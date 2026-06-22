@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { ArrowLeft, Loader2, Trash2, UserPlus } from 'lucide-react';
+import { ArrowLeft, Loader2, Settings, Trash2, UserPlus, Users } from 'lucide-react';
 import { PageHeader } from '@/components/common/PageHeader';
 import { FullPageLoader } from '@/components/common/FullPageLoader';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,20 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/components/ui/sonner';
 import { ApiError } from '@/lib/api/client';
@@ -33,13 +47,15 @@ import {
 import { CaseFilesSection } from '@/features/projects/CaseFilesSection';
 
 /**
- * ProjectDetailPage - a single project's details and collaborator management.
+ * ProjectDetailPage - a single project's details, case files, and collaborators.
  *
- * Reached by clicking a project in the list. Shows the owner, creation date, and
- * collaborators. The owner (or a super-admin) can add collaborators by email,
- * remove them, and delete the project (confirmed). Visibility is enforced by the
- * API: a project the viewer may not see returns 404, rendered as a not-found
- * state. States: loading, not-found / error, and data.
+ * Owners and super-admins get a settings "gear" in the header that opens a small
+ * menu: "Manage collaborators" (a dialog to add by email / remove) and "Delete
+ * project" (a destructive confirmation, separated by a menu divider + danger
+ * color). The page body shows the project details, the OpenFOAM case files, and
+ * a read-only collaborators list so everyone with access can see who is on it.
+ * Visibility is enforced by the API: a project the viewer may not see returns
+ * 404, rendered as a not-found state. States: loading, not-found / error, data.
  */
 
 const dateTimeFormatter = new Intl.DateTimeFormat('en-GB', {
@@ -83,13 +99,16 @@ export function ProjectDetailPage() {
     );
   }
 
-  const canManage =
-    !!user && (project.owner.id === user.id || user.role === 'SUPER_ADMIN');
+  const canManage = !!user && (project.owner.id === user.id || user.role === 'SUPER_ADMIN');
 
   return (
     <div className="flex flex-col gap-6">
       <BackLink />
-      <PageHeader title={project.title} subtitle={`Created ${formatDateTime(project.createdAt)}`} />
+      <PageHeader
+        title={project.title}
+        subtitle={`Created ${formatDateTime(project.createdAt)}`}
+        action={canManage ? <ProjectSettingsMenu project={project} /> : undefined}
+      />
 
       <div className="flex w-full max-w-3xl flex-col gap-6">
         <section className="rounded-md border border-border bg-surface shadow-sm">
@@ -112,34 +131,9 @@ export function ProjectDetailPage() {
 
         <CaseFilesSection projectId={project.id} />
 
-        <CollaboratorsSection project={project} canManage={canManage} />
-
-        {canManage && <DangerZone project={project} />}
+        <CollaboratorsCard project={project} />
       </div>
     </div>
-  );
-}
-
-/**
- * Danger zone: destructive actions live at the bottom of the page, spatially and
- * visually separated from the title/navigation and the rest of the content
- * (a danger-colored hairline), so a delete is never mistaken for a primary action.
- */
-function DangerZone({ project }: { project: Project }) {
-  return (
-    <section className="rounded-md border border-danger/40 bg-surface shadow-sm">
-      <div className="flex flex-col gap-3 px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-        <div className="flex flex-col gap-0.5">
-          <h2 className="text-sm font-semibold text-text">Delete this project</h2>
-          <p className="text-sm text-text-secondary">
-            This permanently removes the project for everyone. It cannot be undone.
-          </p>
-        </div>
-        <div className="shrink-0">
-          <DeleteProjectButton project={project} />
-        </div>
-      </div>
-    </section>
   );
 }
 
@@ -156,10 +150,110 @@ function BackLink() {
   );
 }
 
-/** The "Delete project" trigger + its confirmation dialog. */
-function DeleteProjectButton({ project }: { project: Project }) {
+/**
+ * The header settings "gear" (owner / super-admin only). Opens a small menu;
+ * each item launches a focused overlay. "Delete project" is separated from the
+ * routine action by a divider and rendered in the danger color.
+ */
+function ProjectSettingsMenu({ project }: { project: Project }) {
+  const [collaboratorsOpen, setCollaboratorsOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button type="button" variant="ghost" size="icon" aria-label="Project settings">
+            <Settings strokeWidth={1.75} aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {/* Defer opening so the menu finishes closing (and releases focus)
+              before the dialog traps it — avoids a focus/aria-hidden race. */}
+          <DropdownMenuItem onSelect={() => setTimeout(() => setCollaboratorsOpen(true), 0)}>
+            <Users strokeWidth={1.75} aria-hidden="true" />
+            Manage collaborators
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem destructive onSelect={() => setTimeout(() => setDeleteOpen(true), 0)}>
+            <Trash2 strokeWidth={1.75} aria-hidden="true" />
+            Delete project
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <ManageCollaboratorsDialog
+        project={project}
+        open={collaboratorsOpen}
+        onOpenChange={setCollaboratorsOpen}
+      />
+      <DeleteProjectDialog project={project} open={deleteOpen} onOpenChange={setDeleteOpen} />
+    </>
+  );
+}
+
+/** Manager overlay: add a collaborator by email and remove existing ones. */
+function ManageCollaboratorsDialog({
+  project,
+  open,
+  onOpenChange,
+}: {
+  project: Project;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="overscroll-contain">
+        <DialogHeader>
+          <DialogTitle>Collaborators</DialogTitle>
+          <DialogDescription>
+            People who can see this project, in addition to the owner.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-5">
+          <AddCollaboratorForm projectId={project.id} />
+
+          {project.collaborators.length === 0 ? (
+            <p className="text-sm text-text-secondary">No collaborators yet.</p>
+          ) : (
+            <ul className="divide-y divide-border rounded-md border border-border">
+              {project.collaborators.map((collaborator) => (
+                <li
+                  key={collaborator.id}
+                  className="flex items-center justify-between gap-3 px-3 py-2.5"
+                >
+                  <div className="flex min-w-0 flex-col">
+                    <span className="truncate text-sm font-medium text-text">
+                      {collaborator.fullName}
+                    </span>
+                    <span className="truncate text-xs text-text-secondary">
+                      {collaborator.email}
+                    </span>
+                  </div>
+                  <RemoveCollaboratorButton projectId={project.id} collaborator={collaborator} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** The "Delete project" destructive confirmation, opened from the settings menu. */
+function DeleteProjectDialog({
+  project,
+  open,
+  onOpenChange,
+}: {
+  project: Project;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const navigate = useNavigate();
-  const [open, setOpen] = useState(false);
   const deleteProject = useDeleteProject();
 
   const handleConfirm = async () => {
@@ -168,28 +262,18 @@ function DeleteProjectButton({ project }: { project: Project }) {
       toast.success('Project deleted.');
       navigate('/projects', { replace: true });
     } catch (err) {
-      toast.error(
-        err instanceof ApiError ? err.message : 'Something went wrong. Please try again.',
-      );
+      toast.error(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
     }
   };
 
   return (
-    <AlertDialog open={open} onOpenChange={setOpen}>
-      <Button
-        type="button"
-        variant="secondary"
-        className="border-danger/50 text-danger hover:bg-danger-tint"
-        onClick={() => setOpen(true)}
-      >
-        <Trash2 strokeWidth={1.75} aria-hidden="true" />
-        Delete project
-      </Button>
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent className="overscroll-contain">
         <AlertDialogHeader>
           <AlertDialogTitle>Delete project</AlertDialogTitle>
           <AlertDialogDescription>
-            Delete {project.title}? This action cannot be undone.
+            Delete {project.title}? This permanently removes the project and its files for everyone.
+            This action cannot be undone.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -213,19 +297,8 @@ function DeleteProjectButton({ project }: { project: Project }) {
   );
 }
 
-const addCollaboratorSchema = z.object({
-  email: z.string().trim().min(1, 'Enter an email address.').email('Enter a valid email address.'),
-});
-type AddCollaboratorValues = z.infer<typeof addCollaboratorSchema>;
-
-/** Collaborators list + (for managers) an add-by-email form and remove actions. */
-function CollaboratorsSection({
-  project,
-  canManage,
-}: {
-  project: Project;
-  canManage: boolean;
-}) {
+/** Read-only list of who has access (owner aside), visible to everyone. */
+function CollaboratorsCard({ project }: { project: Project }) {
   return (
     <section className="rounded-md border border-border bg-surface shadow-sm">
       <header className="border-b border-border px-5 py-4 sm:px-6">
@@ -235,27 +308,19 @@ function CollaboratorsSection({
         </p>
       </header>
 
-      <div className="flex flex-col gap-5 px-5 py-5 sm:px-6">
-        {canManage && <AddCollaboratorForm projectId={project.id} />}
-
+      <div className="px-5 py-5 sm:px-6">
         {project.collaborators.length === 0 ? (
           <p className="text-sm text-text-secondary">No collaborators yet.</p>
         ) : (
           <ul className="divide-y divide-border rounded-md border border-border">
             {project.collaborators.map((collaborator) => (
-              <li
-                key={collaborator.id}
-                className="flex items-center justify-between gap-3 px-3 py-2.5"
-              >
+              <li key={collaborator.id} className="flex items-center gap-3 px-3 py-2.5">
                 <div className="flex min-w-0 flex-col">
                   <span className="truncate text-sm font-medium text-text">
                     {collaborator.fullName}
                   </span>
                   <span className="truncate text-xs text-text-secondary">{collaborator.email}</span>
                 </div>
-                {canManage && (
-                  <RemoveCollaboratorButton projectId={project.id} collaborator={collaborator} />
-                )}
               </li>
             ))}
           </ul>
@@ -265,7 +330,12 @@ function CollaboratorsSection({
   );
 }
 
-/** Add a collaborator by email. */
+const addCollaboratorSchema = z.object({
+  email: z.string().trim().min(1, 'Enter an email address.').email('Enter a valid email address.'),
+});
+type AddCollaboratorValues = z.infer<typeof addCollaboratorSchema>;
+
+/** Add a collaborator by email (inside the manage-collaborators dialog). */
 function AddCollaboratorForm({ projectId }: { projectId: string }) {
   const addCollaborator = useAddCollaborator(projectId);
 
@@ -301,9 +371,7 @@ function AddCollaboratorForm({ projectId }: { projectId: string }) {
         setFocus('email');
         return;
       }
-      toast.error(
-        err instanceof ApiError ? err.message : 'Something went wrong. Please try again.',
-      );
+      toast.error(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
     }
   });
 
@@ -328,7 +396,7 @@ function AddCollaboratorForm({ projectId }: { projectId: string }) {
   );
 }
 
-/** Remove a single collaborator. */
+/** Remove a single collaborator (inside the manage-collaborators dialog). */
 function RemoveCollaboratorButton({
   projectId,
   collaborator,
@@ -343,9 +411,7 @@ function RemoveCollaboratorButton({
       await removeCollaborator.mutateAsync(collaborator.id);
       toast.success('Collaborator removed.');
     } catch (err) {
-      toast.error(
-        err instanceof ApiError ? err.message : 'Something went wrong. Please try again.',
-      );
+      toast.error(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
     }
   };
 
