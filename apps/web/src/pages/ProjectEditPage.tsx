@@ -92,11 +92,11 @@ export function ProjectEditPage() {
   }
 
   return (
-    <div className="flex flex-col gap-3 lg:min-h-0 lg:flex-1">
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
       <UnsavedChangesPrompt when={isDirty} />
       <BackLink projectId={id} />
 
-      <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[280px_minmax(0,1fr)]">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
         <FileListSidebar projectId={id} selectedPath={selectedPath} onSelect={requestSelect} />
         <EditorPanel
           selectedPath={selectedPath}
@@ -139,11 +139,11 @@ function FileListSidebar({
   const { data: entries, isPending, isError, refetch, isRefetching } = useCaseFilesQuery(projectId);
 
   return (
-    <aside className="flex flex-col rounded-md border border-border bg-surface shadow-sm lg:min-h-0">
+    <aside className="flex max-h-48 min-h-0 flex-col rounded-md border border-border bg-surface shadow-sm lg:max-h-none lg:w-[280px] lg:shrink-0">
       <header className="border-b border-border px-4 py-3">
         <h2 className="text-sm font-semibold text-text">Files</h2>
       </header>
-      <div className="max-h-72 overflow-auto p-2 lg:max-h-none lg:min-h-0 lg:flex-1">
+      <div className="min-h-0 flex-1 overflow-auto p-2">
         {isPending ? (
           <div className="flex flex-col gap-2 p-1" aria-hidden="true">
             {Array.from({ length: 6 }).map((_, index) => (
@@ -252,11 +252,12 @@ function EditorPanel({
   const tooLarge =
     content.isError && content.error instanceof ApiError && content.error.code === 'FILE_TOO_LARGE';
 
-  // Fixed height on mobile (definite height for the editor), fills on desktop.
-  const fillClass = 'h-[60vh] lg:h-auto lg:min-h-0 lg:flex-1';
+  // The editor area fills the remaining height (the whole page is height-bounded
+  // by the shell, so CodeMirror scrolls internally rather than the page).
+  const fillClass = 'min-h-0 flex-1';
 
   return (
-    <section className="flex flex-col rounded-md border border-border bg-surface shadow-sm lg:min-h-0">
+    <section className="flex min-h-0 flex-1 flex-col rounded-md border border-border bg-surface shadow-sm">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <p className="min-w-0 truncate font-mono text-sm text-text" title={selectedPath ?? undefined}>
           {selectedPath ?? 'No file selected'}
@@ -270,7 +271,7 @@ function EditorPanel({
         />
       </header>
 
-      <div className="flex flex-col p-2 lg:min-h-0 lg:flex-1">
+      <div className="flex min-h-0 flex-1 flex-col p-2">
         {!selectedPath ? (
           <EditorEmpty className={fillClass} />
         ) : content.isPending ? (
