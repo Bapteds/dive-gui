@@ -1,4 +1,4 @@
-import { FolderKanban, Home, Users, type LucideIcon } from 'lucide-react';
+import { FolderKanban, Home, LayoutTemplate, Users, type LucideIcon } from 'lucide-react';
 import type { Role } from '@/lib/api/types';
 
 /**
@@ -20,6 +20,7 @@ export interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { label: 'Home', to: '/', icon: Home },
   { label: 'Projects', to: '/projects', icon: FolderKanban },
+  { label: 'Templates', to: '/templates', icon: LayoutTemplate },
   { label: 'Administration', to: '/admin', icon: Users, requiredRole: 'SUPER_ADMIN' },
 ];
 

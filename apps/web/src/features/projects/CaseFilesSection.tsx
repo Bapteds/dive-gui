@@ -1,20 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  CheckCircle2,
   Download,
   File as FileIcon,
   FileArchive,
   Folder,
+  FolderTree,
   FolderUp,
   ListChecks,
   Loader2,
   RotateCcw,
   SquarePen,
+  TableProperties,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Diamond } from '@/components/brand/Diamond';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -36,21 +38,28 @@ import {
   useScaffoldCase,
   useVerifyCase,
 } from '@/features/projects/useCaseFiles';
+import { CaseSummary } from '@/features/projects/CaseSummary';
+import { ApplyTemplateFlow } from '@/features/templates/ApplyTemplateFlow';
 
 /**
  * CaseFilesSection - import, inspect, verify, and download a project's OpenFOAM
- * case.
+ * case, split across two tabs.
  *
- * Flow (see docs/openfoam-fichiers-obligatoires.md):
- *  1. Import the case as a folder (e.g. a polyMesh/ tree) or a .zip.
- *  2. The imported files render as a tree; the whole case can be downloaded.
- *  3. "Verify" checks the mandatory base files. If any are missing, an overlay
- *     offers to generate them as generic-minimal templates (Yes creates them,
- *     No closes). The mesh itself cannot be generated and is only reported.
+ * - "Files" (default): the management view.
+ *   1. Import the case as a folder (e.g. a polyMesh/ tree) or a .zip.
+ *   2. The imported files render as a tree; the whole case can be downloaded.
+ *   3. "Verify" checks the mandatory base files. If any are missing, an overlay
+ *      offers to generate them as generic-minimal templates (Yes creates them,
+ *      No closes). The mesh itself cannot be generated and is only reported.
+ *   One filled orange CTA per state: "Import folder" while empty, "Verify case"
+ *   once files exist. States: loading (skeleton), empty (import prompt), error
+ *   (inline retry), data (toolbar + tree).
  *
- * One filled orange CTA per state: "Import folder" while empty, "Verify case"
- * once files exist. States: loading (skeleton), empty (import prompt), error
- * (inline retry), data (toolbar + tree).
+ * - "Summary": a read-only synthesis of the settings entered in the readable
+ *   dictionary files, for a glance at what is configured (see CaseSummary).
+ *
+ * The hidden file inputs and the generate-files overlay live at the section
+ * level so they stay mounted whichever tab is active.
  */
 
 const SIZE_UNITS = ['B', 'KB', 'MB', 'GB'] as const;
@@ -100,6 +109,8 @@ export function CaseFilesSection({ projectId }: { projectId: string }) {
   const [downloading, setDownloading] = useState(false);
   // The verification that opened the overlay (null = overlay closed).
   const [pendingVerification, setPendingVerification] = useState<CaseVerification | null>(null);
+  // Active tab: file management ("files") or the read-only synthesis ("summary").
+  const [tab, setTab] = useState<'files' | 'summary'>('files');
 
   const hasFiles = !!entries && entries.some((entry) => entry.type === 'file');
 
@@ -141,17 +152,11 @@ export function CaseFilesSection({ projectId }: { projectId: string }) {
 
   const handleVerify = async () => {
     try {
+      // Verify, then open the set-up flow: add the built-in minimal files,
+      // apply a saved template, or ignore. The flow tailors itself to whether
+      // base files are missing (it also surfaces an incomplete mesh).
       const result = await verify.mutateAsync();
-      if (result.canScaffold) {
-        // Missing base files: ask whether to generate them.
-        setPendingVerification(result);
-      } else if (result.hasMesh) {
-        toast.success('All mandatory files are present.');
-      } else {
-        toast.success(
-          'Base files are present. The mesh (constant/polyMesh) is still incomplete and must be imported.',
-        );
-      }
+      setPendingVerification(result);
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Verification failed. Please try again.');
     }
@@ -171,7 +176,7 @@ export function CaseFilesSection({ projectId }: { projectId: string }) {
 
   return (
     <section className="rounded-md border border-border bg-surface shadow-sm">
-      <header className="border-b border-border px-5 py-4 sm:px-6">
+      <header className="px-5 pt-5 sm:px-6">
         <h2 className="text-lg font-semibold text-text">Case files</h2>
         <p className="mt-1 text-sm text-text-secondary">
           Import your OpenFOAM case (mesh and configuration), then verify it has the mandatory base
@@ -200,99 +205,122 @@ export function CaseFilesSection({ projectId }: { projectId: string }) {
         onChange={(event) => void handleImport('zip', takeFiles(event.currentTarget))}
       />
 
-      <div className="px-5 py-5 sm:px-6">
-        {isPending ? (
-          <CaseTreeSkeleton />
-        ) : isError ? (
-          <div
-            role="alert"
-            className="flex flex-col items-start gap-3 rounded-md border border-danger/40 bg-danger-tint px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
-          >
-            <p className="text-sm text-text">We could not load the case files.</p>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => void refetch()}
-              loading={isRefetching}
-              className="shrink-0"
+      <Tabs
+        value={tab}
+        onValueChange={(value) => setTab(value as 'files' | 'summary')}
+        className="mt-4"
+      >
+        <TabsList className="px-5 sm:px-6">
+          <TabsTrigger value="files">
+            <FolderTree strokeWidth={1.75} aria-hidden="true" />
+            Files
+          </TabsTrigger>
+          <TabsTrigger value="summary">
+            <TableProperties strokeWidth={1.75} aria-hidden="true" />
+            Summary
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="files" className="px-5 py-5 sm:px-6">
+          {isPending ? (
+            <CaseTreeSkeleton />
+          ) : isError ? (
+            <div
+              role="alert"
+              className="flex flex-col items-start gap-3 rounded-md border border-danger/40 bg-danger-tint px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
             >
-              Try again
-            </Button>
-          </div>
-        ) : !hasFiles ? (
-          <ImportPrompt
-            onPickFolder={() => folderInputRef.current?.click()}
-            onPickZip={() => zipInputRef.current?.click()}
-            importingKind={importingKind}
-          />
-        ) : (
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm text-text">We could not load the case files.</p>
               <Button
                 type="button"
                 variant="secondary"
-                size="sm"
-                onClick={() => folderInputRef.current?.click()}
-                loading={importingKind === 'folder'}
-                disabled={importingKind === 'zip'}
+                onClick={() => void refetch()}
+                loading={isRefetching}
+                className="shrink-0"
               >
-                <FolderUp strokeWidth={1.75} aria-hidden="true" />
-                Import folder
+                Try again
               </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => zipInputRef.current?.click()}
-                loading={importingKind === 'zip'}
-                disabled={importingKind === 'folder'}
-              >
-                <FileArchive strokeWidth={1.75} aria-hidden="true" />
-                Import .zip
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => void handleDownload()}
-                loading={downloading}
-              >
-                <Download strokeWidth={1.75} aria-hidden="true" />
-                Download
-              </Button>
-              <Button asChild variant="secondary" size="sm">
-                <Link to={`/projects/${projectId}/edit`}>
-                  <SquarePen strokeWidth={1.75} aria-hidden="true" />
-                  Edit files
-                </Link>
-              </Button>
-              <div className="ml-auto flex items-center gap-2">
-                <ResetCaseButton projectId={projectId} />
+            </div>
+          ) : !hasFiles ? (
+            <ImportPrompt
+              onPickFolder={() => folderInputRef.current?.click()}
+              onPickZip={() => zipInputRef.current?.click()}
+              importingKind={importingKind}
+            />
+          ) : (
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button
                   type="button"
+                  variant="secondary"
                   size="sm"
-                  onClick={() => void handleVerify()}
-                  loading={verify.isPending}
+                  onClick={() => folderInputRef.current?.click()}
+                  loading={importingKind === 'folder'}
+                  disabled={importingKind === 'zip'}
                 >
-                  <ListChecks strokeWidth={1.75} aria-hidden="true" />
-                  Verify case
+                  <FolderUp strokeWidth={1.75} aria-hidden="true" />
+                  Import folder
                 </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => zipInputRef.current?.click()}
+                  loading={importingKind === 'zip'}
+                  disabled={importingKind === 'folder'}
+                >
+                  <FileArchive strokeWidth={1.75} aria-hidden="true" />
+                  Import .zip
+                </Button>
+                <Button asChild variant="secondary" size="sm">
+                  <Link to={`/projects/${projectId}/edit`}>
+                    <SquarePen strokeWidth={1.75} aria-hidden="true" />
+                    Edit files
+                  </Link>
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void handleDownload()}
+                  loading={downloading}
+                  className="text-cta hover:text-cta-hover"
+                >
+                  <Download strokeWidth={1.75} aria-hidden="true" />
+                  Download
+                </Button>
+                <div className="ml-auto flex items-center gap-2">
+                  <ResetCaseButton projectId={projectId} />
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => void handleVerify()}
+                    loading={verify.isPending}
+                  >
+                    <ListChecks strokeWidth={1.75} aria-hidden="true" />
+                    Verify case
+                  </Button>
+                </div>
               </div>
+
+              <CaseTree entries={entries} />
             </div>
+          )}
+        </TabsContent>
 
-            <CaseTree entries={entries} />
-          </div>
-        )}
-      </div>
+        <TabsContent value="summary" className="px-5 py-5 sm:px-6">
+          <CaseSummary projectId={projectId} />
+        </TabsContent>
+      </Tabs>
 
-      <GenerateFilesDialog
-        verification={pendingVerification}
-        pending={scaffold.isPending}
-        onConfirm={() => void handleScaffold()}
-        onOpenChange={(open) => {
-          if (!open && !scaffold.isPending) setPendingVerification(null);
-        }}
-      />
+      {pendingVerification && (
+        <ApplyTemplateFlow
+          projectId={projectId}
+          verification={pendingVerification}
+          onClose={() => setPendingVerification(null)}
+          onApplyMinimal={() => void handleScaffold()}
+          applyingMinimal={scaffold.isPending}
+        />
+      )}
     </section>
   );
 }
@@ -319,7 +347,12 @@ function ImportPrompt({
         </p>
       </div>
       <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
-        <Button type="button" onClick={onPickFolder} loading={importingKind === 'folder'} disabled={importingKind === 'zip'}>
+        <Button
+          type="button"
+          onClick={onPickFolder}
+          loading={importingKind === 'folder'}
+          disabled={importingKind === 'zip'}
+        >
           <FolderUp strokeWidth={1.75} aria-hidden="true" />
           Import folder
         </Button>
@@ -351,15 +384,28 @@ function CaseTree({ entries }: { entries: CaseEntry[] }) {
             key={entry.path}
             className="flex items-center gap-2 border-b border-border px-3 py-2 last:border-b-0"
           >
-            <span style={{ paddingInlineStart: `${depth * 16}px` }} className="flex min-w-0 items-center gap-2">
+            <span
+              style={{ paddingInlineStart: `${depth * 16}px` }}
+              className="flex min-w-0 items-center gap-2"
+            >
               {isDir ? (
-                <Folder className="size-4 shrink-0 text-primary" strokeWidth={1.75} aria-hidden="true" />
+                <Folder
+                  className="size-4 shrink-0 text-primary"
+                  strokeWidth={1.75}
+                  aria-hidden="true"
+                />
               ) : (
-                <FileIcon className="size-4 shrink-0 text-text-secondary" strokeWidth={1.75} aria-hidden="true" />
+                <FileIcon
+                  className="size-4 shrink-0 text-text-secondary"
+                  strokeWidth={1.75}
+                  aria-hidden="true"
+                />
               )}
               <span
                 title={entry.path}
-                className={isDir ? 'truncate text-sm font-medium text-text' : 'truncate text-sm text-text'}
+                className={
+                  isDir ? 'truncate text-sm font-medium text-text' : 'truncate text-sm text-text'
+                }
               >
                 {name}
               </span>
@@ -381,7 +427,10 @@ function CaseTreeSkeleton({ rows = 5 }: { rows?: number }) {
   return (
     <div className="rounded-md border border-border" aria-hidden="true">
       {Array.from({ length: rows }).map((_, index) => (
-        <div key={index} className="flex items-center gap-2 border-b border-border px-3 py-2 last:border-b-0">
+        <div
+          key={index}
+          className="flex items-center gap-2 border-b border-border px-3 py-2 last:border-b-0"
+        >
           <Skeleton className="size-4 rounded-sm" />
           <Skeleton className="h-4 w-40" />
         </div>
@@ -444,72 +493,6 @@ function ResetCaseButton({ projectId }: { projectId: string }) {
               <Loader2 className="size-4 animate-spin" strokeWidth={1.75} aria-hidden="true" />
             )}
             Reset
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-}
-
-/** Overlay asking whether to generate the missing mandatory base files. */
-function GenerateFilesDialog({
-  verification,
-  pending,
-  onConfirm,
-  onOpenChange,
-}: {
-  verification: CaseVerification | null;
-  pending: boolean;
-  onConfirm: () => void;
-  onOpenChange: (open: boolean) => void;
-}) {
-  return (
-    <AlertDialog open={!!verification} onOpenChange={onOpenChange}>
-      <AlertDialogContent className="overscroll-contain">
-        <AlertDialogHeader>
-          <AlertDialogTitle>Generate the missing base files?</AlertDialogTitle>
-          <AlertDialogDescription>
-            These mandatory files are missing. They will be created as generic-minimal templates you
-            can edit afterwards.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-
-        {verification && (
-          <div className="flex flex-col gap-3">
-            <ul className="rounded-md border border-border bg-bg/60 px-3 py-2.5">
-              {verification.missingBase.map((path) => (
-                <li key={path} className="flex items-center gap-2 py-0.5 text-sm text-text">
-                  <FileIcon className="size-4 shrink-0 text-text-secondary" strokeWidth={1.75} aria-hidden="true" />
-                  <span className="truncate font-mono text-[0.8125rem]">{path}</span>
-                </li>
-              ))}
-            </ul>
-            {!verification.hasMesh && (
-              <p className="text-sm text-text-secondary">
-                Note: the mesh (constant/polyMesh) is incomplete. It comes from your import and
-                cannot be generated.
-              </p>
-            )}
-          </div>
-        )}
-
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={pending}>Not now</AlertDialogCancel>
-          <AlertDialogAction
-            className="bg-cta font-bold text-white hover:bg-cta-hover"
-            onClick={(event) => {
-              event.preventDefault();
-              onConfirm();
-            }}
-            disabled={pending}
-            aria-busy={pending || undefined}
-          >
-            {pending ? (
-              <Loader2 className="size-4 animate-spin" strokeWidth={1.75} aria-hidden="true" />
-            ) : (
-              <CheckCircle2 strokeWidth={1.75} aria-hidden="true" />
-            )}
-            Create files
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

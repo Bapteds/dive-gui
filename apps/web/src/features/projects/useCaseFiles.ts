@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  createCaseFile,
+  deleteCaseFile,
   getCaseFileContent,
   getCaseFiles,
   importCaseFolder,
@@ -12,6 +14,8 @@ import {
 import type {
   CaseEntry,
   CaseFileContent,
+  CreateCaseFileResponse,
+  DeleteCaseFileResponse,
   ImportCaseResponse,
   ScaffoldCaseResponse,
 } from '@/lib/api/types';
@@ -90,6 +94,29 @@ export function useCaseFileContentQuery(projectId: string, path: string | null) 
     queryKey: caseFileContentQueryKey(projectId, path ?? ''),
     queryFn: () => getCaseFileContent(projectId, path as string),
     enabled: !!path,
+  });
+}
+
+/** Create a new (empty) file, then write the refreshed tree into the cache. */
+export function useCreateCaseFile(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<CreateCaseFileResponse, Error, { path: string }>({
+    mutationFn: ({ path }) => createCaseFile(projectId, path),
+    onSuccess: (result) => {
+      queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
+    },
+  });
+}
+
+/** Delete a single file, then write the refreshed tree and drop its content cache. */
+export function useDeleteCaseFile(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<DeleteCaseFileResponse, Error, { path: string }>({
+    mutationFn: ({ path }) => deleteCaseFile(projectId, path),
+    onSuccess: (result, { path }) => {
+      queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
+      queryClient.removeQueries({ queryKey: caseFileContentQueryKey(projectId, path) });
+    },
   });
 }
 

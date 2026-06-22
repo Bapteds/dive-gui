@@ -7,6 +7,8 @@ import { AppError } from '../../lib/AppError';
 import type { Viewer } from './projects.service';
 import {
   buildCaseArchive,
+  createCaseFile,
+  deleteCaseFileContent,
   getCaseFiles,
   importCaseFiles,
   readCaseFileContent,
@@ -124,4 +126,18 @@ export async function saveCaseFileContentController(req: Request, res: Response)
   const content = typeof req.body === 'string' ? req.body : '';
   const file = await saveCaseFileContent(requireViewer(req), req.params.id, path, content);
   res.status(200).json({ file });
+}
+
+/** POST /projects/:id/files/content — create a new (empty) file from the editor. */
+export async function createCaseFileController(req: Request, res: Response): Promise<void> {
+  const { path } = req.body as { path: string };
+  const result = await createCaseFile(requireViewer(req), req.params.id, path);
+  res.status(201).json(result);
+}
+
+/** DELETE /projects/:id/files/content?path=… — delete a single file from the editor. */
+export async function deleteCaseFileController(req: Request, res: Response): Promise<void> {
+  const path = (req.query.path as string | undefined) ?? '';
+  const result = await deleteCaseFileContent(requireViewer(req), req.params.id, path);
+  res.status(200).json(result);
 }

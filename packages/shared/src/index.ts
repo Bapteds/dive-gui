@@ -22,6 +22,12 @@ export const FULL_NAME_MAX_LENGTH = 120;
 /** Maximum length of a project title. */
 export const PROJECT_TITLE_MAX_LENGTH = 120;
 
+/** Maximum length of a reusable template's name. */
+export const TEMPLATE_NAME_MAX_LENGTH = 120;
+
+/** Maximum length of a reusable template's description. */
+export const TEMPLATE_DESCRIPTION_MAX_LENGTH = 2000;
+
 /**
  * Maximum size of a case file that may be opened/saved in the in-app editor.
  * Configuration dictionaries are tiny; large mesh files (e.g. `points`) are not
@@ -49,6 +55,7 @@ export const SERVER_ERROR_CODES = [
   'INVALID_ARCHIVE',
   'PAYLOAD_TOO_LARGE',
   'FILE_TOO_LARGE',
+  'FILE_EXISTS',
   'VALIDATION_ERROR',
   'UNAUTHENTICATED',
   'FORBIDDEN',

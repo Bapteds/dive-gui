@@ -21,7 +21,7 @@ export function Header() {
             aria-label="DIVE Turbinen home"
             className="rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
           >
-            <BrandLockup size="md" />
+            <BrandLockup size="md" alt="" />
           </Link>
         </div>
         <UserMenu />

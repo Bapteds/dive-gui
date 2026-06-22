@@ -180,3 +180,74 @@ export interface CaseFileContent {
 export interface CaseFileContentResponse {
   file: CaseFileContent;
 }
+
+/** `POST /projects/:id/files/content` (create file) response. */
+export interface CreateCaseFileResponse {
+  path: string;
+  entries: CaseEntry[];
+}
+
+/** `DELETE /projects/:id/files/content` (delete file) response. */
+export interface DeleteCaseFileResponse {
+  entries: CaseEntry[];
+}
+
+// ---- Templates (shared, reusable file templates) ----
+
+/** A reusable, shared file template (its files live under the template tree). */
+export interface Template {
+  id: string;
+  name: string;
+  description: string | null;
+  /** The author; templates are shared, so this is shown for attribution. */
+  owner: UserSummary;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Payload for `POST /templates`. */
+export interface CreateTemplateInput {
+  name: string;
+  description?: string;
+}
+
+/** Payload for `PATCH /templates/:id` (all fields optional). */
+export interface UpdateTemplateInput {
+  name?: string;
+  description?: string;
+}
+
+/** `GET /templates` response. */
+export interface ListTemplatesResponse {
+  templates: Template[];
+}
+
+/** Response shape for endpoints returning a single template. */
+export interface TemplateResponse {
+  template: Template;
+}
+
+/** Per-file decision when a template file collides with an existing case file. */
+export type ApplyDecision = 'overwrite' | 'keep';
+
+/** Preview of applying a template to a project's case. */
+export interface ApplyPreview {
+  /** Every file the template would contribute. */
+  files: string[];
+  /** Template files whose path already exists in the case (need a decision). */
+  conflicts: string[];
+  /** Template files not present in the case (always written). */
+  newFiles: string[];
+}
+
+/** `GET /projects/:id/apply-template/:templateId/preview` response. */
+export interface ApplyPreviewResponse {
+  preview: ApplyPreview;
+}
+
+/** `POST /projects/:id/apply-template/:templateId` response. */
+export interface ApplyTemplateResponse {
+  applied: string[];
+  skipped: string[];
+  entries: CaseEntry[];
+}

@@ -9,6 +9,7 @@ import { AppError } from '../../lib/AppError';
 import { AuditAction, recordAudit, type AuditActionCode } from '../../lib/audit';
 import { hashPassword } from '../../lib/password';
 import { prisma } from '../../lib/prisma';
+import { removeTemplateStorage } from '../../lib/templateStorage';
 import { toPublicUser, type PublicUser } from '../../lib/serializeUser';
 import type { CreateUserInput, UpdateUserInput } from './users.schemas';
 
@@ -227,7 +228,19 @@ export async function deleteUser(id: string, actor: Actor): Promise<void> {
     throw new AppError(409, 'SELF_DELETE_FORBIDDEN', 'You cannot delete your own account');
   }
 
+  // The user's templates are removed by the DB cascade, but their on-disk files
+  // are not — collect the ids first so we can purge their storage afterwards.
+  const ownedTemplates = await prisma.template.findMany({
+    where: { ownerId: id },
+    select: { id: true },
+  });
+
   await prisma.user.delete({ where: { id } });
+
+  // Best-effort disk cleanup of the deleted user's template files.
+  await Promise.all(
+    ownedTemplates.map((template) => removeTemplateStorage(template.id).catch(() => undefined)),
+  );
 
   await recordAudit({
     action: AuditAction.USER_DELETED,

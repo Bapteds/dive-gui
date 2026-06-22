@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import type { CaseEntry, CaseVerification } from '@/lib/api/types';
@@ -15,6 +16,7 @@ import type { CaseEntry, CaseVerification } from '@/lib/api/types';
 
 vi.mock('@/lib/api/projects', () => ({
   getCaseFiles: vi.fn(),
+  getCaseFileContent: vi.fn(),
   importCaseFolder: vi.fn(),
   importCaseZip: vi.fn(),
   verifyCase: vi.fn(),
@@ -83,7 +85,7 @@ describe('CaseFilesSection', () => {
     await waitFor(() => expect(api.resetCase).toHaveBeenCalledWith('p1'));
   });
 
-  it('opens the generate-files overlay when verification reports missing base files', async () => {
+  it('opens the set-up flow with the minimal + template choices when base files are missing', async () => {
     vi.mocked(api.getCaseFiles).mockResolvedValue(tree);
     const verification: CaseVerification = {
       hasMesh: true,
@@ -98,9 +100,73 @@ describe('CaseFilesSection', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /verify case/i }));
 
-    expect(await screen.findByText('Generate the missing base files?')).toBeInTheDocument();
+    expect(await screen.findByText('Set up the case files')).toBeInTheDocument();
     expect(screen.getByText('system/controlDict')).toBeInTheDocument();
     expect(screen.getByText('0/U')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /create files/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /add minimal base files/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /use a saved template/i })).toBeInTheDocument();
+  });
+
+  it('adds the built-in minimal base files from the set-up flow', async () => {
+    vi.mocked(api.getCaseFiles).mockResolvedValue(tree);
+    const verification: CaseVerification = {
+      hasMesh: true,
+      missingMesh: [],
+      presentBase: [],
+      missingBase: ['system/controlDict'],
+      complete: false,
+      canScaffold: true,
+    };
+    vi.mocked(api.verifyCase).mockResolvedValue(verification);
+    vi.mocked(api.scaffoldCase).mockResolvedValue({
+      created: ['system/controlDict'],
+      verification: { ...verification, missingBase: [], complete: true, canScaffold: false },
+      entries: tree,
+    });
+    renderSection();
+
+    fireEvent.click(await screen.findByRole('button', { name: /verify case/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /add minimal base files/i }));
+
+    await waitFor(() => expect(api.scaffoldCase).toHaveBeenCalledWith('p1'));
+  });
+
+  it('exposes Files and Summary tabs, with Files active by default', async () => {
+    vi.mocked(api.getCaseFiles).mockResolvedValue(tree);
+    renderSection();
+
+    expect(await screen.findByRole('tab', { name: /files/i })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByRole('tab', { name: /summary/i })).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it('summarises readable dictionary files in the Summary tab and skips the mesh', async () => {
+    const treeWithDict: CaseEntry[] = [
+      { path: 'system', type: 'directory', size: 0 },
+      { path: 'system/controlDict', type: 'file', size: 800 },
+      { path: 'constant/polyMesh/points', type: 'file', size: 2048 },
+    ];
+    vi.mocked(api.getCaseFiles).mockResolvedValue(treeWithDict);
+    vi.mocked(api.getCaseFileContent).mockResolvedValue({
+      path: 'system/controlDict',
+      size: 800,
+      content: 'FoamFile { class dictionary; object controlDict; }\napplication foamRun;\nendTime 500;\n',
+    });
+    renderSection();
+
+    await userEvent.click(await screen.findByRole('tab', { name: /summary/i }));
+
+    // The readable dictionary is fetched and its entries are rendered.
+    expect(await screen.findByText('application')).toBeInTheDocument();
+    expect(screen.getByText('foamRun')).toBeInTheDocument();
+    expect(screen.getByText('endTime')).toBeInTheDocument();
+    expect(screen.getByText('500')).toBeInTheDocument();
+    expect(screen.getByText('controlDict')).toBeInTheDocument();
+
+    // The mesh file is never opened for the summary.
+    expect(api.getCaseFileContent).toHaveBeenCalledWith('p1', 'system/controlDict');
+    expect(api.getCaseFileContent).not.toHaveBeenCalledWith('p1', 'constant/polyMesh/points');
   });
 });

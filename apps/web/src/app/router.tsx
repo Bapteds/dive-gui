@@ -22,6 +22,12 @@ const ProjectDetailPage = lazy(() =>
 const ProjectEditPage = lazy(() =>
   import('@/pages/ProjectEditPage').then((m) => ({ default: m.ProjectEditPage })),
 );
+const TemplatesPage = lazy(() =>
+  import('@/pages/TemplatesPage').then((m) => ({ default: m.TemplatesPage })),
+);
+const TemplateEditPage = lazy(() =>
+  import('@/pages/TemplateEditPage').then((m) => ({ default: m.TemplateEditPage })),
+);
 
 /**
  * router.tsx - application route tree.
@@ -55,6 +61,8 @@ export const router = createBrowserRouter([
       { path: 'projects', element: <ProjectsPage /> },
       { path: 'projects/:id', element: <ProjectDetailPage /> },
       { path: 'projects/:id/edit', element: <ProjectEditPage /> },
+      { path: 'templates', element: <TemplatesPage /> },
+      { path: 'templates/:id/edit', element: <TemplateEditPage /> },
       { path: 'account', element: <AccountPage /> },
       {
         path: 'admin',

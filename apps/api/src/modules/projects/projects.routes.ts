@@ -15,6 +15,8 @@ import {
   removeCollaboratorController,
 } from './projects.controller';
 import {
+  createCaseFileController,
+  deleteCaseFileController,
   downloadCaseController,
   getCaseFileContentController,
   getCaseFilesController,
@@ -25,13 +27,18 @@ import {
   scaffoldCaseController,
   verifyCaseController,
 } from './files.controller';
-import { filePathQuerySchema } from './files.schemas';
+import { createFileSchema, filePathQuerySchema } from './files.schemas';
 import {
   addCollaboratorSchema,
   collaboratorParamSchema,
   createProjectSchema,
   projectIdParamSchema,
 } from './projects.schemas';
+import {
+  applyTemplateController,
+  previewApplyTemplateController,
+} from '../templates/templates.controller';
+import { applyDecisionsSchema, applyTemplateParamSchema } from '../templates/templates.schemas';
 
 /**
  * Body parser for the file-save route only. The global JSON limit (16kb) is far
@@ -115,6 +122,32 @@ export function createProjectsRouter(): Router {
     validate({ params: projectIdParamSchema, query: filePathQuerySchema }),
     parseFileContent,
     asyncHandler(saveCaseFileContentController),
+  );
+  // Create a new (empty) file, or delete a single file, from the editor. The
+  // JSON body of the create route is parsed by the global express.json (a path
+  // is tiny); delete carries the path as a query param.
+  router.post(
+    '/:id/files/content',
+    validate({ params: projectIdParamSchema, body: createFileSchema }),
+    asyncHandler(createCaseFileController),
+  );
+  router.delete(
+    '/:id/files/content',
+    validate({ params: projectIdParamSchema, query: filePathQuerySchema }),
+    asyncHandler(deleteCaseFileController),
+  );
+
+  // Apply a shared template to this project's case: preview the conflicts, then
+  // apply with a per-file decision map. Authorization is project visibility.
+  router.get(
+    '/:id/apply-template/:templateId/preview',
+    validate({ params: applyTemplateParamSchema }),
+    asyncHandler(previewApplyTemplateController),
+  );
+  router.post(
+    '/:id/apply-template/:templateId',
+    validate({ params: applyTemplateParamSchema, body: applyDecisionsSchema }),
+    asyncHandler(applyTemplateController),
   );
 
   return router;

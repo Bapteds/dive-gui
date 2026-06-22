@@ -1,11 +1,17 @@
 import { apiClient } from './client';
 import type {
+  ApplyDecision,
+  ApplyPreview,
+  ApplyPreviewResponse,
+  ApplyTemplateResponse,
   CaseEntry,
   CaseFileContent,
   CaseFileContentResponse,
   CaseFilesResponse,
   CaseVerification,
+  CreateCaseFileResponse,
   CreateProjectInput,
+  DeleteCaseFileResponse,
   ImportCaseResponse,
   ListProjectsResponse,
   Project,
@@ -121,4 +127,41 @@ export async function saveCaseFileContent(
   content: string,
 ): Promise<void> {
   await apiClient.putText(`/projects/${id}/files/content?path=${encodeURIComponent(path)}`, content);
+}
+
+/** Create a new (empty) case file from the editor. Returns the refreshed tree. */
+export async function createCaseFile(id: string, path: string): Promise<CreateCaseFileResponse> {
+  return apiClient.post<CreateCaseFileResponse>(`/projects/${id}/files/content`, { path });
+}
+
+/** Delete a single case file from the editor. Returns the refreshed tree. */
+export async function deleteCaseFile(id: string, path: string): Promise<DeleteCaseFileResponse> {
+  return apiClient.delete<DeleteCaseFileResponse>(
+    `/projects/${id}/files/content?path=${encodeURIComponent(path)}`,
+  );
+}
+
+// ---- Applying a shared template to this project's case ----
+
+/** Preview applying a template: which files are new and which conflict. */
+export async function previewApplyTemplate(
+  projectId: string,
+  templateId: string,
+): Promise<ApplyPreview> {
+  const data = await apiClient.get<ApplyPreviewResponse>(
+    `/projects/${projectId}/apply-template/${templateId}/preview`,
+  );
+  return data.preview;
+}
+
+/** Apply a template to this project's case, resolving conflicts per file. */
+export async function applyTemplate(
+  projectId: string,
+  templateId: string,
+  decisions: Record<string, ApplyDecision> = {},
+): Promise<ApplyTemplateResponse> {
+  return apiClient.post<ApplyTemplateResponse>(
+    `/projects/${projectId}/apply-template/${templateId}`,
+    { decisions },
+  );
 }

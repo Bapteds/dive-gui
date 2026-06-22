@@ -22,7 +22,7 @@ export function AppShell() {
   //  - the project detail page is full width but scrolls normally.
   // Every other page stays centered at max-w-content.
   const { pathname } = useLocation();
-  const isEditor = /^\/projects\/[^/]+\/edit\/?$/.test(pathname);
+  const isEditor = /^\/(projects|templates)\/[^/]+\/edit\/?$/.test(pathname);
   const isWide = /^\/projects\/[^/]+\/?$/.test(pathname);
   const contentClass = isEditor
     ? 'flex h-[calc(100dvh_-_4rem)] flex-col overflow-hidden px-4 py-4 sm:px-6 sm:py-6'

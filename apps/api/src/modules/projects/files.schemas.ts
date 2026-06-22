@@ -7,3 +7,10 @@ export const filePathQuerySchema = z.object({
 });
 
 export type FilePathQuery = z.infer<typeof filePathQuerySchema>;
+
+/** Body for creating a new (empty) case file from the editor. */
+export const createFileSchema = z.object({
+  path: z.string().trim().min(1, 'A file path is required'),
+});
+
+export type CreateFileInput = z.infer<typeof createFileSchema>;

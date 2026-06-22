@@ -373,3 +373,82 @@ describe('PUT /projects/:id/files/content', () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe('POST /projects/:id/files/content (create)', () => {
+  it('creates a new empty file and returns the refreshed tree', async () => {
+    const { id, auth } = await makeProject('create-ok@dive-turbinen.test');
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/content`)
+      .set('Authorization', auth)
+      .send({ path: 'system/myDict' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.path).toBe('system/myDict');
+    const paths = (res.body.entries as Array<{ path: string }>).map((e) => e.path);
+    expect(paths).toContain('system/myDict');
+
+    // The created file is readable and empty.
+    const read = await request(app)
+      .get(`/api/v1/projects/${id}/files/content?path=system/myDict`)
+      .set('Authorization', auth);
+    expect(read.status).toBe(200);
+    expect(read.body.file.content).toBe('');
+  });
+
+  it('rejects creating a file that already exists (409 FILE_EXISTS)', async () => {
+    const { id, auth } = await makeProject('create-dup@dive-turbinen.test');
+    await importFolder(id, auth, [{ relativePath: 'system/controlDict', data: 'x' }]);
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/content`)
+      .set('Authorization', auth)
+      .send({ path: 'system/controlDict' });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('FILE_EXISTS');
+  });
+
+  it('rejects a blank path with 422', async () => {
+    const { id, auth } = await makeProject('create-blank@dive-turbinen.test');
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/content`)
+      .set('Authorization', auth)
+      .send({ path: '   ' });
+    expect(res.status).toBe(422);
+  });
+});
+
+describe('DELETE /projects/:id/files/content (single file)', () => {
+  it('deletes an existing file and returns the refreshed tree', async () => {
+    const { id, auth } = await makeProject('del-ok@dive-turbinen.test');
+    await importFolder(id, auth, [
+      { relativePath: 'system/controlDict', data: 'a' },
+      { relativePath: 'system/fvSchemes', data: 'b' },
+    ]);
+
+    const res = await request(app)
+      .delete(`/api/v1/projects/${id}/files/content?path=system/controlDict`)
+      .set('Authorization', auth);
+    expect(res.status).toBe(200);
+    const paths = (res.body.entries as Array<{ path: string }>).map((e) => e.path);
+    expect(paths).not.toContain('system/controlDict');
+    expect(paths).toContain('system/fvSchemes');
+  });
+
+  it('returns 404 deleting a file that does not exist', async () => {
+    const { id, auth } = await makeProject('del-missing@dive-turbinen.test');
+    const res = await request(app)
+      .delete(`/api/v1/projects/${id}/files/content?path=system/nope`)
+      .set('Authorization', auth);
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects a traversal path with 400', async () => {
+    const { id, auth } = await makeProject('del-traversal@dive-turbinen.test');
+    const res = await request(app)
+      .delete(
+        `/api/v1/projects/${id}/files/content?path=${encodeURIComponent('../../secret')}`,
+      )
+      .set('Authorization', auth);
+    expect(res.status).toBe(400);
+  });
+});

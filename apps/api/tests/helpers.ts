@@ -13,6 +13,7 @@ export const app = createApp();
 /** Remove all rows so each test starts from a clean slate. */
 export async function resetDatabase(): Promise<void> {
   await prisma.auditLog.deleteMany();
+  await prisma.template.deleteMany();
   await prisma.project.deleteMany();
   await prisma.user.deleteMany();
 }

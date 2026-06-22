@@ -11,6 +11,7 @@ import {
   caseFileExists,
   caseIsEmpty,
   clearCase,
+  deleteCaseFile,
   extractArchive,
   listCaseTree,
   readCaseFile,
@@ -19,6 +20,7 @@ import {
   zipCase,
   type CaseEntry,
 } from '../../lib/caseStorage';
+import { sanitizeRelative } from '../../lib/fileTreeStorage';
 import {
   BASE_FILE_PATHS,
   BOUNDARY_FILE,
@@ -220,4 +222,47 @@ export async function saveCaseFileContent(
   }
   await writeCaseFile(projectId, relPath, content);
   return { path: relPath, size };
+}
+
+/**
+ * Create a new, empty case file from the editor.
+ * @throws 409 FILE_EXISTS if a file already exists at that path, 413
+ *         FILE_TOO_LARGE if the optional initial content exceeds the cap.
+ */
+export async function createCaseFile(
+  viewer: Viewer,
+  projectId: string,
+  relPath: string,
+  content = '',
+): Promise<{ path: string; entries: CaseEntry[] }> {
+  await assertProjectVisible(viewer, projectId);
+
+  const safePath = sanitizeRelative(relPath);
+  if (await caseFileExists(projectId, safePath)) {
+    throw new AppError(409, 'FILE_EXISTS', 'A file already exists at that path');
+  }
+  if (Buffer.byteLength(content, 'utf8') > EDITABLE_FILE_MAX_BYTES) {
+    throw new AppError(413, 'FILE_TOO_LARGE', 'The file content is too large to create here');
+  }
+
+  await writeCaseFile(projectId, safePath, content);
+  return { path: safePath, entries: await listCaseTree(projectId) };
+}
+
+/**
+ * Delete a single case file from the editor. Returns the refreshed tree.
+ * @throws 404 NOT_FOUND if the file does not exist.
+ */
+export async function deleteCaseFileContent(
+  viewer: Viewer,
+  projectId: string,
+  relPath: string,
+): Promise<{ entries: CaseEntry[] }> {
+  await assertProjectVisible(viewer, projectId);
+
+  if (!(await caseFileExists(projectId, relPath))) {
+    throw new AppError(404, 'NOT_FOUND', 'File not found');
+  }
+  await deleteCaseFile(projectId, relPath);
+  return { entries: await listCaseTree(projectId) };
 }
