@@ -4,6 +4,7 @@ import {
   getCaseFiles,
   importCaseFolder,
   importCaseZip,
+  resetCase,
   saveCaseFileContent,
   scaffoldCase,
   verifyCase,
@@ -54,6 +55,17 @@ export function useImportCase(projectId: string) {
 export function useVerifyCase(projectId: string) {
   return useMutation({
     mutationFn: () => verifyCase(projectId),
+  });
+}
+
+/** Reset: remove all imported files, then empty the tree cache. */
+export function useResetCase(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<CaseEntry[]>({
+    mutationFn: () => resetCase(projectId),
+    onSuccess: (entries) => {
+      queryClient.setQueryData(caseFilesQueryKey(projectId), entries);
+    },
   });
 }
 

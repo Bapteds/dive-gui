@@ -163,6 +163,29 @@ describe('POST /projects/:id/files/import (zip)', () => {
   });
 });
 
+describe('DELETE /projects/:id/files (reset)', () => {
+  it('requires authentication', async () => {
+    const { id } = await makeProject('reset-auth@dive-turbinen.test');
+    const res = await request(app).delete(`/api/v1/projects/${id}/files`);
+    expect(res.status).toBe(401);
+  });
+
+  it('removes all imported files and returns an empty tree', async () => {
+    const { id, auth } = await makeProject('reset@dive-turbinen.test');
+    await importFolder(id, auth, [
+      { relativePath: 'polyMesh/points', data: 'points' },
+      { relativePath: 'polyMesh/boundary', data: BOUNDARY },
+    ]);
+
+    const reset = await request(app).delete(`/api/v1/projects/${id}/files`).set('Authorization', auth);
+    expect(reset.status).toBe(200);
+    expect(reset.body.entries).toEqual([]);
+
+    const tree = await request(app).get(`/api/v1/projects/${id}/files`).set('Authorization', auth);
+    expect(tree.body.entries).toEqual([]);
+  });
+});
+
 describe('GET /projects/:id/files/verify', () => {
   it('reports every mandatory file missing for an empty case', async () => {
     const { id, auth } = await makeProject('g@dive-turbinen.test');

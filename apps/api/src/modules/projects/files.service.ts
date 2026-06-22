@@ -10,6 +10,7 @@ import { AppError } from '../../lib/AppError';
 import {
   caseFileExists,
   caseIsEmpty,
+  clearCase,
   extractArchive,
   listCaseTree,
   readCaseFile,
@@ -103,6 +104,13 @@ export async function importCaseFiles(
 
   const entries = await listCaseTree(projectId);
   return { written, entries };
+}
+
+/** Remove every imported case file (the "Reset" action). Returns the now-empty tree. */
+export async function resetCase(viewer: Viewer, projectId: string): Promise<ImportResult> {
+  await assertProjectVisible(viewer, projectId);
+  await clearCase(projectId);
+  return { written: [], entries: await listCaseTree(projectId) };
 }
 
 /** Build a .zip of the whole case for download. @throws 404 if the case is empty. */

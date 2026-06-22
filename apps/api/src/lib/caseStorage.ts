@@ -245,3 +245,8 @@ export async function removeProjectStorage(projectId: string): Promise<void> {
   const dir = path.join(storageRoot(), 'projects', projectId);
   await fs.rm(dir, { recursive: true, force: true });
 }
+
+/** Remove all of a project's case files (the case dir is recreated on next import). */
+export async function clearCase(projectId: string): Promise<void> {
+  await fs.rm(caseRootFor(projectId), { recursive: true, force: true });
+}

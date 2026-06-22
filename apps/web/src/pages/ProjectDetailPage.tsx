@@ -110,7 +110,7 @@ export function ProjectDetailPage() {
         action={canManage ? <ProjectSettingsMenu project={project} /> : undefined}
       />
 
-      <div className="flex w-full max-w-3xl flex-col gap-6">
+      <div className="flex w-full flex-col gap-6">
         <section className="rounded-md border border-border bg-surface shadow-sm">
           <header className="border-b border-border px-5 py-4 sm:px-6">
             <h2 className="text-lg font-semibold text-text">Details</h2>

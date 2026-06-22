@@ -100,6 +100,12 @@ export async function downloadCase(id: string): Promise<Blob> {
   return apiClient.getBlob(`/projects/${id}/files/download`);
 }
 
+/** Remove all imported case files (reset). Returns the now-empty tree. */
+export async function resetCase(id: string): Promise<CaseEntry[]> {
+  const data = await apiClient.delete<{ entries: CaseEntry[] }>(`/projects/${id}/files`);
+  return data.entries;
+}
+
 /** Read a single case file's text content for the editor. */
 export async function getCaseFileContent(id: string, path: string): Promise<CaseFileContent> {
   const data = await apiClient.get<CaseFileContentResponse>(

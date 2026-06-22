@@ -10,6 +10,7 @@ import {
   getCaseFiles,
   importCaseFiles,
   readCaseFileContent,
+  resetCase,
   saveCaseFileContent,
   scaffoldCase,
   verifyCase,
@@ -82,6 +83,12 @@ export async function importCaseFilesController(req: Request, res: Response): Pr
 
   const result = await importCaseFiles(requireViewer(req), req.params.id, payload);
   res.status(201).json({ written: result.written, entries: result.entries });
+}
+
+/** DELETE /projects/:id/files — remove all imported case files (reset). */
+export async function resetCaseController(req: Request, res: Response): Promise<void> {
+  const result = await resetCase(requireViewer(req), req.params.id);
+  res.status(200).json(result);
 }
 
 /** GET /projects/:id/files/download — stream a .zip of the whole case. */

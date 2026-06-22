@@ -9,6 +9,7 @@ import {
   FolderUp,
   ListChecks,
   Loader2,
+  RotateCcw,
   SquarePen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -31,6 +32,7 @@ import type { CaseEntry, CaseVerification } from '@/lib/api/types';
 import {
   useCaseFilesQuery,
   useImportCase,
+  useResetCase,
   useScaffoldCase,
   useVerifyCase,
 } from '@/features/projects/useCaseFiles';
@@ -264,7 +266,8 @@ export function CaseFilesSection({ projectId }: { projectId: string }) {
                   Edit files
                 </Link>
               </Button>
-              <div className="ml-auto">
+              <div className="ml-auto flex items-center gap-2">
+                <ResetCaseButton projectId={projectId} />
                 <Button
                   type="button"
                   size="sm"
@@ -384,6 +387,67 @@ function CaseTreeSkeleton({ rows = 5 }: { rows?: number }) {
         </div>
       ))}
     </div>
+  );
+}
+
+/** Destructive "Reset": remove all imported files (confirmed). */
+function ResetCaseButton({ projectId }: { projectId: string }) {
+  const [open, setOpen] = useState(false);
+  const reset = useResetCase(projectId);
+
+  const handleConfirm = async () => {
+    try {
+      await reset.mutateAsync();
+      toast.success('Imported files removed.');
+      setOpen(false);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not reset the files.');
+    }
+  };
+
+  return (
+    <AlertDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!reset.isPending) setOpen(next);
+      }}
+    >
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        className="border-danger/50 text-danger hover:bg-danger-tint"
+        onClick={() => setOpen(true)}
+      >
+        <RotateCcw strokeWidth={1.75} aria-hidden="true" />
+        Reset
+      </Button>
+      <AlertDialogContent className="overscroll-contain">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Reset case files?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This permanently removes every imported file for this project. You will need to import
+            them again. This cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={reset.isPending}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={(event) => {
+              event.preventDefault();
+              void handleConfirm();
+            }}
+            disabled={reset.isPending}
+            aria-busy={reset.isPending || undefined}
+          >
+            {reset.isPending && (
+              <Loader2 className="size-4 animate-spin" strokeWidth={1.75} aria-hidden="true" />
+            )}
+            Reset
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 

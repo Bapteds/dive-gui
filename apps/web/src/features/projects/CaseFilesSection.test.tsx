@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import type { CaseEntry, CaseVerification } from '@/lib/api/types';
@@ -20,6 +20,7 @@ vi.mock('@/lib/api/projects', () => ({
   verifyCase: vi.fn(),
   scaffoldCase: vi.fn(),
   downloadCase: vi.fn(),
+  resetCase: vi.fn(),
 }));
 
 import * as api from '@/lib/api/projects';
@@ -67,6 +68,19 @@ describe('CaseFilesSection', () => {
     expect(screen.getByText('512 B')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /verify case/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /download/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reset' })).toBeInTheDocument();
+  });
+
+  it('resets the case after confirmation', async () => {
+    vi.mocked(api.getCaseFiles).mockResolvedValue(tree);
+    vi.mocked(api.resetCase).mockResolvedValue([]);
+    renderSection();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reset' }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reset' }));
+
+    await waitFor(() => expect(api.resetCase).toHaveBeenCalledWith('p1'));
   });
 
   it('opens the generate-files overlay when verification reports missing base files', async () => {

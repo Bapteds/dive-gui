@@ -13,19 +13,22 @@ import { Sidebar } from './Sidebar';
  * px-4. The whole shell sits on the page-bg tint.
  */
 export function AppShell() {
-  // The file editor opts out of the centered max-width container so it can use
-  // the full viewport (full width + full height); every other page stays
-  // centered at max-w-content.
+  // Project pages opt out of the centered max-width container to use the full
+  // width. Two flavors:
+  //  - the file editor (`…/edit`) is pinned to exactly the viewport minus the
+  //    64px (h-16) sticky header and clipped, so the page never scrolls and the
+  //    editor scrolls internally (a fixed height is deterministic and lets
+  //    descendants resolve `height: 100%`);
+  //  - the project detail page is full width but scrolls normally.
+  // Every other page stays centered at max-w-content.
   const { pathname } = useLocation();
-  const fullBleed = /^\/projects\/[^/]+\/edit\/?$/.test(pathname);
-  // Full-bleed pins the content region to exactly the viewport minus the 64px
-  // (h-16) sticky header and clips it, so the page itself never scrolls and the
-  // editor scrolls internally. A fixed height (not a min-h-0 flex chain) is used
-  // because it is deterministic and lets descendants resolve `height: 100%`.
-  // Normal pages keep the default centered, grow-and-scroll-the-page behavior.
-  const contentClass = fullBleed
+  const isEditor = /^\/projects\/[^/]+\/edit\/?$/.test(pathname);
+  const isWide = /^\/projects\/[^/]+\/?$/.test(pathname);
+  const contentClass = isEditor
     ? 'flex h-[calc(100dvh_-_4rem)] flex-col overflow-hidden px-4 py-4 sm:px-6 sm:py-6'
-    : 'mx-auto w-full max-w-content px-4 py-6 sm:px-6 sm:py-8 lg:px-8';
+    : isWide
+      ? 'w-full px-4 py-6 sm:px-6 sm:py-8 lg:px-8'
+      : 'mx-auto w-full max-w-content px-4 py-6 sm:px-6 sm:py-8 lg:px-8';
 
   return (
     <div className="flex min-h-[100dvh] flex-col bg-bg">

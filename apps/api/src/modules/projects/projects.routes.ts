@@ -20,6 +20,7 @@ import {
   getCaseFilesController,
   importCaseFilesController,
   parseCaseUpload,
+  resetCaseController,
   saveCaseFileContentController,
   scaffoldCaseController,
   verifyCaseController,
@@ -75,6 +76,11 @@ export function createProjectsRouter(): Router {
     '/:id/files',
     validate({ params: projectIdParamSchema }),
     asyncHandler(getCaseFilesController),
+  );
+  router.delete(
+    '/:id/files',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(resetCaseController),
   );
   router.post(
     '/:id/files/import',
