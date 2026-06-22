@@ -1,0 +1,75 @@
+// Prisma schema for the DIVE Turbinen API.
+// Provider: SQLite (local file) — trivially migratable to Postgres later.
+// The client is generated into node_modules/@prisma/client.
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+/// Application user / account.
+/// Passwords are never stored in clear text — only an argon2id hash.
+///
+/// NOTE: `role` is stored as a String rather than a Prisma enum because the
+/// SQLite connector does not support native enums. The allowed values
+/// ('SUPER_ADMIN' | 'USER') are enforced at the application layer (zod schemas)
+/// and reflected in the typed `Role` union exported from the codebase, so the
+/// wire contract is unchanged. Migrating to Postgres later can promote this to
+/// a real enum without touching the API surface.
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  fullName     String
+  passwordHash String
+  role         String    @default("USER") // 'SUPER_ADMIN' | 'USER'
+  isProtected  Boolean   @default(false) // true = permanent super-admin (cannot be deleted or downgraded)
+  isActive     Boolean   @default(true) // false = disabled account (cannot log in or refresh)
+  tokenVersion Int       @default(0) // bumped on logout to revoke outstanding refresh tokens
+  lastLoginAt  DateTime? // timestamp of the most recent successful login (null = never)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  projects        Project[] @relation("ProjectOwner")
+  collaboratingOn Project[] @relation("ProjectCollaborators")
+}
+
+/// A project owned by a user, optionally shared with collaborators. This base
+/// phase only carries a title; richer fields (CFD case parameters, runs) arrive
+/// with the solver phase. Visibility: the owner and any collaborator can see it;
+/// a super-admin can see every project.
+model Project {
+  id            String   @id @default(cuid())
+  title         String
+  ownerId       String
+  owner         User     @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  collaborators User[]   @relation("ProjectCollaborators")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([ownerId])
+}
+
+/// Append-only audit trail of security-relevant admin and auth actions.
+///
+/// Actor and target are denormalized (id + email captured at write time) so the
+/// log stays readable even after an account is renamed or deleted. There are no
+/// foreign keys on purpose: an audit row must survive deletion of the user it
+/// references. Rows are never updated or deleted by the application.
+model AuditLog {
+  id          String   @id @default(cuid())
+  action      String // e.g. 'LOGIN' | 'USER_CREATED' | 'USER_DISABLED' (see lib/audit)
+  actorId     String? // who performed the action (null for unauthenticated/system)
+  actorEmail  String? // denormalized actor email at the time of the action
+  targetId    String? // the account the action affected, if any
+  targetEmail String? // denormalized target email at the time of the action
+  metadata    String? // optional JSON string with extra context (e.g. changed fields)
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId])
+  @@index([targetId])
+}

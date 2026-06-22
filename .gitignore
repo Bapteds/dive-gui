@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Test coverage
+coverage/
+
+# Environment files (keep .env.example)
+.env
+.env.*
+!.env.example
+
+# Local SQLite databases
+*.db
+*.db-journal
+apps/api/prisma/dev.db*
+
+# Uploaded OpenFOAM case files (per-project storage) and test storage
+apps/api/storage/
+apps/api/test-storage/
+
+# OS files
+.DS_Store
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Local-only files
+*.local

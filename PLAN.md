@@ -1,0 +1,220 @@
+# PLAN.md — DIVE Turbinen · openFOAM Solver Control
+
+> Plan d'implémentation de la base applicative.
+> Objectif de cette phase : **fondations** — auth, back office admin de gestion des comptes, page d'accueil vierge.
+> Le pilotage réel d'`openFoamSolver` (serveur distant) **n'est PAS** dans le périmètre de cette phase (pas de serveur dispo). On prépare seulement le terrain.
+
+---
+
+## 1. Décisions validées (avec l'utilisateur)
+
+| Sujet | Choix | Note |
+|-------|-------|------|
+| API | **Vrai backend Node + TypeScript** (Express) | Serveur séparé, REST, prêt à brancher openFOAM plus tard. |
+| Persistance | **SQLite (fichier local) via Prisma** | Zéro install serveur ; migration Postgres triviale ensuite. |
+| Authentification | **JWT access + refresh** | Access token court (15 min), refresh en cookie `httpOnly` (7 j). |
+| Rôles | **`super-admin` / `user`** | `super-admin` indélébile et non rétrogradable. |
+
+> Choix du framework backend : **Express** (léger, explicite, TypeScript). Alternative écartée pour l'instant : NestJS (plus structuré mais lourd pour une base). À rediscuter si le périmètre grossit.
+
+---
+
+## 2. Architecture du dépôt (monorepo)
+
+```
+app/
+├── apps/
+│   ├── api/                 # Backend Express + TS + Prisma
+│   │   ├── prisma/
+│   │   │   ├── schema.prisma
+│   │   │   └── seed.ts       # crée le super-admin initial
+│   │   ├── src/
+│   │   │   ├── config/       # env, constantes
+│   │   │   ├── lib/          # prisma client, jwt, hashing, logger
+│   │   │   ├── middleware/   # auth, role guard, error handler, validation
+│   │   │   ├── modules/
+│   │   │   │   ├── auth/      # routes login / refresh / logout / me
+│   │   │   │   └── users/     # CRUD comptes (back office)
+│   │   │   ├── app.ts        # app Express
+│   │   │   └── server.ts     # bootstrap
+│   │   ├── .env.example
+│   │   └── package.json
+│   └── web/                  # Frontend React + Vite + TS
+│       ├── src/
+│       │   ├── app/          # routes, providers, guards
+│       │   ├── components/   # UI réutilisable + primitives shadcn
+│       │   ├── features/
+│       │   │   ├── auth/     # login, contexte session
+│       │   │   └── admin/    # back office users
+│       │   ├── lib/          # client API (fetch + refresh auto), utils
+│       │   ├── pages/        # Home, Login, Admin
+│       │   ├── styles/
+│       │   │   └── tokens.css # design tokens (source unique CSS vars)
+│       │   └── main.tsx
+│       ├── tailwind.config.ts # miroir des tokens
+│       └── package.json
+├── package.json              # workspaces (npm) + scripts racine
+├── AGENTS.md                 # (existant) règles front
+├── CLAUDE.md                 # (existant) charte design
+└── PLAN.md                   # ce fichier
+```
+
+> Découplage strict front/back. Le front parle au back uniquement via le client API (`apps/web/src/lib/api`). Quand le serveur openFOAM existera, on ajoutera un module `solver/` côté API sans toucher au reste.
+
+---
+
+## 3. Modèle de données (Prisma / SQLite)
+
+```prisma
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  fullName     String
+  passwordHash String
+  role         Role     @default(USER)
+  isProtected  Boolean  @default(false) // true = super-admin indélébile
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+enum Role {
+  SUPER_ADMIN
+  USER
+}
+```
+
+- **Mots de passe** : hash `argon2` (jamais en clair, jamais loggués).
+- **Seed** : crée 1 `super-admin` (`isProtected = true`) depuis variables d'env (`SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`). Idempotent.
+
+---
+
+## 4. API REST — contrat
+
+Préfixe : `/api/v1`. Réponses JSON. Erreurs normalisées `{ error: { code, message } }`.
+
+### Auth
+| Méthode | Route | Accès | Rôle |
+|---------|-------|-------|------|
+| POST | `/auth/login` | public | — | corps `{ email, password }` → access token + pose le cookie refresh |
+| POST | `/auth/refresh` | cookie | — | renvoie un nouvel access token |
+| POST | `/auth/logout` | auth | — | invalide le cookie refresh |
+| GET  | `/auth/me` | auth | — | profil de l'utilisateur courant |
+
+### Users (back office)
+| Méthode | Route | Rôle requis |
+|---------|-------|-------------|
+| GET    | `/users` | `super-admin` | liste paginée |
+| POST   | `/users` | `super-admin` | crée un compte |
+| GET    | `/users/:id` | `super-admin` | détail |
+| PATCH  | `/users/:id` | `super-admin` | modifie (nom, rôle, mot de passe) |
+| DELETE | `/users/:id` | `super-admin` | supprime |
+
+**Règles métier dures (testées) :**
+- Un compte `isProtected` (super-admin) **ne peut pas** être supprimé → `409`.
+- Le super-admin ne peut pas être rétrogradé en `user`.
+- On ne peut pas supprimer son **propre** compte.
+- Email unique ; validation des entrées via `zod`.
+
+---
+
+## 5. Sécurité
+
+- Hash mots de passe : `argon2id`.
+- JWT signés (`jsonwebtoken`), secret en env ; access 15 min, refresh 7 j (cookie `httpOnly`, `SameSite=Lax`, `Secure` en prod).
+- Middleware : `requireAuth` (vérifie l'access token) + `requireRole('SUPER_ADMIN')`.
+- `helmet`, CORS restreint à l'origine front, rate-limit sur `/auth/login`.
+- Aucune donnée sensible en log. Variables secrètes uniquement via `.env` (jamais commit ; `.env.example` fourni).
+
+---
+
+## 6. Frontend — écrans & routing
+
+Stack imposée par `CLAUDE.md` / `AGENTS.md` : React + Vite + TS, Tailwind branché sur les tokens, shadcn/ui, `lucide-react`.
+
+- **Routing** : `react-router`. Garde de route (`<RequireAuth>`, `<RequireRole>`).
+- **Session** : contexte React + client API qui rafraîchit l'access token automatiquement sur `401`.
+- **Écrans** :
+  1. `/login` — formulaire email + mot de passe (états : idle, loading, erreur).
+  2. `/` — **page d'accueil vierge** (layout + header de marque, contenu vide volontairement).
+  3. `/admin` — back office (réservé `super-admin`) : table des comptes, création, édition, suppression avec confirmation. Le super-admin apparaît avec un badge « protégé » et actions delete/downgrade désactivées.
+- **États gérés partout** : loading, empty, error, hover, focus, disabled (DoD CLAUDE.md).
+- **Design** : 100 % via tokens (`tokens.css` + `tailwind.config`), palette stricte `#004A99 / #EE7F00 / #BCBDBF` + échelle. Thème clair uniquement.
+
+> ⚠️ Règle CLAUDE.md §0 : avant TOUT JSX/CSS, exécuter la séquence skills **1) ui-ux-pro-max → 2) frontend-design → 3) design-taste-frontend → 4) web-design-guidelines**. Aucune ligne d'UI ne sera écrite avant ça.
+
+---
+
+## 7. Qualité / outillage
+
+- TypeScript strict des deux côtés. ESLint + Prettier. Code **commenté en anglais**.
+- Tests : `vitest` (front) + tests API (supertest) ciblés sur les règles métier critiques (suppression super-admin, auth, rôles).
+- Scripts racine : `dev` (front + api en parallèle), `build`, `lint`, `test`, `db:migrate`, `db:seed`.
+- `full-output-enforcement` : aucun placeholder ni `// TODO` tronqué dans le code livré.
+
+---
+
+## 8. Découpage en lots (ordre d'exécution proposé)
+
+1. **Lot 0 — Scaffolding** : monorepo (workspaces), configs TS/ESLint/Prettier, `.env.example`, scripts racine.
+2. **Lot 1 — Backend auth & DB** : Prisma + SQLite, schéma, seed super-admin, modules auth (login/refresh/logout/me), middlewares sécurité. + tests.
+3. **Lot 2 — Backend users** : CRUD + règles métier (protection super-admin). + tests.
+4. **Lot 3 — Front fondation** : Vite, tokens design, Tailwind, shadcn, client API, contexte session, routing + gardes. *(skills 1→4 d'abord)*
+5. **Lot 4 — Écrans** : Login, Home vierge, Back office Admin. *(skills 1→4 d'abord)*
+6. **Lot 5 — Finitions** : responsive, a11y AA, review `web-design-guidelines`, README de lancement.
+
+> Je te propose de **valider ce plan**, puis d'exécuter lot par lot (je te montre le résultat à chaque lot). Dis-moi si tu veux ajuster le framework backend, le périmètre des rôles, ou l'ordre des lots.
+
+---
+
+## 9. Points encore ouverts (à confirmer si besoin)
+
+- **Gestionnaire de paquets** : npm workspaces par défaut
+- **Inscription publique** : aucune — les comptes sont créés uniquement par le super-admin via le back office.
+- **Réinitialisation mot de passe / email** : hors périmètre de cette base (pas de serveur mail). À planifier plus tard.
+
+---
+
+## 10. Journal des modifications de code
+<!-- Chaque modification de code est notée ici (exigence CLAUDE.md §0). Format : date — lot — fichiers — description. -->
+
+| Date | Lot | Fichiers / zone | Description |
+|------|-----|-----------------|-------------|
+| 2026-06-19 | Design (skills 1→3) | `PRODUCT.md`, `DESIGN.md` | Direction design issue de `ui-ux-pro-max` → `impeccable` (substitut de `frontend-design`, non installé) → `design-taste-frontend`. Contrat visuel + tokens verrouillés + specs des 3 écrans. |
+| 2026-06-19 | Lot 0 (Scaffolding) | racine, `apps/api`, `apps/web` | Monorepo npm workspaces ; `@dive/api` (Express+TS CommonJS, app bootable, env validé zod) + `@dive/web` (Vite+React 18+TS, alias `@`) ; configs TS/ESLint9/Prettier ; install unique (555 paquets, argon2 natif OK). Gates verts (typecheck/build/lint/health). |
+| 2026-06-19 | Lot 1+2 (Backend) | `apps/api/prisma`, `apps/api/src`, `apps/api/tests` | Prisma/SQLite (modèle `User` ; `role` en `String` car SQLite/Prisma 5.22 sans enum natif, enum appliqué côté zod) + migration `init` + seed super-admin argon2id idempotent. JWT access+refresh, révocation par `tokenVersion` au logout, cookie refresh httpOnly path-scopé. Middlewares auth/role/validate/rate-limit. CRUD `/users` + règles dures (`PROTECTED_ACCOUNT`, `PROTECTED_ROLE`, `SELF_DELETE_FORBIDDEN`, `EMAIL_TAKEN`). 29 tests supertest verts. Note : `DATABASE_URL=file:./dev.db` (résolu relativement à `prisma/`). |
+| 2026-06-19 | Lot 3 (Front fondation) | `apps/web/src` | `tokens.css` + `tailwind.config.ts` (charte exacte, tout en variables CSS), primitives shadcn/Radix tokenisées (button/input/field/password/badge/table/dialog/alert-dialog/select/dropdown/tooltip/avatar/separator/skeleton/sonner), client API (refresh single-flight sur 401), contexte session (token en mémoire + bootstrap via cookie refresh), react-router + gardes `RequireAuth`/`RequireRole`, app-shell (header/sidebar/nav mobile), pages **Login + Home finalisées**. Gates verts. Inter chargé via `<link>` Google Fonts (pas de paquet font dispo). |
+| 2026-06-19 | Lot 4 (Écrans Admin) | `apps/web/src/features/admin`, `pages/AdminPage.tsx`, `vitest.config.ts` | Back office complet : table users (états loading skeleton / empty / error), dialogue create/edit (react-hook-form + zod, mapping des codes d'erreur API), confirmation de suppression (AlertDialog), **super-admin protégé** (delete + downgrade désactivés avec tooltip via `aria-disabled` focusable), garde anti-auto-suppression, mutations react-query + toasts. 4 tests RTL verts. Table responsive (colonne « Created » masquée < 640px, pas de scroll horizontal à 375px). |
+| 2026-06-19 | Lot 5 (QA / intégration / review) | racine, `apps/web/src`, `index.html` | Gate monorepo vert (lint 0 erreur / typecheck / **33 tests** : 29 API + 4 web / build). **Smoke e2e live** sur serveur réel (10/10) : login super-admin seedé, cookie httpOnly, `/me`, `/users`, delete protégé → 409, mauvais mdp → 401, non-auth → 401. **Review `web-design-guidelines` (skill 4)** : 12 correctifs a11y appliqués — CTA accessible `--color-cta #A85F00` blanc gras (**4.88:1** AA), placeholder 5.82:1, bouton désactivé 4.73:1, skip-link, `theme-color`, préload font, `touch-action`, `break-words`, overscroll popovers, ellipses placeholders, focus mobile gardé, live-region erreur login. README de lancement finalisé. **Différé (hors-scope base, documenté)** : état des dialogues dans l'URL, garde de saisie non sauvegardée. |
+| 2026-06-19 | Perf (post-livraison) | `apps/web` : `app/router.tsx`, `components/layout/AppShell.tsx`, `features/auth/AuthProvider.tsx`, `vite.config.ts` | Optimisations (skill `react-best-practices`) suite au constat de lenteur. **Mesure** : backend rapide (login argon2 ~65 ms, lecture DB ~7 ms) → goulot côté front. Code-splitting par route (`lazy` + `Suspense` dans le shell) : bundle unique 554 kB → chunks `react`/`router`/`radix`/`query`/`forms`/`vendor` + 1 chunk/page ; `forms`+`AdminPage` (~29 kB gzip) différés jusqu'à `/admin`. Bootstrap session : suppression du `me()` redondant (`refresh()` renvoie déjà l'utilisateur). `optimizeDeps.include` (évite la ré-optimisation Vite à la 1re navigation) + `manualChunks` (vendors cacheables). Valeur de contexte mémoïsée. Gates verts. |
+| 2026-06-19 | Perf (police + diagnostic `/`) | `apps/web/index.html`, `apps/web/src/main.tsx`, `apps/web/package.json` | **Diagnostic** du « ~2000 ms pour le document `/` » : prod `/` mesuré à **~5 ms** (preview) → les 2 s = cold-start Vite (pré-bundling des deps au 1er chargement, **dev uniquement**), pas l'app. **Correctif durable** : Inter **self-hosté** via `@fontsource/inter` (400/500/600/700 + 700 italic), suppression de la requête Google Fonts externe bloquante (~300 ms) → même origine, hors-ligne. Build : 0 référence externe dans le HTML, 35 woff2 bundlés (sous-ensemble latin à la demande). Gates verts (typecheck/lint/33 tests/build). |
+| 2026-06-19 | Feature (Compte self-service) | `apps/api/src/modules/auth/*`, `apps/api/src/modules/users/users.service.ts`, `apps/api/tests/{account,users}.test.ts`, `apps/web/src/features/account/*`, `pages/AccountPage.tsx`, `lib/api/{auth,types,client}.ts`, `features/auth/{AuthProvider,auth-context}`, `app/router.tsx`, `components/layout/UserMenu.tsx` | Issu de l'analyse 5 agents (manque fonctionnel n°1 : un USER ne pouvait rien changer sur lui-même). **Backend** : `PATCH /auth/me` (nom propre uniquement ; email/rôle restent administrés), `POST /auth/change-password` (re-vérifie le mot de passe courant → 400 `INVALID_PASSWORD`, hash argon2id, **bump `tokenVersion` → révoque les AUTRES sessions** puis re-pose le cookie refresh pour garder l'appareil courant connecté). **Correctif sécu** : `users.service.updateUser` bump `tokenVersion` quand le rôle change réellement ou le mot de passe est réinitialisé (révocation quasi-immédiate d'un compte rétrogradé/réinitialisé ; un no-op de rôle ne révoque pas). **Frontend** (séquence skills obligatoire `ui-ux-pro-max → impeccable (substitut frontend-design) → design-taste-frontend → web-design-guidelines`) : page `/account` (RequireAuth, accès via le menu user en **vrai `<Link>` `asChild`**), section **Profil** (email+rôle en lecture seule via `dl`, note « managed by your administrator », nom éditable, Save désactivé tant que non modifié) + section **Mot de passe** (current/new/confirm, show/hide, zod `onBlur` : ≥8 / match / ≠ courant ; mapping `INVALID_PASSWORD` → erreur sur le champ courant), `AuthProvider.setUser` pour resync la session (avatar/menu), `client.changePassword` avec `credentials:'include'` (le serveur fait tourner le cookie). Décisions anti-slop : hairline = signature (pas de marqueur diamant répété par section), 1 CTA orange par zone. **Tests** : +13 API (`account` 9 + révocation `users` 4) + 13 web (`schemas` 8, `ProfileSection` 2, `ChangePasswordSection` 3). **Gates verts** : typecheck, lint 0 erreur, **59 tests** (42 API + 17 web), build (chunk `AccountPage` lazy ~2 kB gzip). **Différé** (cohérent avec l'app, déjà noté §lot 5) : garde de saisie non sauvegardée. |
+| 2026-06-22 | Lot « App web » (backlog §11, hors track solveur) | racine (`package.json`, `.github/workflows/ci.yml`), `packages/shared/*`, `apps/api/{prisma,src,tests}`, `apps/web/src/{components,features,pages,lib,app}` | Quatre tracks du backlog livrés en un lot. **Correctifs & polish** : bug AA `sonner.tsx` `actionButton` orange `#EE7F00` → `--color-cta` (blanc gras) ; bordures d'erreur `aria-invalid` sur email+mdp du login quand `INVALID_CREDENTIALS` (effacées à la frappe, message en banner `aria-live`) ; `apps/web/.env.example` + garde *lazy* `getBaseUrl()` (erreur claire si `VITE_API_URL` absent, sans casser les tests) ; **durcissement API** : `app.set('trust proxy', env.TRUST_PROXY)`, `express.json({ limit:'16kb' })`, `config/env.ts` impose en prod des secrets JWT ≥32 char, distincts, non-placeholder (+ `SEED_ADMIN_PASSWORD`). **Robustesse** : pipeline **CI** GitHub Actions (prisma generate → build:shared → lint → typecheck → test → build) ; table **`AuditLog`** (append-only, acteur/cible dénormalisés) + `lib/audit.ts` best-effort, enregistrée sur login/logout/profil/mdp et create/update/delete/disable/enable ; `GET /audit-logs` (super-admin, paginé) + page **/activity**. **Profondeur back-office** : migration Prisma `add_audit_log_and_account_status` (`User.isActive`, `User.lastLoginAt`) ; login stampe `lastLoginAt` et **refuse 403 `ACCOUNT_DISABLED`** (après vérif mdp, pas d'énumération) ; `requireAuth`+`refresh` rejettent un compte désactivé ; `updateUser` gère `isActive` (désactiver bump `tokenVersion`, garde `PROTECTED_ACCOUNT` + nouvelle `SELF_DISABLE_FORBIDDEN`) ; table admin **recherche** (nom+email, Échap efface) + **tri** colonnes (`aria-sort`) + colonne **Last login** + badge **Active/Disabled** (icône+texte) + action **Disable/Enable** (confirm dialog pour désactiver, direct pour réactiver) ; séquence skills obligatoire suivie (`ui-ux-pro-max → design-taste-frontend → web-design-guidelines`). **Contrat partagé** : `packages/shared` (`@dive/shared`, dual CJS+ESM) source unique de `Role`/`roleSchema`/`PASSWORD_MIN/MAX`/`FULL_NAME_MAX`/`SERVER_ERROR_CODES`, consommé par les schémas zod API + web (supprime la dérive de longueur de mdp). **Garde de saisie** : `UnsavedChangesPrompt` (`useBlocker` + `beforeunload`) sur `/account` (état dirty agrégé des 2 sections) et le dialogue admin create/edit. **Gates verts** : lint 0 erreur, typecheck, **82 tests** (55 API + 27 web), build (chunks `AdminPage`/`ActivityPage` lazy). Note : pré-requis CI/local `npm run build:shared` avant typecheck/test/dev (intégré aux scripts racine). |
+| 2026-06-22 | Feature (Projects) | `packages/shared/src/index.ts`, `apps/api/{prisma,src/modules/projects,tests/projects.test.ts,app.ts,tests/helpers.ts}`, `apps/web/src/{lib/api,features/projects,pages/ProjectsPage.tsx,components/layout/nav.ts,app/router.tsx}` | Zone **Projects** : un utilisateur connecté crée un projet (titre seul, rien d'autre). **Backend** : modèle Prisma `Project` (titre, `ownerId` relation `User` `onDelete: Cascade`) + migration `add_project` ; module `projects` (requireAuth, **owner-scoped**) — `POST /projects` (zod `title` 1..`PROJECT_TITLE_MAX_LENGTH` partagé) + `GET /projects` (les siens, plus récents d'abord) ; `ownerId` jamais sérialisé. **Frontend** (système DESIGN.md déjà cadré par la séquence skills cette session) : nav item **Projects** (tous les rôles), route `/projects` lazy, page = 1 form de création (champ titre + 1 CTA orange) au-dessus de la liste (états loading skeleton / empty / error / data ; colonne Created `tabular-nums`). **Tests** : +4 API (auth requise, création 201 owner-scopée, titre vide 422, isolation entre users) + 3 web (schéma titre). `resetDatabase` purge `project` aussi. **Gates verts** : typecheck, lint 0 erreur, **89 tests** (59 API + 30 web), build (chunk `ProjectsPage` lazy ~1.9 kB gzip). |
+| 2026-06-22 | Feature (Projects: collaborateurs, détail, delete) | `packages/shared/src/index.ts`, `apps/api/{prisma,src/modules/projects/*,tests/projectsAccess.test.ts}`, `apps/web/src/{lib/api/{types,projects},features/projects/useProjects,pages/{ProjectsPage,ProjectDetailPage},app/router.tsx}` | Évolution du modèle d'accès des projets. **Visibilité** : un projet est visible par son **owner**, ses **collaborateurs**, et **tout super-admin** ; un étranger reçoit **404** (pas de fuite d'existence). **Migration** `add_project_collaborators` : m2m implicite `Project.collaborators ↔ User` (relations nommées `ProjectOwner`/`ProjectCollaborators`). **Backend** : `GET /projects` (owner+collab ; super-admin → tout), `GET /projects/:id` (404 si non-membre), `DELETE /projects/:id` (**owner ou super-admin** ; un simple collaborateur → 403 `FORBIDDEN`), `POST /projects/:id/collaborators` (ajout **par email** ; 404 `USER_NOT_FOUND`, 409 `COLLABORATOR_EXISTS` si owner/déjà collab), `DELETE /projects/:id/collaborators/:userId`. `PublicProject` sérialise désormais `owner` + `collaborators` (résumés `{id,fullName,email}`). Nouveaux codes partagés `USER_NOT_FOUND`/`COLLABORATOR_EXISTS`. **Frontend** : liste = titres **cliquables** (lien vers `/projects/:id`) + colonne **Owner** (« You » si c'est l'utilisateur) ; **page détail** `/projects/:id` (lazy) avec section Détails (owner, date) + section Collaborateurs (ajout par email + retrait, réservés owner/super-admin via `canManage` = owner || super-admin) + bouton **Delete project** (déclencheur secondaire teinté danger → dialogue de confirmation destructif), état not-found dédié. **Tests** : +14 API (visibilité owner/collab/étranger/super-admin, détail 404, delete 204/403/404/super-admin, ajout/retrait collaborateur, email inconnu, doublon, non-manager 403). **Gates verts** : typecheck, lint 0 erreur, **103 tests** (73 API + 30 web), build (chunk `ProjectDetailPage` lazy ~2.6 kB gzip). Note Windows : régénérer le client Prisma exige d'arrêter le dev server (`tsx watch` verrouille le moteur). |
+| 2026-06-22 | Tweak UI (déplacement delete + retrait visuel Activity) | `apps/web/src/pages/ProjectDetailPage.tsx`, `apps/web/src/{components/layout/nav.ts,app/router.tsx,lib/api/types.ts}` (+ suppressions) | **(1)** Sur demande `/ui-ux-pro-max` : le bouton **Delete project** quitte le header (slot du CTA principal) pour une section **« Danger zone »** en bas de la page détail (bordure `border-danger/40`, libellé + ligne explicative), conforme à `destructive-nav-separation` / `destructive-emphasis`. **(2)** Retrait de la **partie visuelle Activity** : suppression de `pages/ActivityPage.tsx`, `features/admin/{useAuditLogs,auditActions}.ts`, `lib/api/audit.ts`, du nav item + route `/activity`, et des types `AuditLogEntry`/`ListAuditLogsResponse`. **Backend conservé** (non visuel) : table `AuditLog`, enregistrement, `GET /audit-logs` + ses tests. **Gates verts** : typecheck, lint 0 erreur, **103 tests** (73 API + 30 web), build (plus de chunk `ActivityPage`). |
+
+---
+
+## 11. Backlog d'améliorations (analyse 5 agents — post-fondation)
+
+> Issu de l'analyse de 5 agents le 2026-06-19 (la fondation `PLAN.md` §1-§9 étant livrée).
+> L'utilisateur a choisi de construire **track 1 (Compte self-service)** en premier ; le reste est **validé mais pas encore construit**.
+> ⚠️ Toute UI ici passe d'abord par la séquence skills obligatoire (`CLAUDE.md §0`). Vérifier que les références fichier/ligne tiennent toujours avant d'agir.
+
+### Fait
+| # | Amélioration | Détail |
+|---|---|---|
+| ✅ 1 | **Compte self-service** | Page `/account` + `PATCH /auth/me` + `POST /auth/change-password`. Voir §10 (2026-06-19). |
+| ✅ 2 | **Révocation de session au changement mdp/rôle** | `tokenVersion` bumpé dans `users.service.updateUser` + au change-password. Voir §10. |
+| ✅ 3 | **Correctifs & polish** | Bug AA sonner → `--color-cta` ; bordures d'erreur login ; `apps/web/.env.example` + garde `VITE_API_URL` ; durcissement API (`trust proxy`, `json limit 16kb`, secrets prod imposés). Voir §10 (2026-06-22). |
+| ✅ 4 | **Robustesse fondation** | Pipeline CI GitHub Actions + table `AuditLog` (enregistrement admin/auth) + `GET /audit-logs` + page `/activity`. Voir §10 (2026-06-22). |
+| ✅ 5 | **Profondeur back-office** | Recherche + tri + colonne `lastLoginAt` + statut Active/Disabled + désactiver/réactiver (`isActive`, login bloqué 403 `ACCOUNT_DISABLED`). Voir §10 (2026-06-22). |
+| ✅ 6 | **Contrat partagé** | `packages/shared` (`@dive/shared`) : `Role`/`roleSchema`/longueurs/error codes consommés des deux côtés. Voir §10 (2026-06-22). |
+| ✅ 7 | **Garde de saisie non sauvegardée** | `UnsavedChangesPrompt` (`useBlocker` + `beforeunload`) sur `/account` et le dialogue admin. Voir §10 (2026-06-22). |
+
+### À faire (les « modifs manquantes » restantes)
+
+**Track — Socle solveur + Home** *(le plus gros pas produit, ~L ; volontairement laissé pour une phase dédiée)*
+- [ ] Modèles Prisma `Case` (projet CFD) + `Run` (statut, stub) ; routes `/cases` ; page liste + détail.
+- [ ] Remplacer le `EmptyState` vide de la Home par une vraie page d'accueil « workspace ».
+- [ ] Données seed réalistes (étage de turbine, etc.). Dispatch = stub tant que le serveur openFOAM n'existe pas.

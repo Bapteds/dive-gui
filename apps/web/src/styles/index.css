@@ -1,0 +1,132 @@
+/**
+ * index.css - Global stylesheet entry.
+ *
+ * Imports the design tokens, then the three Tailwind layers. Base element
+ * styles set the page background, text color, and font family from tokens so
+ * the whole app inherits the DIVE light theme. A subtle `.bg-blueprint`
+ * utility renders the faint engineering grid used behind the login card.
+ */
+
+@import './tokens.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    /* Tokenised default border color so `border` alone reads as a hairline. */
+    border-color: var(--color-border);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    /* Remove the grey tap flash on mobile (iOS/Android). */
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Remove the 300ms tap delay on interactive controls (mobile). */
+  button,
+  [role='button'],
+  a,
+  label,
+  summary {
+    touch-action: manipulation;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background-color: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Inter stylistic sets: tabular-friendly figures and refined glyphs. */
+    font-feature-settings:
+      'cv05' 1,
+      'ss01' 1;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Headings use a slightly tighter tracking per the type scale. */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    letter-spacing: -0.01em;
+  }
+
+  /* A single, consistent, visible focus ring for keyboard users everywhere. */
+  :focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+  }
+
+  /**
+   * Skip link: the first Tab stop in the app shell. Visually hidden offscreen
+   * until focused, then it slides on-screen at the top-left as a surface chip
+   * with the standard focus ring, so keyboard users can jump past the nav.
+   */
+  .skip-link {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: var(--z-toast);
+    transform: translateY(-150%);
+    padding: 8px 16px;
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    font-size: 0.875rem;
+    font-weight: 600;
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-md);
+    transition: transform var(--duration-fast) var(--ease-out);
+  }
+
+  .skip-link:focus {
+    transform: translateY(0);
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+  }
+
+  /* Honor reduced-motion globally: collapse transitions and animations. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  /**
+   * Faint engineering grid for the login background. 1px lines in the border
+   * color over the page background at a 32px cadence, kept barely perceptible.
+   * It must read as texture, never as a foreground element.
+   */
+  .bg-blueprint {
+    background-color: var(--color-bg);
+    background-image:
+      linear-gradient(to right, var(--color-border) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--color-border) 1px, transparent 1px);
+    background-size: 32px 32px;
+    background-position: -1px -1px;
+  }
+
+  /* Tabular figures utility for data columns (dates, counts). */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}

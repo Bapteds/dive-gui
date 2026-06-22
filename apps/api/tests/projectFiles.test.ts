@@ -1,0 +1,280 @@
+// Integration tests for project case files: import (folder + zip), tree
+// listing, verification, scaffolding, download, and access control.
+import { promises as fs } from 'node:fs';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import request from 'supertest';
+import AdmZip from 'adm-zip';
+import { app, authHeader, createProtectedAdmin, createTestUser, resetDatabase } from './helpers';
+import { prisma } from '../src/lib/prisma';
+
+const BOUNDARY = `FoamFile { class polyBoundaryMesh; object boundary; }
+2
+(
+    inlet { type patch; nFaces 10; startFace 100; }
+    outlet { type patch; nFaces 10; startFace 110; }
+)
+`;
+
+/** Create a project owned by a freshly created user. */
+async function makeProject(email: string): Promise<{ userId: string; auth: string; id: string }> {
+  const user = await createTestUser({ email });
+  const project = await prisma.project.create({ data: { title: 'Case', ownerId: user.id } });
+  return { userId: user.id, auth: authHeader(user), id: project.id };
+}
+
+/**
+ * Build a raw multipart body. superagent's `.attach()` basenames the part
+ * filename, which would strip the relative path a folder upload carries; the
+ * browser (and busboy with preservePath) keep it. We craft the body by hand so
+ * the tests exercise the real directory-preserving behavior.
+ */
+function buildMultipart(parts: Array<{ field: string; filename: string; data: Buffer | string }>): {
+  body: Buffer;
+  contentType: string;
+} {
+  const boundary = '----DiveTestBoundary7MA4YWxkTrZu0gW';
+  const chunks: Buffer[] = [];
+  for (const part of parts) {
+    const data = Buffer.isBuffer(part.data) ? part.data : Buffer.from(part.data);
+    chunks.push(
+      Buffer.from(
+        `--${boundary}\r\n` +
+          `Content-Disposition: form-data; name="${part.field}"; filename="${part.filename}"\r\n` +
+          'Content-Type: application/octet-stream\r\n\r\n',
+      ),
+    );
+    chunks.push(data, Buffer.from('\r\n'));
+  }
+  chunks.push(Buffer.from(`--${boundary}--\r\n`));
+  return { body: Buffer.concat(chunks), contentType: `multipart/form-data; boundary=${boundary}` };
+}
+
+/** Import a folder (files carrying relative paths) via a raw multipart body. */
+function importFolder(
+  id: string,
+  auth: string,
+  files: Array<{ relativePath: string; data: Buffer | string }>,
+) {
+  const { body, contentType } = buildMultipart(
+    files.map((f) => ({ field: 'files', filename: f.relativePath, data: f.data })),
+  );
+  return request(app)
+    .post(`/api/v1/projects/${id}/files/import`)
+    .set('Authorization', auth)
+    .set('Content-Type', contentType)
+    .send(body);
+}
+
+beforeEach(async () => {
+  await resetDatabase();
+  // Each test starts from an empty, isolated storage tree.
+  await fs.rm('./test-storage', { recursive: true, force: true });
+});
+
+afterAll(async () => {
+  await prisma.$disconnect();
+  await fs.rm('./test-storage', { recursive: true, force: true });
+});
+
+describe('GET /projects/:id/files', () => {
+  it('requires authentication', async () => {
+    const { id } = await makeProject('a@dive-turbinen.test');
+    const res = await request(app).get(`/api/v1/projects/${id}/files`);
+    expect(res.status).toBe(401);
+  });
+
+  it('returns an empty tree for a project with no imports', async () => {
+    const { id, auth } = await makeProject('b@dive-turbinen.test');
+    const res = await request(app).get(`/api/v1/projects/${id}/files`).set('Authorization', auth);
+    expect(res.status).toBe(200);
+    expect(res.body.entries).toEqual([]);
+  });
+
+  it('returns 404 for a project the viewer cannot see', async () => {
+    const { id } = await makeProject('owner@dive-turbinen.test');
+    const stranger = await createTestUser({ email: 'stranger@dive-turbinen.test' });
+    const res = await request(app)
+      .get(`/api/v1/projects/${id}/files`)
+      .set('Authorization', authHeader(stranger));
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('POST /projects/:id/files/import (folder)', () => {
+  it('imports a bare polyMesh folder under constant/polyMesh/', async () => {
+    const { id, auth } = await makeProject('c@dive-turbinen.test');
+    const res = await importFolder(id, auth, [
+      { relativePath: 'polyMesh/points', data: 'points data' },
+      { relativePath: 'polyMesh/boundary', data: BOUNDARY },
+    ]);
+
+    expect(res.status).toBe(201);
+    expect(res.body.written).toEqual(
+      expect.arrayContaining(['constant/polyMesh/points', 'constant/polyMesh/boundary']),
+    );
+    const paths = (res.body.entries as Array<{ path: string }>).map((e) => e.path);
+    expect(paths).toContain('constant/polyMesh/points');
+  });
+
+  it('rejects an import with no files (400 NO_FILES_UPLOADED)', async () => {
+    const { id, auth } = await makeProject('d@dive-turbinen.test');
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/import`)
+      .set('Authorization', auth)
+      .field('note', 'nothing attached');
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('NO_FILES_UPLOADED');
+  });
+});
+
+describe('POST /projects/:id/files/import (zip)', () => {
+  it('extracts a .zip archive into the case tree', async () => {
+    const { id, auth } = await makeProject('e@dive-turbinen.test');
+    const zip = new AdmZip();
+    zip.addFile('polyMesh/points', Buffer.from('points'));
+    zip.addFile('polyMesh/boundary', Buffer.from(BOUNDARY));
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/import`)
+      .set('Authorization', auth)
+      .attach('archive', zip.toBuffer(), 'mesh.zip');
+
+    expect(res.status).toBe(201);
+    expect(res.body.written).toEqual(
+      expect.arrayContaining(['constant/polyMesh/points', 'constant/polyMesh/boundary']),
+    );
+  });
+
+  it('rejects a zip containing a traversal path (400 INVALID_ARCHIVE)', async () => {
+    const { id, auth } = await makeProject('f@dive-turbinen.test');
+    const zip = new AdmZip();
+    // adm-zip normalizes `../` away on add, so force the malicious entry name
+    // directly (this is exactly the zip-slip payload the server must refuse).
+    zip.addFile('placeholder.txt', Buffer.from('pwned'));
+    zip.getEntries()[0].entryName = '../../evil.txt';
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/import`)
+      .set('Authorization', auth)
+      .attach('archive', zip.toBuffer(), 'evil.zip');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('INVALID_ARCHIVE');
+  });
+});
+
+describe('GET /projects/:id/files/verify', () => {
+  it('reports every mandatory file missing for an empty case', async () => {
+    const { id, auth } = await makeProject('g@dive-turbinen.test');
+    const res = await request(app)
+      .get(`/api/v1/projects/${id}/files/verify`)
+      .set('Authorization', auth);
+
+    expect(res.status).toBe(200);
+    expect(res.body.verification.complete).toBe(false);
+    expect(res.body.verification.canScaffold).toBe(true);
+    expect(res.body.verification.hasMesh).toBe(false);
+    expect(res.body.verification.missingBase).toEqual(
+      expect.arrayContaining(['system/controlDict', 'system/fvSchemes', '0/U', '0/p']),
+    );
+  });
+});
+
+describe('POST /projects/:id/files/scaffold', () => {
+  it('creates the missing base files and reports the case complete', async () => {
+    const { id, auth } = await makeProject('h@dive-turbinen.test');
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/scaffold`)
+      .set('Authorization', auth);
+
+    expect(res.status).toBe(201);
+    expect(res.body.created).toEqual(
+      expect.arrayContaining([
+        'system/controlDict',
+        'system/fvSchemes',
+        'system/fvSolution',
+        '0/U',
+        '0/p',
+      ]),
+    );
+    expect(res.body.verification.complete).toBe(true);
+    const paths = (res.body.entries as Array<{ path: string }>).map((e) => e.path);
+    expect(paths).toContain('system/controlDict');
+  });
+
+  it('does not overwrite a base file that already exists', async () => {
+    const { id, auth } = await makeProject('i@dive-turbinen.test');
+    // Import an existing controlDict with a sentinel value.
+    await importFolder(id, auth, [{ relativePath: 'system/controlDict', data: 'SENTINEL' }]);
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/scaffold`)
+      .set('Authorization', auth);
+
+    expect(res.status).toBe(201);
+    expect(res.body.created).not.toContain('system/controlDict');
+
+    // The original content survives (verified via the downloaded archive).
+    const download = await request(app)
+      .get(`/api/v1/projects/${id}/files/download`)
+      .set('Authorization', auth)
+      .buffer(true)
+      .parse((res2, cb) => {
+        const chunks: Buffer[] = [];
+        res2.on('data', (c: Buffer) => chunks.push(c));
+        res2.on('end', () => cb(null, Buffer.concat(chunks)));
+      });
+    const zip = new AdmZip(download.body as Buffer);
+    expect(zip.getEntry('system/controlDict')?.getData().toString()).toBe('SENTINEL');
+  });
+});
+
+describe('GET /projects/:id/files/download', () => {
+  it('returns 404 when there is nothing to download', async () => {
+    const { id, auth } = await makeProject('j@dive-turbinen.test');
+    const res = await request(app)
+      .get(`/api/v1/projects/${id}/files/download`)
+      .set('Authorization', auth);
+    expect(res.status).toBe(404);
+  });
+
+  it('returns a zip after files are imported', async () => {
+    const { id, auth } = await makeProject('k@dive-turbinen.test');
+    await importFolder(id, auth, [{ relativePath: 'polyMesh/points', data: 'points' }]);
+
+    const res = await request(app)
+      .get(`/api/v1/projects/${id}/files/download`)
+      .set('Authorization', auth);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('application/zip');
+  });
+});
+
+describe('access control for case files', () => {
+  it('lets a collaborator import and a super-admin verify', async () => {
+    const { id, auth } = await makeProject('l@dive-turbinen.test');
+    const collaborator = await createTestUser({ email: 'collab@dive-turbinen.test' });
+    await prisma.project.update({
+      where: { id },
+      data: { collaborators: { connect: { id: collaborator.id } } },
+    });
+    const admin = await createProtectedAdmin();
+
+    const importRes = await importFolder(id, authHeader(collaborator), [
+      { relativePath: 'polyMesh/points', data: 'points' },
+    ]);
+    expect(importRes.status).toBe(201);
+
+    const verifyRes = await request(app)
+      .get(`/api/v1/projects/${id}/files/verify`)
+      .set('Authorization', authHeader(admin));
+    expect(verifyRes.status).toBe(200);
+    expect(verifyRes.body.verification.hasMesh).toBe(false);
+
+    // Owner auth still works too.
+    const treeRes = await request(app)
+      .get(`/api/v1/projects/${id}/files`)
+      .set('Authorization', auth);
+    expect(treeRes.status).toBe(200);
+  });
+});

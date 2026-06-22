@@ -1,0 +1,81 @@
+/**
+ * tokens.css - Single source of truth for DIVE Turbinen design tokens.
+ *
+ * Every color, radius, shadow, z-index, and the focus ring live here as CSS
+ * custom properties. The Tailwind config (tailwind.config.ts) mirrors these
+ * variables under semantic names, so components reference semantic Tailwind
+ * classes and never raw hex / px values. Light theme only.
+ *
+ * Palette is locked to the DIVE logo (blue / orange / grey) plus a small set
+ * of functional signal colors (success / danger) used only for status.
+ */
+
+:root {
+  /* ---- Brand: blue (primary) ---- */
+  --color-primary: #004a99; /* brand blue: header, links, active states, strong titles */
+  --color-primary-hover: #003a78; /* hover / pressed for primary */
+  --color-primary-light: #1e63b5; /* lighter blue for subtle accents */
+  --color-primary-tint: #e8f0f9; /* blue wash: selected rows, info surfaces, active nav bg */
+
+  /* ---- Brand: orange (accent) ---- */
+  --color-accent: #ee7f00; /* orange accent: badges, highlights, non-CTA accent uses */
+  --color-accent-hover: #cc6e00; /* hover / pressed for the orange accent */
+  --color-accent-tint: #fff3e6; /* orange wash: attention surfaces (used sparingly) */
+
+  /* ---- Accessible CTA fill (darker brand-orange derivative) ---- */
+  --color-cta: #a85f00; /* primary CTA fill: white-bold label = ~4.9:1, AA normal text */
+  --color-cta-hover: #8c4e00; /* hover / pressed for the primary CTA */
+
+  /* ---- Brand: grey (neutral) ---- */
+  --color-neutral: #bcbdbf; /* logo grey: marked borders, disabled fills, secondary icons */
+
+  /* ---- Surfaces & text ---- */
+  --color-bg: #f5f7fa; /* page background */
+  --color-surface: #ffffff; /* cards, panels, header, table surface */
+  --color-text: #1a2230; /* primary text (never pure #000) */
+  --color-text-secondary: #5b6676; /* secondary / muted text, helper text, table meta */
+
+  /* ---- Borders ---- */
+  --color-border: #e4e8ee; /* default hairline border / divider */
+  --color-border-strong: #bcbdbf; /* emphasised border (focused inputs idle, strong separators) */
+
+  /* ---- Functional signal colors (status / feedback only, never brand) ---- */
+  --color-success: #1e7b4f; /* success text / icon */
+  --color-success-tint: #e7f4ee; /* success surface */
+  --color-danger: #b42318; /* destructive action, error text / icon */
+  --color-danger-hover: #911a12; /* destructive hover */
+  --color-danger-tint: #fdecea; /* error surface / destructive ghost hover */
+
+  /* ---- Focus ring (blue, 2px, with 2px offset) ---- */
+  --color-focus-ring: #1e63b5;
+
+  /* ---- Scrim behind dialogs / overlays ---- */
+  --color-scrim: rgba(16, 24, 40, 0.45);
+
+  /* ---- Radius (Shape Lock) ---- */
+  --radius-sm: 8px; /* inputs, buttons, badges, dropdowns, small controls */
+  --radius-md: 12px; /* cards, dialogs, panels, table container */
+  --radius-lg: 16px; /* login card and other large standalone containers */
+
+  /* ---- Shadows (soft, low, tinted, rare) ---- */
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05); /* resting cards, inputs */
+  --shadow-md: 0 4px 12px rgba(16, 24, 40, 0.08); /* dropdowns, popovers */
+  --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.1); /* dialogs only */
+
+  /* ---- z-index scale (semantic, no magic numbers) ---- */
+  --z-base: 0;
+  --z-dropdown: 1000;
+  --z-sticky: 1100;
+  --z-overlay: 1200;
+  --z-modal: 1300;
+  --z-toast: 1400;
+  --z-tooltip: 1500;
+
+  /* ---- Typography ---- */
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+
+  /* ---- Motion ---- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 150ms;
+  --duration-base: 200ms;
+}
