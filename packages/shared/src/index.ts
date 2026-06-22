@@ -23,13 +23,6 @@ export const FULL_NAME_MAX_LENGTH = 120;
 export const PROJECT_TITLE_MAX_LENGTH = 120;
 
 /**
- * Maximum total size accepted for a single case-file import request (folder or
- * archive). Mesh files (notably `points`) can be large, so this is generous;
- * it exists to reject pathological payloads, not to constrain legitimate meshes.
- */
-export const CASE_UPLOAD_MAX_BYTES = 200 * 1024 * 1024; // 200 MB
-
-/**
  * Machine-readable error codes the API may emit in its `{ error: { code } }`
  * envelope. The web client maps these to user-facing messages; it adds its own
  * transport-only codes (network failures, unknown) on top of this set.

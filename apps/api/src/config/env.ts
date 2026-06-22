@@ -36,6 +36,11 @@ const envSchema = z
     // subtree per project. Resolved relative to the API process working
     // directory. Defaults to ./storage (i.e. apps/api/storage in local dev).
     STORAGE_DIR: z.string().min(1).default('./storage'),
+    // Maximum size (in MB) accepted for a single uploaded case file. CFD meshes
+    // can be large (the points/owner files especially), so this is generous.
+    // Note: uploads are currently buffered in memory, so very large values cost
+    // RAM per concurrent upload; raise deliberately on a server with headroom.
+    MAX_UPLOAD_MB: z.coerce.number().int().positive().default(1024),
     // Number of trusted reverse-proxy hops in front of the API. 0 = trust none
     // (default, correct for direct exposure / local dev). Set to 1 behind a
     // single proxy/load balancer so the login rate-limiter keys on the real

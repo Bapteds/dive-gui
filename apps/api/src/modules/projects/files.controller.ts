@@ -2,7 +2,7 @@
 // files.service; all routes run behind requireAuth and are visibility-scoped.
 import type { Request, RequestHandler, Response } from 'express';
 import multer, { MulterError } from 'multer';
-import { CASE_UPLOAD_MAX_BYTES } from '@dive/shared';
+import { env } from '../../config/env';
 import { AppError } from '../../lib/AppError';
 import type { Viewer } from './projects.service';
 import {
@@ -22,7 +22,7 @@ import {
  */
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: CASE_UPLOAD_MAX_BYTES, files: 5000 },
+  limits: { fileSize: env.MAX_UPLOAD_MB * 1024 * 1024, files: 5000 },
   // Keep the full relative path in `originalname`. A folder upload sends each
   // file's relative path (e.g. "polyMesh/points") as the part filename; without
   // this, busboy would strip the directory and we'd lose the tree structure.
