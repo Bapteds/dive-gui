@@ -1,6 +1,8 @@
 import { apiClient } from './client';
 import type {
   CaseEntry,
+  CaseFileContent,
+  CaseFileContentResponse,
   CaseFilesResponse,
   CaseVerification,
   CreateProjectInput,
@@ -96,4 +98,21 @@ export async function scaffoldCase(id: string): Promise<ScaffoldCaseResponse> {
 /** Download the whole case as a .zip blob. */
 export async function downloadCase(id: string): Promise<Blob> {
   return apiClient.getBlob(`/projects/${id}/files/download`);
+}
+
+/** Read a single case file's text content for the editor. */
+export async function getCaseFileContent(id: string, path: string): Promise<CaseFileContent> {
+  const data = await apiClient.get<CaseFileContentResponse>(
+    `/projects/${id}/files/content?path=${encodeURIComponent(path)}`,
+  );
+  return data.file;
+}
+
+/** Save edited text content back to an existing case file. */
+export async function saveCaseFileContent(
+  id: string,
+  path: string,
+  content: string,
+): Promise<void> {
+  await apiClient.putText(`/projects/${id}/files/content?path=${encodeURIComponent(path)}`, content);
 }

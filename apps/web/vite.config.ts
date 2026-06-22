@@ -42,6 +42,8 @@ export default defineConfig({
       '@radix-ui/react-separator',
       '@radix-ui/react-tooltip',
       '@radix-ui/react-avatar',
+      '@uiw/react-codemirror',
+      '@codemirror/lang-cpp',
     ],
   },
   build: {
@@ -51,6 +53,18 @@ export default defineConfig({
         // the route-level lazy imports, this shrinks the initial JS download.
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined;
+          // The code editor is heavy and used only by the lazy edit page; keep it
+          // in its own chunk so it never weighs on the initial load.
+          if (
+            id.includes('node_modules/@codemirror') ||
+            id.includes('node_modules/@uiw') ||
+            id.includes('node_modules/@lezer') ||
+            id.includes('node_modules/codemirror') ||
+            id.includes('node_modules/style-mod') ||
+            id.includes('node_modules/crelt') ||
+            id.includes('node_modules/w3c-keyname')
+          )
+            return 'codemirror';
           if (id.includes('node_modules/react-router') || id.includes('node_modules/@remix-run'))
             return 'router';
           if (id.includes('node_modules/@radix-ui')) return 'radix';

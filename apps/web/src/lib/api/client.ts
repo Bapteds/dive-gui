@@ -153,6 +153,8 @@ interface RequestOptions extends Omit<RequestInit, 'body'> {
    * the Content-Type with its boundary); anything else is JSON-stringified.
    */
   body?: unknown;
+  /** Send a string body verbatim (text/plain) instead of JSON-stringifying it. */
+  rawText?: boolean;
   /** Skip the automatic 401 refresh-and-retry (used internally for auth). */
   skipRefresh?: boolean;
 }
@@ -192,17 +194,19 @@ async function decodeBody<T>(response: Response): Promise<T> {
 }
 
 function performFetch(path: string, options: RequestOptions): Promise<Response> {
-  const { body, skipRefresh: _skipRefresh, headers, ...rest } = options;
+  const { body, rawText, skipRefresh: _skipRefresh, headers, ...rest } = options;
   const hasBody = body !== undefined;
   const formBody = isFormData(body);
+  const textBody = rawText === true;
   const init: RequestInit = {
     ...rest,
-    headers: buildHeaders(hasBody && !formBody, headers),
+    // JSON content-type only for JSON bodies (not FormData, not raw text).
+    headers: buildHeaders(hasBody && !formBody && !textBody, headers),
     // Auth endpoints rely on the refresh cookie; send credentials for them.
     credentials: isAuthPath(path) ? 'include' : rest.credentials,
   };
   if (hasBody) {
-    init.body = formBody ? (body as FormData) : JSON.stringify(body);
+    init.body = formBody ? (body as FormData) : textBody ? String(body) : JSON.stringify(body);
   }
   return fetch(`${getBaseUrl()}${path}`, init);
 }
@@ -266,6 +270,16 @@ export const apiClient = {
   /** POST a multipart `FormData` payload (file uploads). */
   postForm<T>(path: string, formData: FormData, options?: RequestOptions): Promise<T> {
     return request<T>(path, { ...options, method: 'POST', body: formData });
+  },
+  /** PUT a raw text body (file content saves). */
+  putText<T>(path: string, text: string, options?: RequestOptions): Promise<T> {
+    return request<T>(path, {
+      ...options,
+      method: 'PUT',
+      body: text,
+      rawText: true,
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    });
   },
   /** GET a binary response as a `Blob` (file downloads). */
   async getBlob(path: string, options?: RequestOptions): Promise<Blob> {

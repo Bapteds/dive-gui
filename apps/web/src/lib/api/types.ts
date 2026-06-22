@@ -168,3 +168,15 @@ export interface ScaffoldCaseResponse {
   verification: CaseVerification;
   entries: CaseEntry[];
 }
+
+/** A single case file's text content (for the editor). */
+export interface CaseFileContent {
+  path: string;
+  content: string;
+  size: number;
+}
+
+/** `GET /projects/:id/files/content` response. */
+export interface CaseFileContentResponse {
+  file: CaseFileContent;
+}

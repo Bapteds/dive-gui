@@ -19,6 +19,9 @@ const ProjectsPage = lazy(() =>
 const ProjectDetailPage = lazy(() =>
   import('@/pages/ProjectDetailPage').then((m) => ({ default: m.ProjectDetailPage })),
 );
+const ProjectEditPage = lazy(() =>
+  import('@/pages/ProjectEditPage').then((m) => ({ default: m.ProjectEditPage })),
+);
 
 /**
  * router.tsx - application route tree.
@@ -51,6 +54,7 @@ export const router = createBrowserRouter([
       { index: true, element: <HomePage /> },
       { path: 'projects', element: <ProjectsPage /> },
       { path: 'projects/:id', element: <ProjectDetailPage /> },
+      { path: 'projects/:id/edit', element: <ProjectEditPage /> },
       { path: 'account', element: <AccountPage /> },
       {
         path: 'admin',

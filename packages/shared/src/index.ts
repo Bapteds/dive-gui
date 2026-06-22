@@ -23,6 +23,13 @@ export const FULL_NAME_MAX_LENGTH = 120;
 export const PROJECT_TITLE_MAX_LENGTH = 120;
 
 /**
+ * Maximum size of a case file that may be opened/saved in the in-app editor.
+ * Configuration dictionaries are tiny; large mesh files (e.g. `points`) are not
+ * meant to be hand-edited and are surfaced as "too large to edit here" instead.
+ */
+export const EDITABLE_FILE_MAX_BYTES = 2 * 1024 * 1024; // 2 MB
+
+/**
  * Machine-readable error codes the API may emit in its `{ error: { code } }`
  * envelope. The web client maps these to user-facing messages; it adds its own
  * transport-only codes (network failures, unknown) on top of this set.
@@ -41,6 +48,7 @@ export const SERVER_ERROR_CODES = [
   'NO_FILES_UPLOADED',
   'INVALID_ARCHIVE',
   'PAYLOAD_TOO_LARGE',
+  'FILE_TOO_LARGE',
   'VALIDATION_ERROR',
   'UNAUTHENTICATED',
   'FORBIDDEN',

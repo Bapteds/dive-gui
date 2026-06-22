@@ -130,8 +130,6 @@ export function ProjectDetailPage() {
         </section>
 
         <CaseFilesSection projectId={project.id} />
-
-        <CollaboratorsCard project={project} />
       </div>
     </div>
   );
@@ -294,39 +292,6 @@ function DeleteProjectDialog({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
-  );
-}
-
-/** Read-only list of who has access (owner aside), visible to everyone. */
-function CollaboratorsCard({ project }: { project: Project }) {
-  return (
-    <section className="rounded-md border border-border bg-surface shadow-sm">
-      <header className="border-b border-border px-5 py-4 sm:px-6">
-        <h2 className="text-lg font-semibold text-text">Collaborators</h2>
-        <p className="mt-1 text-sm text-text-secondary">
-          People who can see this project, in addition to the owner.
-        </p>
-      </header>
-
-      <div className="px-5 py-5 sm:px-6">
-        {project.collaborators.length === 0 ? (
-          <p className="text-sm text-text-secondary">No collaborators yet.</p>
-        ) : (
-          <ul className="divide-y divide-border rounded-md border border-border">
-            {project.collaborators.map((collaborator) => (
-              <li key={collaborator.id} className="flex items-center gap-3 px-3 py-2.5">
-                <div className="flex min-w-0 flex-col">
-                  <span className="truncate text-sm font-medium text-text">
-                    {collaborator.fullName}
-                  </span>
-                  <span className="truncate text-xs text-text-secondary">{collaborator.email}</span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </section>
   );
 }
 

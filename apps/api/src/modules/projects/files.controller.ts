@@ -9,6 +9,8 @@ import {
   buildCaseArchive,
   getCaseFiles,
   importCaseFiles,
+  readCaseFileContent,
+  saveCaseFileContent,
   scaffoldCase,
   verifyCase,
   type ImportPayload,
@@ -100,4 +102,19 @@ export async function verifyCaseController(req: Request, res: Response): Promise
 export async function scaffoldCaseController(req: Request, res: Response): Promise<void> {
   const result = await scaffoldCase(requireViewer(req), req.params.id);
   res.status(201).json(result);
+}
+
+/** GET /projects/:id/files/content?path=… — read a single file's text content. */
+export async function getCaseFileContentController(req: Request, res: Response): Promise<void> {
+  const path = (req.query.path as string | undefined) ?? '';
+  const file = await readCaseFileContent(requireViewer(req), req.params.id, path);
+  res.status(200).json({ file });
+}
+
+/** PUT /projects/:id/files/content?path=… — save edited text content (text/plain body). */
+export async function saveCaseFileContentController(req: Request, res: Response): Promise<void> {
+  const path = (req.query.path as string | undefined) ?? '';
+  const content = typeof req.body === 'string' ? req.body : '';
+  const file = await saveCaseFileContent(requireViewer(req), req.params.id, path, content);
+  res.status(200).json({ file });
 }

@@ -1,7 +1,8 @@
 // Projects router, mounted at /api/v1/projects.
 // Every route requires an authenticated user; access is visibility-scoped in
 // the service (owner + collaborators, or any super-admin).
-import { Router } from 'express';
+import express, { Router } from 'express';
+import { EDITABLE_FILE_MAX_BYTES } from '@dive/shared';
 import { asyncHandler } from '../../middleware/asyncHandler';
 import { requireAuth } from '../../middleware/requireAuth';
 import { validate } from '../../middleware/validate';
@@ -15,18 +16,28 @@ import {
 } from './projects.controller';
 import {
   downloadCaseController,
+  getCaseFileContentController,
   getCaseFilesController,
   importCaseFilesController,
   parseCaseUpload,
+  saveCaseFileContentController,
   scaffoldCaseController,
   verifyCaseController,
 } from './files.controller';
+import { filePathQuerySchema } from './files.schemas';
 import {
   addCollaboratorSchema,
   collaboratorParamSchema,
   createProjectSchema,
   projectIdParamSchema,
 } from './projects.schemas';
+
+/**
+ * Body parser for the file-save route only. The global JSON limit (16kb) is far
+ * too small for file content, and the editor sends raw text, so accept any
+ * content-type as text up to the editable cap.
+ */
+const parseFileContent = express.text({ type: '*/*', limit: EDITABLE_FILE_MAX_BYTES });
 
 /** Build the projects router (authenticated, visibility-scoped). */
 export function createProjectsRouter(): Router {
@@ -85,6 +96,19 @@ export function createProjectsRouter(): Router {
     '/:id/files/scaffold',
     validate({ params: projectIdParamSchema }),
     asyncHandler(scaffoldCaseController),
+  );
+
+  // Single-file content: read for the editor, save edited text back.
+  router.get(
+    '/:id/files/content',
+    validate({ params: projectIdParamSchema, query: filePathQuerySchema }),
+    asyncHandler(getCaseFileContentController),
+  );
+  router.put(
+    '/:id/files/content',
+    validate({ params: projectIdParamSchema, query: filePathQuerySchema }),
+    parseFileContent,
+    asyncHandler(saveCaseFileContentController),
   );
 
   return router;

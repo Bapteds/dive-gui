@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import type { CaseEntry, CaseVerification } from '@/lib/api/types';
 
 /**
@@ -35,7 +36,9 @@ function renderSection() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={queryClient}>
-      <CaseFilesSection projectId="p1" />
+      <MemoryRouter>
+        <CaseFilesSection projectId="p1" />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }

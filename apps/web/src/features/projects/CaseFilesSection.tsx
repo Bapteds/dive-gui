@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   CheckCircle2,
   Download,
@@ -8,6 +9,7 @@ import {
   FolderUp,
   ListChecks,
   Loader2,
+  SquarePen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Diamond } from '@/components/brand/Diamond';
@@ -255,6 +257,12 @@ export function CaseFilesSection({ projectId }: { projectId: string }) {
               >
                 <Download strokeWidth={1.75} aria-hidden="true" />
                 Download
+              </Button>
+              <Button asChild variant="secondary" size="sm">
+                <Link to={`/projects/${projectId}/edit`}>
+                  <SquarePen strokeWidth={1.75} aria-hidden="true" />
+                  Edit files
+                </Link>
               </Button>
               <div className="ml-auto">
                 <Button

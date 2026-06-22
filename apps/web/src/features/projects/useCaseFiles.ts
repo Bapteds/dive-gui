@@ -1,12 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  getCaseFileContent,
   getCaseFiles,
   importCaseFolder,
   importCaseZip,
+  saveCaseFileContent,
   scaffoldCase,
   verifyCase,
 } from '@/lib/api/projects';
-import type { CaseEntry, ImportCaseResponse, ScaffoldCaseResponse } from '@/lib/api/types';
+import type {
+  CaseEntry,
+  CaseFileContent,
+  ImportCaseResponse,
+  ScaffoldCaseResponse,
+} from '@/lib/api/types';
 
 /**
  * useCaseFiles - React Query hooks for a project's OpenFOAM case files.
@@ -57,6 +64,35 @@ export function useScaffoldCase(projectId: string) {
     mutationFn: () => scaffoldCase(projectId),
     onSuccess: (result) => {
       queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
+    },
+  });
+}
+
+/** Query key for a single case file's content. */
+export const caseFileContentQueryKey = (projectId: string, path: string) =>
+  ['projects', projectId, 'files', 'content', path] as const;
+
+/** Load a single file's content; disabled until a path is selected. */
+export function useCaseFileContentQuery(projectId: string, path: string | null) {
+  return useQuery<CaseFileContent>({
+    queryKey: caseFileContentQueryKey(projectId, path ?? ''),
+    queryFn: () => getCaseFileContent(projectId, path as string),
+    enabled: !!path,
+  });
+}
+
+/** Save edited file content; refresh that file's cache and the tree (size changes). */
+export function useSaveCaseFile(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error, { path: string; content: string }>({
+    mutationFn: ({ path, content }) => saveCaseFileContent(projectId, path, content),
+    onSuccess: (_data, { path, content }) => {
+      queryClient.setQueryData<CaseFileContent>(caseFileContentQueryKey(projectId, path), {
+        path,
+        content,
+        size: new Blob([content]).size,
+      });
+      void queryClient.invalidateQueries({ queryKey: caseFilesQueryKey(projectId) });
     },
   });
 }

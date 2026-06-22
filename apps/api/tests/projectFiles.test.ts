@@ -278,3 +278,75 @@ describe('access control for case files', () => {
     expect(treeRes.status).toBe(200);
   });
 });
+
+describe('GET /projects/:id/files/content', () => {
+  it('returns the text content of an imported file', async () => {
+    const { id, auth } = await makeProject('m@dive-turbinen.test');
+    await importFolder(id, auth, [{ relativePath: 'system/controlDict', data: 'application foamRun;' }]);
+
+    const res = await request(app)
+      .get(`/api/v1/projects/${id}/files/content?path=system/controlDict`)
+      .set('Authorization', auth);
+
+    expect(res.status).toBe(200);
+    expect(res.body.file).toMatchObject({ path: 'system/controlDict', content: 'application foamRun;' });
+  });
+
+  it('returns 404 for a file that does not exist', async () => {
+    const { id, auth } = await makeProject('n@dive-turbinen.test');
+    const res = await request(app)
+      .get(`/api/v1/projects/${id}/files/content?path=system/missing`)
+      .set('Authorization', auth);
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects a traversal path with 400', async () => {
+    const { id, auth } = await makeProject('o@dive-turbinen.test');
+    const res = await request(app)
+      .get(`/api/v1/projects/${id}/files/content?path=${encodeURIComponent('../../secret')}`)
+      .set('Authorization', auth);
+    expect(res.status).toBe(400);
+  });
+
+  it('refuses to open a file larger than the editable cap (413)', async () => {
+    const { id, auth } = await makeProject('p@dive-turbinen.test');
+    // 2 MB + 1 byte exceeds EDITABLE_FILE_MAX_BYTES.
+    const big = Buffer.alloc(2 * 1024 * 1024 + 1, 0x61);
+    await importFolder(id, auth, [{ relativePath: 'constant/polyMesh/points', data: big }]);
+
+    const res = await request(app)
+      .get(`/api/v1/projects/${id}/files/content?path=constant/polyMesh/points`)
+      .set('Authorization', auth);
+    expect(res.status).toBe(413);
+    expect(res.body.error.code).toBe('FILE_TOO_LARGE');
+  });
+});
+
+describe('PUT /projects/:id/files/content', () => {
+  it('saves edited content to an existing file', async () => {
+    const { id, auth } = await makeProject('q@dive-turbinen.test');
+    await importFolder(id, auth, [{ relativePath: 'system/controlDict', data: 'old;' }]);
+
+    const put = await request(app)
+      .put(`/api/v1/projects/${id}/files/content?path=system/controlDict`)
+      .set('Authorization', auth)
+      .set('Content-Type', 'text/plain')
+      .send('application simpleFoam;\nendTime 500;\n');
+    expect(put.status).toBe(200);
+
+    const read = await request(app)
+      .get(`/api/v1/projects/${id}/files/content?path=system/controlDict`)
+      .set('Authorization', auth);
+    expect(read.body.file.content).toBe('application simpleFoam;\nendTime 500;\n');
+  });
+
+  it('returns 404 when saving to a file that does not exist', async () => {
+    const { id, auth } = await makeProject('r@dive-turbinen.test');
+    const res = await request(app)
+      .put(`/api/v1/projects/${id}/files/content?path=system/controlDict`)
+      .set('Authorization', auth)
+      .set('Content-Type', 'text/plain')
+      .send('content');
+    expect(res.status).toBe(404);
+  });
+});

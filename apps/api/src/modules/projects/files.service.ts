@@ -5,6 +5,7 @@
 // projects service enforces. Members may both read and contribute case files;
 // project management (delete, collaborators) remains owner/super-admin only and
 // lives in projects.service.
+import { EDITABLE_FILE_MAX_BYTES } from '@dive/shared';
 import { AppError } from '../../lib/AppError';
 import {
   caseFileExists,
@@ -65,6 +66,13 @@ export interface ScaffoldResult {
   created: string[];
   verification: CaseVerification;
   entries: CaseEntry[];
+}
+
+/** A single case file's text content. */
+export interface CaseFileContent {
+  path: string;
+  content: string;
+  size: number;
 }
 
 /** List the case tree (empty until something is imported). */
@@ -157,4 +165,51 @@ export async function scaffoldCase(viewer: Viewer, projectId: string): Promise<S
     listCaseTree(projectId),
   ]);
   return { created, verification, entries };
+}
+
+/**
+ * Read a single case file's content for the in-app editor.
+ * @throws 404 NOT_FOUND if the file does not exist, 413 FILE_TOO_LARGE if it
+ *         exceeds the editable size cap.
+ */
+export async function readCaseFileContent(
+  viewer: Viewer,
+  projectId: string,
+  relPath: string,
+): Promise<CaseFileContent> {
+  await assertProjectVisible(viewer, projectId);
+
+  const buffer = await readCaseFile(projectId, relPath);
+  if (!buffer) {
+    throw new AppError(404, 'NOT_FOUND', 'File not found');
+  }
+  if (buffer.length > EDITABLE_FILE_MAX_BYTES) {
+    throw new AppError(413, 'FILE_TOO_LARGE', 'This file is too large to edit in the browser');
+  }
+  return { path: relPath, content: buffer.toString('utf8'), size: buffer.length };
+}
+
+/**
+ * Save edited content back to an existing case file. Editing only: the file
+ * must already exist (creation happens via import/scaffold, not the editor).
+ * @throws 404 NOT_FOUND if the file does not exist, 413 FILE_TOO_LARGE if the
+ *         new content exceeds the editable size cap.
+ */
+export async function saveCaseFileContent(
+  viewer: Viewer,
+  projectId: string,
+  relPath: string,
+  content: string,
+): Promise<{ path: string; size: number }> {
+  await assertProjectVisible(viewer, projectId);
+
+  if (!(await caseFileExists(projectId, relPath))) {
+    throw new AppError(404, 'NOT_FOUND', 'File not found');
+  }
+  const size = Buffer.byteLength(content, 'utf8');
+  if (size > EDITABLE_FILE_MAX_BYTES) {
+    throw new AppError(413, 'FILE_TOO_LARGE', 'The edited content is too large to save');
+  }
+  await writeCaseFile(projectId, relPath, content);
+  return { path: relPath, size };
 }
