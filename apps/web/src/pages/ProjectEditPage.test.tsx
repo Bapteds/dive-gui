@@ -90,7 +90,7 @@ describe('ProjectEditPage', () => {
     expect(api.getCaseFileContent).toHaveBeenCalledWith('p1', 'system/controlDict');
   });
 
-  it('saves edited content', async () => {
+  it('auto-saves edited content (debounced, no Save button)', async () => {
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: /controlDict/i }));
 
@@ -98,14 +98,17 @@ describe('ProjectEditPage', () => {
     await waitFor(() => expect(editor).toHaveValue('application foamRun;'));
 
     fireEvent.change(editor, { target: { value: 'application simpleFoam;' } });
-    fireEvent.click(screen.getByRole('button', { name: /save/i }));
 
-    await waitFor(() =>
-      expect(api.saveCaseFileContent).toHaveBeenCalledWith(
-        'p1',
-        'system/controlDict',
-        'application simpleFoam;',
-      ),
+    // No Save button: the debounced autosave persists the change on its own.
+    expect(screen.queryByRole('button', { name: /save/i })).not.toBeInTheDocument();
+    await waitFor(
+      () =>
+        expect(api.saveCaseFileContent).toHaveBeenCalledWith(
+          'p1',
+          'system/controlDict',
+          'application simpleFoam;',
+        ),
+      { timeout: 2000 },
     );
   });
 });

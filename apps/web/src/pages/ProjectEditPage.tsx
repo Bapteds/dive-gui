@@ -1,22 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, File as FileIcon, FileWarning, Folder, Save } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Check, File as FileIcon, FileWarning, Folder, Loader2 } from 'lucide-react';
 import { PageHeader } from '@/components/common/PageHeader';
 import { FullPageLoader } from '@/components/common/FullPageLoader';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Diamond } from '@/components/brand/Diamond';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import { toast } from '@/components/ui/sonner';
 import { UnsavedChangesPrompt } from '@/components/common/UnsavedChangesPrompt';
 import { cn } from '@/lib/utils';
 import { ApiError } from '@/lib/api/client';
@@ -30,25 +19,26 @@ import {
 import { CaseFileEditor } from '@/features/projects/CaseFileEditor';
 
 /**
- * ProjectEditPage - edit and save the OpenFOAM case files of a project.
+ * ProjectEditPage - edit and auto-save the OpenFOAM case files of a project.
  *
- * Reached from the "Edit files" button on the project detail page. Two panes:
- * the case file tree on the left, an online editor (CodeMirror) on the right.
- * Selecting a file loads its content; Save persists it (the single orange CTA).
- * Unsaved edits are guarded on route-leave and when switching files. The mesh
- * and other files too large to edit show a notice instead of the editor.
+ * Full-bleed (AppShell drops the centered container for this route): the file
+ * tree fills the left column and the CodeMirror editor fills the rest of the
+ * viewport. Edits auto-save on a short debounce (no Save button); a status line
+ * reports "Saving…" / "All changes saved" / "Save failed". Switching files
+ * flushes any pending edit first; the unsaved-changes guard covers the brief
+ * window before a save lands (or a failed save). Files too large to edit show a
+ * notice instead of the editor.
  */
+
+const AUTOSAVE_DELAY_MS = 600;
 
 export function ProjectEditPage() {
   const { id = '' } = useParams();
   const project = useProjectQuery(id);
 
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  // A file the user clicked while there are unsaved edits (awaiting confirm).
-  const [pendingPath, setPendingPath] = useState<string | null>(null);
-
   const content = useCaseFileContentQuery(id, selectedPath);
-  const save = useSaveCaseFile(id);
+  const { mutate: saveFile, isPending: saving, isError: saveFailed } = useSaveCaseFile(id);
 
   const [draft, setDraft] = useState('');
   // Sync the editor draft whenever a file's content loads (or reloads).
@@ -58,23 +48,25 @@ export function ProjectEditPage() {
 
   const isDirty = !!selectedPath && !!content.data && draft !== content.data.content;
 
+  // Auto-save: persist the draft a short moment after the last keystroke. On
+  // success the content cache updates to the new value, which clears isDirty.
+  useEffect(() => {
+    if (!selectedPath || !content.data || draft === content.data.content) return;
+    const handle = setTimeout(() => saveFile({ path: selectedPath, content: draft }), AUTOSAVE_DELAY_MS);
+    return () => clearTimeout(handle);
+  }, [draft, selectedPath, content.data, saveFile]);
+
   const requestSelect = (path: string) => {
     if (path === selectedPath) return;
-    if (isDirty) {
-      setPendingPath(path);
-      return;
+    // Flush a pending edit to the current file before switching (no data loss).
+    if (selectedPath && content.data && draft !== content.data.content) {
+      saveFile({ path: selectedPath, content: draft });
     }
     setSelectedPath(path);
   };
 
-  const handleSave = async () => {
-    if (!selectedPath) return;
-    try {
-      await save.mutateAsync({ path: selectedPath, content: draft });
-      toast.success('File saved.');
-    } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'Could not save the file.');
-    }
+  const retrySave = () => {
+    if (selectedPath) saveFile({ path: selectedPath, content: draft });
   };
 
   if (project.isPending) {
@@ -101,12 +93,12 @@ export function ProjectEditPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1">
       <UnsavedChangesPrompt when={isDirty} />
       <BackLink projectId={id} />
       <PageHeader title={project.data.title} subtitle="Edit case files" />
 
-      <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+      <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[280px_minmax(0,1fr)]">
         <FileListSidebar projectId={id} selectedPath={selectedPath} onSelect={requestSelect} />
         <EditorPanel
           selectedPath={selectedPath}
@@ -114,19 +106,11 @@ export function ProjectEditPage() {
           draft={draft}
           onDraftChange={setDraft}
           isDirty={isDirty}
-          saving={save.isPending}
-          onSave={() => void handleSave()}
+          saving={saving}
+          saveFailed={saveFailed}
+          onRetry={retrySave}
         />
       </div>
-
-      <DiscardChangesDialog
-        open={pendingPath !== null}
-        onConfirm={() => {
-          if (pendingPath !== null) setSelectedPath(pendingPath);
-          setPendingPath(null);
-        }}
-        onCancel={() => setPendingPath(null)}
-      />
     </div>
   );
 }
@@ -157,11 +141,11 @@ function FileListSidebar({
   const { data: entries, isPending, isError, refetch, isRefetching } = useCaseFilesQuery(projectId);
 
   return (
-    <aside className="rounded-md border border-border bg-surface shadow-sm lg:self-start">
+    <aside className="flex flex-col rounded-md border border-border bg-surface shadow-sm lg:min-h-0">
       <header className="border-b border-border px-4 py-3">
         <h2 className="text-sm font-semibold text-text">Files</h2>
       </header>
-      <div className="max-h-[60vh] overflow-auto p-2">
+      <div className="max-h-72 overflow-auto p-2 lg:max-h-none lg:min-h-0 lg:flex-1">
         {isPending ? (
           <div className="flex flex-col gap-2 p-1" aria-hidden="true">
             {Array.from({ length: 6 }).map((_, index) => (
@@ -237,9 +221,7 @@ function FileRow({
         className={cn(
           'flex w-full items-center gap-2 rounded-sm py-1.5 pe-2 text-left text-sm transition-colors duration-fast ease-out',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
-          selected
-            ? 'bg-primary-tint font-medium text-primary'
-            : 'text-text hover:bg-bg',
+          selected ? 'bg-primary-tint font-medium text-primary' : 'text-text hover:bg-bg',
         )}
       >
         <FileIcon className="size-4 shrink-0 text-text-secondary" strokeWidth={1.75} aria-hidden="true" />
@@ -257,7 +239,8 @@ function EditorPanel({
   onDraftChange,
   isDirty,
   saving,
-  onSave,
+  saveFailed,
+  onRetry,
 }: {
   selectedPath: string | null;
   content: ReturnType<typeof useCaseFileContentQuery>;
@@ -265,37 +248,37 @@ function EditorPanel({
   onDraftChange: (value: string) => void;
   isDirty: boolean;
   saving: boolean;
-  onSave: () => void;
+  saveFailed: boolean;
+  onRetry: () => void;
 }) {
   const tooLarge =
     content.isError && content.error instanceof ApiError && content.error.code === 'FILE_TOO_LARGE';
 
+  // Fixed height on mobile (definite height for the editor), fills on desktop.
+  const fillClass = 'h-[60vh] lg:h-auto lg:min-h-0 lg:flex-1';
+
   return (
-    <section className="flex min-w-0 flex-col rounded-md border border-border bg-surface shadow-sm">
+    <section className="flex flex-col rounded-md border border-border bg-surface shadow-sm lg:min-h-0">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <p className="min-w-0 truncate font-mono text-sm text-text" title={selectedPath ?? undefined}>
           {selectedPath ?? 'No file selected'}
-          {isDirty && <span className="ml-2 text-xs text-text-secondary">(unsaved)</span>}
         </p>
-        <Button
-          type="button"
-          size="sm"
-          onClick={onSave}
-          loading={saving}
-          disabled={!selectedPath || !isDirty || content.isPending || tooLarge}
-        >
-          <Save strokeWidth={1.75} aria-hidden="true" />
-          Save
-        </Button>
+        <SaveStatus
+          selected={!!selectedPath}
+          dirty={isDirty}
+          saving={saving}
+          failed={saveFailed}
+          onRetry={onRetry}
+        />
       </header>
 
-      <div className="p-2">
+      <div className="flex flex-col p-2 lg:min-h-0 lg:flex-1">
         {!selectedPath ? (
-          <EditorEmpty />
+          <EditorEmpty className={fillClass} />
         ) : content.isPending ? (
-          <Skeleton className="h-[60vh] min-h-80 w-full" />
+          <Skeleton className={cn('w-full', fillClass)} />
         ) : tooLarge ? (
-          <div className="flex h-[60vh] min-h-80 flex-col items-center justify-center gap-3 px-6 text-center">
+          <div className={cn('flex flex-col items-center justify-center gap-3 px-6 text-center', fillClass)}>
             <FileWarning className="size-8 text-text-secondary" strokeWidth={1.5} aria-hidden="true" />
             <p className="text-sm font-medium text-text">This file is too large to edit here</p>
             <p className="max-w-sm text-sm text-text-secondary">
@@ -303,14 +286,14 @@ function EditorPanel({
             </p>
           </div>
         ) : content.isError ? (
-          <div className="flex h-[60vh] min-h-80 flex-col items-center justify-center gap-3 px-6 text-center">
+          <div className={cn('flex flex-col items-center justify-center gap-3 px-6 text-center', fillClass)}>
             <p className="text-sm font-medium text-text">We could not load this file.</p>
             <Button type="button" variant="secondary" size="sm" onClick={() => void content.refetch()}>
               Try again
             </Button>
           </div>
         ) : (
-          <div className="h-[60vh] min-h-80 overflow-hidden rounded-sm border border-border">
+          <div className={cn('overflow-hidden rounded-sm border border-border', fillClass)}>
             <CaseFileEditor value={draft} onChange={onDraftChange} />
           </div>
         )}
@@ -319,10 +302,63 @@ function EditorPanel({
   );
 }
 
-/** Empty editor: nothing selected yet. */
-function EditorEmpty() {
+/** Auto-save status line (replaces a manual Save button). */
+function SaveStatus({
+  selected,
+  dirty,
+  saving,
+  failed,
+  onRetry,
+}: {
+  selected: boolean;
+  dirty: boolean;
+  saving: boolean;
+  failed: boolean;
+  onRetry: () => void;
+}) {
+  if (!selected) return null;
+
+  if (failed) {
+    return (
+      <div role="status" aria-live="polite" className="flex items-center gap-2 text-sm text-danger">
+        <AlertCircle className="size-4" strokeWidth={1.75} aria-hidden="true" />
+        <span>Save failed</span>
+        <Button type="button" variant="ghost" size="sm" onClick={onRetry} className="h-7 px-2 text-primary">
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
+  if (saving) {
+    return (
+      <p role="status" aria-live="polite" className="flex items-center gap-1.5 text-sm text-text-secondary">
+        <Loader2 className="size-4 animate-spin" strokeWidth={1.75} aria-hidden="true" />
+        Saving…
+      </p>
+    );
+  }
+
+  if (dirty) {
+    return (
+      <p role="status" aria-live="polite" className="text-sm text-text-secondary">
+        Editing…
+      </p>
+    );
+  }
+
   return (
-    <div className="flex h-[60vh] min-h-80 flex-col items-center justify-center gap-3 px-6 text-center">
+    <p role="status" aria-live="polite" className="flex items-center gap-1.5 text-sm text-text-secondary">
+      <Check className="size-4 text-success" strokeWidth={2} aria-hidden="true" />
+      All changes saved
+    </p>
+  );
+}
+
+/** Empty editor: nothing selected yet. */
+function EditorEmpty({ className }: { className?: string }) {
+  return (
+    <div className={cn('flex flex-col items-center justify-center gap-3 px-6 text-center', className)}>
       <span className="grid size-12 place-items-center rounded-md bg-primary-tint">
         <Diamond size={18} className="text-primary" />
       </span>
@@ -331,39 +367,5 @@ function EditorEmpty() {
         Choose a file from the list to open it in the editor.
       </p>
     </div>
-  );
-}
-
-/** Confirm discarding unsaved edits before switching to another file. */
-function DiscardChangesDialog({
-  open,
-  onConfirm,
-  onCancel,
-}: {
-  open: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  return (
-    <AlertDialog open={open} onOpenChange={(next) => !next && onCancel()}>
-      <AlertDialogContent className="overscroll-contain">
-        <AlertDialogHeader>
-          <AlertDialogTitle>Discard unsaved changes?</AlertDialogTitle>
-          <AlertDialogDescription>
-            You have unsaved edits in the current file. If you open another file now, they will be
-            lost.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel onClick={onCancel}>Keep editing</AlertDialogCancel>
-          <AlertDialogAction
-            className="bg-danger text-white hover:bg-danger-hover"
-            onClick={onConfirm}
-          >
-            Discard changes
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
   );
 }
