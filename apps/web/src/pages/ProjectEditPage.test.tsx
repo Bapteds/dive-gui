@@ -76,7 +76,6 @@ beforeEach(() => {
 describe('ProjectEditPage', () => {
   it('renders the file list and an empty editor until a file is chosen', async () => {
     renderPage();
-    expect(await screen.findByText('Rotor stage study')).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: /controlDict/i })).toBeInTheDocument();
     expect(screen.getByText('Select a file to edit')).toBeInTheDocument();
   });

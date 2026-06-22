@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, Check, File as FileIcon, FileWarning, Folder, Loader2 } from 'lucide-react';
-import { PageHeader } from '@/components/common/PageHeader';
 import { FullPageLoader } from '@/components/common/FullPageLoader';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -93,10 +92,9 @@ export function ProjectEditPage() {
   }
 
   return (
-    <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1">
+    <div className="flex flex-col gap-3 lg:min-h-0 lg:flex-1">
       <UnsavedChangesPrompt when={isDirty} />
       <BackLink projectId={id} />
-      <PageHeader title={project.data.title} subtitle="Edit case files" />
 
       <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[280px_minmax(0,1fr)]">
         <FileListSidebar projectId={id} selectedPath={selectedPath} onSelect={requestSelect} />

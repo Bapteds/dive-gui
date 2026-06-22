@@ -18,8 +18,12 @@ export function AppShell() {
   // centered at max-w-content.
   const { pathname } = useLocation();
   const fullBleed = /^\/projects\/[^/]+\/edit\/?$/.test(pathname);
+  // Full-bleed bounds the height (min-h-0 chain + overflow-hidden) so the editor
+  // scrolls internally. Normal pages keep the default grow-and-scroll-the-page
+  // behavior, so min-h-0 must NOT leak onto them (it would clip long content).
+  const mainClass = fullBleed ? 'flex min-h-0 min-w-0 flex-1 flex-col' : 'min-w-0 flex-1';
   const contentClass = fullBleed
-    ? 'flex min-h-0 flex-1 flex-col px-4 py-4 sm:px-6 sm:py-6'
+    ? 'flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 sm:px-6 sm:py-6'
     : 'mx-auto w-full max-w-content px-4 py-6 sm:px-6 sm:py-8 lg:px-8';
 
   return (
@@ -31,7 +35,7 @@ export function AppShell() {
       <Header />
       <div className="flex flex-1">
         <Sidebar />
-        <main id="main" tabIndex={-1} className="flex min-w-0 flex-1 flex-col">
+        <main id="main" tabIndex={-1} className={mainClass}>
           <div className={contentClass}>
             {/* Suspense boundary for the code-split route components: the shell
                 stays put while the next page's chunk loads. */}
