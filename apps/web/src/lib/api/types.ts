@@ -118,3 +118,53 @@ export interface ListProjectsResponse {
 export interface ProjectResponse {
   project: Project;
 }
+
+// ---- Project case files (OpenFOAM) ----
+
+/** A node in a project's case tree. */
+export interface CaseEntry {
+  /** Forward-slash relative path from the case root. */
+  path: string;
+  type: 'file' | 'directory';
+  /** Size in bytes (0 for directories). */
+  size: number;
+}
+
+/** Report of which mandatory files a case has (the "Verify" check). */
+export interface CaseVerification {
+  /** All five constant/polyMesh/ mesh files are present. */
+  hasMesh: boolean;
+  /** Mesh files still absent (come from the import, cannot be generated). */
+  missingMesh: string[];
+  /** Scaffoldable base files already present. */
+  presentBase: string[];
+  /** Scaffoldable base files still absent (what "create them" would generate). */
+  missingBase: string[];
+  /** No base files are missing. */
+  complete: boolean;
+  /** At least one base file is missing, so scaffolding has something to do. */
+  canScaffold: boolean;
+}
+
+/** `GET /projects/:id/files` response. */
+export interface CaseFilesResponse {
+  entries: CaseEntry[];
+}
+
+/** `GET /projects/:id/files/verify` response. */
+export interface VerifyCaseResponse {
+  verification: CaseVerification;
+}
+
+/** `POST /projects/:id/files/import` response. */
+export interface ImportCaseResponse {
+  written: string[];
+  entries: CaseEntry[];
+}
+
+/** `POST /projects/:id/files/scaffold` response. */
+export interface ScaffoldCaseResponse {
+  created: string[];
+  verification: CaseVerification;
+  entries: CaseEntry[];
+}

@@ -148,17 +148,29 @@ async function refreshAccessToken(): Promise<boolean> {
 // ---- Request core ----
 
 interface RequestOptions extends Omit<RequestInit, 'body'> {
-  /** JSON-serialisable request body (objects are stringified automatically). */
+  /**
+   * Request body. A `FormData` instance is sent as multipart (the browser sets
+   * the Content-Type with its boundary); anything else is JSON-stringified.
+   */
   body?: unknown;
   /** Skip the automatic 401 refresh-and-retry (used internally for auth). */
   skipRefresh?: boolean;
 }
 
-/** Build headers, attaching JSON content-type and the bearer token. */
-function buildHeaders(hasBody: boolean, extra?: HeadersInit): Headers {
+/** Is the body a multipart FormData payload (vs a JSON-serialisable value)? */
+function isFormData(body: unknown): body is FormData {
+  return typeof FormData !== 'undefined' && body instanceof FormData;
+}
+
+/**
+ * Build headers, attaching the JSON content-type only for JSON bodies (never
+ * for FormData, where the browser must set the multipart boundary) and the
+ * bearer token.
+ */
+function buildHeaders(hasJsonBody: boolean, extra?: HeadersInit): Headers {
   const headers = new Headers(extra);
   headers.set('Accept', 'application/json');
-  if (hasBody && !headers.has('Content-Type')) {
+  if (hasJsonBody && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
   if (accessToken) {
@@ -179,26 +191,28 @@ async function decodeBody<T>(response: Response): Promise<T> {
   return JSON.parse(text) as T;
 }
 
-async function performFetch(path: string, options: RequestOptions): Promise<Response> {
+function performFetch(path: string, options: RequestOptions): Promise<Response> {
   const { body, skipRefresh: _skipRefresh, headers, ...rest } = options;
   const hasBody = body !== undefined;
+  const formBody = isFormData(body);
   const init: RequestInit = {
     ...rest,
-    headers: buildHeaders(hasBody, headers),
+    headers: buildHeaders(hasBody && !formBody, headers),
     // Auth endpoints rely on the refresh cookie; send credentials for them.
     credentials: isAuthPath(path) ? 'include' : rest.credentials,
   };
   if (hasBody) {
-    init.body = JSON.stringify(body);
+    init.body = formBody ? (body as FormData) : JSON.stringify(body);
   }
   return fetch(`${getBaseUrl()}${path}`, init);
 }
 
 /**
- * Core request. Performs the fetch; on a 401 for a non-auth request, refreshes
- * the token once and retries. Throws `ApiError` on any non-OK final response.
+ * Core request returning the raw `Response`. Performs the fetch; on a 401 for a
+ * non-auth request, refreshes the token once and retries. Throws `ApiError` on
+ * any non-OK final response or transport failure.
  */
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+async function requestResponse(path: string, options: RequestOptions = {}): Promise<Response> {
   let response: Response;
   try {
     response = await performFetch(path, options);
@@ -227,7 +241,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     throw await toApiError(response);
   }
 
-  return decodeBody<T>(response);
+  return response;
+}
+
+/** Decode a successful response body as JSON (tolerating 204 / empty). */
+async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  return decodeBody<T>(await requestResponse(path, options));
 }
 
 /** Typed HTTP helpers used by the feature-specific API modules. */
@@ -243,5 +262,14 @@ export const apiClient = {
   },
   delete<T>(path: string, options?: RequestOptions): Promise<T> {
     return request<T>(path, { ...options, method: 'DELETE' });
+  },
+  /** POST a multipart `FormData` payload (file uploads). */
+  postForm<T>(path: string, formData: FormData, options?: RequestOptions): Promise<T> {
+    return request<T>(path, { ...options, method: 'POST', body: formData });
+  },
+  /** GET a binary response as a `Blob` (file downloads). */
+  async getBlob(path: string, options?: RequestOptions): Promise<Blob> {
+    const response = await requestResponse(path, { ...options, method: 'GET' });
+    return response.blob();
   },
 };

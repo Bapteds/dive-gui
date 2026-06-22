@@ -30,6 +30,7 @@ import {
   useProjectQuery,
   useRemoveCollaborator,
 } from '@/features/projects/useProjects';
+import { CaseFilesSection } from '@/features/projects/CaseFilesSection';
 
 /**
  * ProjectDetailPage - a single project's details and collaborator management.
@@ -108,6 +109,8 @@ export function ProjectDetailPage() {
             </div>
           </dl>
         </section>
+
+        <CaseFilesSection projectId={project.id} />
 
         <CollaboratorsSection project={project} canManage={canManage} />
 

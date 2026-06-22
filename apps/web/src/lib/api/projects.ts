@@ -1,9 +1,15 @@
 import { apiClient } from './client';
 import type {
+  CaseEntry,
+  CaseFilesResponse,
+  CaseVerification,
   CreateProjectInput,
+  ImportCaseResponse,
   ListProjectsResponse,
   Project,
   ProjectResponse,
+  ScaffoldCaseResponse,
+  VerifyCaseResponse,
 } from './types';
 
 /**
@@ -46,4 +52,48 @@ export async function addCollaborator(id: string, email: string): Promise<Projec
 export async function removeCollaborator(id: string, userId: string): Promise<Project> {
   const data = await apiClient.delete<ProjectResponse>(`/projects/${id}/collaborators/${userId}`);
   return data.project;
+}
+
+// ---- Case files (OpenFOAM) ----
+
+/** List the project's case tree (empty until something is imported). */
+export async function getCaseFiles(id: string): Promise<CaseEntry[]> {
+  const data = await apiClient.get<CaseFilesResponse>(`/projects/${id}/files`);
+  return data.entries;
+}
+
+/**
+ * Import a folder of case files. Each file carries its relative path (the
+ * browser's webkitRelativePath) as the multipart part filename so the server
+ * can rebuild the tree (e.g. a polyMesh/ folder lands under constant/polyMesh/).
+ */
+export async function importCaseFolder(id: string, files: File[]): Promise<ImportCaseResponse> {
+  const form = new FormData();
+  for (const file of files) {
+    form.append('files', file, file.webkitRelativePath || file.name);
+  }
+  return apiClient.postForm<ImportCaseResponse>(`/projects/${id}/files/import`, form);
+}
+
+/** Import a .zip archive of a case (or a polyMesh folder). */
+export async function importCaseZip(id: string, file: File): Promise<ImportCaseResponse> {
+  const form = new FormData();
+  form.append('archive', file, file.name);
+  return apiClient.postForm<ImportCaseResponse>(`/projects/${id}/files/import`, form);
+}
+
+/** Verify which mandatory files the case has. */
+export async function verifyCase(id: string): Promise<CaseVerification> {
+  const data = await apiClient.get<VerifyCaseResponse>(`/projects/${id}/files/verify`);
+  return data.verification;
+}
+
+/** Generate the missing mandatory base files. */
+export async function scaffoldCase(id: string): Promise<ScaffoldCaseResponse> {
+  return apiClient.post<ScaffoldCaseResponse>(`/projects/${id}/files/scaffold`);
+}
+
+/** Download the whole case as a .zip blob. */
+export async function downloadCase(id: string): Promise<Blob> {
+  return apiClient.getBlob(`/projects/${id}/files/download`);
 }
