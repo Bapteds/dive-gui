@@ -189,6 +189,22 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
     expect(controlDict).not.toMatch(/endTime\s+1\s*;/);
   });
 
+  it('treats a complete case with a generic fvSolution (no pRefCell) as not runnable', async () => {
+    const { auth, id } = await makeProject('runnable-generic-fvsol@x.test');
+    await writeMesh(id);
+    await request(app).post(`/api/v1/projects/${id}/runnable/scaffold`).set('Authorization', auth);
+    // Regress the fvSolution to a generic placeholder (simpleFoam app stays).
+    await writeCaseFile(
+      id,
+      'system/fvSolution',
+      'FoamFile { object fvSolution; }\nSIMPLE { nNonOrthogonalCorrectors 0; }\n',
+    );
+
+    const res = await request(app).get(`/api/v1/projects/${id}/runnable`).set('Authorization', auth);
+    expect(res.body.runnable.solver).toBe('simpleFoam');
+    expect(res.body.runnable.runnable).toBe(false); // generic numerics -> gate re-offers repair
+  });
+
   it('reports not runnable when the mesh is absent', async () => {
     const { auth, id } = await makeProject('runnable-3@x.test');
     const res = await request(app).get(`/api/v1/projects/${id}/runnable`).set('Authorization', auth);
