@@ -186,6 +186,37 @@ export async function scaffoldCase(viewer: Viewer, projectId: string): Promise<S
   return { created, verification, entries };
 }
 
+/** The pristine-initial-conditions directory OpenFOAM keeps alongside `0`. */
+const ORIG_DIR = '0.orig/';
+
+/**
+ * OpenFOAM keeps a pristine `0.orig` and runs from a copy in `0` (mesh utilities
+ * can clobber `0`, so the clean fields live in `0.orig`). When a case has
+ * `0.orig/` files but no `0/`, seed `0/` from `0.orig/` — keeping `0.orig/`
+ * untouched — so the solver has initial conditions to run from. No-op when `0/`
+ * already exists or there is no `0.orig/`. Returns the files created in `0/`.
+ */
+async function ensureZeroFromOrig(projectId: string): Promise<string[]> {
+  const tree = await listCaseTree(projectId);
+  const hasZero = tree.some((entry) => entry.path === '0' || entry.path.startsWith('0/'));
+  if (hasZero) return [];
+  const origFiles = tree.filter(
+    (entry) => entry.type === 'file' && entry.path.startsWith(ORIG_DIR),
+  );
+  if (origFiles.length === 0) return [];
+
+  const seeded: string[] = [];
+  for (const entry of origFiles) {
+    const dest = `0/${entry.path.slice(ORIG_DIR.length)}`;
+    const buffer = await readCaseFile(projectId, entry.path);
+    if (buffer) {
+      await writeCaseFile(projectId, dest, buffer);
+      seeded.push(dest);
+    }
+  }
+  return seeded;
+}
+
 /** Whether a case is ready to be run by simpleFoam, and what is missing if not. */
 export interface RunnableCheck {
   /** All five constant/polyMesh/ mesh files are present. */
@@ -303,6 +334,10 @@ export async function scaffoldSolver(
 ): Promise<ScaffoldSolverResult> {
   await assertProjectVisible(viewer, projectId);
 
+  // Run from a copy of 0.orig when the case uses that convention and has no 0/
+  // yet, so the template's initial conditions seed 0/ instead of generic ones.
+  await ensureZeroFromOrig(projectId);
+
   const boundary = await readCaseFile(projectId, BOUNDARY_FILE);
   const patches = boundary ? parseBoundaryPatches(boundary.toString('utf8')) : [];
 
@@ -367,11 +402,16 @@ export async function syncBoundaryFields(
   }
   const patches = parseBoundaryPatchesWithTypes(boundary.toString('utf8'));
 
+  // Seed 0/ from 0.orig/ first when needed, then sync the runnable fields and
+  // leave 0.orig/ pristine.
+  await ensureZeroFromOrig(projectId);
+
   const updated: string[] = [];
   const tree = await listCaseTree(projectId);
   for (const entry of tree) {
     if (entry.type !== 'file') continue;
     if (entry.path.startsWith('constant/polyMesh/')) continue;
+    if (entry.path.startsWith(ORIG_DIR)) continue; // keep 0.orig pristine
     if (entry.size > EDITABLE_FILE_MAX_BYTES) continue;
     const buffer = await readCaseFile(projectId, entry.path);
     if (!buffer) continue;

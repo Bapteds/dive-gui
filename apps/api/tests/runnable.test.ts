@@ -272,4 +272,26 @@ describe('syncBoundaryFields (POST /files/sync-boundaries)', () => {
       .set('Authorization', auth);
     expect(res.status).toBe(409);
   });
+
+  it('seeds 0/ from 0.orig/ when 0/ is missing, and keeps 0.orig pristine', async () => {
+    const { auth, id } = await makeProject('sync-orig@x.test');
+    await writeCaseFile(id, 'constant/polyMesh/boundary', BOUNDARY_3);
+    // The template provides a pristine 0.orig but no 0/.
+    await writeCaseFile(id, '0.orig/U', STALE_U);
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/sync-boundaries`)
+      .set('Authorization', auth);
+    expect(res.status).toBe(200);
+
+    // 0/U was created from 0.orig/U and its boundaryField synced to the mesh.
+    const zero = (await readCaseFile(id, '0/U'))?.toString('utf8') ?? '';
+    expect(zero).toMatch(/inlet\s*\{\s*type\s+zeroGradient;/);
+    expect(zero).toMatch(/front\s*\{\s*type\s+empty;/);
+    expect(zero).not.toContain('oldpatch');
+
+    // 0.orig/U is left untouched (still the template's original boundaryField).
+    const orig = (await readCaseFile(id, '0.orig/U'))?.toString('utf8') ?? '';
+    expect(orig).toContain('oldpatch');
+  });
 });
