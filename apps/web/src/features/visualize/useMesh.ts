@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  autoPatchMesh,
   getMeshEdges,
   getMeshGeometry,
   getMeshManifest,
   rebuildMesh,
   renameMeshPatch,
 } from '@/lib/api/projects';
-import type { MeshManifest } from '@/lib/api/types';
+import type { AutoPatchResult, MeshManifest } from '@/lib/api/types';
 
 /**
  * useMesh - React Query hooks for the 3D mesh viewer ("Visualize" tab).
@@ -115,6 +116,29 @@ export function useRenamePatch(projectId: string) {
       queryClient.removeQueries({ queryKey: meshEdgesQueryKey(projectId) });
       // The patch name lives in constant/polyMesh/boundary, a case file, so keep
       // the case tree / summary in sync too.
+      void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'files'] });
+    },
+  });
+}
+
+/**
+ * Run autoPatch on the mesh. The mutation resolves even when the tool itself
+ * fails (`result.success === false`) so the dialog can show the logs; only
+ * access / missing-mesh errors reject. On a successful run the boundary changed,
+ * so the cached render is stale: drop the manifest, geometry and edge queries so
+ * the viewer rebuilds with the new patches, and refresh the case tree (the
+ * boundary is a case file, and base files may have been scaffolded to run the
+ * utility). A failed run leaves the mesh untouched, so nothing is dropped.
+ */
+export function useAutoPatch(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<AutoPatchResult, Error, number>({
+    mutationFn: (featureAngle) => autoPatchMesh(projectId, featureAngle),
+    onSuccess: (result) => {
+      if (!result.success) return;
+      queryClient.removeQueries({ queryKey: meshManifestQueryKey(projectId) });
+      queryClient.removeQueries({ queryKey: meshGeometryQueryKey(projectId) });
+      queryClient.removeQueries({ queryKey: meshEdgesQueryKey(projectId) });
       void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'files'] });
     },
   });

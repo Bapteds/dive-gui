@@ -29,6 +29,9 @@ export default defineConfig({
       // Same idea for the mesh extractor: point at a committed stub (the real
       // script needs PyVista) — the command runner is faked, so it never runs.
       EXTRACT_PATCHES_SCRIPT: './tests/fixtures/extractPatches.py',
+      // Short stop grace so the solver-run stop test does not wait 30 s for the
+      // SIGTERM escalation (the stream runner is faked, so this only paces tests).
+      RUN_STOP_GRACE_MS: '50',
       SEED_ADMIN_EMAIL: 'admin@dive-turbinen.test',
       SEED_ADMIN_PASSWORD: 'TestAdminPassw0rd!',
       SEED_ADMIN_NAME: 'Test Super Admin',

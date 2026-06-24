@@ -17,7 +17,9 @@ import {
   resetCase,
   saveCaseFileContent,
   scaffoldCase,
+  scaffoldSolver,
   verifyCase,
+  verifyRunnable,
   type ImportPayload,
 } from './files.service';
 import type { MovePathInput } from './files.schemas';
@@ -113,6 +115,18 @@ export async function verifyCaseController(req: Request, res: Response): Promise
 /** POST /projects/:id/files/scaffold — generate the missing mandatory base files. */
 export async function scaffoldCaseController(req: Request, res: Response): Promise<void> {
   const result = await scaffoldCase(requireViewer(req), req.params.id);
+  res.status(201).json(result);
+}
+
+/** GET /projects/:id/runnable — report whether the case is runnable by simpleFoam. */
+export async function verifyRunnableController(req: Request, res: Response): Promise<void> {
+  const runnable = await verifyRunnable(requireViewer(req), req.params.id);
+  res.status(200).json({ runnable });
+}
+
+/** POST /projects/:id/runnable/scaffold — generate the missing simpleFoam files. */
+export async function scaffoldSolverController(req: Request, res: Response): Promise<void> {
+  const result = await scaffoldSolver(requireViewer(req), req.params.id);
   res.status(201).json(result);
 }
 

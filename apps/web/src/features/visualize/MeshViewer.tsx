@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { AlertTriangle, Grid3x3, Loader2, Maximize, MonitorX } from 'lucide-react';
+import { AlertTriangle, Grid3x3, Loader2, Maximize, MonitorX, Scissors } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Diamond } from '@/components/brand/Diamond';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -11,6 +11,7 @@ import { ApiError } from '@/lib/api/client';
 import type { MeshPatch } from '@/lib/api/types';
 import { PatchTable } from './PatchTable';
 import { RenamePatchDialog } from './RenamePatchDialog';
+import { AutoPatchDialog } from './AutoPatchDialog';
 import {
   useMeshEdgesQuery,
   useMeshGeometryQuery,
@@ -60,6 +61,8 @@ export function MeshViewer({ projectId }: { projectId: string }) {
   const [selected, setSelected] = useState<string | null>(null);
   // The patch being renamed, or null when the rename dialog is closed.
   const [renameTarget, setRenameTarget] = useState<string | null>(null);
+  // Whether the auto-patch dialog is open.
+  const [autoPatchOpen, setAutoPatchOpen] = useState(false);
 
   const manifest = useMeshManifestQuery(projectId);
   const patches = manifest.data?.patches ?? [];
@@ -85,14 +88,26 @@ export function MeshViewer({ projectId }: { projectId: string }) {
       >
         {/* Left: patch table (or its loading / empty stand-ins). */}
         <div className="flex min-h-0 flex-col border-b border-border p-4 sm:p-5 lg:border-b-0 lg:border-r">
-          <h2 className="shrink-0 pb-3 text-sm font-semibold text-text">
-            Boundary patches
-            {hasPatches && (
-              <span className="ml-1.5 font-normal tabular-nums text-text-secondary">
-                ({patches.length})
-              </span>
-            )}
-          </h2>
+          <div className="flex shrink-0 items-center justify-between gap-2 pb-3">
+            <h2 className="min-w-0 text-sm font-semibold text-text">
+              Boundary patches
+              {hasPatches && (
+                <span className="ml-1.5 font-normal tabular-nums text-text-secondary">
+                  ({patches.length})
+                </span>
+              )}
+            </h2>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="shrink-0"
+              onClick={() => setAutoPatchOpen(true)}
+            >
+              <Scissors strokeWidth={1.75} aria-hidden="true" />
+              Auto-patch
+            </Button>
+          </div>
           {manifest.isPending ? (
             <PatchTableSkeleton />
           ) : manifest.isError ? (
@@ -135,6 +150,15 @@ export function MeshViewer({ projectId }: { projectId: string }) {
           // Keep the selection (and its 3D highlight) on the patch after rename.
           setSelected((current) => (current === oldName ? newName : current));
         }}
+      />
+
+      <AutoPatchDialog
+        projectId={projectId}
+        open={autoPatchOpen}
+        onClose={() => setAutoPatchOpen(false)}
+        // autoPatch replaced the patches with auto-generated ones, so the old
+        // selection no longer applies once the viewer rebuilds.
+        onPatched={() => setSelected(null)}
       />
     </>
   );

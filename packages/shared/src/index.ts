@@ -93,6 +93,74 @@ export interface MeshManifest {
 }
 
 /**
+ * Directory name (under a project's storage subtree, sibling of `case/`,
+ * `cgns/`, `viz/`) holding solver-run logs and artifacts. Kept apart from the
+ * case so a case reset never wipes the run history/logs (mirrors the viz/cgns
+ * decision): logs are outputs, not case inputs.
+ */
+export const RUN_DIRNAME = 'runs';
+
+/**
+ * Lifecycle states of a solver run, shared so the API (Prisma `status` String,
+ * the reconciliation logic) and the web client (status badge, history) agree.
+ *  - queued/running: active (a process is, or is about to be, executing).
+ *  - converged: exit 0 AND the solver printed its "solution converged" banner.
+ *  - completed: exit 0, reached endTime, WITHOUT converging (ran to the end).
+ *  - diverged: residuals went to nan/inf or a floating-point error occurred.
+ *  - failed:   non-zero exit, missing binary, or wall-clock timeout.
+ *  - stopped:  the user stopped the run.
+ */
+export const RUN_STATUSES = [
+  'queued',
+  'running',
+  'converged',
+  'completed',
+  'diverged',
+  'failed',
+  'stopped',
+] as const;
+export type RunStatus = (typeof RUN_STATUSES)[number];
+
+/** Run statuses that count as "active" — the concurrency guard rejects a new run. */
+export const ACTIVE_RUN_STATUSES = ['queued', 'running'] as const;
+
+/** Is this run status terminal (the process is no longer executing)? */
+export function isTerminalRunStatus(status: RunStatus): boolean {
+  return status !== 'queued' && status !== 'running';
+}
+
+/**
+ * OpenFOAM solver applications the app can run in v1. The actual solver is read
+ * from the case's `system/controlDict` `application` keyword; this set bounds
+ * what we accept (and is reused by the web client's labels). `foamRun` is the
+ * generic launcher the scaffold writes by default; `simpleFoam` is the steady
+ * incompressible RANS MVP.
+ */
+export const SOLVER_IDS = ['simpleFoam', 'foamRun'] as const;
+export type SolverId = (typeof SOLVER_IDS)[number];
+
+/**
+ * Residual field names the chart plots, shared so the parser, the legend, and
+ * the per-series colors stay in sync. The parser stays tolerant to others; this
+ * list only drives display ordering and the known palette. Ux/Uy/Uz are kept
+ * separate here (the solver prints them separately); the UI may merge them.
+ */
+export const RESIDUAL_FIELDS = ['Ux', 'Uy', 'Uz', 'p', 'k', 'omega', 'epsilon', 'nuTilda'] as const;
+export type ResidualField = (typeof RESIDUAL_FIELDS)[number];
+
+/**
+ * One per-iteration residual record: the iteration (solver "Time =") and the
+ * Initial residual of each field present in that block. Fields are optional
+ * because not every model writes every field. Compact on the wire.
+ */
+export interface ResidualSample {
+  /** Solver iteration / time index (the value after "Time = "). */
+  time: number;
+  /** Field name -> Initial residual at this iteration. */
+  values: Partial<Record<string, number>>;
+}
+
+/**
  * Machine-readable error codes the API may emit in its `{ error: { code } }`
  * envelope. The web client maps these to user-facing messages; it adds its own
  * transport-only codes (network failures, unknown) on top of this set.
@@ -117,6 +185,9 @@ export const SERVER_ERROR_CODES = [
   'MESH_BUILD_FAILED',
   'SCRIPT_MISSING',
   'PATCH_EXISTS',
+  'NOT_RUNNABLE',
+  'RUN_IN_PROGRESS',
+  'RUN_NOT_FOUND',
   'PAYLOAD_TOO_LARGE',
   'FILE_TOO_LARGE',
   'FILE_EXISTS',

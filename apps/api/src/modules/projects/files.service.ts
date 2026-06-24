@@ -27,8 +27,11 @@ import {
   BASE_FILE_PATHS,
   BOUNDARY_FILE,
   MESH_FILES,
+  SOLVER_FILE_PATHS,
+  parseApplication,
   parseBoundaryPatches,
   renderBaseFile,
+  renderSolverFile,
 } from '../../lib/openfoamCase';
 import { assertProjectVisible, type Viewer } from './projects.service';
 
@@ -177,6 +180,88 @@ export async function scaffoldCase(viewer: Viewer, projectId: string): Promise<S
     listCaseTree(projectId),
   ]);
   return { created, verification, entries };
+}
+
+/** Whether a case is ready to be run by simpleFoam, and what is missing if not. */
+export interface RunnableCheck {
+  /** All five constant/polyMesh/ mesh files are present. */
+  hasMesh: boolean;
+  /** Mesh files still absent (cannot be generated — they come from the import). */
+  missingMesh: string[];
+  /** Required solver files still absent (what "make runnable" would generate). */
+  missingFiles: string[];
+  /** Mesh present AND every required solver file present. */
+  runnable: boolean;
+  /** Solver read from system/controlDict `application`, or null when unset. */
+  solver: string | null;
+}
+
+/** Result of generating the missing simpleFoam files: created + refreshed state. */
+export interface ScaffoldSolverResult {
+  created: string[];
+  runnable: RunnableCheck;
+  entries: CaseEntry[];
+}
+
+/**
+ * Compute the runnable report for a case (no access check — callers that have
+ * already asserted visibility, e.g. the run service, use this directly).
+ */
+export async function computeRunnable(projectId: string): Promise<RunnableCheck> {
+  const meshPresence = await Promise.all(MESH_FILES.map((file) => caseFileExists(projectId, file)));
+  const missingMesh = MESH_FILES.filter((_, i) => !meshPresence[i]);
+
+  const presence = await Promise.all(
+    SOLVER_FILE_PATHS.map((file) => caseFileExists(projectId, file)),
+  );
+  const missingFiles = SOLVER_FILE_PATHS.filter((_, i) => !presence[i]);
+
+  const controlDict = await readCaseFile(projectId, 'system/controlDict');
+  const solver = controlDict ? parseApplication(controlDict.toString('utf8')) : null;
+
+  return {
+    hasMesh: missingMesh.length === 0,
+    missingMesh,
+    missingFiles,
+    runnable: missingMesh.length === 0 && missingFiles.length === 0,
+    solver,
+  };
+}
+
+/** Verify whether a case is runnable by simpleFoam (drives the Solver tab gate). */
+export async function verifyRunnable(viewer: Viewer, projectId: string): Promise<RunnableCheck> {
+  await assertProjectVisible(viewer, projectId);
+  return computeRunnable(projectId);
+}
+
+/**
+ * Generate the simpleFoam files a case needs to be runnable (the "Make runnable"
+ * action). Like scaffoldCase, the 0/ fields reference the discovered mesh
+ * patches and existing files are never overwritten — so a case already carrying
+ * a hand-tuned controlDict/fvSolution keeps it, and only the truly missing
+ * turbulence/transport pieces are added.
+ */
+export async function scaffoldSolver(
+  viewer: Viewer,
+  projectId: string,
+): Promise<ScaffoldSolverResult> {
+  await assertProjectVisible(viewer, projectId);
+
+  const boundary = await readCaseFile(projectId, BOUNDARY_FILE);
+  const patches = boundary ? parseBoundaryPatches(boundary.toString('utf8')) : [];
+
+  const created: string[] = [];
+  for (const file of SOLVER_FILE_PATHS) {
+    if (await caseFileExists(projectId, file)) continue;
+    await writeCaseFile(projectId, file, renderSolverFile(file, patches));
+    created.push(file);
+  }
+
+  const [runnable, entries] = await Promise.all([
+    computeRunnable(projectId),
+    listCaseTree(projectId),
+  ]);
+  return { created, runnable, entries };
 }
 
 /**

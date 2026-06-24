@@ -6,7 +6,16 @@
  * (later) the admin screens.
  */
 
-import type { ConversionStepId, MeshManifest, MeshPatch, Role, ServerErrorCode } from '@dive/shared';
+import type {
+  ConversionStepId,
+  MeshManifest,
+  MeshPatch,
+  ResidualSample,
+  Role,
+  RunStatus,
+  ServerErrorCode,
+  SolverId,
+} from '@dive/shared';
 
 /** User roles. The super-admin is permanent and cannot be removed or downgraded. */
 export type { Role };
@@ -347,3 +356,95 @@ export type { MeshPatch, MeshManifest };
 export interface MeshManifestResponse {
   manifest: MeshManifest;
 }
+
+/**
+ * Outcome of an autoPatch run. Like a conversion step, a tool failure resolves
+ * with `success: false` and the captured logs rather than rejecting, so the UI
+ * inspects `success` (not just onError).
+ */
+export interface AutoPatchResult {
+  /** True only when autoPatch exited 0. */
+  success: boolean;
+  /** The logical command line that was run. */
+  command: string;
+  /** Process exit code, or null when killed / never spawned. */
+  exitCode: number | null;
+  /** Captured stdout (tail). */
+  stdout: string;
+  /** Captured stderr (tail). */
+  stderr: string;
+  /** Wall-clock duration in ms. */
+  durationMs: number;
+  /** Boundary patch names after the run (the auto-generated patches on success). */
+  patches: string[];
+}
+
+/** `POST /projects/:id/mesh/auto-patch` response. */
+export interface AutoPatchResponse {
+  result: AutoPatchResult;
+}
+
+// ---- Solver runs ("Solver" tab) -------------------------------------------
+
+/** Whether a case can be run by simpleFoam, and what is missing if not. */
+export interface RunnableCheck {
+  /** All five constant/polyMesh/ mesh files are present. */
+  hasMesh: boolean;
+  /** Mesh files still absent (come from the import). */
+  missingMesh: string[];
+  /** Required solver files still absent (what "Make runnable" generates). */
+  missingFiles: string[];
+  /** Mesh present AND every required solver file present. */
+  runnable: boolean;
+  /** Solver read from controlDict `application`, or null. */
+  solver: string | null;
+}
+
+/** `GET /projects/:id/runnable` response. */
+export interface RunnableResponse {
+  runnable: RunnableCheck;
+}
+
+/** `POST /projects/:id/runnable/scaffold` response. */
+export interface ScaffoldSolverResponse {
+  created: string[];
+  runnable: RunnableCheck;
+  entries: CaseEntry[];
+}
+
+/** A solver run as surfaced to the client. */
+export interface RunSummary {
+  id: string;
+  solver: string;
+  status: RunStatus;
+  /** Process exit code, or null while running / never spawned. */
+  exitCode: number | null;
+  /** Short terminal explanation (diverged / failed / stopped), or null. */
+  reason: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+}
+
+/** `POST /projects/:id/runs` and `GET /projects/:id/runs/:runId` response. */
+export interface RunResponse {
+  run: RunSummary;
+}
+
+/** `GET /projects/:id/runs` response. */
+export interface ListRunsResponse {
+  runs: RunSummary[];
+}
+
+/**
+ * `GET /projects/:id/runs/:runId/log` response: the run, its residual series
+ * (downsampled), a bounded log tail, and the total log size in bytes.
+ */
+export interface RunLogPayload {
+  run: RunSummary;
+  series: ResidualSample[];
+  logTail: string;
+  logBytes: number;
+}
+
+export type { RunStatus, SolverId, ResidualSample };

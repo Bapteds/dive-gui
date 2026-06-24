@@ -25,6 +25,12 @@ vi.mock('@/features/projects/CaseFilesSection', () => ({
   CaseFilesSection: () => <div data-testid="case-files">case files</div>,
 }));
 
+vi.mock('@/features/solver/SolverTab', () => ({
+  SolverTab: ({ projectId }: { projectId: string }) => (
+    <div data-testid="solver-tab">solver {projectId}</div>
+  ),
+}));
+
 vi.mock('@/lib/api/projects', () => ({
   getProject: vi.fn(),
   getCaseFiles: vi.fn(),
@@ -102,6 +108,26 @@ describe('ProjectDetailPage - Visualize tab gating', () => {
     await userEvent.click(screen.getByRole('tab', { name: /visualize/i }));
 
     expect(await screen.findByTestId('mesh-viewer')).toBeInTheDocument();
+    expect(screen.queryByTestId('case-files')).not.toBeInTheDocument();
+  });
+});
+
+describe('ProjectDetailPage - Solver tab gating', () => {
+  it('disables the Solver tab when the case has no polyMesh', async () => {
+    vi.mocked(api.getCaseFiles).mockResolvedValue(withoutMesh);
+    renderPage();
+    expect(await screen.findByText('Rotor stage study')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('tab', { name: /solver/i })).toBeDisabled());
+  });
+
+  it('enables the Solver tab and opens it when the case has a polyMesh', async () => {
+    vi.mocked(api.getCaseFiles).mockResolvedValue(withMesh);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByRole('tab', { name: /solver/i })).toBeEnabled());
+    await userEvent.click(screen.getByRole('tab', { name: /solver/i }));
+
+    expect(await screen.findByTestId('solver-tab')).toBeInTheDocument();
     expect(screen.queryByTestId('case-files')).not.toBeInTheDocument();
   });
 });

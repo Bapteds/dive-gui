@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { ArrowLeft, Box, Info, Loader2, Settings, Trash2, UserPlus, Users } from 'lucide-react';
+import { ArrowLeft, Box, Info, Loader2, Play, Settings, Trash2, UserPlus, Users } from 'lucide-react';
 import { PageHeader } from '@/components/common/PageHeader';
 import { FullPageLoader } from '@/components/common/FullPageLoader';
 import { Button } from '@/components/ui/button';
@@ -54,6 +54,14 @@ import { useCaseFilesQuery } from '@/features/projects/useCaseFiles';
  */
 const MeshViewer = lazy(() =>
   import('@/features/visualize/MeshViewer').then((module) => ({ default: module.MeshViewer })),
+);
+
+/**
+ * The Solver tab pulls in the residual chart and run machinery, so it is
+ * code-split and only loaded when the user opens it (never on the initial render).
+ */
+const SolverTab = lazy(() =>
+  import('@/features/solver/SolverTab').then((module) => ({ default: module.SolverTab })),
 );
 
 /**
@@ -133,15 +141,17 @@ export function ProjectDetailPage() {
  * tooltip explaining how to enable it. Opening it swaps the whole detail body for
  * the lazy-loaded 3D viewer, which fills the pinned region at lg+.
  */
+type ProjectView = 'detail' | 'visualize' | 'solver';
+
 function ProjectTabs({ project }: { project: Project }) {
-  const [view, setView] = useState<'detail' | 'visualize'>('detail');
+  const [view, setView] = useState<ProjectView>('detail');
   const { data: entries } = useCaseFilesQuery(project.id);
   const hasPolyMesh = !!entries?.some((entry) => entry.path.startsWith('constant/polyMesh/'));
 
   return (
     <Tabs
       value={view}
-      onValueChange={(value) => setView(value as 'detail' | 'visualize')}
+      onValueChange={(value) => setView(value as ProjectView)}
       className="flex w-full flex-col gap-6 lg:min-h-0 lg:flex-1"
     >
       <TabsList className="shrink-0">
@@ -150,6 +160,7 @@ function ProjectTabs({ project }: { project: Project }) {
           Detail
         </TabsTrigger>
         <VisualizeTab disabled={!hasPolyMesh} />
+        <SolverTabTrigger disabled={!hasPolyMesh} />
       </TabsList>
 
       <TabsContent
@@ -170,6 +181,18 @@ function ProjectTabs({ project }: { project: Project }) {
         {view === 'visualize' && (
           <Suspense fallback={<ViewerLoading />}>
             <MeshViewer projectId={project.id} />
+          </Suspense>
+        )}
+      </TabsContent>
+
+      <TabsContent
+        value="solver"
+        className="mt-0 flex-col data-[state=active]:flex lg:min-h-0 lg:flex-1"
+      >
+        {/* Mount only when open: the tab polls the run log while a run is active. */}
+        {view === 'solver' && (
+          <Suspense fallback={<ViewerLoading />}>
+            <SolverTab projectId={project.id} />
           </Suspense>
         )}
       </TabsContent>
@@ -205,6 +228,37 @@ function VisualizeTab({ disabled }: { disabled: boolean }) {
         </span>
       </TooltipTrigger>
       <TooltipContent>Import a polyMesh to enable 3D</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * The Solver trigger. Gated on the project having a mesh (you cannot run a solver
+ * without one); when disabled, a tooltip explains how to enable it. Whether the
+ * case has the solver files is handled inside the tab (which offers to generate
+ * them), so the tab stays reachable as soon as a mesh exists.
+ */
+function SolverTabTrigger({ disabled }: { disabled: boolean }) {
+  const trigger = (
+    <TabsTrigger value="solver" disabled={disabled}>
+      <Play strokeWidth={1.75} aria-hidden="true" />
+      Solver
+    </TabsTrigger>
+  );
+
+  if (!disabled) return trigger;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          className="inline-flex rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
+        >
+          {trigger}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>Import a polyMesh to enable the solver</TooltipContent>
     </Tooltip>
   );
 }

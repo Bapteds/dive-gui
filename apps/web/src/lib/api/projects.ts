@@ -4,6 +4,8 @@ import type {
   ApplyPreview,
   ApplyPreviewResponse,
   ApplyTemplateResponse,
+  AutoPatchResult,
+  AutoPatchResponse,
   CaseEntry,
   CaseFileContent,
   CaseFileContentResponse,
@@ -20,7 +22,15 @@ import type {
   MeshManifestResponse,
   Project,
   ProjectResponse,
+  ListRunsResponse,
+  RunLogPayload,
+  RunResponse,
+  RunSummary,
+  RunnableCheck,
+  RunnableResponse,
   ScaffoldCaseResponse,
+  ScaffoldSolverResponse,
+  SolverId,
   VerifyCaseResponse,
 } from './types';
 
@@ -207,6 +217,19 @@ export async function renameMeshPatch(
   return apiClient.post<{ patches: string[] }>(`/projects/${id}/mesh/patches/rename`, { from, to });
 }
 
+/**
+ * Run `autoPatch <featureAngle> -overwrite` on the project mesh: splits the
+ * external boundary faces into patches by feature angle, rewriting the mesh
+ * boundary in place. Resolves with the per-run report even when the tool itself
+ * fails (`result.success === false`); only access / missing-mesh errors reject.
+ */
+export async function autoPatchMesh(id: string, featureAngle: number): Promise<AutoPatchResult> {
+  const data = await apiClient.post<AutoPatchResponse>(`/projects/${id}/mesh/auto-patch`, {
+    featureAngle,
+  });
+  return data.result;
+}
+
 // ---- Applying a shared template to this project's case ----
 
 /** Preview applying a template: which files are new and which conflict. */
@@ -230,4 +253,43 @@ export async function applyTemplate(
     `/projects/${projectId}/apply-template/${templateId}`,
     { decisions },
   );
+}
+
+// ---- Solver runs ("Solver" tab) ----
+
+/** Report whether the case can run simpleFoam (drives the Solver tab gate). */
+export async function getRunnable(id: string): Promise<RunnableCheck> {
+  const data = await apiClient.get<RunnableResponse>(`/projects/${id}/runnable`);
+  return data.runnable;
+}
+
+/** Generate the missing simpleFoam files (the "Make runnable" action). */
+export async function scaffoldSolver(id: string): Promise<ScaffoldSolverResponse> {
+  return apiClient.post<ScaffoldSolverResponse>(`/projects/${id}/runnable/scaffold`);
+}
+
+/** Start a solver run. Resolves with the created run (status `running`). */
+export async function startRun(id: string, solver?: SolverId): Promise<RunSummary> {
+  const data = await apiClient.post<RunResponse>(
+    `/projects/${id}/runs`,
+    solver ? { solver } : {},
+  );
+  return data.run;
+}
+
+/** List a project's runs, newest first. */
+export async function listRuns(id: string): Promise<RunSummary[]> {
+  const data = await apiClient.get<ListRunsResponse>(`/projects/${id}/runs`);
+  return data.runs;
+}
+
+/** Fetch the catch-up log payload (run + residual series + log tail) for a run. */
+export async function getRunLog(id: string, runId: string): Promise<RunLogPayload> {
+  return apiClient.get<RunLogPayload>(`/projects/${id}/runs/${runId}/log`);
+}
+
+/** Stop a run (graceful, with a SIGTERM fallback). */
+export async function stopRun(id: string, runId: string): Promise<RunSummary> {
+  const data = await apiClient.post<RunResponse>(`/projects/${id}/runs/${runId}/stop`);
+  return data.run;
 }

@@ -86,6 +86,30 @@ const envSchema = z
     // Wall-clock timeout (ms) for a single mesh-extraction run. The one-time VTK
     // read of a large ASCII mesh dominates; generous, like the conversion above.
     MESH_BUILD_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
+    // --- OpenFOAM solver run (Solver tab) -------------------------------------
+    // The app's first long-running background job. A run spawns the solver
+    // (e.g. simpleFoam) in the case directory, pipes its output to a persisted
+    // log, and drives a `Run` row to a terminal state. The solver binary lives on
+    // the Debian deploy target; on a Windows dev box it is absent, so a real run
+    // reports a clean "not found" (spawn ENOENT -> failed) instead of crashing.
+    // The default solver here is only a fallback; the run reads the actual solver
+    // from the case's controlDict `application`.
+    SOLVER_BIN: z.string().min(1).default('simpleFoam'),
+    // Hard wall-clock cap for a single run (ms); the child is killed past it.
+    // Default 6 h — steady RANS cases can run long; raise on big jobs.
+    SOLVER_MAX_RUNTIME_MS: z.coerce.number().int().positive().default(21600000),
+    // Maximum concurrent runs *per project*. v1 enforces exactly one (a second
+    // start is rejected with RUN_IN_PROGRESS); a queue is deferred.
+    SOLVER_MAX_CONCURRENT_RUNS: z.coerce.number().int().positive().default(1),
+    // Cap (bytes) on a persisted solver.log. The residual stream dwarfs the
+    // 16 MB one-shot command buffer, so this is generous (32 MB).
+    SOLVER_LOG_MAX_BYTES: z.coerce.number().int().positive().default(33554432),
+    // Grace period (ms) after a graceful stop request (writing `stopAt writeNow`)
+    // before escalating to SIGTERM/SIGKILL.
+    RUN_STOP_GRACE_MS: z.coerce.number().int().positive().default(30000),
+    // MPI launcher for the DEFERRED parallel path (decomposePar + mpirun -np N
+    // solver -parallel + reconstructPar). Declared now so the env shape is stable.
+    MPI_BIN: z.string().min(1).default('mpirun'),
     // Number of trusted reverse-proxy hops in front of the API. 0 = trust none
     // (default, correct for direct exposure / local dev). Set to 1 behind a
     // single proxy/load balancer so the login rate-limiter keys on the real

@@ -27,7 +27,9 @@ import {
   resetCaseController,
   saveCaseFileContentController,
   scaffoldCaseController,
+  scaffoldSolverController,
   verifyCaseController,
+  verifyRunnableController,
 } from './files.controller';
 import {
   convertCgnsController,
@@ -43,8 +45,16 @@ import {
   rebuildMeshController,
   renameMeshPatchController,
 } from './mesh.controller';
+import {
+  getRunController,
+  getRunLogController,
+  listRunsController,
+  startRunController,
+  stopRunController,
+} from './runs.controller';
 import { autoPatchSchema, renamePatchSchema } from './mesh.schemas';
 import { createFileSchema, filePathQuerySchema, movePathSchema } from './files.schemas';
+import { runIdParamSchema, startRunSchema } from './runs.schemas';
 import { cgnsNameQuerySchema, convertCgnsSchema } from './conversion.schemas';
 import {
   addCollaboratorSchema,
@@ -127,6 +137,19 @@ export function createProjectsRouter(): Router {
     '/:id/files/scaffold',
     validate({ params: projectIdParamSchema }),
     asyncHandler(scaffoldCaseController),
+  );
+
+  // Runnability (Solver tab): report whether the case can run simpleFoam, and
+  // generate the missing simpleFoam files (turbulence/transport + 0/ fields).
+  router.get(
+    '/:id/runnable',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(verifyRunnableController),
+  );
+  router.post(
+    '/:id/runnable/scaffold',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(scaffoldSolverController),
   );
 
   // Single-file content: read for the editor, save edited text back.
@@ -239,6 +262,35 @@ export function createProjectsRouter(): Router {
     '/:id/apply-template/:templateId',
     validate({ params: applyTemplateParamSchema, body: applyDecisionsSchema }),
     asyncHandler(applyTemplateController),
+  );
+
+  // Solver runs ("Solver" tab). Start a run (spawns the solver in the case dir,
+  // streaming its output to a persisted log), list/get runs, poll the log +
+  // residual series while a run is active, and stop a run.
+  router.get(
+    '/:id/runs',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(listRunsController),
+  );
+  router.post(
+    '/:id/runs',
+    validate({ params: projectIdParamSchema, body: startRunSchema }),
+    asyncHandler(startRunController),
+  );
+  router.get(
+    '/:id/runs/:runId',
+    validate({ params: runIdParamSchema }),
+    asyncHandler(getRunController),
+  );
+  router.get(
+    '/:id/runs/:runId/log',
+    validate({ params: runIdParamSchema }),
+    asyncHandler(getRunLogController),
+  );
+  router.post(
+    '/:id/runs/:runId/stop',
+    validate({ params: runIdParamSchema }),
+    asyncHandler(stopRunController),
   );
 
   return router;

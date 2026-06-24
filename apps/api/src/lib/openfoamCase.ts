@@ -222,6 +222,265 @@ export function renderBaseFile(path: BaseFilePath, patches: string[]): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Runnable simpleFoam case (Solver tab).
+//
+// scaffoldCase above produces a *generic*, solver-agnostic skeleton (foamRun,
+// `div none`, empty SIMPLE) that does NOT actually run a solver. To make a case
+// runnable by simpleFoam (steady incompressible RANS, the MVP solver), we need a
+// few more files and solver-correct numerics. These renderers generate a case
+// that *executes* simpleFoam; the boundary conditions are generic (zeroGradient)
+// and meant to be refined in the in-app editor — same philosophy as the base
+// scaffold, just tuned for one concrete solver.
+// ---------------------------------------------------------------------------
+
+/**
+ * The files a case needs to be runnable by simpleFoam, beyond the mesh. The
+ * system trio and 0/{U,p} overlap with BASE_FILE_PATHS but are rendered here in
+ * solver-correct form (filled divSchemes, residualControl, application
+ * simpleFoam). constant/{transport,turbulence}Properties and 0/{k,omega,nut} are
+ * the turbulence/transport setup the generic scaffold deliberately omits.
+ */
+export const SOLVER_FILE_PATHS = [
+  'system/controlDict',
+  'system/fvSchemes',
+  'system/fvSolution',
+  'constant/transportProperties',
+  'constant/turbulenceProperties',
+  '0/U',
+  '0/p',
+  '0/k',
+  '0/omega',
+  '0/nut',
+] as const;
+
+export type SolverFilePath = (typeof SOLVER_FILE_PATHS)[number];
+
+/** system/controlDict tuned for a steady simpleFoam run. */
+function simpleFoamControlDict(): string {
+  return `${foamHeader('dictionary', 'controlDict', 'system')}
+application     simpleFoam;
+
+startFrom       startTime;
+startTime       0;
+
+stopAt          endTime;
+endTime         1000;
+
+deltaT          1;
+
+writeControl    timeStep;
+writeInterval   100;
+
+purgeWrite      0;
+
+writeFormat     ascii;
+writePrecision  6;
+writeCompression off;
+
+timeFormat      general;
+timePrecision   6;
+
+runTimeModifiable true;
+${FOAM_FOOTER}`;
+}
+
+/** system/fvSchemes with concrete divergence schemes for simpleFoam + k-omega SST. */
+function simpleFoamFvSchemes(): string {
+  return `${foamHeader('dictionary', 'fvSchemes', 'system')}
+ddtSchemes
+{
+    default         steadyState;
+}
+
+gradSchemes
+{
+    default         Gauss linear;
+}
+
+divSchemes
+{
+    default         none;
+    div(phi,U)      bounded Gauss linearUpwind grad(U);
+    div(phi,k)      bounded Gauss upwind;
+    div(phi,omega)  bounded Gauss upwind;
+    div((nuEff*dev2(T(grad(U))))) Gauss linear;
+}
+
+laplacianSchemes
+{
+    default         Gauss linear corrected;
+}
+
+interpolationSchemes
+{
+    default         linear;
+}
+
+snGradSchemes
+{
+    default         corrected;
+}
+
+wallDist
+{
+    method          meshWave;
+}
+${FOAM_FOOTER}`;
+}
+
+/** system/fvSolution with a real solver setup, residualControl and relaxation. */
+function simpleFoamFvSolution(): string {
+  return `${foamHeader('dictionary', 'fvSolution', 'system')}
+solvers
+{
+    p
+    {
+        solver          GAMG;
+        smoother        GaussSeidel;
+        tolerance       1e-06;
+        relTol          0.1;
+    }
+
+    "(U|k|omega)"
+    {
+        solver          smoothSolver;
+        smoother        symGaussSeidel;
+        tolerance       1e-05;
+        relTol          0.1;
+    }
+}
+
+SIMPLE
+{
+    nNonOrthogonalCorrectors 0;
+    consistent      yes;
+
+    // No fixedValue pressure patch in the generic setup, so pin a reference.
+    pRefCell        0;
+    pRefValue       0;
+
+    residualControl
+    {
+        p               1e-4;
+        U               1e-4;
+        "(k|omega)"     1e-4;
+    }
+}
+
+relaxationFactors
+{
+    fields
+    {
+        p               0.3;
+    }
+    equations
+    {
+        U               0.7;
+        "(k|omega)"     0.7;
+    }
+}
+${FOAM_FOOTER}`;
+}
+
+/** constant/transportProperties — Newtonian, kinematic viscosity nu. */
+function transportProperties(): string {
+  return `${foamHeader('dictionary', 'transportProperties', 'constant')}
+transportModel  Newtonian;
+
+// Kinematic viscosity nu [m^2/s]. Default ~ air at room temperature; edit me.
+nu              [0 2 -1 0 0 0 0] 1e-05;
+${FOAM_FOOTER}`;
+}
+
+/** constant/turbulenceProperties — RAS with the k-omega SST model. */
+function turbulenceProperties(): string {
+  return `${foamHeader('dictionary', 'turbulenceProperties', 'constant')}
+simulationType  RAS;
+
+RAS
+{
+    RASModel        kOmegaSST;
+    turbulence      on;
+    printCoeffs     on;
+}
+${FOAM_FOOTER}`;
+}
+
+/** 0/k — turbulent kinetic energy; boundaryField covers every discovered patch. */
+function fieldK(patches: string[]): string {
+  return `${foamHeader('volScalarField', 'k', '0')}
+dimensions      [0 2 -2 0 0 0 0];
+
+internalField   uniform 0.1;
+
+${boundaryFieldBlock(patches)}
+${FOAM_FOOTER}`;
+}
+
+/** 0/omega — specific dissipation rate; boundaryField covers every patch. */
+function fieldOmega(patches: string[]): string {
+  return `${foamHeader('volScalarField', 'omega', '0')}
+dimensions      [0 0 -1 0 0 0 0];
+
+internalField   uniform 1;
+
+${boundaryFieldBlock(patches)}
+${FOAM_FOOTER}`;
+}
+
+/** 0/nut — turbulent viscosity (computed by the model); boundaryField per patch. */
+function fieldNut(patches: string[]): string {
+  return `${foamHeader('volScalarField', 'nut', '0')}
+dimensions      [0 2 -1 0 0 0 0];
+
+internalField   uniform 0;
+
+${boundaryFieldBlock(patches)}
+${FOAM_FOOTER}`;
+}
+
+/**
+ * Render the content of a single simpleFoam solver file. `patches` is used only
+ * by the 0/ fields so their boundaryField references the imported mesh's patches.
+ */
+export function renderSolverFile(path: SolverFilePath, patches: string[]): string {
+  switch (path) {
+    case 'system/controlDict':
+      return simpleFoamControlDict();
+    case 'system/fvSchemes':
+      return simpleFoamFvSchemes();
+    case 'system/fvSolution':
+      return simpleFoamFvSolution();
+    case 'constant/transportProperties':
+      return transportProperties();
+    case 'constant/turbulenceProperties':
+      return turbulenceProperties();
+    case '0/U':
+      return fieldU(patches);
+    case '0/p':
+      return fieldP(patches);
+    case '0/k':
+      return fieldK(patches);
+    case '0/omega':
+      return fieldOmega(patches);
+    case '0/nut':
+      return fieldNut(patches);
+  }
+}
+
+/**
+ * Read the solver name from a controlDict's `application` keyword, or null when
+ * absent/unparseable. Tolerant: ignores comments before the keyword.
+ */
+export function parseApplication(controlDictContent: string): string | null {
+  const cleaned = controlDictContent
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+  const match = cleaned.match(/\bapplication\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/);
+  return match ? match[1] : null;
+}
+
 /** A valid OpenFOAM patch name: a "word" token (letter/underscore start). */
 const PATCH_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
