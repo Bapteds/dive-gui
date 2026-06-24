@@ -6,7 +6,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { app, authHeader, createTestUser, resetDatabase } from './helpers';
 import { prisma } from '../src/lib/prisma';
-import { writeCaseFile } from '../src/lib/caseStorage';
+import { readCaseFile, writeCaseFile } from '../src/lib/caseStorage';
 import { parseApplication, renderSolverFile, setApplication } from '../src/lib/openfoamCase';
 
 const BOUNDARY = `FoamFile { class polyBoundaryMesh; object boundary; }
@@ -153,6 +153,40 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
     expect(res.body.runnable.missingFiles).toHaveLength(0);
     expect(res.body.runnable.solver).toBe('foamRun');
     expect(res.body.runnable.runnable).toBe(false); // gate re-offers "Make runnable"
+  });
+
+  it('repairs a generic system/ trio (adds pRefCell, real div schemes, endTime)', async () => {
+    const { auth, id } = await makeProject('runnable-repair@x.test');
+    await writeMesh(id);
+    // Generic placeholders like the conversion flow scaffolds: no pRefCell, no
+    // residualControl, `div none`, application foamRun, endTime 1.
+    await writeCaseFile(
+      id,
+      'system/controlDict',
+      'FoamFile { object controlDict; }\napplication     foamRun;\nendTime         1;\n',
+    );
+    await writeCaseFile(
+      id,
+      'system/fvSolution',
+      'FoamFile { object fvSolution; }\nSIMPLE { nNonOrthogonalCorrectors 0; }\n',
+    );
+    await writeCaseFile(
+      id,
+      'system/fvSchemes',
+      'FoamFile { object fvSchemes; }\ndivSchemes { default none; }\n',
+    );
+
+    await request(app).post(`/api/v1/projects/${id}/runnable/scaffold`).set('Authorization', auth);
+
+    const fvSolution = (await readCaseFile(id, 'system/fvSolution'))?.toString('utf8') ?? '';
+    const fvSchemes = (await readCaseFile(id, 'system/fvSchemes'))?.toString('utf8') ?? '';
+    const controlDict = (await readCaseFile(id, 'system/controlDict'))?.toString('utf8') ?? '';
+
+    expect(fvSolution).toMatch(/pRefCell/);
+    expect(fvSolution).toMatch(/residualControl/);
+    expect(fvSchemes).toMatch(/div\(phi,U\)/);
+    expect(controlDict).toMatch(/application\s+simpleFoam/);
+    expect(controlDict).not.toMatch(/endTime\s+1\s*;/);
   });
 
   it('reports not runnable when the mesh is absent', async () => {

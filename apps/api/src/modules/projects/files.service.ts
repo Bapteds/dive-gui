@@ -240,12 +240,48 @@ export async function verifyRunnable(viewer: Viewer, projectId: string): Promise
   return computeRunnable(projectId);
 }
 
+/** The system/ numerics that must be simpleFoam-correct (not generic placeholders). */
+const SYSTEM_NUMERICS_FILES = new Set<string>([
+  'system/controlDict',
+  'system/fvSchemes',
+  'system/fvSolution',
+]);
+
+/**
+ * Does a system/ numerics file need to be (re)written for simpleFoam? True when
+ * it is missing or still a generic placeholder, detected by the marker that
+ * simpleFoam requires and the base scaffold omits:
+ *  - fvSolution: a pressure reference (pRefCell/pRefPoint) — without it simpleFoam
+ *    aborts on a closed domain ("Unable to set reference cell for field p").
+ *  - fvSchemes: a real divergence scheme (the base scaffold writes `div none`).
+ *  - controlDict: application=simpleFoam and a non-trivial endTime (the base
+ *    scaffold writes `application foamRun; endTime 1;`, which runs one step).
+ * Marker-guarded so a second "Make runnable" is a no-op, and a real imported case
+ * (which already has these markers) is never overwritten.
+ */
+async function systemNumericsNeedsRepair(projectId: string, file: string): Promise<boolean> {
+  const buffer = await readCaseFile(projectId, file);
+  if (!buffer) return true;
+  const content = buffer.toString('utf8');
+
+  if (file === 'system/fvSolution') return !/pRef(Cell|Point)/.test(content);
+  if (file === 'system/fvSchemes') return !/\bdiv\(phi,U\)/.test(content);
+  // system/controlDict
+  if (parseApplication(content) !== 'simpleFoam') return true;
+  const match = content.match(/\bendTime\s+([0-9.eE+-]+)\s*;/);
+  const endTime = match ? Number(match[1]) : 0;
+  return !Number.isFinite(endTime) || endTime <= 1;
+}
+
 /**
  * Generate the simpleFoam files a case needs to be runnable (the "Make runnable"
- * action). Like scaffoldCase, the 0/ fields reference the discovered mesh
- * patches and existing files are never overwritten — so a case already carrying
- * a hand-tuned controlDict/fvSolution keeps it, and only the truly missing
- * turbulence/transport pieces are added.
+ * action). The 0/ fields and constant/*Properties are written only when missing,
+ * so user-set boundary conditions / property values are kept. The system/
+ * numerics (controlDict / fvSchemes / fvSolution) are instead REPAIRED when they
+ * are generic placeholders (e.g. from the conversion flow): a placeholder
+ * fvSolution lacks pRefCell and simpleFoam aborts, fvSchemes has `div none`, and
+ * controlDict targets foamRun with endTime 1. The repair is marker-guarded, so a
+ * real imported case or a second call is left untouched.
  */
 export async function scaffoldSolver(
   viewer: Viewer,
@@ -258,23 +294,26 @@ export async function scaffoldSolver(
 
   const created: string[] = [];
   for (const file of SOLVER_FILE_PATHS) {
+    if (SYSTEM_NUMERICS_FILES.has(file)) {
+      if (await systemNumericsNeedsRepair(projectId, file)) {
+        await writeCaseFile(projectId, file, renderSolverFile(file, patches));
+        created.push(file);
+      }
+      continue;
+    }
+    // 0/ fields + constant/*Properties: keep what the user has, add what is missing.
     if (await caseFileExists(projectId, file)) continue;
     await writeCaseFile(projectId, file, renderSolverFile(file, patches));
     created.push(file);
   }
 
-  // The action makes the case runnable BY simpleFoam, so the controlDict must
-  // target it. A case scaffolded generically (or coming out of the conversion
-  // flow) says `application foamRun`, which is not what these turbulence/transport
-  // files are written for and may not even be installed. A freshly generated
-  // controlDict already says simpleFoam, so this is a no-op in that case.
+  // Belt and suspenders: make sure controlDict targets simpleFoam even if the
+  // repair check above kept it (idempotent no-op when already simpleFoam).
   const controlDict = await readCaseFile(projectId, 'system/controlDict');
   if (controlDict) {
     const content = controlDict.toString('utf8');
     const next = setApplication(content, 'simpleFoam');
-    if (next !== content) {
-      await writeCaseFile(projectId, 'system/controlDict', next);
-    }
+    if (next !== content) await writeCaseFile(projectId, 'system/controlDict', next);
   }
 
   const [runnable, entries] = await Promise.all([
