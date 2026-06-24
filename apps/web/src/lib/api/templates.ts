@@ -1,4 +1,5 @@
 import { apiClient } from './client';
+import type { UploadFile } from '@/features/files/folderImport';
 import type {
   CaseEntry,
   CaseFileContent,
@@ -6,8 +7,10 @@ import type {
   CaseFilesResponse,
   CreateCaseFileResponse,
   CreateTemplateInput,
+  DeleteCaseDirResponse,
   DeleteCaseFileResponse,
   ImportCaseResponse,
+  MoveCaseEntryResponse,
   ListTemplatesResponse,
   Template,
   TemplateResponse,
@@ -60,11 +63,18 @@ export async function getTemplateFiles(id: string): Promise<CaseEntry[]> {
   return data.entries;
 }
 
-/** Import a folder of files into a template (author or super-admin). */
-export async function importTemplateFolder(id: string, files: File[]): Promise<ImportCaseResponse> {
+/**
+ * Import a folder of files into a template (author or super-admin). Each upload
+ * carries the relative path it should be stored under (the folder picker may
+ * strip the picked root folder, see uploadPath).
+ */
+export async function importTemplateFolder(
+  id: string,
+  files: UploadFile[],
+): Promise<ImportCaseResponse> {
   const form = new FormData();
-  for (const file of files) {
-    form.append('files', file, file.webkitRelativePath || file.name);
+  for (const { file, path } of files) {
+    form.append('files', file, path || file.name);
   }
   return apiClient.postForm<ImportCaseResponse>(`/templates/${id}/files/import`, form);
 }
@@ -106,4 +116,20 @@ export async function deleteTemplateFile(id: string, path: string): Promise<Dele
   return apiClient.delete<DeleteCaseFileResponse>(
     `/templates/${id}/files/content?path=${encodeURIComponent(path)}`,
   );
+}
+
+/** Delete a whole template folder (and its contents). Returns the refreshed tree. */
+export async function deleteTemplateDir(id: string, path: string): Promise<DeleteCaseDirResponse> {
+  return apiClient.delete<DeleteCaseDirResponse>(
+    `/templates/${id}/files/dir?path=${encodeURIComponent(path)}`,
+  );
+}
+
+/** Move (or rename) a template file or folder. Returns the refreshed tree. */
+export async function moveTemplatePath(
+  id: string,
+  from: string,
+  to: string,
+): Promise<MoveCaseEntryResponse> {
+  return apiClient.post<MoveCaseEntryResponse>(`/templates/${id}/files/move`, { from, to });
 }

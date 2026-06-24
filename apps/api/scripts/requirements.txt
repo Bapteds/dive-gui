@@ -1,0 +1,7 @@
+# Runtime dependencies for extractPatches.py (OpenFOAM boundary patches -> GLB).
+# The deploy target already provides a Python interpreter for pvpython / CGNS
+# conversion; these are the extra libraries the patch-extraction script needs.
+# Conservative version floors.
+pyvista>=0.43
+trimesh>=4.0
+numpy>=1.24

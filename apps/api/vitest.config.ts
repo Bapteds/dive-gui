@@ -22,6 +22,13 @@ export default defineConfig({
       CORS_ORIGIN: 'http://localhost:5173',
       // Isolated, git-ignored storage root so tests never touch dev uploads.
       STORAGE_DIR: './test-storage',
+      // Point the conversion's script-existence check at a committed stub (the
+      // real python/CgnsToVtk.py lives outside the repo); the command runner is
+      // faked in the tests, so the stub is never executed.
+      CGNS_TO_VTK_SCRIPT: './tests/fixtures/CgnsToVtk.py',
+      // Same idea for the mesh extractor: point at a committed stub (the real
+      // script needs PyVista) — the command runner is faked, so it never runs.
+      EXTRACT_PATCHES_SCRIPT: './tests/fixtures/extractPatches.py',
       SEED_ADMIN_EMAIL: 'admin@dive-turbinen.test',
       SEED_ADMIN_PASSWORD: 'TestAdminPassw0rd!',
       SEED_ADMIN_NAME: 'Test Super Admin',

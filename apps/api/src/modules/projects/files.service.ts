@@ -11,9 +11,11 @@ import {
   caseFileExists,
   caseIsEmpty,
   clearCase,
+  deleteCaseDir,
   deleteCaseFile,
   extractArchive,
   listCaseTree,
+  moveCasePath,
   readCaseFile,
   writeCaseFile,
   writeUploadedFiles,
@@ -265,4 +267,35 @@ export async function deleteCaseFileContent(
   }
   await deleteCaseFile(projectId, relPath);
   return { entries: await listCaseTree(projectId) };
+}
+
+/**
+ * Delete a whole case directory subtree from the editor. Returns the refreshed
+ * tree. @throws 404 NOT_FOUND if the folder does not exist.
+ */
+export async function deleteCaseDirContent(
+  viewer: Viewer,
+  projectId: string,
+  relPath: string,
+): Promise<{ entries: CaseEntry[] }> {
+  await assertProjectVisible(viewer, projectId);
+  await deleteCaseDir(projectId, relPath);
+  return { entries: await listCaseTree(projectId) };
+}
+
+/**
+ * Move (or rename) a case file or directory within the tree. Returns the
+ * refreshed tree.
+ * @throws 404 NOT_FOUND (source absent), 409 FILE_EXISTS (destination taken),
+ *         400 VALIDATION_ERROR (moving a folder into itself).
+ */
+export async function moveCaseEntry(
+  viewer: Viewer,
+  projectId: string,
+  from: string,
+  to: string,
+): Promise<{ from: string; to: string; entries: CaseEntry[] }> {
+  await assertProjectVisible(viewer, projectId);
+  const result = await moveCasePath(projectId, from, to);
+  return { from: result.from, to: result.to, entries: await listCaseTree(projectId) };
 }

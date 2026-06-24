@@ -12,10 +12,12 @@ import path from 'node:path';
 import {
   assertSafeId,
   clearTreeAt,
+  deleteDirAt,
   deleteFileAt,
   extractArchiveAt,
   fileExistsAt,
   listTree,
+  moveAt,
   readFileAt,
   removeTreeAt,
   sanitizeRelative,
@@ -23,6 +25,7 @@ import {
   writeFileAt,
   writeNormalizedAt,
   type FileEntry,
+  type MoveResult,
 } from './fileTreeStorage';
 
 /** A single node in a template's file tree. */
@@ -96,6 +99,20 @@ export function writeTemplateFile(
 /** Delete a single template file, pruning any parent directories left empty. */
 export function deleteTemplateFile(templateId: string, relPath: string): Promise<void> {
   return deleteFileAt(templateRootFor(templateId), relPath);
+}
+
+/** Recursively delete a template directory subtree, pruning empty parents. */
+export function deleteTemplateDir(templateId: string, relPath: string): Promise<void> {
+  return deleteDirAt(templateRootFor(templateId), relPath);
+}
+
+/** Move (or rename) a template file or directory within the tree. */
+export function moveTemplatePath(
+  templateId: string,
+  fromRel: string,
+  toRel: string,
+): Promise<MoveResult> {
+  return moveAt(templateRootFor(templateId), fromRel, toRel);
 }
 
 /** Remove all of a template's files (the root is recreated on next write). */

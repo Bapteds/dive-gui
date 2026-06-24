@@ -8,9 +8,11 @@ import type { Viewer } from './projects.service';
 import {
   buildCaseArchive,
   createCaseFile,
+  deleteCaseDirContent,
   deleteCaseFileContent,
   getCaseFiles,
   importCaseFiles,
+  moveCaseEntry,
   readCaseFileContent,
   resetCase,
   saveCaseFileContent,
@@ -18,6 +20,7 @@ import {
   verifyCase,
   type ImportPayload,
 } from './files.service';
+import type { MovePathInput } from './files.schemas';
 
 /**
  * Multipart parser for case imports. Files are buffered in memory (mesh files
@@ -139,5 +142,19 @@ export async function createCaseFileController(req: Request, res: Response): Pro
 export async function deleteCaseFileController(req: Request, res: Response): Promise<void> {
   const path = (req.query.path as string | undefined) ?? '';
   const result = await deleteCaseFileContent(requireViewer(req), req.params.id, path);
+  res.status(200).json(result);
+}
+
+/** DELETE /projects/:id/files/dir?path=… — delete a whole folder from the editor. */
+export async function deleteCaseDirController(req: Request, res: Response): Promise<void> {
+  const path = (req.query.path as string | undefined) ?? '';
+  const result = await deleteCaseDirContent(requireViewer(req), req.params.id, path);
+  res.status(200).json(result);
+}
+
+/** POST /projects/:id/files/move — move/rename a file or folder. */
+export async function moveCaseEntryController(req: Request, res: Response): Promise<void> {
+  const { from, to } = req.body as MovePathInput;
+  const result = await moveCaseEntry(requireViewer(req), req.params.id, from, to);
   res.status(200).json(result);
 }

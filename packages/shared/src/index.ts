@@ -36,6 +36,63 @@ export const TEMPLATE_DESCRIPTION_MAX_LENGTH = 2000;
 export const EDITABLE_FILE_MAX_BYTES = 2 * 1024 * 1024; // 2 MB
 
 /**
+ * File extension of an Ansys/CFD CGNS mesh source. The frontend uses it for the
+ * file picker's `accept`, the backend to validate an upload; a single constant
+ * keeps the two from drifting. Compared case-insensitively.
+ */
+export const CGNS_EXTENSION = '.cgns';
+
+/**
+ * Ordered identifiers of the CGNS -> OpenFOAM conversion pipeline steps, shared
+ * so the API and the web client label each step (and its log) identically.
+ *   - cgnsToVtk:   pvpython CgnsToVtk.py  -> legacy VTK
+ *   - vtkToFoam:   vtkUnstructuredToFoam  -> constant/polyMesh
+ *   - checkMesh:   checkMesh              -> mesh quality report
+ */
+export const CONVERSION_STEPS = ['cgnsToVtk', 'vtkToFoam', 'checkMesh'] as const;
+export type ConversionStepId = (typeof CONVERSION_STEPS)[number];
+
+/**
+ * Directory name (under a project's storage subtree, sibling of `case/` and
+ * `cgns/`) holding the rendered 3D-viewer artifacts. Kept apart from the case so
+ * a case reset never touches the cached render (mirrors the CGNS decision).
+ */
+export const VIZ_DIRNAME = 'viz';
+
+/**
+ * One boundary patch of a mesh, as surfaced to the 3D "Visualize" tab. Mirrors
+ * the original inspector's table semantics (Name / Type / nFaces): `nFaces` is
+ * the patch's ORIGINAL boundary face count, not the post-triangulation count.
+ */
+export interface MeshPatch {
+  /** Patch name (matches the named node in the GLB geometry). */
+  name: string;
+  /** Patch type from constant/polyMesh/boundary (patch | wall | …), `?` if unknown. */
+  type: string;
+  /** Number of boundary faces in the patch (pre-triangulation). */
+  nFaces: number;
+  /**
+   * Slice of the cell-edge buffer (edges.bin) for this patch: a vertex offset.
+   * Units are vertices (3 float32 each). Present when true mesh edges were
+   * extracted; absent on an older render (the viewer then falls back).
+   */
+  edgeOffset?: number;
+  /** Number of edge vertices for this patch in edges.bin (even; line-segment pairs). */
+  edgeCount?: number;
+}
+
+/**
+ * Manifest describing the patches in a project's rendered mesh. The patch table
+ * (F4) is driven entirely by this JSON, so it never depends on the geometry
+ * transport format (GLB).
+ */
+export interface MeshManifest {
+  patches: MeshPatch[];
+  /** ISO 8601 timestamp of when the artifacts were built. */
+  generatedAt: string;
+}
+
+/**
  * Machine-readable error codes the API may emit in its `{ error: { code } }`
  * envelope. The web client maps these to user-facing messages; it adds its own
  * transport-only codes (network failures, unknown) on top of this set.
@@ -53,6 +110,13 @@ export const SERVER_ERROR_CODES = [
   'COLLABORATOR_EXISTS',
   'NO_FILES_UPLOADED',
   'INVALID_ARCHIVE',
+  'INVALID_CGNS',
+  'CONVERSION_FAILED',
+  'NO_MESH',
+  'MESH_NOT_BUILT',
+  'MESH_BUILD_FAILED',
+  'SCRIPT_MISSING',
+  'PATCH_EXISTS',
   'PAYLOAD_TOO_LARGE',
   'FILE_TOO_LARGE',
   'FILE_EXISTS',

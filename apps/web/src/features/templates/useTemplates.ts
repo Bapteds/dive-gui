@@ -3,6 +3,7 @@ import {
   createTemplate,
   createTemplateFile,
   deleteTemplate,
+  deleteTemplateDir,
   deleteTemplateFile,
   getTemplate,
   getTemplateFileContent,
@@ -10,11 +11,13 @@ import {
   importTemplateFolder,
   importTemplateZip,
   listTemplates,
+  moveTemplatePath,
   saveTemplateFileContent,
   updateTemplate,
 } from '@/lib/api/templates';
 import { applyTemplate, previewApplyTemplate } from '@/lib/api/projects';
 import { caseFilesQueryKey } from '@/features/projects/useCaseFiles';
+import type { UploadFile } from '@/features/files/folderImport';
 import type {
   ApplyDecision,
   ApplyPreview,
@@ -23,8 +26,10 @@ import type {
   CaseFileContent,
   CreateCaseFileResponse,
   CreateTemplateInput,
+  DeleteCaseDirResponse,
   DeleteCaseFileResponse,
   ImportCaseResponse,
+  MoveCaseEntryResponse,
   Template,
   UpdateTemplateInput,
 } from '@/lib/api/types';
@@ -130,7 +135,7 @@ export function useImportTemplate(templateId: string) {
   return useMutation<
     ImportCaseResponse,
     Error,
-    { kind: 'folder'; files: File[] } | { kind: 'zip'; file: File }
+    { kind: 'folder'; files: UploadFile[] } | { kind: 'zip'; file: File }
   >({
     mutationFn: (input) =>
       input.kind === 'folder'
@@ -161,6 +166,30 @@ export function useDeleteTemplateFile(templateId: string) {
     onSuccess: (result, { path }) => {
       queryClient.setQueryData(templateFilesQueryKey(templateId), result.entries);
       queryClient.removeQueries({ queryKey: templateFileContentQueryKey(templateId, path) });
+    },
+  });
+}
+
+/** Delete a whole template folder, then refresh the tree and drop stale content caches. */
+export function useDeleteTemplateDir(templateId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<DeleteCaseDirResponse, Error, { path: string }>({
+    mutationFn: ({ path }) => deleteTemplateDir(templateId, path),
+    onSuccess: (result) => {
+      queryClient.setQueryData(templateFilesQueryKey(templateId), result.entries);
+      queryClient.removeQueries({ queryKey: [...templateFilesQueryKey(templateId), 'content'] });
+    },
+  });
+}
+
+/** Move/rename a template file or folder, then refresh the tree and drop stale content caches. */
+export function useMoveTemplatePath(templateId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<MoveCaseEntryResponse, Error, { from: string; to: string }>({
+    mutationFn: ({ from, to }) => moveTemplatePath(templateId, from, to),
+    onSuccess: (result) => {
+      queryClient.setQueryData(templateFilesQueryKey(templateId), result.entries);
+      queryClient.removeQueries({ queryKey: [...templateFilesQueryKey(templateId), 'content'] });
     },
   });
 }

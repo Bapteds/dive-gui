@@ -9,6 +9,12 @@ datasource db {
 
 generator client {
   provider = "prisma-client-js"
+  // The app is deployed on Debian but developed on Windows. Emit the Linux query
+  // engine alongside the host's so a client generated on a dev box still runs on
+  // the server. `debian-openssl-3.0.x` covers Debian 12 (bookworm); add
+  // `debian-openssl-1.1.x` for Debian 11 (bullseye). Best practice remains to run
+  // `prisma generate` on the deploy target itself (the CI/deploy step does).
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
 /// Application user / account.

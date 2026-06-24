@@ -16,18 +16,36 @@ import {
 } from './projects.controller';
 import {
   createCaseFileController,
+  deleteCaseDirController,
   deleteCaseFileController,
   downloadCaseController,
   getCaseFileContentController,
   getCaseFilesController,
   importCaseFilesController,
+  moveCaseEntryController,
   parseCaseUpload,
   resetCaseController,
   saveCaseFileContentController,
   scaffoldCaseController,
   verifyCaseController,
 } from './files.controller';
-import { createFileSchema, filePathQuerySchema } from './files.schemas';
+import {
+  convertCgnsController,
+  deleteCgnsController,
+  listCgnsController,
+  uploadCgnsController,
+} from './conversion.controller';
+import {
+  autoPatchController,
+  getMeshEdgesController,
+  getMeshGeometryController,
+  getMeshManifestController,
+  rebuildMeshController,
+  renameMeshPatchController,
+} from './mesh.controller';
+import { autoPatchSchema, renamePatchSchema } from './mesh.schemas';
+import { createFileSchema, filePathQuerySchema, movePathSchema } from './files.schemas';
+import { cgnsNameQuerySchema, convertCgnsSchema } from './conversion.schemas';
 import {
   addCollaboratorSchema,
   collaboratorParamSchema,
@@ -135,6 +153,79 @@ export function createProjectsRouter(): Router {
     '/:id/files/content',
     validate({ params: projectIdParamSchema, query: filePathQuerySchema }),
     asyncHandler(deleteCaseFileController),
+  );
+  // Delete a whole folder, or move/rename a file or folder, from the editor.
+  router.delete(
+    '/:id/files/dir',
+    validate({ params: projectIdParamSchema, query: filePathQuerySchema }),
+    asyncHandler(deleteCaseDirController),
+  );
+  router.post(
+    '/:id/files/move',
+    validate({ params: projectIdParamSchema, body: movePathSchema }),
+    asyncHandler(moveCaseEntryController),
+  );
+
+  // CGNS mesh sources + conversion. Upload/list/delete a CGNS file, then convert
+  // a chosen one into the case mesh (constant/polyMesh) using a chosen template.
+  // The upload reuses the shared multipart parser; convert takes a JSON body.
+  router.get(
+    '/:id/cgns',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(listCgnsController),
+  );
+  router.post(
+    '/:id/cgns',
+    validate({ params: projectIdParamSchema }),
+    parseCaseUpload,
+    asyncHandler(uploadCgnsController),
+  );
+  router.delete(
+    '/:id/cgns',
+    validate({ params: projectIdParamSchema, query: cgnsNameQuerySchema }),
+    asyncHandler(deleteCgnsController),
+  );
+  router.post(
+    '/:id/cgns/convert',
+    validate({ params: projectIdParamSchema, body: convertCgnsSchema }),
+    asyncHandler(convertCgnsController),
+  );
+
+  // 3D mesh viewer ("Visualize" tab). The manifest call builds the render on
+  // demand (extract boundary patches -> GLB + manifest, cached on disk); the
+  // geometry call streams the cached GLB; rebuild forces a fresh extraction.
+  router.get(
+    '/:id/mesh/manifest',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(getMeshManifestController),
+  );
+  router.get(
+    '/:id/mesh/geometry',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(getMeshGeometryController),
+  );
+  router.get(
+    '/:id/mesh/edges',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(getMeshEdgesController),
+  );
+  router.post(
+    '/:id/mesh/rebuild',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(rebuildMeshController),
+  );
+  router.post(
+    '/:id/mesh/patches/rename',
+    validate({ params: projectIdParamSchema, body: renamePatchSchema }),
+    asyncHandler(renameMeshPatchController),
+  );
+  // Auto-patch: run OpenFOAM autoPatch <featureAngle> -overwrite to split the
+  // external boundary faces into patches by feature angle (rewrites the mesh
+  // boundary in place; the render is rebuilt on the next manifest fetch).
+  router.post(
+    '/:id/mesh/auto-patch',
+    validate({ params: projectIdParamSchema, body: autoPatchSchema }),
+    asyncHandler(autoPatchController),
   );
 
   // Apply a shared template to this project's case: preview the conflicts, then

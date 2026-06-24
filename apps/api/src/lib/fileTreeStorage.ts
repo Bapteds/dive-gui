@@ -195,16 +195,13 @@ export async function writeFileAt(
 }
 
 /**
- * Delete a single file under the root, then prune any parent directories that
- * became empty (up to, but never including, the root). The caller is expected
- * to have verified the file exists (the service layer returns 404 otherwise).
+ * Prune directories that became empty after removing `fromAbs`, walking up from
+ * its parent to (but never including) the root. Best-effort: stops at the first
+ * non-empty or unreadable directory.
  */
-export async function deleteFileAt(root: string, relPath: string): Promise<void> {
-  const abs = confineJoin(root, sanitizeRelative(relPath));
-  await fs.unlink(abs);
-
+async function pruneEmptyParents(root: string, fromAbs: string): Promise<void> {
   const resolvedRoot = path.resolve(root);
-  let dir = path.dirname(abs);
+  let dir = path.dirname(fromAbs);
   while (dir !== resolvedRoot && dir.startsWith(resolvedRoot + path.sep)) {
     let remaining: string[];
     try {
@@ -216,6 +213,88 @@ export async function deleteFileAt(root: string, relPath: string): Promise<void>
     await fs.rmdir(dir);
     dir = path.dirname(dir);
   }
+}
+
+/**
+ * Delete a single file under the root, then prune any parent directories that
+ * became empty (up to, but never including, the root). The caller is expected
+ * to have verified the file exists (the service layer returns 404 otherwise).
+ */
+export async function deleteFileAt(root: string, relPath: string): Promise<void> {
+  const abs = confineJoin(root, sanitizeRelative(relPath));
+  await fs.unlink(abs);
+  await pruneEmptyParents(root, abs);
+}
+
+/**
+ * Recursively delete a directory subtree under the root, then prune any parent
+ * directories left empty. @throws NOT_FOUND when the path is absent or is a file.
+ */
+export async function deleteDirAt(root: string, relPath: string): Promise<void> {
+  const abs = confineJoin(root, sanitizeRelative(relPath));
+  let stat;
+  try {
+    stat = await fs.stat(abs);
+  } catch {
+    throw new AppError(404, 'NOT_FOUND', 'Folder not found');
+  }
+  if (!stat.isDirectory()) {
+    throw new AppError(404, 'NOT_FOUND', 'Folder not found');
+  }
+  await fs.rm(abs, { recursive: true, force: true });
+  await pruneEmptyParents(root, abs);
+}
+
+/** Outcome of a move: what was moved and its final, sanitized relative path. */
+export interface MoveResult {
+  type: 'file' | 'directory';
+  from: string;
+  to: string;
+}
+
+/**
+ * Move (or rename) a file or directory within the root. Creates the
+ * destination's parent directories, then prunes any source parents left empty.
+ *
+ * @throws NOT_FOUND when the source is absent.
+ * @throws VALIDATION_ERROR when moving a directory into itself or a descendant.
+ * @throws FILE_EXISTS when something already exists at the destination.
+ */
+export async function moveAt(root: string, fromRel: string, toRel: string): Promise<MoveResult> {
+  const from = sanitizeRelative(fromRel);
+  const to = sanitizeRelative(toRel);
+  const fromAbs = confineJoin(root, from);
+  const toAbs = confineJoin(root, to);
+
+  let stat;
+  try {
+    stat = await fs.stat(fromAbs);
+  } catch {
+    throw new AppError(404, 'NOT_FOUND', 'Path not found');
+  }
+  const isDir = stat.isDirectory();
+
+  if (toAbs === fromAbs) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'The destination is the same as the source');
+  }
+  // A directory cannot be moved inside itself or one of its descendants.
+  if (isDir && toAbs.startsWith(fromAbs + path.sep)) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'Cannot move a folder into itself');
+  }
+
+  try {
+    await fs.stat(toAbs);
+    throw new AppError(409, 'FILE_EXISTS', 'Something already exists at the destination');
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    // ENOENT: the destination is free — proceed.
+  }
+
+  await fs.mkdir(path.dirname(toAbs), { recursive: true });
+  await fs.rename(fromAbs, toAbs);
+  await pruneEmptyParents(root, fromAbs);
+
+  return { type: isDir ? 'directory' : 'file', from, to };
 }
 
 /** Build a .zip of the whole tree (files only). */

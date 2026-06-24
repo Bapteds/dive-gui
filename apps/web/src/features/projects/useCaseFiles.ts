@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createCaseFile,
+  deleteCaseDir,
   deleteCaseFile,
   getCaseFileContent,
   getCaseFiles,
   importCaseFolder,
   importCaseZip,
+  moveCasePath,
   resetCase,
   saveCaseFileContent,
   scaffoldCase,
@@ -15,8 +17,10 @@ import type {
   CaseEntry,
   CaseFileContent,
   CreateCaseFileResponse,
+  DeleteCaseDirResponse,
   DeleteCaseFileResponse,
   ImportCaseResponse,
+  MoveCaseEntryResponse,
   ScaffoldCaseResponse,
 } from '@/lib/api/types';
 
@@ -116,6 +120,30 @@ export function useDeleteCaseFile(projectId: string) {
     onSuccess: (result, { path }) => {
       queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
       queryClient.removeQueries({ queryKey: caseFileContentQueryKey(projectId, path) });
+    },
+  });
+}
+
+/** Delete a whole folder, then write the refreshed tree and drop stale content caches. */
+export function useDeleteCaseDir(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<DeleteCaseDirResponse, Error, { path: string }>({
+    mutationFn: ({ path }) => deleteCaseDir(projectId, path),
+    onSuccess: (result) => {
+      queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
+      queryClient.removeQueries({ queryKey: [...caseFilesQueryKey(projectId), 'content'] });
+    },
+  });
+}
+
+/** Move/rename a file or folder, then refresh the tree and drop stale content caches. */
+export function useMoveCaseEntry(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<MoveCaseEntryResponse, Error, { from: string; to: string }>({
+    mutationFn: ({ from, to }) => moveCasePath(projectId, from, to),
+    onSuccess: (result) => {
+      queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
+      queryClient.removeQueries({ queryKey: [...caseFilesQueryKey(projectId), 'content'] });
     },
   });
 }

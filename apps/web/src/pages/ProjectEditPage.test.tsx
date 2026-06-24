@@ -76,13 +76,13 @@ beforeEach(() => {
 describe('ProjectEditPage', () => {
   it('renders the file list and an empty editor until a file is chosen', async () => {
     renderPage();
-    expect(await screen.findByRole('button', { name: /controlDict/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'controlDict' })).toBeInTheDocument();
     expect(screen.getByText('Select a file to edit')).toBeInTheDocument();
   });
 
   it('loads a file into the editor when selected', async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: /controlDict/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'controlDict' }));
 
     const editor = await screen.findByLabelText('editor');
     await waitFor(() => expect(editor).toHaveValue('application foamRun;'));
@@ -91,7 +91,7 @@ describe('ProjectEditPage', () => {
 
   it('auto-saves edited content (debounced, no Save button)', async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: /controlDict/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'controlDict' }));
 
     const editor = await screen.findByLabelText('editor');
     await waitFor(() => expect(editor).toHaveValue('application foamRun;'));

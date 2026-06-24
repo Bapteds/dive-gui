@@ -55,7 +55,7 @@ export function CaseSummary({ projectId }: { projectId: string }) {
     return (
       <div
         role="alert"
-        className="flex flex-col items-start gap-3 rounded-md border border-danger/40 bg-danger-tint px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
+        className="flex flex-col items-start gap-3 rounded-md border border-danger/40 bg-danger-tint px-4 py-4 sm:flex-row sm:items-center sm:justify-between lg:my-auto"
       >
         <p className="text-sm text-text">We could not load the case files.</p>
         <Button
@@ -75,7 +75,7 @@ export function CaseSummary({ projectId }: { projectId: string }) {
 
   if (summarisable.length === 0) {
     return (
-      <div className="flex flex-col items-center gap-3 rounded-md border border-dashed border-border-strong px-6 py-12 text-center">
+      <div className="flex flex-col items-center gap-3 rounded-md border border-dashed border-border-strong px-6 py-12 text-center lg:my-auto">
         <span className="grid size-12 place-items-center rounded-md bg-primary-tint">
           <Diamond size={18} className="text-primary" />
         </span>
@@ -92,8 +92,18 @@ export function CaseSummary({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="divide-y divide-border rounded-md border border-border">
+    <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1">
+      {/* The summary scrolls within a bounded region so a long case never grows
+          the page: the table itself scrolls, not the whole detail page. On a
+          phone it is capped (max-h-96); from `lg` up it fills the pinned card
+          and scrolls there instead. It is focusable (no focusable children
+          otherwise) so keyboard users can scroll it; overscroll-contain keeps
+          the scroll from chaining to the page once the ends are reached. */}
+      <section
+        aria-label="Case settings summary"
+        tabIndex={0}
+        className="max-h-96 divide-y divide-border overflow-y-auto overscroll-contain rounded-md border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring lg:max-h-none lg:min-h-0 lg:flex-1"
+      >
         {summarisable.map((file, index) => (
           <FileSummary
             key={file.path}
@@ -101,9 +111,9 @@ export function CaseSummary({ projectId }: { projectId: string }) {
             query={contents[index]}
           />
         ))}
-      </div>
+      </section>
       {skipped > 0 && (
-        <p className="text-xs text-text-secondary">
+        <p className="text-xs text-text-secondary lg:shrink-0">
           {skipped} mesh or large file{skipped === 1 ? '' : 's'} not summarised.
         </p>
       )}

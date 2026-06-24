@@ -65,6 +65,9 @@ export default defineConfig({
             id.includes('node_modules/w3c-keyname')
           )
             return 'codemirror';
+          // three.js is large and used only by the lazy Visualize tab; keep it in
+          // its own chunk so it never weighs on the initial load.
+          if (id.includes('node_modules/three')) return 'three';
           if (id.includes('node_modules/react-router') || id.includes('node_modules/@remix-run'))
             return 'router';
           if (id.includes('node_modules/@radix-ui')) return 'radix';

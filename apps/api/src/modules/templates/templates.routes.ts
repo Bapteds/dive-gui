@@ -8,17 +8,19 @@ import { asyncHandler } from '../../middleware/asyncHandler';
 import { requireAuth } from '../../middleware/requireAuth';
 import { validate } from '../../middleware/validate';
 import { parseCaseUpload } from '../projects/files.controller';
-import { filePathQuerySchema } from '../projects/files.schemas';
+import { filePathQuerySchema, movePathSchema } from '../projects/files.schemas';
 import {
   createTemplateController,
   createTemplateFileController,
   deleteTemplateController,
+  deleteTemplateDirController,
   deleteTemplateFileController,
   getTemplateController,
   getTemplateFileContentController,
   getTemplateFilesController,
   importTemplateFilesController,
   listTemplatesController,
+  moveTemplateEntryController,
   saveTemplateFileContentController,
   updateTemplateController,
 } from './templates.controller';
@@ -92,6 +94,17 @@ export function createTemplatesRouter(): Router {
     '/:id/files/content',
     validate({ params: templateIdParamSchema, query: filePathQuerySchema }),
     asyncHandler(deleteTemplateFileController),
+  );
+  // Delete a whole folder, or move/rename a file or folder.
+  router.delete(
+    '/:id/files/dir',
+    validate({ params: templateIdParamSchema, query: filePathQuerySchema }),
+    asyncHandler(deleteTemplateDirController),
+  );
+  router.post(
+    '/:id/files/move',
+    validate({ params: templateIdParamSchema, body: movePathSchema }),
+    asyncHandler(moveTemplateEntryController),
   );
 
   return router;

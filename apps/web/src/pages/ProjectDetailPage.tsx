@@ -1,14 +1,15 @@
-import { useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { ArrowLeft, Loader2, Settings, Trash2, UserPlus, Users } from 'lucide-react';
+import { ArrowLeft, Box, Info, Loader2, Settings, Trash2, UserPlus, Users } from 'lucide-react';
 import { PageHeader } from '@/components/common/PageHeader';
 import { FullPageLoader } from '@/components/common/FullPageLoader';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -45,15 +46,26 @@ import {
   useRemoveCollaborator,
 } from '@/features/projects/useProjects';
 import { CaseFilesSection } from '@/features/projects/CaseFilesSection';
+import { useCaseFilesQuery } from '@/features/projects/useCaseFiles';
 
 /**
- * ProjectDetailPage - a single project's details, case files, and collaborators.
+ * The 3D viewer pulls in three.js, so it is code-split and only loaded when the
+ * user opens the Visualize tab (never on the initial detail render).
+ */
+const MeshViewer = lazy(() =>
+  import('@/features/visualize/MeshViewer').then((module) => ({ default: module.MeshViewer })),
+);
+
+/**
+ * ProjectDetailPage - a single project's details and case files.
  *
  * Owners and super-admins get a settings "gear" in the header that opens a small
  * menu: "Manage collaborators" (a dialog to add by email / remove) and "Delete
  * project" (a destructive confirmation, separated by a menu divider + danger
- * color). The page body shows the project details, the OpenFOAM case files, and
- * a read-only collaborators list so everyone with access can see who is on it.
+ * color). The page body shows the project details and the OpenFOAM case files;
+ * importing, verifying, and converting a CGNS mesh all live in the Case files
+ * card. From `lg` up the page is pinned to the viewport and only that card
+ * scrolls (see AppShell), so the page itself never scrolls.
  * Visibility is enforced by the API: a project the viewer may not see returns
  * 404, rendered as a not-found state. States: loading, not-found / error, data.
  */
@@ -102,35 +114,111 @@ export function ProjectDetailPage() {
   const canManage = !!user && (project.owner.id === user.id || user.role === 'SUPER_ADMIN');
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-6 lg:min-h-0 lg:flex-1">
       <BackLink />
       <PageHeader
         title={project.title}
         subtitle={`Created ${formatDateTime(project.createdAt)}`}
-        action={canManage ? <ProjectSettingsMenu project={project} /> : undefined}
+        action={<ProjectSettingsMenu project={project} canManage={canManage} />}
       />
 
-      <div className="flex w-full flex-col gap-6">
-        <section className="rounded-md border border-border bg-surface shadow-sm">
-          <header className="border-b border-border px-5 py-4 sm:px-6">
-            <h2 className="text-lg font-semibold text-text">Details</h2>
-          </header>
-          <dl className="grid gap-4 px-5 py-5 sm:grid-cols-2 sm:px-6">
-            <div className="flex flex-col gap-1">
-              <dt className="text-xs font-medium text-text-secondary">Owner</dt>
-              <dd className="break-words text-sm text-text">
-                {project.owner.fullName} ({project.owner.email})
-              </dd>
-            </div>
-            <div className="flex flex-col gap-1">
-              <dt className="text-xs font-medium text-text-secondary">Created</dt>
-              <dd className="text-sm text-text tabular-nums">{formatDateTime(project.createdAt)}</dd>
-            </div>
-          </dl>
-        </section>
+      <ProjectTabs project={project} />
+    </div>
+  );
+}
 
-        <CaseFilesSection projectId={project.id} />
-      </div>
+/**
+ * The Detail / Visualize tab strip and bodies. "Visualize" is gated on the case
+ * having an imported mesh (constant/polyMesh/): until then it is disabled, with a
+ * tooltip explaining how to enable it. Opening it swaps the whole detail body for
+ * the lazy-loaded 3D viewer, which fills the pinned region at lg+.
+ */
+function ProjectTabs({ project }: { project: Project }) {
+  const [view, setView] = useState<'detail' | 'visualize'>('detail');
+  const { data: entries } = useCaseFilesQuery(project.id);
+  const hasPolyMesh = !!entries?.some((entry) => entry.path.startsWith('constant/polyMesh/'));
+
+  return (
+    <Tabs
+      value={view}
+      onValueChange={(value) => setView(value as 'detail' | 'visualize')}
+      className="flex w-full flex-col gap-6 lg:min-h-0 lg:flex-1"
+    >
+      <TabsList className="shrink-0">
+        <TabsTrigger value="detail">
+          <Info strokeWidth={1.75} aria-hidden="true" />
+          Detail
+        </TabsTrigger>
+        <VisualizeTab disabled={!hasPolyMesh} />
+      </TabsList>
+
+      <TabsContent
+        value="detail"
+        className="mt-0 flex-col data-[state=active]:flex lg:min-h-0 lg:flex-1"
+      >
+        {/* Project details (owner / created) live behind the header gear menu, so
+            the case files get the full height on every tab. */}
+        <CaseFilesSection projectId={project.id} className="lg:min-h-0 lg:flex-1" />
+      </TabsContent>
+
+      <TabsContent
+        value="visualize"
+        className="mt-0 data-[state=active]:flex lg:min-h-0 lg:flex-1"
+      >
+        {/* Mount the viewer only when the tab is open: it triggers the server
+            build, so it must not run while the user is on Detail. */}
+        {view === 'visualize' && (
+          <Suspense fallback={<ViewerLoading />}>
+            <MeshViewer projectId={project.id} />
+          </Suspense>
+        )}
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+/**
+ * The Visualize trigger. When the project has no mesh yet, it is disabled and
+ * wrapped so a tooltip can explain how to enable it (a disabled control emits no
+ * hover events itself, so the wrapping span carries the tooltip).
+ */
+function VisualizeTab({ disabled }: { disabled: boolean }) {
+  const trigger = (
+    <TabsTrigger value="visualize" disabled={disabled}>
+      <Box strokeWidth={1.75} aria-hidden="true" />
+      Visualize
+    </TabsTrigger>
+  );
+
+  if (!disabled) return trigger;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {/* Focusable wrapper so keyboard users can reach the tooltip even though
+            the disabled trigger emits no pointer/focus events of its own. */}
+        <span
+          tabIndex={0}
+          className="inline-flex rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
+        >
+          {trigger}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>Import a polyMesh to enable 3D</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** Suspense fallback while the three.js viewer chunk loads. */
+function ViewerLoading() {
+  return (
+    <div
+      className="flex min-h-[40vh] items-center justify-center lg:min-h-0 lg:flex-1"
+      role="status"
+      aria-live="polite"
+    >
+      <Loader2 className="size-5 animate-spin text-text-secondary" strokeWidth={1.75} aria-hidden="true" />
+      <span className="sr-only">Loading the 3D viewer</span>
     </div>
   );
 }
@@ -149,11 +237,13 @@ function BackLink() {
 }
 
 /**
- * The header settings "gear" (owner / super-admin only). Opens a small menu;
- * each item launches a focused overlay. "Delete project" is separated from the
- * routine action by a divider and rendered in the danger color.
+ * The header "gear" menu. "Project details" (owner / created) is available to
+ * every member, so the details no longer take a card in the page body. Managers
+ * (owner / super-admin) additionally get "Manage collaborators" and, separated
+ * by a divider and rendered in the danger color, "Delete project".
  */
-function ProjectSettingsMenu({ project }: { project: Project }) {
+function ProjectSettingsMenu({ project, canManage }: { project: Project; canManage: boolean }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [collaboratorsOpen, setCollaboratorsOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
@@ -161,32 +251,81 @@ function ProjectSettingsMenu({ project }: { project: Project }) {
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button type="button" variant="ghost" size="icon" aria-label="Project settings">
+          <Button type="button" variant="ghost" size="icon" aria-label="Project menu">
             <Settings strokeWidth={1.75} aria-hidden="true" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           {/* Defer opening so the menu finishes closing (and releases focus)
               before the dialog traps it — avoids a focus/aria-hidden race. */}
-          <DropdownMenuItem onSelect={() => setTimeout(() => setCollaboratorsOpen(true), 0)}>
-            <Users strokeWidth={1.75} aria-hidden="true" />
-            Manage collaborators
+          <DropdownMenuItem onSelect={() => setTimeout(() => setDetailsOpen(true), 0)}>
+            <Info strokeWidth={1.75} aria-hidden="true" />
+            Project details
           </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem destructive onSelect={() => setTimeout(() => setDeleteOpen(true), 0)}>
-            <Trash2 strokeWidth={1.75} aria-hidden="true" />
-            Delete project
-          </DropdownMenuItem>
+          {canManage && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => setTimeout(() => setCollaboratorsOpen(true), 0)}>
+                <Users strokeWidth={1.75} aria-hidden="true" />
+                Manage collaborators
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem destructive onSelect={() => setTimeout(() => setDeleteOpen(true), 0)}>
+                <Trash2 strokeWidth={1.75} aria-hidden="true" />
+                Delete project
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <ManageCollaboratorsDialog
-        project={project}
-        open={collaboratorsOpen}
-        onOpenChange={setCollaboratorsOpen}
-      />
-      <DeleteProjectDialog project={project} open={deleteOpen} onOpenChange={setDeleteOpen} />
+      <ProjectDetailsDialog project={project} open={detailsOpen} onOpenChange={setDetailsOpen} />
+      {canManage && (
+        <>
+          <ManageCollaboratorsDialog
+            project={project}
+            open={collaboratorsOpen}
+            onOpenChange={setCollaboratorsOpen}
+          />
+          <DeleteProjectDialog project={project} open={deleteOpen} onOpenChange={setDeleteOpen} />
+        </>
+      )}
     </>
+  );
+}
+
+/** Read-only overlay: the project's owner and creation date (any member). */
+function ProjectDetailsDialog({
+  project,
+  open,
+  onOpenChange,
+}: {
+  project: Project;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="overscroll-contain">
+        <DialogHeader>
+          <DialogTitle>Project details</DialogTitle>
+          <DialogDescription>Who owns this project and when it was created.</DialogDescription>
+        </DialogHeader>
+
+        <dl className="grid gap-4 sm:grid-cols-2">
+          <div className="flex flex-col gap-1">
+            <dt className="text-xs font-medium text-text-secondary">Owner</dt>
+            <dd className="break-words text-sm text-text">
+              {project.owner.fullName} ({project.owner.email})
+            </dd>
+          </div>
+          <div className="flex flex-col gap-1">
+            <dt className="text-xs font-medium text-text-secondary">Created</dt>
+            <dd className="text-sm text-text tabular-nums">{formatDateTime(project.createdAt)}</dd>
+          </div>
+        </dl>
+      </DialogContent>
+    </Dialog>
   );
 }
 

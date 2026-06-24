@@ -23,9 +23,11 @@ import {
   type CaseEntry,
 } from '../../lib/caseStorage';
 import {
+  deleteTemplateDir,
   deleteTemplateFile,
   extractTemplateArchive,
   listTemplateTree,
+  moveTemplatePath,
   readTemplateFile,
   removeTemplateStorage,
   templateFileExists,
@@ -281,6 +283,29 @@ export async function deleteTemplateFileContent(
   }
   await deleteTemplateFile(id, relPath);
   return { entries: await listTemplateTree(id) };
+}
+
+/** Delete a whole template directory subtree. Author or super-admin only. */
+export async function deleteTemplateDirContent(
+  viewer: Viewer,
+  id: string,
+  relPath: string,
+): Promise<{ entries: TemplateEntry[] }> {
+  await findManageableOrThrow(viewer, id);
+  await deleteTemplateDir(id, relPath);
+  return { entries: await listTemplateTree(id) };
+}
+
+/** Move (or rename) a template file or directory. Author or super-admin only. */
+export async function moveTemplateEntry(
+  viewer: Viewer,
+  id: string,
+  from: string,
+  to: string,
+): Promise<{ from: string; to: string; entries: TemplateEntry[] }> {
+  await findManageableOrThrow(viewer, id);
+  const result = await moveTemplatePath(id, from, to);
+  return { from: result.from, to: result.to, entries: await listTemplateTree(id) };
 }
 
 /** List a template's files (file paths only). */

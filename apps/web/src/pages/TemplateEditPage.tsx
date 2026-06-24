@@ -11,11 +11,19 @@ import {
   useTemplateFileContentQuery,
   useTemplateFilesQuery,
   useCreateTemplateFile,
+  useDeleteTemplateDir,
   useDeleteTemplateFile,
+  useMoveTemplatePath,
   useSaveTemplateFile,
   useTemplateQuery,
 } from '@/features/templates/useTemplates';
 import { FileTreeEditor, type FileTreeResource } from '@/features/files/FileTreeEditor';
+import { FolderImportDialog } from '@/features/files/FolderImportDialog';
+import {
+  groupPickedFolder,
+  type PickedFolder,
+  type UploadFile,
+} from '@/features/files/folderImport';
 
 /**
  * TemplateEditPage - build a shared template's files: create/edit/delete in the
@@ -38,6 +46,8 @@ export function TemplateEditPage() {
     useSave: () => useSaveTemplateFile(id),
     useCreate: () => useCreateTemplateFile(id),
     useDelete: () => useDeleteTemplateFile(id),
+    useDeleteDir: () => useDeleteTemplateDir(id),
+    useMove: () => useMoveTemplatePath(id),
   };
 
   if (template.isPending) {
@@ -88,11 +98,19 @@ export function TemplateEditPage() {
   );
 }
 
-/** Folder / .zip import buttons for the template (author or super-admin only). */
+/**
+ * Folder / .zip import for the template (author or super-admin only).
+ *
+ * Picking a folder doesn't import straight away: its contents are grouped by
+ * immediate child and shown in a selection overlay, so the author can keep only
+ * the subfolders/files they want before importing. A .zip imports as-is.
+ */
 function ImportControls({ templateId }: { templateId: string }) {
   const folderInputRef = useRef<HTMLInputElement>(null);
   const zipInputRef = useRef<HTMLInputElement>(null);
   const [importingKind, setImportingKind] = useState<'folder' | 'zip' | null>(null);
+  // The folder awaiting a keep-selection (null = overlay closed).
+  const [picked, setPicked] = useState<PickedFolder | null>(null);
   const importTemplate = useImportTemplate(templateId);
 
   // The folder picker needs the non-standard directory attributes (not typed by React).
@@ -110,16 +128,22 @@ function ImportControls({ templateId }: { templateId: string }) {
     return files;
   };
 
-  const handleImport = async (kind: 'folder' | 'zip', files: File[]) => {
-    if (files.length === 0) return;
-    setImportingKind(kind);
+  // A folder was picked: open the selection overlay instead of importing now.
+  const handlePickFolder = (files: File[]) => {
+    const grouped = groupPickedFolder(files);
+    if (grouped) setPicked(grouped);
+  };
+
+  const runImport = async (
+    payload: { kind: 'folder'; files: UploadFile[] } | { kind: 'zip'; file: File },
+  ) => {
+    setImportingKind(payload.kind);
     try {
-      const result = await importTemplate.mutateAsync(
-        kind === 'folder' ? { kind, files } : { kind, file: files[0] },
-      );
+      const result = await importTemplate.mutateAsync(payload);
       toast.success(
         `Imported ${result.written.length} file${result.written.length === 1 ? '' : 's'}.`,
       );
+      setPicked(null);
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Import failed. Please try again.');
     } finally {
@@ -136,7 +160,7 @@ function ImportControls({ templateId }: { templateId: string }) {
         className="sr-only"
         tabIndex={-1}
         aria-hidden="true"
-        onChange={(event) => void handleImport('folder', takeFiles(event.currentTarget))}
+        onChange={(event) => handlePickFolder(takeFiles(event.currentTarget))}
       />
       <input
         ref={zipInputRef}
@@ -145,7 +169,10 @@ function ImportControls({ templateId }: { templateId: string }) {
         className="sr-only"
         tabIndex={-1}
         aria-hidden="true"
-        onChange={(event) => void handleImport('zip', takeFiles(event.currentTarget))}
+        onChange={(event) => {
+          const [file] = takeFiles(event.currentTarget);
+          if (file) void runImport({ kind: 'zip', file });
+        }}
       />
       <Button
         type="button"
@@ -169,6 +196,13 @@ function ImportControls({ templateId }: { templateId: string }) {
         <FileArchive strokeWidth={1.75} aria-hidden="true" />
         Import .zip
       </Button>
+
+      <FolderImportDialog
+        picked={picked}
+        importing={importingKind === 'folder'}
+        onConfirm={(files) => void runImport({ kind: 'folder', files })}
+        onCancel={() => setPicked(null)}
+      />
     </div>
   );
 }

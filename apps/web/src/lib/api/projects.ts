@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { ApiError, apiClient } from './client';
 import type {
   ApplyDecision,
   ApplyPreview,
@@ -11,9 +11,13 @@ import type {
   CaseVerification,
   CreateCaseFileResponse,
   CreateProjectInput,
+  DeleteCaseDirResponse,
   DeleteCaseFileResponse,
   ImportCaseResponse,
+  MoveCaseEntryResponse,
   ListProjectsResponse,
+  MeshManifest,
+  MeshManifestResponse,
   Project,
   ProjectResponse,
   ScaffoldCaseResponse,
@@ -139,6 +143,68 @@ export async function deleteCaseFile(id: string, path: string): Promise<DeleteCa
   return apiClient.delete<DeleteCaseFileResponse>(
     `/projects/${id}/files/content?path=${encodeURIComponent(path)}`,
   );
+}
+
+/** Delete a whole case folder (and its contents). Returns the refreshed tree. */
+export async function deleteCaseDir(id: string, path: string): Promise<DeleteCaseDirResponse> {
+  return apiClient.delete<DeleteCaseDirResponse>(
+    `/projects/${id}/files/dir?path=${encodeURIComponent(path)}`,
+  );
+}
+
+/** Move (or rename) a case file or folder. Returns the refreshed tree. */
+export async function moveCasePath(
+  id: string,
+  from: string,
+  to: string,
+): Promise<MoveCaseEntryResponse> {
+  return apiClient.post<MoveCaseEntryResponse>(`/projects/${id}/files/move`, { from, to });
+}
+
+// ---- 3D mesh viewer ("Visualize" tab) ----
+
+/**
+ * Fetch the patch manifest for a project's mesh. This call builds the render on
+ * the server if it is missing or stale (so the first load may take a moment).
+ */
+export async function getMeshManifest(id: string): Promise<MeshManifest> {
+  const data = await apiClient.get<MeshManifestResponse>(`/projects/${id}/mesh/manifest`);
+  return data.manifest;
+}
+
+/** Fetch the rendered mesh geometry (a GLB) as a Blob for three.js to parse. */
+export async function getMeshGeometry(id: string): Promise<Blob> {
+  return apiClient.getBlob(`/projects/${id}/mesh/geometry`);
+}
+
+/**
+ * Fetch the cell-edge buffer (raw float32 line-segment endpoints), or null when
+ * this render has none (an older build) — the viewer then falls back to a
+ * client-side edge overlay.
+ */
+export async function getMeshEdges(id: string): Promise<ArrayBuffer | null> {
+  try {
+    const blob = await apiClient.getBlob(`/projects/${id}/mesh/edges`);
+    return await blob.arrayBuffer();
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+/** Force a rebuild of the render (e.g. after a build failure), returning the manifest. */
+export async function rebuildMesh(id: string): Promise<MeshManifest> {
+  const data = await apiClient.post<MeshManifestResponse>(`/projects/${id}/mesh/rebuild`);
+  return data.manifest;
+}
+
+/** Rename a boundary patch (updates the mesh boundary + field boundaryFields). */
+export async function renameMeshPatch(
+  id: string,
+  from: string,
+  to: string,
+): Promise<{ patches: string[] }> {
+  return apiClient.post<{ patches: string[] }>(`/projects/${id}/mesh/patches/rename`, { from, to });
 }
 
 // ---- Applying a shared template to this project's case ----

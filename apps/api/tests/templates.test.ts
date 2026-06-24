@@ -204,6 +204,57 @@ describe('template files', () => {
       .set('Authorization', authHeader(author));
     expect(res.status).toBe(404);
   });
+
+  it('deletes a whole folder subtree (author)', async () => {
+    const author = await createTestUser({ email: 'a@dive-turbinen.test' });
+    const id = await makeTemplate(authHeader(author));
+    await importTemplateZip(id, authHeader(author), [
+      { path: '0/U', data: 'a' },
+      { path: '0/p', data: 'b' },
+      { path: 'system/controlDict', data: 'c' },
+    ]);
+
+    const res = await request(app)
+      .delete(`/api/v1/templates/${id}/files/dir?path=0`)
+      .set('Authorization', authHeader(author));
+    expect(res.status).toBe(200);
+    const paths = (res.body.entries as Array<{ path: string }>).map((e) => e.path);
+    expect(paths).not.toContain('0/U');
+    expect(paths).toContain('system/controlDict');
+  });
+
+  it('moves a file within a template (author)', async () => {
+    const author = await createTestUser({ email: 'a@dive-turbinen.test' });
+    const id = await makeTemplate(authHeader(author));
+    await importTemplateZip(id, authHeader(author), [{ path: '0/U', data: 'x' }]);
+
+    const res = await request(app)
+      .post(`/api/v1/templates/${id}/files/move`)
+      .set('Authorization', authHeader(author))
+      .send({ from: '0/U', to: 'system/U' });
+    expect(res.status).toBe(200);
+    const paths = (res.body.entries as Array<{ path: string }>).map((e) => e.path);
+    expect(paths).toContain('system/U');
+    expect(paths).not.toContain('0/U');
+  });
+
+  it('blocks a stranger from moving or deleting a folder (403)', async () => {
+    const author = await createTestUser({ email: 'a@dive-turbinen.test' });
+    const stranger = await createTestUser({ email: 's@dive-turbinen.test' });
+    const id = await makeTemplate(authHeader(author));
+    await importTemplateZip(id, authHeader(author), [{ path: 'dir/file', data: 'x' }]);
+
+    const move = await request(app)
+      .post(`/api/v1/templates/${id}/files/move`)
+      .set('Authorization', authHeader(stranger))
+      .send({ from: 'dir/file', to: 'other/file' });
+    expect(move.status).toBe(403);
+
+    const del = await request(app)
+      .delete(`/api/v1/templates/${id}/files/dir?path=dir`)
+      .set('Authorization', authHeader(stranger));
+    expect(del.status).toBe(403);
+  });
 });
 
 describe('applying a template to a project', () => {

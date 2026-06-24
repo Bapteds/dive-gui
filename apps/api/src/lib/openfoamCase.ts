@@ -222,6 +222,76 @@ export function renderBaseFile(path: BaseFilePath, patches: string[]): string {
   }
 }
 
+/** A valid OpenFOAM patch name: a "word" token (letter/underscore start). */
+const PATCH_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Is `name` a syntactically valid OpenFOAM patch name? */
+export function isValidPatchName(name: string): boolean {
+  return PATCH_NAME_RE.test(name);
+}
+
+/** Escape a string for safe use inside a RegExp. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Replace a patch block header `from { … }` with `to { … }`. A patch name is the
+ * only token immediately followed (across optional whitespace/newlines) by `{`,
+ * so this targets the dictionary header and never a value like `type from;` or a
+ * group reference `1(from)`. The preceding delimiter (start / whitespace / `(`)
+ * is preserved.
+ */
+function renamePatchHeader(content: string, from: string, to: string): string {
+  const re = new RegExp(`(^|[\\s(])${escapeRegExp(from)}(\\s*\\{)`, 'g');
+  return content.replace(re, `$1${to}$2`);
+}
+
+/**
+ * Rename a patch in a constant/polyMesh/boundary file. The only `name { … }`
+ * blocks there are the patch entries (the FoamFile header is named `FoamFile`),
+ * so a whole-file header rename is safe.
+ */
+export function renameBoundaryPatch(content: string, from: string, to: string): string {
+  return renamePatchHeader(content, from, to);
+}
+
+/**
+ * Find the brace span of the `boundaryField { … }` dictionary in a field file,
+ * or null when absent. Brace-matched from the first `{` after the keyword.
+ */
+function boundaryFieldSpan(content: string): { open: number; close: number } | null {
+  const keyword = content.search(/\bboundaryField\b/);
+  if (keyword < 0) return null;
+  const open = content.indexOf('{', keyword);
+  if (open < 0) return null;
+  let depth = 0;
+  for (let i = open; i < content.length; i += 1) {
+    const char = content[i];
+    if (char === '{') depth += 1;
+    else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return { open, close: i };
+    }
+  }
+  return null;
+}
+
+/**
+ * Rename a patch entry inside a field file's `boundaryField` block only (so a
+ * patch name that happens to appear elsewhere — a coded `functions` block, a
+ * comment — is left untouched). Returns the content unchanged when the file has
+ * no boundaryField.
+ */
+export function renameFieldBoundaryPatch(content: string, from: string, to: string): string {
+  const span = boundaryFieldSpan(content);
+  if (!span) return content;
+  const before = content.slice(0, span.open);
+  const block = content.slice(span.open, span.close + 1);
+  const after = content.slice(span.close + 1);
+  return before + renamePatchHeader(block, from, to) + after;
+}
+
 /**
  * Parse the names of the boundary patches from a constant/polyMesh/boundary
  * file. Tolerant by design: strips comments, then collects every `name { ... }`

@@ -6,7 +6,7 @@
  * (later) the admin screens.
  */
 
-import type { Role, ServerErrorCode } from '@dive/shared';
+import type { ConversionStepId, MeshManifest, MeshPatch, Role, ServerErrorCode } from '@dive/shared';
 
 /** User roles. The super-admin is permanent and cannot be removed or downgraded. */
 export type { Role };
@@ -192,6 +192,18 @@ export interface DeleteCaseFileResponse {
   entries: CaseEntry[];
 }
 
+/** `DELETE /projects/:id/files/dir` (delete folder) response. */
+export interface DeleteCaseDirResponse {
+  entries: CaseEntry[];
+}
+
+/** `POST /projects/:id/files/move` (move/rename) response. */
+export interface MoveCaseEntryResponse {
+  from: string;
+  to: string;
+  entries: CaseEntry[];
+}
+
 // ---- Templates (shared, reusable file templates) ----
 
 /** A reusable, shared file template (its files live under the template tree). */
@@ -250,4 +262,88 @@ export interface ApplyTemplateResponse {
   applied: string[];
   skipped: string[];
   entries: CaseEntry[];
+}
+
+// ---- CGNS mesh sources + CGNS -> OpenFOAM conversion ----
+
+/** A CGNS mesh source file stored on a project. */
+export interface CgnsFile {
+  /** Filename within the project's cgns store (no directory part). */
+  name: string;
+  /** Size in bytes. */
+  size: number;
+}
+
+/** `GET /projects/:id/cgns` response. */
+export interface CgnsListResponse {
+  files: CgnsFile[];
+}
+
+/** `POST /projects/:id/cgns` (upload) response. */
+export interface UploadCgnsResponse {
+  file: CgnsFile;
+  files: CgnsFile[];
+}
+
+/** `DELETE /projects/:id/cgns` response. */
+export interface DeleteCgnsResponse {
+  files: CgnsFile[];
+}
+
+/** Re-export of the shared pipeline step ids (cgnsToVtk | vtkToFoam | checkMesh). */
+export type { ConversionStepId };
+
+/** Outcome of a single conversion step. */
+export type ConversionStepStatus = 'success' | 'failed' | 'skipped';
+
+/** One executed (or skipped) step of the conversion pipeline. */
+export interface ConversionStep {
+  id: ConversionStepId;
+  /** Human-readable step name. */
+  label: string;
+  /** The logical command line that was run. */
+  command: string;
+  status: ConversionStepStatus;
+  /** Process exit code, or null when killed / never spawned. */
+  exitCode: number | null;
+  /** Captured stdout (tail). */
+  stdout: string;
+  /** Captured stderr (tail). */
+  stderr: string;
+  /** Wall-clock duration in ms (0 for a skipped step). */
+  durationMs: number;
+}
+
+/** Result of a CGNS -> OpenFOAM conversion run. */
+export interface ConversionResult {
+  /** True only when every step succeeded. */
+  success: boolean;
+  steps: ConversionStep[];
+  /** Informational notes (template applied, base files generated, ...). */
+  notes: string[];
+  /** Refreshed mandatory-file verification after the run. */
+  verification: CaseVerification;
+  /** Refreshed case tree after the run. */
+  entries: CaseEntry[];
+}
+
+/** `POST /projects/:id/cgns/convert` response. */
+export interface ConvertCgnsResponse {
+  result: ConversionResult;
+}
+
+/** Body for `POST /projects/:id/cgns/convert`. */
+export interface ConvertCgnsInput {
+  cgnsFile: string;
+  templateId: string;
+}
+
+// ---- 3D mesh viewer ("Visualize" tab) ----
+
+/** Re-export of the shared mesh shapes (one patch; the full manifest). */
+export type { MeshPatch, MeshManifest };
+
+/** `GET /projects/:id/mesh/manifest` and `POST /projects/:id/mesh/rebuild` response. */
+export interface MeshManifestResponse {
+  manifest: MeshManifest;
 }

@@ -41,6 +41,51 @@ const envSchema = z
     // Note: uploads are currently buffered in memory, so very large values cost
     // RAM per concurrent upload; raise deliberately on a server with headroom.
     MAX_UPLOAD_MB: z.coerce.number().int().positive().default(1024),
+    // --- CGNS -> OpenFOAM mesh conversion toolchain ---------------------------
+    // The conversion runs external binaries that exist on the Debian deploy
+    // target (not on a Windows dev box). Every command is configurable so the
+    // same code runs unchanged wherever the tools live; sensible Linux defaults
+    // assume they are on PATH. When a binary is absent the pipeline reports a
+    // clear per-step "not found" instead of crashing.
+    //
+    // ParaView's python used to run the CGNS->VTK script. On Debian: `pvpython`.
+    PVPYTHON_BIN: z.string().min(1).default('pvpython'),
+    // Absolute path to the CGNS->VTK ParaView script. Empty => the script
+    // bundled with the API at apps/api/scripts/CgnsToVtk.py (resolved relative to
+    // the module, cwd-independent). Set this only to point at a script kept
+    // elsewhere.
+    CGNS_TO_VTK_SCRIPT: z.string().default(''),
+    // OpenFOAM mesh utilities (on PATH once the OpenFOAM environment is sourced).
+    VTK_TO_FOAM_BIN: z.string().min(1).default('vtkUnstructuredToFoam'),
+    CHECK_MESH_BIN: z.string().min(1).default('checkMesh'),
+    // autoPatch: divides the external boundary faces into patches by feature
+    // angle, used by the "Auto-patch boundaries" action on the Visualize tab.
+    AUTO_PATCH_BIN: z.string().min(1).default('autoPatch'),
+    // Optional path to an OpenFOAM `etc/bashrc`. When set, OpenFOAM utilities run
+    // inside `bash -c 'source <bashrc> && exec "$@"'` so their environment is
+    // available; arguments are passed as real argv (never interpolated), so this
+    // is injection-safe. Leave empty when the tools are already on PATH.
+    OPENFOAM_BASHRC: z.string().default(''),
+    // Per-step wall-clock timeout (ms) for a conversion command. A large mesh's
+    // checkMesh can take a while, so this is generous; raise on big cases.
+    CONVERSION_STEP_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
+    // --- 3D mesh viewer (Visualize tab) ---------------------------------------
+    // The viewer's geometry is extracted offline by a one-shot Python script
+    // (extractPatches.py, reusing PyVista) into a compact GLB + manifest, cached
+    // on disk. Same operational footprint as the CGNS conversion above.
+    //
+    // Python interpreter used to run extractPatches.py. The deploy target is
+    // Debian (`python3`); on a Windows dev box the launcher is usually `python`,
+    // so default by platform. Override with MESH_PYTHON_BIN when it differs (or
+    // when the interpreter is not on PATH).
+    MESH_PYTHON_BIN: z.string().min(1).default(process.platform === 'win32' ? 'python' : 'python3'),
+    // Absolute path to the boundary-patch extractor. Empty => the script bundled
+    // with the API at apps/api/scripts/extractPatches.py (resolved relative to
+    // the module, cwd-independent). Set only to point at a script kept elsewhere.
+    EXTRACT_PATCHES_SCRIPT: z.string().default(''),
+    // Wall-clock timeout (ms) for a single mesh-extraction run. The one-time VTK
+    // read of a large ASCII mesh dominates; generous, like the conversion above.
+    MESH_BUILD_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
     // Number of trusted reverse-proxy hops in front of the API. 0 = trust none
     // (default, correct for direct exposure / local dev). Set to 1 behind a
     // single proxy/load balancer so the login rate-limiter keys on the real

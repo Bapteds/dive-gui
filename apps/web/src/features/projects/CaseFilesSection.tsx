@@ -12,6 +12,7 @@ import {
   RotateCcw,
   SquarePen,
   TableProperties,
+  Workflow,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Diamond } from '@/components/brand/Diamond';
@@ -28,6 +29,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { toast } from '@/components/ui/sonner';
+import { cn } from '@/lib/utils';
 import { ApiError } from '@/lib/api/client';
 import { downloadCase } from '@/lib/api/projects';
 import type { CaseEntry, CaseVerification } from '@/lib/api/types';
@@ -39,6 +41,7 @@ import {
   useVerifyCase,
 } from '@/features/projects/useCaseFiles';
 import { CaseSummary } from '@/features/projects/CaseSummary';
+import { ConvertToFoamFlow } from '@/features/projects/ConvertToFoamFlow';
 import { ApplyTemplateFlow } from '@/features/templates/ApplyTemplateFlow';
 
 /**
@@ -58,8 +61,13 @@ import { ApplyTemplateFlow } from '@/features/templates/ApplyTemplateFlow';
  * - "Summary": a read-only synthesis of the settings entered in the readable
  *   dictionary files, for a glance at what is configured (see CaseSummary).
  *
+ * "Convert a CGNS mesh" opens the guided CGNS -> OpenFOAM flow (ConvertToFoamFlow)
+ * as a dialog, reachable from the empty state and the Files toolbar.
+ *
  * The hidden file inputs and the generate-files overlay live at the section
- * level so they stay mounted whichever tab is active.
+ * level so they stay mounted whichever tab is active. From `lg` up the card is a
+ * flex column whose active tab list fills the height and scrolls internally, so
+ * the detail page never scrolls (the page gives the card `min-h-0 flex-1`).
  */
 
 const SIZE_UNITS = ['B', 'KB', 'MB', 'GB'] as const;
@@ -84,7 +92,14 @@ function takeFiles(input: HTMLInputElement | null): File[] {
   return files;
 }
 
-export function CaseFilesSection({ projectId }: { projectId: string }) {
+export function CaseFilesSection({
+  projectId,
+  className,
+}: {
+  projectId: string;
+  /** Lets the page make the card fill and scroll internally (min-h-0 flex-1). */
+  className?: string;
+}) {
   const { data: entries, isPending, isError, refetch, isRefetching } = useCaseFilesQuery(projectId);
 
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -111,6 +126,8 @@ export function CaseFilesSection({ projectId }: { projectId: string }) {
   const [pendingVerification, setPendingVerification] = useState<CaseVerification | null>(null);
   // Active tab: file management ("files") or the read-only synthesis ("summary").
   const [tab, setTab] = useState<'files' | 'summary'>('files');
+  // Whether the guided CGNS -> Foam conversion dialog is open.
+  const [convertOpen, setConvertOpen] = useState(false);
 
   const hasFiles = !!entries && entries.some((entry) => entry.type === 'file');
 
@@ -175,8 +192,13 @@ export function CaseFilesSection({ projectId }: { projectId: string }) {
   };
 
   return (
-    <section className="rounded-md border border-border bg-surface shadow-sm">
-      <header className="px-5 pt-5 sm:px-6">
+    <section
+      className={cn(
+        'rounded-md border border-border bg-surface shadow-sm lg:flex lg:flex-col',
+        className,
+      )}
+    >
+      <header className="shrink-0 px-5 pt-5 sm:px-6">
         <h2 className="text-lg font-semibold text-text">Case files</h2>
         <p className="mt-1 text-sm text-text-secondary">
           Import your OpenFOAM case (mesh and configuration), then verify it has the mandatory base
@@ -208,9 +230,9 @@ export function CaseFilesSection({ projectId }: { projectId: string }) {
       <Tabs
         value={tab}
         onValueChange={(value) => setTab(value as 'files' | 'summary')}
-        className="mt-4"
+        className="mt-4 lg:flex lg:min-h-0 lg:flex-1 lg:flex-col"
       >
-        <TabsList className="px-5 sm:px-6">
+        <TabsList className="shrink-0 px-5 sm:px-6">
           <TabsTrigger value="files">
             <FolderTree strokeWidth={1.75} aria-hidden="true" />
             Files
@@ -221,13 +243,16 @@ export function CaseFilesSection({ projectId }: { projectId: string }) {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="files" className="px-5 py-5 sm:px-6">
+        <TabsContent
+          value="files"
+          className="px-5 py-5 sm:px-6 lg:min-h-0 lg:flex-1 lg:flex-col lg:data-[state=active]:flex"
+        >
           {isPending ? (
             <CaseTreeSkeleton />
           ) : isError ? (
             <div
               role="alert"
-              className="flex flex-col items-start gap-3 rounded-md border border-danger/40 bg-danger-tint px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
+              className="flex flex-col items-start gap-3 rounded-md border border-danger/40 bg-danger-tint px-4 py-4 sm:flex-row sm:items-center sm:justify-between lg:my-auto"
             >
               <p className="text-sm text-text">We could not load the case files.</p>
               <Button
@@ -244,11 +269,12 @@ export function CaseFilesSection({ projectId }: { projectId: string }) {
             <ImportPrompt
               onPickFolder={() => folderInputRef.current?.click()}
               onPickZip={() => zipInputRef.current?.click()}
+              onConvert={() => setConvertOpen(true)}
               importingKind={importingKind}
             />
           ) : (
-            <div className="flex flex-col gap-4">
-              <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1">
+              <div className="flex flex-wrap items-center gap-2 lg:shrink-0">
                 <Button
                   type="button"
                   variant="secondary"
@@ -270,6 +296,15 @@ export function CaseFilesSection({ projectId }: { projectId: string }) {
                 >
                   <FileArchive strokeWidth={1.75} aria-hidden="true" />
                   Import .zip
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setConvertOpen(true)}
+                >
+                  <Workflow strokeWidth={1.75} aria-hidden="true" />
+                  Convert mesh
                 </Button>
                 <Button asChild variant="secondary" size="sm">
                   <Link to={`/projects/${projectId}/edit`}>
@@ -307,7 +342,10 @@ export function CaseFilesSection({ projectId }: { projectId: string }) {
           )}
         </TabsContent>
 
-        <TabsContent value="summary" className="px-5 py-5 sm:px-6">
+        <TabsContent
+          value="summary"
+          className="px-5 py-5 sm:px-6 lg:min-h-0 lg:flex-1 lg:flex-col lg:data-[state=active]:flex"
+        >
           <CaseSummary projectId={projectId} />
         </TabsContent>
       </Tabs>
@@ -321,50 +359,71 @@ export function CaseFilesSection({ projectId }: { projectId: string }) {
           applyingMinimal={scaffold.isPending}
         />
       )}
+
+      {convertOpen && (
+        <ConvertToFoamFlow projectId={projectId} onClose={() => setConvertOpen(false)} />
+      )}
     </section>
   );
 }
 
-/** Empty state: a diamond mark and the two import actions (orange CTA = folder). */
+/**
+ * Empty state: a diamond mark, the two import actions (orange CTA = folder), and
+ * a subordinate "Convert a CGNS mesh" path for users who start from a mesh.
+ */
 function ImportPrompt({
   onPickFolder,
   onPickZip,
+  onConvert,
   importingKind,
 }: {
   onPickFolder: () => void;
   onPickZip: () => void;
+  onConvert: () => void;
   importingKind: 'folder' | 'zip' | null;
 }) {
   return (
-    <div className="flex flex-col items-center gap-3 rounded-md border border-dashed border-border-strong px-6 py-12 text-center">
+    <div className="flex flex-col items-center gap-3 rounded-md border border-dashed border-border-strong px-6 py-12 text-center lg:my-auto">
       <span className="grid size-12 place-items-center rounded-md bg-primary-tint">
         <Diamond size={18} className="text-primary" />
       </span>
       <div className="flex max-w-sm flex-col gap-1">
         <p className="text-lg font-semibold text-text">No case files yet</p>
         <p className="text-sm text-text-secondary">
-          Import a polyMesh folder or a .zip of your case. You can add the rest later.
+          Import a polyMesh folder or a .zip of your case. You can also convert a CGNS mesh into one.
         </p>
       </div>
-      <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+      <div className="mt-2 flex flex-col items-center gap-3">
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <Button
+            type="button"
+            onClick={onPickFolder}
+            loading={importingKind === 'folder'}
+            disabled={importingKind === 'zip'}
+          >
+            <FolderUp strokeWidth={1.75} aria-hidden="true" />
+            Import folder
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={onPickZip}
+            loading={importingKind === 'zip'}
+            disabled={importingKind === 'folder'}
+          >
+            <FileArchive strokeWidth={1.75} aria-hidden="true" />
+            Import .zip
+          </Button>
+        </div>
         <Button
           type="button"
-          onClick={onPickFolder}
-          loading={importingKind === 'folder'}
-          disabled={importingKind === 'zip'}
+          variant="ghost"
+          size="sm"
+          className="text-primary hover:bg-primary-tint hover:text-primary"
+          onClick={onConvert}
         >
-          <FolderUp strokeWidth={1.75} aria-hidden="true" />
-          Import folder
-        </Button>
-        <Button
-          type="button"
-          variant="secondary"
-          onClick={onPickZip}
-          loading={importingKind === 'zip'}
-          disabled={importingKind === 'folder'}
-        >
-          <FileArchive strokeWidth={1.75} aria-hidden="true" />
-          Import .zip
+          <Workflow strokeWidth={1.75} aria-hidden="true" />
+          Convert a CGNS mesh
         </Button>
       </div>
     </div>
@@ -374,7 +433,7 @@ function ImportPrompt({
 /** The imported case rendered as an indented tree (directories then files). */
 function CaseTree({ entries }: { entries: CaseEntry[] }) {
   return (
-    <ul className="max-h-80 overflow-auto rounded-md border border-border">
+    <ul className="max-h-80 overflow-auto overscroll-contain rounded-md border border-border lg:max-h-none lg:min-h-0 lg:flex-1">
       {entries.map((entry) => {
         const depth = entry.path.split('/').length - 1;
         const name = entry.path.split('/').pop() ?? entry.path;

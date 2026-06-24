@@ -100,6 +100,38 @@ Run from the repo root:
 
 Errors use a normalized envelope `{ error: { code, message } }`. Enforced business rules (covered by tests): the super-admin account cannot be deleted (`PROTECTED_ACCOUNT`), downgraded (`PROTECTED_ROLE`), or disabled (`PROTECTED_ACCOUNT`); you cannot delete (`SELF_DELETE_FORBIDDEN`) or disable (`SELF_DISABLE_FORBIDDEN`) your own account; a disabled account cannot log in (`ACCOUNT_DISABLED`); emails are unique (`EMAIL_TAKEN`); inputs are validated (`VALIDATION_ERROR`).
 
+## Mesh conversion (CGNS → OpenFOAM) on Debian
+
+A project's **Mesh conversion** card converts an uploaded `.cgns` mesh into the case's `constant/polyMesh` by running an external three-step toolchain on the server:
+
+1. `pvpython CgnsToVtk.py <cgns> <vtk>` (ParaView) → legacy VTK
+2. `vtkUnstructuredToFoam -case <case> <vtk>` (OpenFOAM) → `constant/polyMesh`
+3. `checkMesh -case <case>` (OpenFOAM) → mesh report
+
+The CGNS→VTK script ships with the API at `apps/api/scripts/CgnsToVtk.py`; the **binaries** (`pvpython`, the OpenFOAM utilities) are **not bundled** - install them on the deploy host and point the API at them. A missing/failed tool never crashes the API: each step is captured as a structured result and the convert endpoint returns `200` with a per-step report (the UI shows the logs).
+
+**Debian install (example):**
+
+```bash
+sudo apt-get install -y paraview        # provides pvpython
+# Install OpenFOAM per opencfd/openfoam.org instructions for your distro.
+```
+
+**Configure (`apps/api/.env`)** - every command is overridable; defaults assume Linux PATH:
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `PVPYTHON_BIN` | `pvpython` | ParaView's Python. On Windows it is `pvpython.exe` and rarely on PATH - set the full path, e.g. `C:\Program Files\ParaView 5.12.0\bin\pvpython.exe`. |
+| `CGNS_TO_VTK_SCRIPT` | `apps/api/scripts/CgnsToVtk.py` | Bundled with the API (resolved relative to the module, cwd-independent). Set only to override. |
+| `VTK_TO_FOAM_BIN` | `vtkUnstructuredToFoam` | OpenFOAM utility (on PATH once the env is sourced). |
+| `CHECK_MESH_BIN` | `checkMesh` | OpenFOAM utility. |
+| `OPENFOAM_BASHRC` | *(empty)* | When set, OpenFOAM tools run inside `bash -c 'source <bashrc> && exec "$@"'` (injection-safe). e.g. `/opt/openfoam12/etc/bashrc`. Leave empty if the tools are already on PATH. |
+| `CONVERSION_STEP_TIMEOUT_MS` | `600000` | Per-step wall-clock timeout (10 min). |
+
+Conversion is currently **synchronous** (one request runs the whole pipeline). Uploaded CGNS files live under `STORAGE_DIR/projects/<id>/cgns/`, separate from the case.
+
+> **Prisma on Debian:** `schema.prisma` declares `binaryTargets = ["native", "debian-openssl-3.0.x"]`. Run `npm run prisma:generate -w @dive/api` **on the deploy host** (or a Debian build stage) so the Linux query engine is present; never ship a Windows-generated client. Use `debian-openssl-1.1.x` instead for Debian 11.
+
 ## App structure
 
 **`apps/api/src`** - `config/` (validated env), `lib/` (prisma, jwt, password, AppError), `middleware/` (auth, role, validation, rate-limit, error handler), `modules/auth` + `modules/users` (routes/controller/service/schemas), `app.ts` (Express factory), `server.ts`. Tests in `apps/api/tests`.

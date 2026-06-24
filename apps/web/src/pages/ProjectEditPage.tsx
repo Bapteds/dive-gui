@@ -7,7 +7,9 @@ import {
   useCaseFileContentQuery,
   useCaseFilesQuery,
   useCreateCaseFile,
+  useDeleteCaseDir,
   useDeleteCaseFile,
+  useMoveCaseEntry,
   useSaveCaseFile,
 } from '@/features/projects/useCaseFiles';
 import { FileTreeEditor, type FileTreeResource } from '@/features/files/FileTreeEditor';
@@ -28,6 +30,8 @@ export function ProjectEditPage() {
     useSave: () => useSaveCaseFile(id),
     useCreate: () => useCreateCaseFile(id),
     useDelete: () => useDeleteCaseFile(id),
+    useDeleteDir: () => useDeleteCaseDir(id),
+    useMove: () => useMoveCaseEntry(id),
   };
 
   if (project.isPending) {
@@ -58,6 +62,7 @@ export function ProjectEditPage() {
       <BackLink projectId={id} />
       <FileTreeEditor
         resource={resource}
+        enableEasyMode
         emptyFilesHint={
           <>
             No files yet.{' '}

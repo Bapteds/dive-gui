@@ -452,3 +452,108 @@ describe('DELETE /projects/:id/files/content (single file)', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('DELETE /projects/:id/files/dir (folder)', () => {
+  it('deletes a whole folder subtree and returns the refreshed tree', async () => {
+    const { id, auth } = await makeProject('deldir-ok@dive-turbinen.test');
+    await importFolder(id, auth, [
+      { relativePath: '0/U', data: 'a' },
+      { relativePath: '0/p', data: 'b' },
+      { relativePath: 'system/controlDict', data: 'c' },
+    ]);
+
+    const res = await request(app)
+      .delete(`/api/v1/projects/${id}/files/dir?path=0`)
+      .set('Authorization', auth);
+    expect(res.status).toBe(200);
+    const paths = (res.body.entries as Array<{ path: string }>).map((e) => e.path);
+    expect(paths).not.toContain('0');
+    expect(paths).not.toContain('0/U');
+    expect(paths).toContain('system/controlDict');
+  });
+
+  it('returns 404 deleting a folder that does not exist', async () => {
+    const { id, auth } = await makeProject('deldir-missing@dive-turbinen.test');
+    const res = await request(app)
+      .delete(`/api/v1/projects/${id}/files/dir?path=nope`)
+      .set('Authorization', auth);
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('POST /projects/:id/files/move', () => {
+  it('moves a file to a new path and returns the refreshed tree', async () => {
+    const { id, auth } = await makeProject('move-file@dive-turbinen.test');
+    await importFolder(id, auth, [{ relativePath: '0/U', data: 'x' }]);
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/move`)
+      .set('Authorization', auth)
+      .send({ from: '0/U', to: 'system/U' });
+    expect(res.status).toBe(200);
+    const paths = (res.body.entries as Array<{ path: string }>).map((e) => e.path);
+    expect(paths).toContain('system/U');
+    expect(paths).not.toContain('0/U');
+    // The now-empty source folder is pruned.
+    expect(paths).not.toContain('0');
+  });
+
+  it('moves a whole folder, carrying its contents', async () => {
+    const { id, auth } = await makeProject('move-dir@dive-turbinen.test');
+    // The top-level `keep.txt` sibling stops the case importer from stripping
+    // `src` as a common wrapper folder, so it survives as a real directory.
+    await importFolder(id, auth, [
+      { relativePath: 'src/a', data: '1' },
+      { relativePath: 'src/sub/b', data: '2' },
+      { relativePath: 'keep.txt', data: '0' },
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/move`)
+      .set('Authorization', auth)
+      .send({ from: 'src', to: 'dst' });
+    expect(res.status).toBe(200);
+    const paths = (res.body.entries as Array<{ path: string }>).map((e) => e.path);
+    expect(paths).toEqual(expect.arrayContaining(['dst', 'dst/a', 'dst/sub', 'dst/sub/b']));
+    expect(paths).not.toContain('src');
+  });
+
+  it('rejects moving onto an existing path (409 FILE_EXISTS)', async () => {
+    const { id, auth } = await makeProject('move-conflict@dive-turbinen.test');
+    await importFolder(id, auth, [
+      { relativePath: 'a.txt', data: '1' },
+      { relativePath: 'b.txt', data: '2' },
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/move`)
+      .set('Authorization', auth)
+      .send({ from: 'a.txt', to: 'b.txt' });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('FILE_EXISTS');
+  });
+
+  it('rejects moving a folder into itself (400)', async () => {
+    const { id, auth } = await makeProject('move-self@dive-turbinen.test');
+    // `keep.txt` keeps `dir` from being stripped as a wrapper on import.
+    await importFolder(id, auth, [
+      { relativePath: 'dir/file', data: '1' },
+      { relativePath: 'keep.txt', data: '0' },
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/move`)
+      .set('Authorization', auth)
+      .send({ from: 'dir', to: 'dir/inner' });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 moving a source that does not exist', async () => {
+    const { id, auth } = await makeProject('move-missing@dive-turbinen.test');
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/move`)
+      .set('Authorization', auth)
+      .send({ from: 'ghost', to: 'elsewhere' });
+    expect(res.status).toBe(404);
+  });
+});

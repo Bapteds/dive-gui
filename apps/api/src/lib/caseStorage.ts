@@ -13,10 +13,12 @@ import {
   assertSafeId,
   clearTreeAt,
   commonWrapperSegment,
+  deleteDirAt,
   deleteFileAt,
   extractArchiveAt,
   fileExistsAt,
   listTree,
+  moveAt,
   readFileAt,
   removeTreeAt,
   sanitizeRelative,
@@ -26,6 +28,7 @@ import {
   writeNormalizedAt,
   zipTreeAt,
   type FileEntry,
+  type MoveResult,
 } from './fileTreeStorage';
 
 /** A single node in a project's case tree. */
@@ -38,6 +41,15 @@ const CASE_DIRS = new Set(['system', 'constant', '0']);
 function caseRootFor(projectId: string): string {
   assertSafeId(projectId);
   return path.join(storageRoot(), 'projects', projectId, 'case');
+}
+
+/**
+ * Absolute path to a project's case root, for callers that must hand a real
+ * filesystem path to an external process (e.g. the OpenFOAM mesh utilities run
+ * with `-case <dir>`). The id is validated; the directory may not exist yet.
+ */
+export function caseDirAbsolute(projectId: string): string {
+  return caseRootFor(projectId);
 }
 
 /**
@@ -110,6 +122,20 @@ export function writeCaseFile(
 /** Delete a single case file, pruning any parent directories left empty. */
 export function deleteCaseFile(projectId: string, relPath: string): Promise<void> {
   return deleteFileAt(caseRootFor(projectId), relPath);
+}
+
+/** Recursively delete a case directory subtree, pruning empty parents. */
+export function deleteCaseDir(projectId: string, relPath: string): Promise<void> {
+  return deleteDirAt(caseRootFor(projectId), relPath);
+}
+
+/** Move (or rename) a case file or directory within the case tree. */
+export function moveCasePath(
+  projectId: string,
+  fromRel: string,
+  toRel: string,
+): Promise<MoveResult> {
+  return moveAt(caseRootFor(projectId), fromRel, toRel);
 }
 
 /** Build a .zip of the whole case tree (files only). */

@@ -14,3 +14,11 @@ export const createFileSchema = z.object({
 });
 
 export type CreateFileInput = z.infer<typeof createFileSchema>;
+
+/** Body for moving/renaming a file or directory: source and destination paths. */
+export const movePathSchema = z.object({
+  from: z.string().trim().min(1, 'A source path is required'),
+  to: z.string().trim().min(1, 'A destination path is required'),
+});
+
+export type MovePathInput = z.infer<typeof movePathSchema>;

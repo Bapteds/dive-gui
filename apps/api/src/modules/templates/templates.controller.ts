@@ -10,11 +10,13 @@ import {
   createTemplate,
   createTemplateFile,
   deleteTemplate,
+  deleteTemplateDirContent,
   deleteTemplateFileContent,
   getTemplate,
   getTemplateFiles,
   importTemplateFiles,
   listTemplates,
+  moveTemplateEntry,
   previewApplyTemplate,
   readTemplateFileContent,
   saveTemplateFileContent,
@@ -25,6 +27,7 @@ import type {
   CreateTemplateInput,
   UpdateTemplateInput,
 } from './templates.schemas';
+import type { MovePathInput } from '../projects/files.schemas';
 
 /** Build the acting viewer (id + role) or fail defensively. */
 function requireViewer(req: Request): Viewer {
@@ -117,6 +120,20 @@ export async function createTemplateFileController(req: Request, res: Response):
 export async function deleteTemplateFileController(req: Request, res: Response): Promise<void> {
   const path = (req.query.path as string | undefined) ?? '';
   const result = await deleteTemplateFileContent(requireViewer(req), req.params.id, path);
+  res.status(200).json(result);
+}
+
+/** DELETE /templates/:id/files/dir?path=… — delete a whole folder. */
+export async function deleteTemplateDirController(req: Request, res: Response): Promise<void> {
+  const path = (req.query.path as string | undefined) ?? '';
+  const result = await deleteTemplateDirContent(requireViewer(req), req.params.id, path);
+  res.status(200).json(result);
+}
+
+/** POST /templates/:id/files/move — move/rename a file or folder. */
+export async function moveTemplateEntryController(req: Request, res: Response): Promise<void> {
+  const { from, to } = req.body as MovePathInput;
+  const result = await moveTemplateEntry(requireViewer(req), req.params.id, from, to);
   res.status(200).json(result);
 }
 

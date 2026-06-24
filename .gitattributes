@@ -1,0 +1,27 @@
+# Line-ending normalization. The team develops on Windows but the app is
+# deployed on Debian, so keep everything LF in the repository: shell scripts,
+# Python, and OpenFOAM dictionaries must use LF to run correctly under Linux.
+# This removes the dependency on each contributor's core.autocrlf setting.
+* text=auto eol=lf
+
+# Scripts that are executed under Linux: force LF explicitly.
+*.sh text eol=lf
+*.py text eol=lf
+
+# Binary assets must never be line-ending normalized.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.webp binary
+*.woff  binary
+*.woff2 binary
+*.ttf  binary
+*.otf  binary
+*.db   binary
+# CFD mesh/data artifacts.
+*.cgns binary
+*.vtk  binary
+*.vtu  binary
+*.msh  binary

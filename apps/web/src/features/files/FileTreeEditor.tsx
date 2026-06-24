@@ -1,19 +1,32 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { UseMutationResult, UseQueryResult } from '@tanstack/react-query';
 import {
   AlertCircle,
   Check,
+  Code2,
+  CornerUpRight,
   File as FileIcon,
   FilePlus2,
   FileWarning,
   Folder,
+  GripVertical,
   Loader2,
+  MoreVertical,
+  Sparkles,
   Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Diamond } from '@/components/brand/Diamond';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   Dialog,
   DialogContent,
@@ -42,9 +55,13 @@ import type {
   CaseEntry,
   CaseFileContent,
   CreateCaseFileResponse,
+  DeleteCaseDirResponse,
   DeleteCaseFileResponse,
+  MoveCaseEntryResponse,
 } from '@/lib/api/types';
 import { CaseFileEditor } from '@/features/projects/CaseFileEditor';
+import { CaseFileForm } from '@/features/projects/CaseFileForm';
+import { foamEasyModeAvailable, matchFoamFileDef } from '@/features/projects/foamForm';
 
 /**
  * A resource whose files this editor reads and writes. Both the project case and
@@ -57,6 +74,8 @@ export interface FileTreeResource {
   useSave: () => UseMutationResult<void, Error, { path: string; content: string }>;
   useCreate: () => UseMutationResult<CreateCaseFileResponse, Error, { path: string }>;
   useDelete: () => UseMutationResult<DeleteCaseFileResponse, Error, { path: string }>;
+  useDeleteDir: () => UseMutationResult<DeleteCaseDirResponse, Error, { path: string }>;
+  useMove: () => UseMutationResult<MoveCaseEntryResponse, Error, { from: string; to: string }>;
 }
 
 interface FileTreeEditorProps {
@@ -65,6 +84,11 @@ interface FileTreeEditorProps {
   canEdit?: boolean;
   /** Guidance shown in the sidebar when there are no files yet. */
   emptyFilesHint?: ReactNode;
+  /**
+   * Offer an "easy mode" structured form (OpenFOAM field catalog) alongside the
+   * raw editor. Enabled for the project case editor; off for templates.
+   */
+  enableEasyMode?: boolean;
 }
 
 const AUTOSAVE_DELAY_MS = 600;
@@ -79,7 +103,12 @@ const AUTOSAVE_DELAY_MS = 600;
  * scrolls internally. Edits auto-save on a short debounce — there is no Save
  * button; a status line reports "Saving…" / "All changes saved" / "Save failed".
  */
-export function FileTreeEditor({ resource, canEdit = true, emptyFilesHint }: FileTreeEditorProps) {
+export function FileTreeEditor({
+  resource,
+  canEdit = true,
+  emptyFilesHint,
+  enableEasyMode = false,
+}: FileTreeEditorProps) {
   const files = resource.useFiles();
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const content = resource.useContent(selectedPath);
@@ -115,6 +144,20 @@ export function FileTreeEditor({ resource, canEdit = true, emptyFilesHint }: Fil
     if (selectedPath) saveFile({ path: selectedPath, content: draft });
   };
 
+  // Keep the open file in sync when a move/delete changes the tree under it.
+  const handleMoved = (from: string, to: string) => {
+    setSelectedPath((current) => {
+      if (current === from) return to;
+      if (current && current.startsWith(`${from}/`)) return `${to}${current.slice(from.length)}`;
+      return current;
+    });
+  };
+  const handleRemoved = (path: string) => {
+    setSelectedPath((current) =>
+      current === path || (current && current.startsWith(`${path}/`)) ? null : current,
+    );
+  };
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       <UnsavedChangesPrompt when={isDirty} />
@@ -125,6 +168,8 @@ export function FileTreeEditor({ resource, canEdit = true, emptyFilesHint }: Fil
           selectedPath={selectedPath}
           onSelect={requestSelect}
           onCreated={(path) => setSelectedPath(path)}
+          onMoved={handleMoved}
+          onRemoved={handleRemoved}
           canEdit={canEdit}
           emptyFilesHint={emptyFilesHint}
         />
@@ -139,6 +184,7 @@ export function FileTreeEditor({ resource, canEdit = true, emptyFilesHint }: Fil
           saveFailed={saveFailed}
           onRetry={retrySave}
           canEdit={canEdit}
+          enableEasyMode={enableEasyMode}
           onDeleted={() => setSelectedPath(null)}
         />
       </div>
@@ -146,13 +192,37 @@ export function FileTreeEditor({ resource, canEdit = true, emptyFilesHint }: Fil
   );
 }
 
-/** Left pane: the file tree. Directories are labels; files are selectable. */
+// ---- Path helpers for moving entries within the tree ----
+
+/** Last path segment (the entry's own name). */
+function basename(path: string): string {
+  return path.split('/').pop() ?? path;
+}
+
+/** Where `from` lands when moved into directory `dir` ('' = top level). */
+function destinationPath(dir: string, from: string): string {
+  const name = basename(from);
+  return dir ? `${dir}/${name}` : name;
+}
+
+/**
+ * A valid, non-trivial destination directory for moving `from`: not `from`
+ * itself or one of its descendants, and not its current parent (a no-op).
+ */
+function canMoveInto(dir: string, from: string): boolean {
+  if (dir === from || dir.startsWith(`${from}/`)) return false;
+  return destinationPath(dir, from) !== from;
+}
+
+/** Left pane: the file tree with drag-and-drop move, per-row actions, and create/delete. */
 function FileListSidebar({
   resource,
   files,
   selectedPath,
   onSelect,
   onCreated,
+  onMoved,
+  onRemoved,
   canEdit,
   emptyFilesHint,
 }: {
@@ -161,11 +231,63 @@ function FileListSidebar({
   selectedPath: string | null;
   onSelect: (path: string) => void;
   onCreated: (path: string) => void;
+  onMoved: (from: string, to: string) => void;
+  onRemoved: (path: string) => void;
   canEdit: boolean;
   emptyFilesHint?: ReactNode;
 }) {
   const { data: entries, isPending, isError, refetch, isRefetching } = files;
   const [newOpen, setNewOpen] = useState(false);
+  // The entry queued for delete confirmation (file or folder); null = closed.
+  const [confirmDelete, setConfirmDelete] = useState<CaseEntry | null>(null);
+  // Drag state: the path being dragged, and the hovered drop target ('' = top level).
+  const [dragPath, setDragPath] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+
+  const move = resource.useMove();
+  const deleteDir = resource.useDeleteDir();
+  const deleteFile = resource.useDelete();
+
+  const folderPaths = useMemo(
+    () => (entries ?? []).filter((entry) => entry.type === 'directory').map((entry) => entry.path),
+    [entries],
+  );
+
+  const busy = move.isPending || deleteDir.isPending || deleteFile.isPending;
+  const hasFiles = !!entries && entries.some((entry) => entry.type === 'file');
+
+  const runMove = async (from: string, to: string) => {
+    try {
+      await move.mutateAsync({ from, to });
+      onMoved(from, to);
+      toast.success('Moved.');
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not move it.');
+    }
+  };
+
+  // Drop the dragged entry into `dir` ('' = top level), skipping invalid/no-op moves.
+  const dropInto = (dir: string) => {
+    const from = dragPath;
+    setDragPath(null);
+    setDropTarget(null);
+    if (from === null || !canMoveInto(dir, from)) return;
+    void runMove(from, destinationPath(dir, from));
+  };
+
+  const handleConfirmDelete = async () => {
+    const entry = confirmDelete;
+    if (!entry) return;
+    try {
+      if (entry.type === 'directory') await deleteDir.mutateAsync({ path: entry.path });
+      else await deleteFile.mutateAsync({ path: entry.path });
+      onRemoved(entry.path);
+      toast.success(entry.type === 'directory' ? 'Folder deleted.' : 'File deleted.');
+      setConfirmDelete(null);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not delete it.');
+    }
+  };
 
   return (
     <aside className="flex max-h-48 min-h-0 flex-col rounded-md border border-border bg-surface shadow-sm lg:max-h-none lg:w-[280px] lg:shrink-0">
@@ -204,18 +326,49 @@ function FileListSidebar({
               Try again
             </Button>
           </div>
-        ) : entries.filter((entry) => entry.type === 'file').length === 0 ? (
+        ) : !hasFiles ? (
           <p className="px-2 py-3 text-sm text-text-secondary">
             {emptyFilesHint ?? 'No files yet.'}
           </p>
         ) : (
-          <ul className="flex flex-col">
+          <ul
+            className={cn(
+              'flex flex-col rounded-sm',
+              // While dragging, the list itself is the "top level" drop target.
+              canEdit && dragPath !== null && 'ring-1 ring-inset ring-border',
+              canEdit && dragPath !== null && dropTarget === '' && 'ring-2 ring-primary',
+            )}
+            onDragOver={(event) => {
+              if (!canEdit || dragPath === null) return;
+              event.preventDefault();
+              setDropTarget('');
+            }}
+            onDrop={(event) => {
+              if (!canEdit || dragPath === null) return;
+              event.preventDefault();
+              dropInto('');
+            }}
+          >
             {entries.map((entry) => (
               <FileRow
                 key={entry.path}
                 entry={entry}
                 selected={entry.path === selectedPath}
                 onSelect={onSelect}
+                canEdit={canEdit}
+                busy={busy}
+                folderPaths={folderPaths}
+                dragging={dragPath === entry.path}
+                isDropTarget={entry.type === 'directory' && dropTarget === entry.path}
+                onDragStart={() => setDragPath(entry.path)}
+                onDragEnd={() => {
+                  setDragPath(null);
+                  setDropTarget(null);
+                }}
+                onDirDragOver={() => setDropTarget(entry.path)}
+                onDropInto={dropInto}
+                onMoveTo={(dir) => void runMove(entry.path, destinationPath(dir, entry.path))}
+                onDelete={() => setConfirmDelete(entry)}
               />
             ))}
           </ul>
@@ -230,58 +383,253 @@ function FileListSidebar({
           onCreated={onCreated}
         />
       )}
+      {canEdit && (
+        <DeleteEntryDialog
+          entry={confirmDelete}
+          pending={deleteDir.isPending || deleteFile.isPending}
+          onConfirm={() => void handleConfirmDelete()}
+          onCancel={() => setConfirmDelete(null)}
+        />
+      )}
     </aside>
   );
 }
 
-/** A single tree row: a non-interactive directory label or a selectable file. */
+/**
+ * A single tree row: a draggable file (selectable) or folder, with a drag handle
+ * and a row-actions menu (move into another folder / delete). Folders are drop
+ * targets for the drag-and-drop move.
+ */
 function FileRow({
   entry,
   selected,
   onSelect,
+  canEdit,
+  busy,
+  folderPaths,
+  dragging,
+  isDropTarget,
+  onDragStart,
+  onDragEnd,
+  onDirDragOver,
+  onDropInto,
+  onMoveTo,
+  onDelete,
 }: {
   entry: CaseEntry;
   selected: boolean;
   onSelect: (path: string) => void;
+  canEdit: boolean;
+  busy: boolean;
+  folderPaths: string[];
+  dragging: boolean;
+  isDropTarget: boolean;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onDirDragOver: () => void;
+  onDropInto: (dir: string) => void;
+  onMoveTo: (dir: string) => void;
+  onDelete: () => void;
 }) {
   const depth = entry.path.split('/').length - 1;
-  const name = entry.path.split('/').pop() ?? entry.path;
+  const name = basename(entry.path);
   const indent = { paddingInlineStart: `${depth * 14 + 8}px` };
+  const isDir = entry.type === 'directory';
 
-  if (entry.type === 'directory') {
-    return (
-      <li
-        style={indent}
-        className="flex items-center gap-2 py-1.5 pe-2 text-xs font-medium text-text-secondary"
-      >
-        <Folder className="size-4 shrink-0 text-neutral" strokeWidth={1.75} aria-hidden="true" />
-        <span className="truncate">{name}</span>
-      </li>
-    );
-  }
+  const dragProps = canEdit
+    ? {
+        draggable: true,
+        onDragStart: (event: React.DragEvent) => {
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', entry.path);
+          onDragStart();
+        },
+        onDragEnd,
+      }
+    : {};
+
+  // Folders accept drops; files don't (a drop on a file falls through to the list).
+  const dropProps =
+    canEdit && isDir
+      ? {
+          onDragOver: (event: React.DragEvent) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onDirDragOver();
+          },
+          onDrop: (event: React.DragEvent) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onDropInto(entry.path);
+          },
+        }
+      : {};
 
   return (
-    <li>
-      <button
-        type="button"
-        onClick={() => onSelect(entry.path)}
-        aria-current={selected || undefined}
-        title={entry.path}
-        style={indent}
-        className={cn(
-          'flex w-full items-center gap-2 rounded-sm py-1.5 pe-2 text-left text-sm transition-colors duration-fast ease-out',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
-          selected ? 'bg-primary-tint font-medium text-primary' : 'text-text hover:bg-bg',
-        )}
-      >
-        <FileIcon
-          className="size-4 shrink-0 text-text-secondary"
-          strokeWidth={1.75}
+    <li
+      className={cn(
+        'group flex items-center gap-1 rounded-sm transition-colors duration-fast ease-out',
+        dragging && 'opacity-50',
+        isDropTarget && 'bg-primary-tint ring-1 ring-inset ring-primary',
+      )}
+      {...dragProps}
+      {...dropProps}
+    >
+      {canEdit && (
+        <span
+          className="grid shrink-0 cursor-grab place-items-center pl-1 text-neutral opacity-0 transition-opacity duration-fast ease-out group-hover:opacity-100"
           aria-hidden="true"
+        >
+          <GripVertical className="size-3.5" strokeWidth={1.75} />
+        </span>
+      )}
+
+      {isDir ? (
+        <span
+          style={indent}
+          className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-xs font-medium text-text-secondary"
+        >
+          <Folder className="size-4 shrink-0 text-neutral" strokeWidth={1.75} aria-hidden="true" />
+          <span className="truncate" title={entry.path}>
+            {name}
+          </span>
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={() => onSelect(entry.path)}
+          aria-current={selected || undefined}
+          title={entry.path}
+          style={indent}
+          className={cn(
+            'flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 text-left text-sm transition-colors duration-fast ease-out',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
+            selected ? 'bg-primary-tint font-medium text-primary' : 'text-text hover:bg-bg',
+          )}
+        >
+          <FileIcon
+            className="size-4 shrink-0 text-text-secondary"
+            strokeWidth={1.75}
+            aria-hidden="true"
+          />
+          <span className="truncate">{name}</span>
+        </button>
+      )}
+
+      {canEdit && (
+        <RowActions
+          entry={entry}
+          folderPaths={folderPaths}
+          busy={busy}
+          onMoveTo={onMoveTo}
+          onDelete={onDelete}
         />
-        <span className="truncate">{name}</span>
-      </button>
+      )}
     </li>
+  );
+}
+
+/** Per-row actions menu: move the entry into another folder (or top level), or delete it. */
+function RowActions({
+  entry,
+  folderPaths,
+  busy,
+  onMoveTo,
+  onDelete,
+}: {
+  entry: CaseEntry;
+  folderPaths: string[];
+  busy: boolean;
+  onMoveTo: (dir: string) => void;
+  onDelete: () => void;
+}) {
+  const isDir = entry.type === 'directory';
+  // Valid destinations: top level plus every folder that isn't the entry itself,
+  // a descendant of it, or its current parent.
+  const destinations = useMemo(
+    () => ['', ...folderPaths].filter((dir) => canMoveInto(dir, entry.path)),
+    [folderPaths, entry.path],
+  );
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          disabled={busy}
+          aria-label={`Actions for ${entry.path}`}
+          className="mr-1 grid size-7 shrink-0 place-items-center rounded-sm text-text-secondary opacity-0 transition-[opacity] duration-fast ease-out hover:bg-bg hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring group-hover:opacity-100 disabled:opacity-50 data-[state=open]:opacity-100"
+        >
+          <MoreVertical className="size-4" strokeWidth={1.75} aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-h-72 overflow-auto">
+        <DropdownMenuLabel>Move to</DropdownMenuLabel>
+        {destinations.length === 0 ? (
+          <DropdownMenuItem disabled>No other location</DropdownMenuItem>
+        ) : (
+          destinations.map((dir) => (
+            <DropdownMenuItem key={dir || '/'} onSelect={() => onMoveTo(dir)}>
+              <CornerUpRight strokeWidth={1.75} aria-hidden="true" />
+              <span className="truncate">{dir === '' ? 'Top level' : dir}</span>
+            </DropdownMenuItem>
+          ))
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem destructive onSelect={onDelete}>
+          <Trash2 strokeWidth={1.75} aria-hidden="true" />
+          {isDir ? 'Delete folder' : 'Delete file'}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** Confirm dialog for deleting a file or a whole folder (and its contents). */
+function DeleteEntryDialog({
+  entry,
+  pending,
+  onConfirm,
+  onCancel,
+}: {
+  entry: CaseEntry | null;
+  pending: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const isDir = entry?.type === 'directory';
+  return (
+    <AlertDialog open={!!entry} onOpenChange={(next) => !pending && !next && onCancel()}>
+      <AlertDialogContent className="overscroll-contain">
+        <AlertDialogHeader>
+          <AlertDialogTitle>{isDir ? 'Delete this folder?' : 'Delete this file?'}</AlertDialogTitle>
+          <AlertDialogDescription>
+            <span className="font-mono">{entry?.path}</span>{' '}
+            {isDir
+              ? 'and everything inside it will be permanently removed.'
+              : 'will be permanently removed.'}{' '}
+            This cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            className="border-danger/50 bg-danger text-white hover:bg-danger/90"
+            onClick={(event) => {
+              event.preventDefault();
+              onConfirm();
+            }}
+            disabled={pending}
+            aria-busy={pending || undefined}
+          >
+            {pending && (
+              <Loader2 className="size-4 animate-spin" strokeWidth={1.75} aria-hidden="true" />
+            )}
+            {isDir ? 'Delete folder' : 'Delete file'}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -297,6 +645,7 @@ function EditorPanel({
   saveFailed,
   onRetry,
   canEdit,
+  enableEasyMode,
   onDeleted,
 }: {
   resource: FileTreeResource;
@@ -309,12 +658,32 @@ function EditorPanel({
   saveFailed: boolean;
   onRetry: () => void;
   canEdit: boolean;
+  enableEasyMode: boolean;
   onDeleted: () => void;
 }) {
   const tooLarge =
     content.isError && content.error instanceof ApiError && content.error.code === 'FILE_TOO_LARGE';
 
   const fillClass = 'min-h-0 flex-1';
+  const fileContent = content.data?.content ?? null;
+
+  // Is the structured "easy mode" worth offering for this file, and is it a
+  // recognised catalog file (→ default to easy)? Parse at most once each.
+  const easyAvailable = useMemo(
+    () => enableEasyMode && !tooLarge && !!fileContent && foamEasyModeAvailable(fileContent),
+    [enableEasyMode, tooLarge, fileContent],
+  );
+  const recognized = useMemo(() => !!fileContent && !!matchFoamFileDef(fileContent), [fileContent]);
+
+  // Editor mode, re-defaulted whenever the selected file changes (easy for a
+  // recognised file, advanced otherwise). The user can flip it per file.
+  const [mode, setMode] = useState<'easy' | 'advanced'>('advanced');
+  const [modeForPath, setModeForPath] = useState<string | null>(null);
+  if (fileContent !== null && selectedPath !== modeForPath) {
+    setMode(easyAvailable && recognized ? 'easy' : 'advanced');
+    setModeForPath(selectedPath);
+  }
+  const effectiveMode = easyAvailable ? mode : 'advanced';
 
   return (
     <section className="flex min-h-0 flex-1 flex-col rounded-md border border-border bg-surface shadow-sm">
@@ -326,6 +695,7 @@ function EditorPanel({
           {selectedPath ?? 'No file selected'}
         </p>
         <div className="flex items-center gap-3">
+          {easyAvailable && <ModeToggle mode={effectiveMode} onChange={setMode} />}
           <SaveStatus
             selected={!!selectedPath}
             dirty={isDirty}
@@ -369,6 +739,10 @@ function EditorPanel({
               Try again
             </Button>
           </div>
+        ) : effectiveMode === 'easy' ? (
+          <div className={cn('overflow-hidden rounded-sm border border-border', fillClass)}>
+            <CaseFileForm value={draft} onChange={onDraftChange} readOnly={!canEdit} />
+          </div>
         ) : (
           <div className={cn('overflow-hidden rounded-sm border border-border', fillClass)}>
             <CaseFileEditor value={draft} onChange={onDraftChange} readOnly={!canEdit} />
@@ -376,6 +750,66 @@ function EditorPanel({
         )}
       </div>
     </section>
+  );
+}
+
+/** Segmented Easy / Advanced editor-mode switch. */
+function ModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: 'easy' | 'advanced';
+  onChange: (mode: 'easy' | 'advanced') => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Editor mode"
+      className="inline-flex items-center rounded-md border border-border bg-bg p-0.5"
+    >
+      <ModeButton
+        active={mode === 'easy'}
+        onClick={() => onChange('easy')}
+        icon={<Sparkles className="size-3.5" strokeWidth={1.75} aria-hidden="true" />}
+        label="Easy"
+      />
+      <ModeButton
+        active={mode === 'advanced'}
+        onClick={() => onChange('advanced')}
+        icon={<Code2 className="size-3.5" strokeWidth={1.75} aria-hidden="true" />}
+        label="Advanced"
+      />
+    </div>
+  );
+}
+
+function ModeButton({
+  active,
+  onClick,
+  icon,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: ReactNode;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        'inline-flex h-7 items-center gap-1.5 rounded-[6px] px-2.5 text-xs font-medium transition-colors duration-fast ease-out',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
+        active
+          ? 'bg-surface text-primary shadow-sm'
+          : 'text-text-secondary hover:text-text',
+      )}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 
