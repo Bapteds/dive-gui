@@ -11,6 +11,7 @@ import {
   resetCase,
   saveCaseFileContent,
   scaffoldCase,
+  syncBoundaries,
   verifyCase,
 } from '@/lib/api/projects';
 import type {
@@ -84,6 +85,23 @@ export function useScaffoldCase(projectId: string) {
     mutationFn: () => scaffoldCase(projectId),
     onSuccess: (result) => {
       queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
+    },
+  });
+}
+
+/**
+ * Apply the mesh boundary (patch names + types) to every 0/ field's
+ * boundaryField, then write the refreshed tree into the cache and invalidate the
+ * runnable gate. Needed after a polyMesh import + template / default files so the
+ * boundaryFields match the mesh patches.
+ */
+export function useSyncBoundaries(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<{ updated: string[]; entries: CaseEntry[] }>({
+    mutationFn: () => syncBoundaries(projectId),
+    onSuccess: (result) => {
+      queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
+      void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'runnable'] });
     },
   });
 }

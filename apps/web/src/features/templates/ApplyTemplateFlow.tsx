@@ -27,6 +27,7 @@ import {
   usePreviewApplyTemplate,
   useTemplatesQuery,
 } from '@/features/templates/useTemplates';
+import { useSyncBoundaries } from '@/features/projects/useCaseFiles';
 
 /**
  * ApplyTemplateFlow - the three-step dialog flow opened by "Verify case".
@@ -71,15 +72,30 @@ export function ApplyTemplateFlow({
   );
   // The template currently being previewed/applied from the picker (row spinner).
   const [pendingId, setPendingId] = useState<string | null>(null);
+  // Default on: a polyMesh given a template usually needs its 0/ boundaryFields
+  // aligned to the mesh patches (the template brings its own patch names).
+  const [applyBoundaries, setApplyBoundaries] = useState(true);
 
   const preview = usePreviewApplyTemplate(projectId);
   const apply = useApplyTemplate(projectId);
+  const syncBoundaries = useSyncBoundaries(projectId);
 
   if (!verification) return null;
 
-  const busy = preview.isPending || apply.isPending || applyingMinimal;
+  const busy = preview.isPending || apply.isPending || applyingMinimal || syncBoundaries.isPending;
 
-  const applied = (result: { applied: string[] }) => {
+  const applied = async (result: { applied: string[] }) => {
+    if (applyBoundaries) {
+      try {
+        await syncBoundaries.mutateAsync();
+      } catch (err) {
+        toast.error(
+          err instanceof ApiError
+            ? err.message
+            : 'Applied the template, but could not align the boundaries.',
+        );
+      }
+    }
     toast.success(
       `Applied ${result.applied.length} file${result.applied.length === 1 ? '' : 's'} from the template.`,
     );
@@ -93,7 +109,7 @@ export function ApplyTemplateFlow({
       const result = await preview.mutateAsync({ templateId: template.id });
       if (result.conflicts.length === 0) {
         const applyResult = await apply.mutateAsync({ templateId: template.id });
-        applied(applyResult);
+        await applied(applyResult);
         return;
       }
       setSelected({ template, preview: result });
@@ -110,7 +126,7 @@ export function ApplyTemplateFlow({
     if (!selected) return;
     try {
       const result = await apply.mutateAsync({ templateId: selected.template.id, decisions });
-      applied(result);
+      await applied(result);
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Could not apply the template.');
     }
@@ -138,6 +154,8 @@ export function ApplyTemplateFlow({
           pendingId={pendingId ?? undefined}
           busy={busy}
           onBack={() => setStep('choice')}
+          applyBoundaries={applyBoundaries}
+          onToggleBoundaries={setApplyBoundaries}
         />
       )}
       {step === 'conflicts' && selected && (
@@ -236,11 +254,15 @@ function PickerDialog({
   pendingId,
   busy,
   onBack,
+  applyBoundaries,
+  onToggleBoundaries,
 }: {
   onPick: (template: Template) => void;
   pendingId: string | undefined;
   busy: boolean;
   onBack: () => void;
+  applyBoundaries: boolean;
+  onToggleBoundaries: (value: boolean) => void;
 }) {
   const { user } = useAuth();
   const { data: templates, isPending, isError, refetch, isRefetching } = useTemplatesQuery();
@@ -316,6 +338,23 @@ function PickerDialog({
           </ul>
         )}
       </div>
+
+      <label className="flex items-start gap-2">
+        <input
+          type="checkbox"
+          checked={applyBoundaries}
+          onChange={(event) => onToggleBoundaries(event.target.checked)}
+          disabled={busy}
+          className="mt-0.5 size-4 shrink-0 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
+        />
+        <span className="text-sm text-text">
+          Apply the boundary type and name to the 0/ fields
+          <span className="block text-xs text-text-secondary">
+            Rewrites each field&apos;s boundaryField to match this mesh&apos;s patches, so the
+            template&apos;s 0/ fields line up with your polyMesh.
+          </span>
+        </span>
+      </label>
 
       <DialogFooter className="mt-2">
         <Button type="button" variant="ghost" onClick={onBack} disabled={busy}>

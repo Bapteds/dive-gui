@@ -9,6 +9,7 @@ import { RunHistory } from './RunHistory';
 import { RunLog } from './RunLog';
 import { RunStatusBadge } from './RunStatusBadge';
 import { runStatusMeta } from './runStatusMeta';
+import { useSyncBoundaries } from '@/features/projects/useCaseFiles';
 import {
   isRunActive,
   useRunLogQuery,
@@ -17,7 +18,6 @@ import {
   useScaffoldSolver,
   useStartRun,
   useStopRun,
-  useSyncBoundaries,
 } from './useRuns';
 
 /**

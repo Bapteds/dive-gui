@@ -6,7 +6,6 @@ import {
   scaffoldSolver,
   startRun,
   stopRun,
-  syncBoundaries,
 } from '@/lib/api/projects';
 import type {
   RunLogPayload,
@@ -64,21 +63,6 @@ export function useScaffoldSolver(projectId: string) {
       queryClient.setQueryData(runnableQueryKey(projectId), result.runnable);
       // New case files were written; keep the case tree / summary in sync.
       void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'files'] });
-    },
-  });
-}
-
-/**
- * Apply the mesh boundary (patch names + types) to the 0/ field boundaryFields.
- * The 0/ files change, so refresh the case tree (and the runnable gate).
- */
-export function useSyncBoundaries(projectId: string) {
-  const queryClient = useQueryClient();
-  return useMutation<{ updated: string[] }>({
-    mutationFn: () => syncBoundaries(projectId),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'files'] });
-      void queryClient.invalidateQueries({ queryKey: runnableQueryKey(projectId) });
     },
   });
 }
