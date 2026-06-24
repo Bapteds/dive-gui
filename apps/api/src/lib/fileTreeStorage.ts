@@ -127,6 +127,24 @@ export function extractArchiveAt(
   );
 }
 
+/**
+ * Compare two forward-slash paths segment by segment, so a directory's own entry
+ * stays grouped with its children and a sibling whose name is a prefix of another
+ * (e.g. "0" vs "0.orig") sorts correctly. A plain string compare interleaves them
+ * because '/' (0x2F) sorts after '.' (0x2E), which would place "0.orig" and its
+ * files between "0" and the files of "0" — making "0" look merged into "0.orig"
+ * in the flat, depth-indented tree the UI renders.
+ */
+export function comparePaths(a: string, b: string): number {
+  const aSegments = a.split('/');
+  const bSegments = b.split('/');
+  const shared = Math.min(aSegments.length, bSegments.length);
+  for (let i = 0; i < shared; i += 1) {
+    if (aSegments[i] !== bSegments[i]) return aSegments[i].localeCompare(bSegments[i]);
+  }
+  return aSegments.length - bSegments.length;
+}
+
 /** Walk a file tree (files and directories). Empty if the root does not exist. */
 export async function listTree(root: string): Promise<FileEntry[]> {
   const entries: FileEntry[] = [];
@@ -153,7 +171,7 @@ export async function listTree(root: string): Promise<FileEntry[]> {
   }
 
   await walk(root, '');
-  entries.sort((a, b) => a.path.localeCompare(b.path));
+  entries.sort((a, b) => comparePaths(a.path, b.path));
   return entries;
 }
 
