@@ -180,7 +180,7 @@ describe('solver run lifecycle', () => {
     const start = await startRun(id, auth);
     const settled = await waitForTerminal(id, start.body.run.id, auth);
     expect(settled.status).toBe('failed');
-    expect(settled.reason).toMatch(/could not start/i);
+    expect(settled.reason).toMatch(/binary not found/i);
   });
 
   it('stops a running run (graceful then SIGTERM fallback)', async () => {

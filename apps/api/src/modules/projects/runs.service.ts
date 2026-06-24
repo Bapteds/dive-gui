@@ -139,7 +139,12 @@ function classifyExit(
 ): { status: RunStatus; reason: string | null } {
   const parsed = parseResiduals(log);
   if (exit.spawnError) {
-    return { status: 'failed', reason: `Solver could not start: ${exit.spawnError}` };
+    return {
+      status: 'failed',
+      reason:
+        'Solver binary not found. Check the OpenFOAM environment on the server ' +
+        `(OPENFOAM_BASHRC), and that the solver in controlDict is installed. ${exit.spawnError}`,
+    };
   }
   if (wasStopped) {
     return { status: 'stopped', reason: 'Stopped by user' };

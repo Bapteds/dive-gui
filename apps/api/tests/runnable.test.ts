@@ -7,7 +7,7 @@ import request from 'supertest';
 import { app, authHeader, createTestUser, resetDatabase } from './helpers';
 import { prisma } from '../src/lib/prisma';
 import { writeCaseFile } from '../src/lib/caseStorage';
-import { parseApplication, renderSolverFile } from '../src/lib/openfoamCase';
+import { parseApplication, renderSolverFile, setApplication } from '../src/lib/openfoamCase';
 
 const BOUNDARY = `FoamFile { class polyBoundaryMesh; object boundary; }
 2
@@ -68,6 +68,19 @@ describe('renderSolverFile / parseApplication (unit)', () => {
     expect(parseApplication('// application foo;\nstartTime 0;')).toBeNull();
     expect(parseApplication('application   pimpleFoam ;')).toBe('pimpleFoam');
   });
+
+  it('setApplication rewrites an existing application line and inserts a missing one', () => {
+    expect(parseApplication(setApplication('application     foamRun;\n', 'simpleFoam'))).toBe(
+      'simpleFoam',
+    );
+    // Preserves the rest of the dict.
+    const dict = 'application     foamRun;\n\nendTime         1000;\n';
+    const updated = setApplication(dict, 'simpleFoam');
+    expect(updated).toContain('application     simpleFoam;');
+    expect(updated).toContain('endTime         1000;');
+    // Missing application line gets one added.
+    expect(parseApplication(setApplication('startTime 0;\n', 'simpleFoam'))).toBe('simpleFoam');
+  });
 });
 
 describe('runnable gate + scaffoldSolver (integration)', () => {
@@ -103,6 +116,26 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
       .set('Authorization', auth);
     expect(again.body.created).toHaveLength(0);
     expect(again.body.runnable.runnable).toBe(true);
+  });
+
+  it('retargets a generic controlDict (application foamRun) to simpleFoam', async () => {
+    const { auth, id } = await makeProject('runnable-foamrun@x.test');
+    await writeMesh(id);
+    // Simulate a case that came through the conversion flow: a generic controlDict.
+    await writeCaseFile(
+      id,
+      'system/controlDict',
+      'FoamFile { object controlDict; }\napplication     foamRun;\nendTime         1;\n',
+    );
+
+    const scaffold = await request(app)
+      .post(`/api/v1/projects/${id}/runnable/scaffold`)
+      .set('Authorization', auth);
+    expect(scaffold.status).toBe(201);
+    // The existing controlDict is not in `created` (kept), but its application
+    // is retargeted to simpleFoam so the run uses the right binary.
+    expect(scaffold.body.runnable.runnable).toBe(true);
+    expect(scaffold.body.runnable.solver).toBe('simpleFoam');
   });
 
   it('reports not runnable when the mesh is absent', async () => {

@@ -32,6 +32,7 @@ import {
   parseBoundaryPatches,
   renderBaseFile,
   renderSolverFile,
+  setApplication,
 } from '../../lib/openfoamCase';
 import { assertProjectVisible, type Viewer } from './projects.service';
 
@@ -255,6 +256,20 @@ export async function scaffoldSolver(
     if (await caseFileExists(projectId, file)) continue;
     await writeCaseFile(projectId, file, renderSolverFile(file, patches));
     created.push(file);
+  }
+
+  // The action makes the case runnable BY simpleFoam, so the controlDict must
+  // target it. A case scaffolded generically (or coming out of the conversion
+  // flow) says `application foamRun`, which is not what these turbulence/transport
+  // files are written for and may not even be installed. A freshly generated
+  // controlDict already says simpleFoam, so this is a no-op in that case.
+  const controlDict = await readCaseFile(projectId, 'system/controlDict');
+  if (controlDict) {
+    const content = controlDict.toString('utf8');
+    const next = setApplication(content, 'simpleFoam');
+    if (next !== content) {
+      await writeCaseFile(projectId, 'system/controlDict', next);
+    }
   }
 
   const [runnable, entries] = await Promise.all([

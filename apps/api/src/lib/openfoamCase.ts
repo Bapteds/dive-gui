@@ -481,6 +481,31 @@ export function parseApplication(controlDictContent: string): string | null {
   return match ? match[1] : null;
 }
 
+/**
+ * Set the `application` keyword in a controlDict to `solver`. Replaces an
+ * existing `application <x>;` line (preserving indentation); if none is present,
+ * inserts one just after the FoamFile header banner. Used by "Make runnable for
+ * simpleFoam" so a case scaffolded generically (`application foamRun`) actually
+ * targets the solver its turbulence/transport files are written for.
+ */
+export function setApplication(content: string, solver: string): string {
+  if (/^[ \t]*application[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*;/m.test(content)) {
+    return content.replace(
+      /^([ \t]*)application[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*;/m,
+      `$1application     ${solver};`,
+    );
+  }
+  const line = `application     ${solver};`;
+  const banner = content.indexOf('// * * *');
+  if (banner >= 0) {
+    const newline = content.indexOf('\n', banner);
+    if (newline >= 0) {
+      return `${content.slice(0, newline + 1)}\n${line}\n${content.slice(newline + 1)}`;
+    }
+  }
+  return `${line}\n${content}`;
+}
+
 /** A valid OpenFOAM patch name: a "word" token (letter/underscore start). */
 const PATCH_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
