@@ -93,6 +93,41 @@ export interface MeshManifest {
 }
 
 /**
+ * Geometric boundary types a mesh patch can be set to from the Visualize tab
+ * (the `type` keyword in constant/polyMesh/boundary). The constraint types
+ * (empty / symmetry / symmetryPlane / wedge) require every field's boundaryField
+ * entry for that patch to use the SAME type, which the app propagates into the
+ * 0/ files. cyclic / cyclicAMI / processor are intentionally excluded here: they
+ * need a paired neighbour patch (or are parallel-only) and are out of scope for
+ * single-patch retyping.
+ */
+export const MESH_PATCH_TYPES = [
+  'patch',
+  'wall',
+  'symmetry',
+  'symmetryPlane',
+  'empty',
+  'wedge',
+] as const;
+export type MeshPatchType = (typeof MESH_PATCH_TYPES)[number];
+
+/**
+ * Patch types whose field boundaryField BC must match the geometric type exactly
+ * (the solver errors otherwise). When a patch is set to one of these, the app
+ * rewrites its 0/ boundaryField entries to the same type; when set away from one
+ * (to patch/wall), a leftover constraint BC is reset to a valid generic default.
+ */
+export const CONSTRAINT_PATCH_TYPES = [
+  'empty',
+  'symmetry',
+  'symmetryPlane',
+  'wedge',
+  'cyclic',
+  'cyclicAMI',
+  'processor',
+] as const;
+
+/**
  * Directory name (under a project's storage subtree, sibling of `case/`,
  * `cgns/`, `viz/`) holding solver-run logs and artifacts. Kept apart from the
  * case so a case reset never wipes the run history/logs (mirrors the viz/cgns

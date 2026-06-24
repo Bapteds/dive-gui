@@ -576,6 +576,79 @@ export function renameFieldBoundaryPatch(content: string, from: string, to: stri
   return before + renamePatchHeader(block, from, to) + after;
 }
 
+/** Index of the `}` matching the `{` at `open`, or -1 when unbalanced. */
+function matchBrace(content: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < content.length; i += 1) {
+    const char = content[i];
+    if (char === '{') depth += 1;
+    else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Set the `type` of a patch block in a constant/polyMesh/boundary file. Targets
+ * the patch's own dictionary header (`name { … }`), replacing its `type X;` (or
+ * inserting one if absent). Returns the content unchanged when the patch is
+ * absent. A patch name appearing as a value (`type name;`) is never matched
+ * because the header requires the name to be immediately followed by `{`.
+ */
+export function setBoundaryPatchType(content: string, patch: string, type: string): string {
+  const header = new RegExp(`(?:^|[\\s(])${escapeRegExp(patch)}\\s*\\{`, 'm');
+  const match = header.exec(content);
+  if (!match) return content;
+  const open = content.indexOf('{', match.index);
+  const close = matchBrace(content, open);
+  if (close < 0) return content;
+
+  const block = content.slice(open, close + 1);
+  const retyped = block.replace(/(\btype\s+)[A-Za-z_][A-Za-z0-9_]*(\s*;)/, `$1${type}$2`);
+  const next = retyped !== block ? retyped : block.replace('{', `{\n        type            ${type};`);
+  return content.slice(0, open) + next + content.slice(close + 1);
+}
+
+/** Read the BC `type` of a patch entry inside a field's boundaryField, or null. */
+export function getFieldPatchType(content: string, patch: string): string | null {
+  const span = boundaryFieldSpan(content);
+  if (!span) return null;
+  const block = content.slice(span.open, span.close + 1);
+  const header = new RegExp(`(?:^|[\\s])${escapeRegExp(patch)}\\s*\\{`, 'm');
+  const match = header.exec(block);
+  if (!match) return null;
+  const open = block.indexOf('{', match.index);
+  const close = matchBrace(block, open);
+  if (close < 0) return null;
+  const entry = block.slice(open, close + 1);
+  const typeMatch = entry.match(/\btype\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/);
+  return typeMatch ? typeMatch[1] : null;
+}
+
+/**
+ * Replace a patch entry inside a field's boundaryField with a minimal
+ * `{ type <bcType>; }`. Used to propagate a constraint patch type (empty /
+ * symmetry / …) into the 0/ fields, where the field BC must match the geometric
+ * type exactly (those BCs take no other keywords). Returns content unchanged when
+ * the field has no boundaryField or no such patch entry.
+ */
+export function setFieldPatchType(content: string, patch: string, bcType: string): string {
+  const span = boundaryFieldSpan(content);
+  if (!span) return content;
+  const block = content.slice(span.open, span.close + 1);
+  const header = new RegExp(`(?:^|[\\s])${escapeRegExp(patch)}\\s*\\{`, 'm');
+  const match = header.exec(block);
+  if (!match) return content;
+  const open = block.indexOf('{', match.index);
+  const close = matchBrace(block, open);
+  if (close < 0) return content;
+  const entry = `{\n        type            ${bcType};\n    }`;
+  const newBlock = block.slice(0, open) + entry + block.slice(close + 1);
+  return content.slice(0, span.open) + newBlock + content.slice(span.close + 1);
+}
+
 /**
  * Parse the names of the boundary patches from a constant/polyMesh/boundary
  * file. Tolerant by design: strips comments, then collects every `name { ... }`

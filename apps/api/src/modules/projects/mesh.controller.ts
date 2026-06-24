@@ -11,8 +11,9 @@ import {
   getMeshManifest,
   rebuildMesh,
   renameMeshPatch,
+  setPatchType,
 } from './mesh.service';
-import type { AutoPatchInput, RenamePatchInput } from './mesh.schemas';
+import type { AutoPatchInput, RenamePatchInput, SetPatchTypeInput } from './mesh.schemas';
 
 /** Build the acting viewer (id + role) or fail defensively. */
 function requireViewer(req: Request): Viewer {
@@ -60,6 +61,13 @@ export async function rebuildMeshController(req: Request, res: Response): Promis
 export async function renameMeshPatchController(req: Request, res: Response): Promise<void> {
   const { from, to } = req.body as RenamePatchInput;
   const result = await renameMeshPatch(requireViewer(req), req.params.id, from, to);
+  res.status(200).json(result);
+}
+
+/** POST /projects/:id/mesh/patches/type — set a boundary patch's geometric type. */
+export async function setMeshPatchTypeController(req: Request, res: Response): Promise<void> {
+  const { patch, type } = req.body as SetPatchTypeInput;
+  const result = await setPatchType(requireViewer(req), req.params.id, patch, type);
   res.status(200).json(result);
 }
 

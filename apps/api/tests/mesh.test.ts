@@ -340,6 +340,65 @@ describe('POST /projects/:id/mesh/patches/rename', () => {
   });
 });
 
+function setType(id: string, auth: string, patch: string, type: string) {
+  return request(app)
+    .post(`/api/v1/projects/${id}/mesh/patches/type`)
+    .set('Authorization', auth)
+    .send({ patch, type });
+}
+
+describe('POST /projects/:id/mesh/patches/type', () => {
+  it('sets a constraint type and propagates it into the field boundaryFields', async () => {
+    const { id, auth } = await makeProject('mesh-type-empty@dive-turbinen.test');
+    await writePolyMesh(id);
+    await writeCaseFile(id, '0/U', FIELD_U);
+
+    const res = await setType(id, auth, 'inlet', 'empty');
+    expect(res.status).toBe(200);
+
+    const boundary = (await readCaseFile(id, 'constant/polyMesh/boundary'))?.toString('utf8') ?? '';
+    expect(boundary).toMatch(/inlet\s*\{[^}]*type\s+empty;/);
+
+    const field = (await readCaseFile(id, '0/U'))?.toString('utf8') ?? '';
+    expect(field).toMatch(/inlet\s*\{\s*type\s+empty;\s*\}/);
+    // The other patch's BC is untouched.
+    expect(field).toMatch(/walls\s*\{[\s\S]*?noSlip/);
+  });
+
+  it('resets a leftover constraint field BC when switching to wall', async () => {
+    const { id, auth } = await makeProject('mesh-type-reset@dive-turbinen.test');
+    await writePolyMesh(id);
+    await writeCaseFile(id, '0/U', FIELD_U);
+
+    await setType(id, auth, 'inlet', 'symmetry'); // field inlet BC -> symmetry
+    const res = await setType(id, auth, 'inlet', 'wall'); // -> reset to zeroGradient
+    expect(res.status).toBe(200);
+
+    const boundary = (await readCaseFile(id, 'constant/polyMesh/boundary'))?.toString('utf8') ?? '';
+    expect(boundary).toMatch(/inlet\s*\{[^}]*type\s+wall;/);
+    const field = (await readCaseFile(id, '0/U'))?.toString('utf8') ?? '';
+    expect(field).toMatch(/inlet\s*\{\s*type\s+zeroGradient;\s*\}/);
+  });
+
+  it('rejects an unsupported type with 422', async () => {
+    const { id, auth } = await makeProject('mesh-type-bad@dive-turbinen.test');
+    await writePolyMesh(id);
+    expect((await setType(id, auth, 'inlet', 'banana')).status).toBe(422);
+  });
+
+  it('returns 404 for an unknown patch', async () => {
+    const { id, auth } = await makeProject('mesh-type-missing@dive-turbinen.test');
+    await writePolyMesh(id);
+    expect((await setType(id, auth, 'ghost', 'wall')).status).toBe(404);
+  });
+
+  it('returns 404 for a stranger', async () => {
+    const { id } = await makeProject('mesh-type-owner@dive-turbinen.test');
+    const stranger = await createTestUser({ email: 'mesh-type-stranger@dive-turbinen.test' });
+    expect((await setType(id, authHeader(stranger), 'inlet', 'wall')).status).toBe(404);
+  });
+});
+
 /** The boundary autoPatch -overwrite would write: original patches replaced by auto-generated ones. */
 const AUTO_BOUNDARY = `FoamFile { class polyBoundaryMesh; object boundary; }
 3

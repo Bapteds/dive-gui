@@ -21,12 +21,20 @@ import path from 'node:path';
 import {
   BOUNDARY_FILE,
   MESH_FILES,
+  getFieldPatchType,
   isValidPatchName,
   parseBoundaryPatches,
   renameBoundaryPatch,
   renameFieldBoundaryPatch,
+  setBoundaryPatchType,
+  setFieldPatchType,
 } from '../../lib/openfoamCase';
-import { type MeshManifest } from '@dive/shared';
+import {
+  CONSTRAINT_PATCH_TYPES,
+  MESH_PATCH_TYPES,
+  type MeshManifest,
+  type MeshPatchType,
+} from '@dive/shared';
 import { env } from '../../config/env';
 import { AppError } from '../../lib/AppError';
 import { runCommand, type CommandResult } from '../../lib/commandRunner';
@@ -250,6 +258,82 @@ export async function renameMeshPatch(
     const text = buffer.toString('utf8');
     if (!text.includes('boundaryField')) continue;
     const updated = renameFieldBoundaryPatch(text, from, to);
+    if (updated !== text) {
+      await writeCaseFile(projectId, entry.path, updated);
+    }
+  }
+
+  return { patches: parseBoundaryPatches(newBoundary) };
+}
+
+/** Is `type` one of the constraint types (field BC must match it exactly)? */
+function isConstraintType(type: string): boolean {
+  return (CONSTRAINT_PATCH_TYPES as readonly string[]).includes(type);
+}
+
+/**
+ * Set the geometric `type` of a boundary patch in constant/polyMesh/boundary AND
+ * keep the 0/ fields valid:
+ *  - a constraint type (empty / symmetry / symmetryPlane / wedge) forces every
+ *    field's boundaryField entry for the patch to the SAME type (the solver
+ *    errors otherwise);
+ *  - a non-constraint type (patch / wall) resets a leftover constraint field BC
+ *    to a generic `zeroGradient`, and otherwise keeps the user's BCs.
+ * The render cache goes stale (boundary mtime) and rebuilds on the next manifest
+ * fetch, so the new type shows in the patch table.
+ *
+ * @throws 404 NOT_FOUND if the project is not visible, or `patch` is absent.
+ * @throws 409 NO_MESH if there is no boundary file.
+ * @throws 422 VALIDATION_ERROR if `type` is not a supported patch type.
+ */
+export async function setPatchType(
+  viewer: Viewer,
+  projectId: string,
+  patch: string,
+  type: MeshPatchType,
+): Promise<{ patches: string[] }> {
+  await assertProjectVisible(viewer, projectId);
+
+  if (!(MESH_PATCH_TYPES as readonly string[]).includes(type)) {
+    throw new AppError(422, 'VALIDATION_ERROR', `Unsupported patch type "${type}".`);
+  }
+
+  const boundary = await readCaseFile(projectId, BOUNDARY_FILE);
+  if (!boundary) {
+    throw new AppError(409, 'NO_MESH', 'No polyMesh found for this project.');
+  }
+  const content = boundary.toString('utf8');
+  if (!parseBoundaryPatches(content).includes(patch)) {
+    throw new AppError(404, 'NOT_FOUND', `Patch "${patch}" was not found in the mesh.`);
+  }
+
+  // 1) The mesh boundary file (the geometric type, source of truth).
+  const newBoundary = setBoundaryPatchType(content, patch, type);
+  await writeCaseFile(projectId, BOUNDARY_FILE, newBoundary);
+
+  // 2) Propagate into the 0/ fields so the case stays valid.
+  const constraint = isConstraintType(type);
+  const entries = await listCaseTree(projectId);
+  for (const entry of entries) {
+    if (entry.type !== 'file') continue;
+    if (entry.path.startsWith('constant/polyMesh/')) continue;
+    if (entry.size > FIELD_SCAN_MAX_BYTES) continue;
+    const buffer = await readCaseFile(projectId, entry.path);
+    if (!buffer) continue;
+    const text = buffer.toString('utf8');
+    if (!text.includes('boundaryField')) continue;
+
+    let updated = text;
+    if (constraint) {
+      // Constraint types require the field BC to be exactly that type.
+      updated = setFieldPatchType(text, patch, type);
+    } else {
+      // patch / wall: a leftover constraint BC is now invalid; reset it.
+      const current = getFieldPatchType(text, patch);
+      if (current && isConstraintType(current)) {
+        updated = setFieldPatchType(text, patch, 'zeroGradient');
+      }
+    }
     if (updated !== text) {
       await writeCaseFile(projectId, entry.path, updated);
     }

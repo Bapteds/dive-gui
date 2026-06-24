@@ -44,6 +44,7 @@ import {
   getMeshManifestController,
   rebuildMeshController,
   renameMeshPatchController,
+  setMeshPatchTypeController,
 } from './mesh.controller';
 import {
   getRunController,
@@ -52,7 +53,7 @@ import {
   startRunController,
   stopRunController,
 } from './runs.controller';
-import { autoPatchSchema, renamePatchSchema } from './mesh.schemas';
+import { autoPatchSchema, renamePatchSchema, setPatchTypeSchema } from './mesh.schemas';
 import { createFileSchema, filePathQuerySchema, movePathSchema } from './files.schemas';
 import { runIdParamSchema, startRunSchema } from './runs.schemas';
 import { cgnsNameQuerySchema, convertCgnsSchema } from './conversion.schemas';
@@ -241,6 +242,11 @@ export function createProjectsRouter(): Router {
     '/:id/mesh/patches/rename',
     validate({ params: projectIdParamSchema, body: renamePatchSchema }),
     asyncHandler(renameMeshPatchController),
+  );
+  router.post(
+    '/:id/mesh/patches/type',
+    validate({ params: projectIdParamSchema, body: setPatchTypeSchema }),
+    asyncHandler(setMeshPatchTypeController),
   );
   // Auto-patch: run OpenFOAM autoPatch <featureAngle> -overwrite to split the
   // external boundary faces into patches by feature angle (rewrites the mesh
