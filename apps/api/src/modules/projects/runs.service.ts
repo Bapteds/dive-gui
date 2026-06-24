@@ -152,11 +152,15 @@ function classifyExit(
   if (exit.timedOut) {
     return { status: 'failed', reason: 'Run exceeded the maximum runtime' };
   }
-  if (parsed.foamError) {
-    return { status: 'diverged', reason: 'Solver error (see log)' };
+  // Divergence: a residual went to nan/inf, or a floating-point exception — the
+  // solution blew up.
+  if (parsed.diverged || /floating point exception/i.test(log)) {
+    return { status: 'diverged', reason: 'Residuals diverged (the solution blew up).' };
   }
-  if (parsed.diverged) {
-    return { status: 'diverged', reason: 'Residuals diverged (nan/inf)' };
+  // A FOAM fatal error (bad config, a missing patch or file, ...) is a failure,
+  // not divergence.
+  if (/FOAM FATAL/i.test(log)) {
+    return { status: 'failed', reason: 'Solver stopped on a fatal error. See the log.' };
   }
   if (exit.exitCode === 0) {
     return parsed.converged

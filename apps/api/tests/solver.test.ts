@@ -33,7 +33,7 @@ const BOUNDARY = `FoamFile { class polyBoundaryMesh; object boundary; }
 )
 `;
 
-type Mode = 'converge' | 'complete' | 'fail' | 'diverge' | 'spawnError' | 'hang';
+type Mode = 'converge' | 'complete' | 'fail' | 'diverge' | 'fatal' | 'spawnError' | 'hang';
 
 /** A fake streaming runner: writes scripted residuals, then resolves per mode. */
 function fakeRunner(mode: Mode): StreamRunner {
@@ -60,11 +60,12 @@ function fakeRunner(mode: Mode): StreamRunner {
           : 'GAMG:  Solving for p, Initial residual = 0.02, Final residual = 1e-4, No Iterations 5',
       ];
       if (mode === 'converge') lines.push('SIMPLE solution converged in 2 iterations');
+      if (mode === 'fatal') lines.push('--> FOAM FATAL ERROR: No matching patches: (inlet)');
       lines.push('End');
       await fs.writeFile(spec.logFile, `${lines.join('\n')}\n`);
 
       if (mode === 'hang') return; // stays active until stop()
-      resolveExit({ exitCode: mode === 'fail' ? 1 : 0, signal: null });
+      resolveExit({ exitCode: mode === 'fail' || mode === 'fatal' ? 1 : 0, signal: null });
     })();
 
     return {
@@ -172,6 +173,14 @@ describe('solver run lifecycle', () => {
     const start = await startRun(id, auth);
     const settled = await waitForTerminal(id, start.body.run.id, auth);
     expect(settled.status).toBe('diverged');
+  });
+
+  it('classifies a FOAM fatal error as failed (not diverged)', async () => {
+    setStreamRunner(fakeRunner('fatal'));
+    const { id, auth } = await makeRunnableProject('solver-fatal@x.test');
+    const start = await startRun(id, auth);
+    const settled = await waitForTerminal(id, start.body.run.id, auth);
+    expect(settled.status).toBe('failed');
   });
 
   it('classifies a spawn error (missing binary) as failed', async () => {
