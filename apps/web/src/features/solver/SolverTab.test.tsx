@@ -14,6 +14,7 @@ import type { RunSummary, RunnableCheck } from '@/lib/api/types';
 vi.mock('@/lib/api/projects', () => ({
   getRunnable: vi.fn(),
   scaffoldSolver: vi.fn(),
+  syncBoundaries: vi.fn(),
   listRuns: vi.fn(),
   getRunLog: vi.fn(),
   startRun: vi.fn(),
@@ -73,6 +74,7 @@ describe('SolverTab', () => {
       runnable: runnableYes,
       entries: [],
     });
+    vi.mocked(api.syncBoundaries).mockResolvedValue({ updated: ['0/U'], entries: [] });
 
     renderTab();
 
@@ -81,6 +83,8 @@ describe('SolverTab', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /make runnable/i }));
     await waitFor(() => expect(api.scaffoldSolver).toHaveBeenCalledWith('p1'));
+    // The "apply boundary" checkbox is on by default, so boundaries are synced too.
+    await waitFor(() => expect(api.syncBoundaries).toHaveBeenCalledWith('p1'));
   });
 
   it('shows the run config + empty history and starts a run when runnable', async () => {

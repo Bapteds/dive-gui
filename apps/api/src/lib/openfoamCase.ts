@@ -9,6 +9,7 @@
 // patches (the rule that 0/*.boundaryField must cover every polyMesh patch).
 //
 // See docs/openfoam-fichiers-obligatoires.md for the contract this encodes.
+import { CONSTRAINT_PATCH_TYPES } from '@dive/shared';
 
 /**
  * The five files that make up the mesh, living under constant/polyMesh/. These
@@ -504,6 +505,93 @@ export function setApplication(content: string, solver: string): string {
     }
   }
   return `${line}\n${content}`;
+}
+
+// ---------------------------------------------------------------------------
+// Sync boundaryField to the mesh boundary (names + types).
+//
+// When a polyMesh is imported and then scaffolded or a template is applied, the
+// 0/ fields' boundaryField may not match the mesh's patches (a template brings
+// its own patch names; the scaffold ignores the geometric type). This rebuilds
+// every field's boundaryField to cover exactly the mesh patches, with a valid BC
+// per geometric type: a constraint type (empty/symmetry/symmetryPlane/wedge) is
+// mirrored (required), a wall gets noSlip for U else zeroGradient, a plain patch
+// gets zeroGradient (the user sets inlet/outlet specifics afterwards).
+// ---------------------------------------------------------------------------
+
+/** One mesh boundary patch with its geometric type, read from the boundary file. */
+export interface BoundaryPatch {
+  name: string;
+  type: string;
+}
+
+/**
+ * Parse the boundary patches AND their geometric `type` from a
+ * constant/polyMesh/boundary file. Like parseBoundaryPatches but also reads the
+ * `type X;` inside each patch block. Order preserved, de-duplicated by name.
+ */
+export function parseBoundaryPatchesWithTypes(content: string): BoundaryPatch[] {
+  const cleaned = content.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  const result: BoundaryPatch[] = [];
+  const seen = new Set<string>();
+  const blockStart = /([A-Za-z_][A-Za-z0-9_-]*)\s*\{/g;
+  let match: RegExpExecArray | null;
+  while ((match = blockStart.exec(cleaned)) !== null) {
+    const name = match[1];
+    if (name === 'FoamFile' || seen.has(name)) continue;
+    const open = cleaned.indexOf('{', match.index);
+    const close = matchBrace(cleaned, open);
+    if (close < 0) continue;
+    const block = cleaned.slice(open, close + 1);
+    const typeMatch = block.match(/\btype\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/);
+    result.push({ name, type: typeMatch ? typeMatch[1] : 'patch' });
+    seen.add(name);
+    blockStart.lastIndex = close; // skip the block body (no nested patch headers)
+  }
+  return result;
+}
+
+/** A valid boundary-field BC for a field on a patch of the given geometric type. */
+function defaultFieldBc(fieldName: string, geometricType: string): string {
+  if ((CONSTRAINT_PATCH_TYPES as readonly string[]).includes(geometricType)) {
+    // Constraint patches require the field BC to be exactly the geometric type.
+    return geometricType;
+  }
+  if (geometricType === 'wall' && fieldName === 'U') return 'noSlip';
+  return 'zeroGradient';
+}
+
+/** Render a fresh boundaryField block covering exactly `patches` for `fieldName`. */
+function renderBoundaryFieldFor(fieldName: string, patches: BoundaryPatch[]): string {
+  if (patches.length === 0) return 'boundaryField\n{\n}';
+  const entries = patches
+    .map(
+      (patch) => `    ${patch.name}
+    {
+        type            ${defaultFieldBc(fieldName, patch.type)};
+    }`,
+    )
+    .join('\n');
+  return `boundaryField\n{\n${entries}\n}`;
+}
+
+/**
+ * Rebuild a field file's `boundaryField` block so it covers exactly the mesh
+ * patches with a valid BC per geometric type. Replaces the whole existing block
+ * (the action is an explicit "apply the boundary to the fields"); the rest of
+ * the file (header, dimensions, internalField) is untouched. Returns the content
+ * unchanged when the file has no boundaryField. `fieldName` is the field's object
+ * name (e.g. "U", "p", "k") used to pick a sensible per-field default.
+ */
+export function rebuildFieldBoundary(
+  content: string,
+  fieldName: string,
+  patches: BoundaryPatch[],
+): string {
+  const span = boundaryFieldSpan(content);
+  const keyword = content.search(/\bboundaryField\b/);
+  if (!span || keyword < 0) return content;
+  return content.slice(0, keyword) + renderBoundaryFieldFor(fieldName, patches) + content.slice(span.close + 1);
 }
 
 /** A valid OpenFOAM patch name: a "word" token (letter/underscore start). */

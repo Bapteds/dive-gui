@@ -17,6 +17,7 @@ import {
   useScaffoldSolver,
   useStartRun,
   useStopRun,
+  useSyncBoundaries,
 } from './useRuns';
 
 /**
@@ -76,10 +77,18 @@ function SolverSkeleton() {
 /** Not-runnable gate: explain what is missing and offer to generate it. */
 function RunnableGate({ projectId, missingFiles }: { projectId: string; missingFiles: string[] }) {
   const scaffold = useScaffoldSolver(projectId);
+  const syncBoundaries = useSyncBoundaries(projectId);
+  // Default on: a polyMesh given a template or default files usually needs its
+  // boundaryFields aligned to the mesh patches (names + types) to actually run.
+  const [applyBoundaries, setApplyBoundaries] = useState(true);
+  const pending = scaffold.isPending || syncBoundaries.isPending;
 
   const handleMakeRunnable = async () => {
     try {
       await scaffold.mutateAsync();
+      if (applyBoundaries) {
+        await syncBoundaries.mutateAsync();
+      }
       toast.success('Solver files generated. The case is ready to run.');
     } catch (err) {
       toast.error(
@@ -112,7 +121,22 @@ function RunnableGate({ projectId, missingFiles }: { projectId: string; missingF
           ))}
         </ul>
       )}
-      <Button variant="primary" loading={scaffold.isPending} onClick={() => void handleMakeRunnable()}>
+      <label className="flex items-start gap-2">
+        <input
+          type="checkbox"
+          checked={applyBoundaries}
+          onChange={(event) => setApplyBoundaries(event.target.checked)}
+          className="mt-0.5 size-4 shrink-0 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
+        />
+        <span className="text-sm text-text">
+          Apply the boundary type and name to the 0/ fields
+          <span className="block text-xs text-text-secondary">
+            Rewrites each field&apos;s boundaryField to match the mesh patches (needed after a
+            polyMesh import with a template or default files).
+          </span>
+        </span>
+      </label>
+      <Button variant="primary" loading={pending} onClick={() => void handleMakeRunnable()}>
         <Wrench strokeWidth={1.75} aria-hidden="true" />
         Make runnable for simpleFoam
       </Button>

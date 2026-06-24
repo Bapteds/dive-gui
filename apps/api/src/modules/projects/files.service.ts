@@ -30,9 +30,12 @@ import {
   SOLVER_FILE_PATHS,
   parseApplication,
   parseBoundaryPatches,
+  parseBoundaryPatchesWithTypes,
+  rebuildFieldBoundary,
   renderBaseFile,
   renderSolverFile,
   setApplication,
+  type BoundaryPatch,
 } from '../../lib/openfoamCase';
 import { assertProjectVisible, type Viewer } from './projects.service';
 
@@ -332,6 +335,57 @@ export async function scaffoldSolver(
     listCaseTree(projectId),
   ]);
   return { created, runnable, entries };
+}
+
+/** Result of syncing boundaryFields to the mesh: which files changed + the patches. */
+export interface SyncBoundariesResult {
+  /** Field files whose boundaryField was rewritten. */
+  updated: string[];
+  /** The mesh patches (name + geometric type) the fields were aligned to. */
+  patches: BoundaryPatch[];
+  /** Refreshed case tree. */
+  entries: CaseEntry[];
+}
+
+/**
+ * Apply the mesh boundary (patch names AND geometric types) to every field's
+ * boundaryField, so the 0/ files cover exactly the mesh patches with a valid BC
+ * per type. For a polyMesh imported then scaffolded or given a template, this is
+ * what makes the case actually runnable (a template brings its own patch names;
+ * the scaffold ignores the geometric type). The render is unaffected (only the
+ * 0/ fields change). @throws 409 NO_MESH when there is no boundary file.
+ */
+export async function syncBoundaryFields(
+  viewer: Viewer,
+  projectId: string,
+): Promise<SyncBoundariesResult> {
+  await assertProjectVisible(viewer, projectId);
+
+  const boundary = await readCaseFile(projectId, BOUNDARY_FILE);
+  if (!boundary) {
+    throw new AppError(409, 'NO_MESH', 'No polyMesh found for this project.');
+  }
+  const patches = parseBoundaryPatchesWithTypes(boundary.toString('utf8'));
+
+  const updated: string[] = [];
+  const tree = await listCaseTree(projectId);
+  for (const entry of tree) {
+    if (entry.type !== 'file') continue;
+    if (entry.path.startsWith('constant/polyMesh/')) continue;
+    if (entry.size > EDITABLE_FILE_MAX_BYTES) continue;
+    const buffer = await readCaseFile(projectId, entry.path);
+    if (!buffer) continue;
+    const text = buffer.toString('utf8');
+    if (!text.includes('boundaryField')) continue;
+    const fieldName = entry.path.split('/').pop() ?? entry.path;
+    const next = rebuildFieldBoundary(text, fieldName, patches);
+    if (next !== text) {
+      await writeCaseFile(projectId, entry.path, next);
+      updated.push(entry.path);
+    }
+  }
+
+  return { updated, patches, entries: await listCaseTree(projectId) };
 }
 
 /**

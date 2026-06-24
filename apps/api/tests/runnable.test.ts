@@ -221,3 +221,55 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
     expect(res.status).toBe(404);
   });
 });
+
+const BOUNDARY_3 = `FoamFile { class polyBoundaryMesh; object boundary; }
+3
+(
+    inlet { type patch; nFaces 10; startFace 100; }
+    walls { type wall; nFaces 20; startFace 110; }
+    front { type empty; nFaces 5; startFace 130; }
+)
+`;
+
+const STALE_U = `FoamFile { class volVectorField; object U; }
+dimensions [0 1 -1 0 0 0 0];
+internalField uniform (0 0 0);
+boundaryField
+{
+    oldpatch
+    {
+        type            fixedValue;
+        value           uniform (1 0 0);
+    }
+}
+`;
+
+describe('syncBoundaryFields (POST /files/sync-boundaries)', () => {
+  it('rewrites field boundaryFields to match the mesh patches and their types', async () => {
+    const { auth, id } = await makeProject('sync-bf@x.test');
+    await writeCaseFile(id, 'constant/polyMesh/boundary', BOUNDARY_3);
+    await writeCaseFile(id, '0/U', STALE_U);
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/sync-boundaries`)
+      .set('Authorization', auth);
+    expect(res.status).toBe(200);
+    expect(res.body.updated).toContain('0/U');
+
+    const u = (await readCaseFile(id, '0/U'))?.toString('utf8') ?? '';
+    expect(u).not.toContain('oldpatch');
+    expect(u).toMatch(/inlet\s*\{\s*type\s+zeroGradient;/); // patch -> zeroGradient
+    expect(u).toMatch(/walls\s*\{\s*type\s+noSlip;/); // wall + U -> noSlip
+    expect(u).toMatch(/front\s*\{\s*type\s+empty;/); // empty -> empty
+    // The header / dimensions / internalField are untouched.
+    expect(u).toContain('internalField uniform (0 0 0)');
+  });
+
+  it('returns 409 when there is no mesh boundary', async () => {
+    const { auth, id } = await makeProject('sync-nomesh@x.test');
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/sync-boundaries`)
+      .set('Authorization', auth);
+    expect(res.status).toBe(409);
+  });
+});

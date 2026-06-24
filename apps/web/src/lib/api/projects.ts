@@ -278,6 +278,15 @@ export async function scaffoldSolver(id: string): Promise<ScaffoldSolverResponse
   return apiClient.post<ScaffoldSolverResponse>(`/projects/${id}/runnable/scaffold`);
 }
 
+/** Apply the mesh boundary (patch names + types) to every 0/ field's boundaryField. */
+export async function syncBoundaries(
+  id: string,
+): Promise<{ updated: string[]; entries: CaseEntry[] }> {
+  return apiClient.post<{ updated: string[]; entries: CaseEntry[] }>(
+    `/projects/${id}/files/sync-boundaries`,
+  );
+}
+
 /** Start a solver run. Resolves with the created run (status `running`). */
 export async function startRun(id: string, solver?: SolverId): Promise<RunSummary> {
   const data = await apiClient.post<RunResponse>(

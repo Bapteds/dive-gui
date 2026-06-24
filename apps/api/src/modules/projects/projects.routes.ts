@@ -28,6 +28,7 @@ import {
   saveCaseFileContentController,
   scaffoldCaseController,
   scaffoldSolverController,
+  syncBoundariesController,
   verifyCaseController,
   verifyRunnableController,
 } from './files.controller';
@@ -151,6 +152,11 @@ export function createProjectsRouter(): Router {
     '/:id/runnable/scaffold',
     validate({ params: projectIdParamSchema }),
     asyncHandler(scaffoldSolverController),
+  );
+  router.post(
+    '/:id/files/sync-boundaries',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(syncBoundariesController),
   );
 
   // Single-file content: read for the editor, save edited text back.

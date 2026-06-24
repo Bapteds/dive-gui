@@ -18,6 +18,7 @@ import {
   saveCaseFileContent,
   scaffoldCase,
   scaffoldSolver,
+  syncBoundaryFields,
   verifyCase,
   verifyRunnable,
   type ImportPayload,
@@ -128,6 +129,12 @@ export async function verifyRunnableController(req: Request, res: Response): Pro
 export async function scaffoldSolverController(req: Request, res: Response): Promise<void> {
   const result = await scaffoldSolver(requireViewer(req), req.params.id);
   res.status(201).json(result);
+}
+
+/** POST /projects/:id/files/sync-boundaries — align 0/ boundaryFields to the mesh. */
+export async function syncBoundariesController(req: Request, res: Response): Promise<void> {
+  const result = await syncBoundaryFields(requireViewer(req), req.params.id);
+  res.status(200).json(result);
 }
 
 /** GET /projects/:id/files/content?path=… — read a single file's text content. */
