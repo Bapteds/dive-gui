@@ -10,6 +10,7 @@ import type {
   ConversionStepId,
   MeshManifest,
   MeshPatch,
+  MeshPatchType,
   ResidualSample,
   Role,
   RunStatus,
@@ -350,7 +351,7 @@ export interface ConvertCgnsInput {
 // ---- 3D mesh viewer ("Visualize" tab) ----
 
 /** Re-export of the shared mesh shapes (one patch; the full manifest). */
-export type { MeshPatch, MeshManifest };
+export type { MeshPatch, MeshManifest, MeshPatchType };
 
 /** `GET /projects/:id/mesh/manifest` and `POST /projects/:id/mesh/rebuild` response. */
 export interface MeshManifestResponse {

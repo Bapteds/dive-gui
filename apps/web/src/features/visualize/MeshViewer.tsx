@@ -6,9 +6,10 @@ import { AlertTriangle, Grid3x3, Loader2, Maximize, MonitorX, Scissors } from 'l
 import { Button } from '@/components/ui/button';
 import { Diamond } from '@/components/brand/Diamond';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { toast } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
 import { ApiError } from '@/lib/api/client';
-import type { MeshPatch } from '@/lib/api/types';
+import type { MeshPatch, MeshPatchType } from '@/lib/api/types';
 import { PatchTable } from './PatchTable';
 import { RenamePatchDialog } from './RenamePatchDialog';
 import { AutoPatchDialog } from './AutoPatchDialog';
@@ -17,6 +18,7 @@ import {
   useMeshGeometryQuery,
   useMeshManifestQuery,
   useRebuildMesh,
+  useSetPatchType,
 } from './useMesh';
 
 /**
@@ -74,10 +76,23 @@ export function MeshViewer({ projectId }: { projectId: string }) {
   const geometry = useMeshGeometryQuery(projectId, viewerEnabled);
   const edges = useMeshEdgesQuery(projectId, viewerEnabled);
   const rebuild = useRebuildMesh(projectId);
+  const setPatchType = useSetPatchType(projectId);
 
   const handleRebuild = () => {
     setSelected(null);
     rebuild.mutate();
+  };
+
+  const handleSetType = (name: string, type: string) => {
+    setPatchType.mutate(
+      { patch: name, type: type as MeshPatchType },
+      {
+        onError: (error) =>
+          toast.error(
+            error instanceof ApiError ? error.message : 'Could not change the patch type.',
+          ),
+      },
+    );
   };
 
   return (
@@ -120,6 +135,7 @@ export function MeshViewer({ projectId }: { projectId: string }) {
               selected={selected}
               onSelect={setSelected}
               onRename={setRenameTarget}
+              onSetType={handleSetType}
             />
           )}
         </div>

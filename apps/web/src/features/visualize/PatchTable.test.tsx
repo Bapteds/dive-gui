@@ -61,6 +61,24 @@ describe('PatchTable', () => {
     expect(screen.queryByRole('button', { name: /rename/i })).not.toBeInTheDocument();
   });
 
+  it('exposes a per-row type select that changes the type without selecting the row', () => {
+    const onSelect = vi.fn();
+    const onSetType = vi.fn();
+    render(
+      <PatchTable patches={patches} selected={null} onSelect={onSelect} onSetType={onSetType} />,
+    );
+    const select = screen.getByRole('combobox', { name: 'Type for inlet' });
+    fireEvent.change(select, { target: { value: 'wall' } });
+    expect(onSetType).toHaveBeenCalledWith('inlet', 'wall');
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('shows the type as read-only text when onSetType is not provided', () => {
+    render(<PatchTable patches={patches} selected={null} onSelect={() => {}} />);
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(screen.getByText('patch')).toBeInTheDocument();
+  });
+
   it('disables "Show all" until something is selected, then clears the selection', () => {
     const onSelect = vi.fn();
     const { rerender } = render(

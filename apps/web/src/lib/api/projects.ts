@@ -20,6 +20,7 @@ import type {
   ListProjectsResponse,
   MeshManifest,
   MeshManifestResponse,
+  MeshPatchType,
   Project,
   ProjectResponse,
   ListRunsResponse,
@@ -215,6 +216,15 @@ export async function renameMeshPatch(
   to: string,
 ): Promise<{ patches: string[] }> {
   return apiClient.post<{ patches: string[] }>(`/projects/${id}/mesh/patches/rename`, { from, to });
+}
+
+/** Set a boundary patch's geometric type (propagated into the 0/ fields server-side). */
+export async function setMeshPatchType(
+  id: string,
+  patch: string,
+  type: MeshPatchType,
+): Promise<{ patches: string[] }> {
+  return apiClient.post<{ patches: string[] }>(`/projects/${id}/mesh/patches/type`, { patch, type });
 }
 
 /**

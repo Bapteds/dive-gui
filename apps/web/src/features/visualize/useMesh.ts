@@ -6,8 +6,9 @@ import {
   getMeshManifest,
   rebuildMesh,
   renameMeshPatch,
+  setMeshPatchType,
 } from '@/lib/api/projects';
-import type { AutoPatchResult, MeshManifest } from '@/lib/api/types';
+import type { AutoPatchResult, MeshManifest, MeshPatchType } from '@/lib/api/types';
 
 /**
  * useMesh - React Query hooks for the 3D mesh viewer ("Visualize" tab).
@@ -116,6 +117,25 @@ export function useRenamePatch(projectId: string) {
       queryClient.removeQueries({ queryKey: meshEdgesQueryKey(projectId) });
       // The patch name lives in constant/polyMesh/boundary, a case file, so keep
       // the case tree / summary in sync too.
+      void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'files'] });
+    },
+  });
+}
+
+/**
+ * Set a boundary patch's geometric type. The boundary file and the 0/ field
+ * boundaryFields change server-side, so drop the cached render (rebuilt on the
+ * next manifest fetch with the new types) and refresh the case tree (the 0/
+ * files changed).
+ */
+export function useSetPatchType(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<{ patches: string[] }, Error, { patch: string; type: MeshPatchType }>({
+    mutationFn: ({ patch, type }) => setMeshPatchType(projectId, patch, type),
+    onSuccess: () => {
+      queryClient.removeQueries({ queryKey: meshManifestQueryKey(projectId) });
+      queryClient.removeQueries({ queryKey: meshGeometryQueryKey(projectId) });
+      queryClient.removeQueries({ queryKey: meshEdgesQueryKey(projectId) });
       void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'files'] });
     },
   });
