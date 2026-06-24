@@ -22,7 +22,7 @@ export function RunLog({ text, live }: { text: string; live: boolean }) {
   };
 
   return (
-    <div className="flex min-h-0 flex-col gap-1.5">
+    <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium text-text-secondary">Log</span>
         {live && (
@@ -37,7 +37,7 @@ export function RunLog({ text, live }: { text: string; live: boolean }) {
         tabIndex={0}
         role="log"
         aria-label="Solver output log"
-        className="max-h-64 min-h-24 flex-1 overflow-auto overscroll-contain rounded-md border border-border bg-surface px-3 py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring lg:max-h-none"
+        className="max-h-72 overflow-auto overscroll-contain rounded-md border border-border bg-surface px-3 py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
       >
         {text ? (
           <pre className="whitespace-pre-wrap break-words font-mono text-xs text-text" translate="no">

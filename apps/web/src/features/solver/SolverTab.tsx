@@ -252,7 +252,7 @@ function LiveRun({
   const lastIteration = series.length > 0 ? series[series.length - 1].time : null;
 
   return (
-    <div className="flex min-h-0 flex-col gap-4 rounded-md border border-border bg-surface p-5 shadow-sm">
+    <div className="flex flex-col gap-4 rounded-md border border-border bg-surface p-5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           {run ? (
