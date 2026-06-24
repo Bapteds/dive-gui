@@ -138,6 +138,23 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
     expect(scaffold.body.runnable.solver).toBe('simpleFoam');
   });
 
+  it('treats a fully-filled case whose controlDict targets foamRun as not runnable', async () => {
+    const { auth, id } = await makeProject('runnable-foamrun-full@x.test');
+    await writeMesh(id);
+    // Scaffold a complete simpleFoam case, then point controlDict back at foamRun.
+    await request(app).post(`/api/v1/projects/${id}/runnable/scaffold`).set('Authorization', auth);
+    await writeCaseFile(
+      id,
+      'system/controlDict',
+      'FoamFile { object controlDict; }\napplication     foamRun;\n',
+    );
+
+    const res = await request(app).get(`/api/v1/projects/${id}/runnable`).set('Authorization', auth);
+    expect(res.body.runnable.missingFiles).toHaveLength(0);
+    expect(res.body.runnable.solver).toBe('foamRun');
+    expect(res.body.runnable.runnable).toBe(false); // gate re-offers "Make runnable"
+  });
+
   it('reports not runnable when the mesh is absent', async () => {
     const { auth, id } = await makeProject('runnable-3@x.test');
     const res = await request(app).get(`/api/v1/projects/${id}/runnable`).set('Authorization', auth);

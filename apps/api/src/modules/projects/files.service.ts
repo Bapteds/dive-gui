@@ -220,11 +220,16 @@ export async function computeRunnable(projectId: string): Promise<RunnableCheck>
   const controlDict = await readCaseFile(projectId, 'system/controlDict');
   const solver = controlDict ? parseApplication(controlDict.toString('utf8')) : null;
 
+  // v1 runs simpleFoam end to end, and the scaffolded turbulence/transport files
+  // are written for it. A case targeting another application (e.g. the generic
+  // `foamRun` the conversion flow writes) is NOT runnable here, so the gate
+  // re-offers "Make runnable" which retargets it. The scaffold step itself sets
+  // application to simpleFoam, so this is self-healing.
   return {
     hasMesh: missingMesh.length === 0,
     missingMesh,
     missingFiles,
-    runnable: missingMesh.length === 0 && missingFiles.length === 0,
+    runnable: missingMesh.length === 0 && missingFiles.length === 0 && solver === 'simpleFoam',
     solver,
   };
 }

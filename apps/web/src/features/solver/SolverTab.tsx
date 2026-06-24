@@ -95,8 +95,9 @@ function RunnableGate({ projectId, missingFiles }: { projectId: string; missingF
         <h2 className="text-base font-semibold text-text">This case is not ready to run</h2>
       </div>
       <p className="text-sm text-text-secondary">
-        simpleFoam needs a few solver files that the case does not have yet. Generate them to make
-        the case runnable, then refine the values in the editor.
+        This case needs its simpleFoam setup completed (solver files and the controlDict
+        application). Generate the missing pieces to make it runnable, then refine the values in
+        the editor.
       </p>
       {missingFiles.length > 0 && (
         <ul className="flex flex-wrap gap-1.5">
