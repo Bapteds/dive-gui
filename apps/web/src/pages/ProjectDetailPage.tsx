@@ -3,7 +3,18 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { ArrowLeft, Box, Info, Loader2, Play, Settings, Trash2, UserPlus, Users } from 'lucide-react';
+import {
+  ArrowLeft,
+  Box,
+  Info,
+  Loader2,
+  Play,
+  Settings,
+  Trash2,
+  Upload,
+  UserPlus,
+  Users,
+} from 'lucide-react';
 import { PageHeader } from '@/components/common/PageHeader';
 import { FullPageLoader } from '@/components/common/FullPageLoader';
 import { Button } from '@/components/ui/button';
@@ -62,6 +73,14 @@ const MeshViewer = lazy(() =>
  */
 const SolverTab = lazy(() =>
   import('@/features/solver/SolverTab').then((module) => ({ default: module.SolverTab })),
+);
+
+/**
+ * The Export tab runs the OpenFOAM -> CGNS (CFD-Post) pipeline and shows its
+ * report; code-split so its machinery only loads when the tab is opened.
+ */
+const ExportTab = lazy(() =>
+  import('@/features/export/ExportTab').then((module) => ({ default: module.ExportTab })),
 );
 
 /**
@@ -141,7 +160,7 @@ export function ProjectDetailPage() {
  * tooltip explaining how to enable it. Opening it swaps the whole detail body for
  * the lazy-loaded 3D viewer, which fills the pinned region at lg+.
  */
-type ProjectView = 'detail' | 'visualize' | 'solver';
+type ProjectView = 'detail' | 'visualize' | 'solver' | 'export';
 
 function ProjectTabs({ project }: { project: Project }) {
   const [view, setView] = useState<ProjectView>('detail');
@@ -161,6 +180,7 @@ function ProjectTabs({ project }: { project: Project }) {
         </TabsTrigger>
         <VisualizeTab disabled={!hasPolyMesh} />
         <SolverTabTrigger disabled={!hasPolyMesh} />
+        <ExportTabTrigger disabled={!hasPolyMesh} />
       </TabsList>
 
       <TabsContent
@@ -193,6 +213,17 @@ function ProjectTabs({ project }: { project: Project }) {
         {view === 'solver' && (
           <Suspense fallback={<ViewerLoading />}>
             <SolverTab projectId={project.id} />
+          </Suspense>
+        )}
+      </TabsContent>
+
+      <TabsContent
+        value="export"
+        className="mt-0 flex-col data-[state=active]:flex lg:min-h-0 lg:flex-1"
+      >
+        {view === 'export' && (
+          <Suspense fallback={<ViewerLoading />}>
+            <ExportTab projectId={project.id} />
           </Suspense>
         )}
       </TabsContent>
@@ -259,6 +290,36 @@ function SolverTabTrigger({ disabled }: { disabled: boolean }) {
         </span>
       </TooltipTrigger>
       <TooltipContent>Import a polyMesh to enable the solver</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * The Export trigger. Gated on the project having a mesh; the export needs SOLVED
+ * results, which the pipeline reports on if missing (run the solver first). When
+ * disabled, a tooltip explains how to enable it.
+ */
+function ExportTabTrigger({ disabled }: { disabled: boolean }) {
+  const trigger = (
+    <TabsTrigger value="export" disabled={disabled}>
+      <Upload strokeWidth={1.75} aria-hidden="true" />
+      Export
+    </TabsTrigger>
+  );
+
+  if (!disabled) return trigger;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          className="inline-flex rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
+        >
+          {trigger}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>Import a polyMesh to enable export</TooltipContent>
     </Tooltip>
   );
 }
