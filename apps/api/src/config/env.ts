@@ -101,6 +101,11 @@ const envSchema = z
     // foamToEnsight write every solved time (the evolution); 'false' adds
     // -latestTime to export just the final result.
     EXPORT_ALL_TIMES: z.enum(['true', 'false']).default('true'),
+    // Write ASCII EnSight (foamToEnsight -ascii) instead of the default binary.
+    // Ansys CFD-Post's EnSight reader often chokes on OpenFOAM's BINARY EnSight
+    // but reads the ASCII variant fine (bigger files, slower). Set 'true' if
+    // CFD-Post refuses to load the binary output.
+    EXPORT_ENSIGHT_ASCII: z.enum(['true', 'false']).default('false'),
     // --- OpenFOAM solver run (Solver tab) -------------------------------------
     // The app's first long-running background job. A run spawns the solver
     // (e.g. simpleFoam) in the case directory, pipes its output to a persisted

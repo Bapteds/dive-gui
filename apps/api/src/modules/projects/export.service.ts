@@ -303,6 +303,9 @@ async function convertToEnsight(
   const allTimes = env.EXPORT_ALL_TIMES === 'true';
   const args = ['-case', caseDir];
   if (!allTimes) args.push('-latestTime');
+  // ASCII EnSight is more compatible with CFD-Post's reader than the default
+  // binary (which CFD-Post often refuses to load for OpenFOAM output).
+  if (env.EXPORT_ENSIGHT_ASCII === 'true') args.push('-ascii');
   const plan = planOpenfoamCommand(env.FOAM_TO_ENSIGHT_BIN, args, caseDir);
   const result = await runCommand({ ...plan, timeoutMs: env.CONVERSION_STEP_TIMEOUT_MS });
 
