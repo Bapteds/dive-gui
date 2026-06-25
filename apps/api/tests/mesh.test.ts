@@ -504,3 +504,178 @@ describe('POST /projects/:id/mesh/auto-patch', () => {
     expect(res.status).toBe(404);
   });
 });
+
+function editPatches(
+  id: string,
+  auth: string,
+  edits: Array<{ from: string; to: string; type: string }>,
+) {
+  return request(app)
+    .put(`/api/v1/projects/${id}/mesh/patches`)
+    .set('Authorization', auth)
+    .send({ edits });
+}
+
+describe('PUT /projects/:id/mesh/patches (batch edit)', () => {
+  it('applies a rename and a type change in one call, across boundary and fields', async () => {
+    const { id, auth } = await makeProject('mesh-edit-ok@dive-turbinen.test');
+    await writePolyMesh(id);
+    await writeCaseFile(id, '0/U', FIELD_U);
+
+    const res = await editPatches(id, auth, [
+      { from: 'inlet', to: 'intake', type: 'patch' },
+      { from: 'walls', to: 'walls', type: 'empty' }, // type-only change
+    ]);
+    expect(res.status).toBe(200);
+    expect(res.body.patches).toContain('intake');
+    expect(res.body.patches).not.toContain('inlet');
+
+    const boundary = (await readCaseFile(id, 'constant/polyMesh/boundary'))?.toString('utf8') ?? '';
+    expect(boundary).toMatch(/intake\s*\{/);
+    expect(boundary).toMatch(/walls\s*\{[^}]*type\s+empty;/);
+    expect(boundary).not.toMatch(/inlet\s*\{/);
+
+    const field = (await readCaseFile(id, '0/U'))?.toString('utf8') ?? '';
+    expect(field).toMatch(/intake\s*\{/); // renamed
+    expect(field).toMatch(/walls\s*\{\s*type\s+empty;\s*\}/); // constraint propagated
+    expect(field).not.toMatch(/inlet\s*\{/);
+  });
+
+  it('swaps two patch names without an intermediate collision', async () => {
+    const { id, auth } = await makeProject('mesh-edit-swap@dive-turbinen.test');
+    await writePolyMesh(id);
+    await writeCaseFile(id, '0/U', FIELD_U);
+
+    const res = await editPatches(id, auth, [
+      { from: 'inlet', to: 'walls', type: 'patch' },
+      { from: 'walls', to: 'inlet', type: 'wall' },
+    ]);
+    expect(res.status).toBe(200);
+    expect(res.body.patches).toEqual(expect.arrayContaining(['inlet', 'walls']));
+
+    // The field blocks swapped names: the old inlet BC (fixedValue) is now under
+    // "walls", and the old walls BC (noSlip) is now under "inlet".
+    const field = (await readCaseFile(id, '0/U'))?.toString('utf8') ?? '';
+    expect(field).toMatch(/walls\s*\{[\s\S]*?fixedValue/);
+    expect(field).toMatch(/inlet\s*\{[\s\S]*?noSlip/);
+  });
+
+  it('returns 409 PATCH_EXISTS when two edits target the same name', async () => {
+    const { id, auth } = await makeProject('mesh-edit-dup@dive-turbinen.test');
+    await writePolyMesh(id);
+    const res = await editPatches(id, auth, [
+      { from: 'inlet', to: 'dup', type: 'patch' },
+      { from: 'walls', to: 'dup', type: 'wall' },
+    ]);
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('PATCH_EXISTS');
+  });
+
+  it('returns 409 PATCH_EXISTS when a rename collides with an unchanged patch', async () => {
+    const { id, auth } = await makeProject('mesh-edit-collide@dive-turbinen.test');
+    await writePolyMesh(id);
+    const res = await editPatches(id, auth, [{ from: 'inlet', to: 'walls', type: 'patch' }]);
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('PATCH_EXISTS');
+  });
+
+  it('rejects an invalid new patch name (422)', async () => {
+    const { id, auth } = await makeProject('mesh-edit-invalid@dive-turbinen.test');
+    await writePolyMesh(id);
+    const res = await editPatches(id, auth, [{ from: 'inlet', to: '2bad', type: 'patch' }]);
+    expect(res.status).toBe(422);
+  });
+
+  it('returns 404 for a project the viewer cannot see', async () => {
+    const { id } = await makeProject('mesh-edit-owner@dive-turbinen.test');
+    await writePolyMesh(id);
+    const stranger = await createTestUser({ email: 'mesh-edit-stranger@dive-turbinen.test' });
+    const res = await editPatches(id, authHeader(stranger), [
+      { from: 'inlet', to: 'intake', type: 'patch' },
+    ]);
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('Mesh backup slot (GET/POST /mesh/backup, POST /mesh/backup/restore)', () => {
+  it('reports no backup before any edit, then an "original" after the first edit', async () => {
+    const { id, auth } = await makeProject('mesh-backup-original@dive-turbinen.test');
+    await writePolyMesh(id);
+
+    const before = await request(app)
+      .get(`/api/v1/projects/${id}/mesh/backup`)
+      .set('Authorization', auth);
+    expect(before.status).toBe(200);
+    expect(before.body.backup).toBeNull();
+
+    await editPatches(id, auth, [{ from: 'inlet', to: 'intake', type: 'patch' }]);
+
+    const after = await request(app)
+      .get(`/api/v1/projects/${id}/mesh/backup`)
+      .set('Authorization', auth);
+    expect(after.status).toBe(200);
+    expect(after.body.backup.kind).toBe('original');
+    expect(typeof after.body.backup.updatedAt).toBe('string');
+  });
+
+  it('overwrites the slot with the current case as a "manual" backup', async () => {
+    const { id, auth } = await makeProject('mesh-backup-manual@dive-turbinen.test');
+    await writePolyMesh(id);
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/mesh/backup`)
+      .set('Authorization', auth);
+    expect(res.status).toBe(200);
+    expect(res.body.backup.kind).toBe('manual');
+  });
+
+  it('restores the mesh and the 0/ fields from the backup slot', async () => {
+    const { id, auth } = await makeProject('mesh-backup-restore@dive-turbinen.test');
+    await writePolyMesh(id);
+    await writeCaseFile(id, '0/U', FIELD_U);
+
+    // First edit auto-captures the original (inlet/walls), then mutates the case.
+    await editPatches(id, auth, [
+      { from: 'inlet', to: 'intake', type: 'patch' },
+      { from: 'walls', to: 'walls', type: 'empty' },
+    ]);
+    const changed = (await readCaseFile(id, 'constant/polyMesh/boundary'))?.toString('utf8') ?? '';
+    expect(changed).toMatch(/intake\s*\{/);
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/mesh/backup/restore`)
+      .set('Authorization', auth);
+    expect(res.status).toBe(200);
+    expect(res.body.manifest.patches).toEqual(MANIFEST);
+
+    // Boundary and the field are back to the original names/BCs.
+    const boundary = (await readCaseFile(id, 'constant/polyMesh/boundary'))?.toString('utf8') ?? '';
+    expect(boundary).toMatch(/inlet\s*\{/);
+    expect(boundary).toMatch(/walls\s*\{[^}]*type\s+wall;/);
+    expect(boundary).not.toMatch(/intake/);
+
+    const field = (await readCaseFile(id, '0/U'))?.toString('utf8') ?? '';
+    expect(field).toContain('fixedValue');
+    expect(field).toMatch(/walls\s*\{[\s\S]*?noSlip/);
+    expect(field).not.toContain('intake');
+  });
+
+  it('returns 404 when restoring with no backup', async () => {
+    const { id, auth } = await makeProject('mesh-backup-none@dive-turbinen.test');
+    await writePolyMesh(id);
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/mesh/backup/restore`)
+      .set('Authorization', auth);
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 for a project the viewer cannot see', async () => {
+    const { id } = await makeProject('mesh-backup-owner@dive-turbinen.test');
+    await writePolyMesh(id);
+    const stranger = await createTestUser({ email: 'mesh-backup-stranger@dive-turbinen.test' });
+    const res = await request(app)
+      .get(`/api/v1/projects/${id}/mesh/backup`)
+      .set('Authorization', authHeader(stranger));
+    expect(res.status).toBe(404);
+  });
+});
