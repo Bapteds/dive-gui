@@ -309,18 +309,20 @@ async function convertToCgns(
 
   const outCgns = exportFilePath(projectId, 'cgns');
   const fieldsCsv = profile.fields.join(',');
-  const args = [
-    '--force-offscreen-rendering',
-    script,
-    foam,
-    outCgns,
-    profile.latestTime ?? '',
-    fieldsCsv,
-  ];
-  const display = `${env.PVBATCH_BIN} ${args.join(' ')}`;
+  const scriptArgs = [script, foam, outCgns, profile.latestTime ?? '', fieldsCsv];
+
+  // Importing paraview.simple crashes (rendering controller New() SIGSEGV) on a
+  // headless box with no GL context. Default: give pvbatch a virtual X display
+  // via `xvfb-run -a`. Otherwise (OSMesa build) force offscreen rendering instead.
+  const useXvfb = env.PVBATCH_XVFB === 'true';
+  const command = useXvfb ? 'xvfb-run' : env.PVBATCH_BIN;
+  const args = useXvfb
+    ? ['-a', env.PVBATCH_BIN, ...scriptArgs]
+    : ['--force-offscreen-rendering', ...scriptArgs];
+  const display = `${command} ${args.join(' ')}`;
 
   const result = await runCommand({
-    command: env.PVBATCH_BIN,
+    command,
     args,
     cwd: caseDir,
     env: process.env,
@@ -329,8 +331,12 @@ async function convertToCgns(
 
   const produced = (await readExportBytes(projectId, 'cgns')) !== null;
   const ok = !result.spawnError && !result.timedOut && result.exitCode === 0 && produced;
+  const xvfbHint =
+    useXvfb && result.spawnError
+      ? ' (is xvfb installed? `apt install xvfb`, or set PVBATCH_XVFB=false for an OSMesa pvbatch)'
+      : '';
   const extra = result.spawnError
-    ? `\n[runner] ${result.spawnError}`
+    ? `\n[runner] ${result.spawnError}${xvfbHint}`
     : result.timedOut
       ? '\n[runner] pvbatch timed out'
       : !produced && result.exitCode === 0

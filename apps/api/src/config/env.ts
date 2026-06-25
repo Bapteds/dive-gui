@@ -100,6 +100,13 @@ const envSchema = z
     // wheel under MESH_PYTHON_BIN (no ParaView needed to read). Every binary is
     // configurable so the same code runs wherever the tools live on the server.
     PVBATCH_BIN: z.string().min(1).default('pvbatch'),
+    // Importing paraview.simple instantiates a rendering pipeline controller that
+    // SEGFAULTS on a headless server with no GL context (ParaView without OSMesa).
+    // The standard fix is to give it a virtual X display via `xvfb-run`. When
+    // 'true' (default), the convert step runs `xvfb-run -a pvbatch …` (requires
+    // `apt install xvfb`); set 'false' only if pvbatch has working offscreen GL
+    // (an OSMesa build), in which case it runs `pvbatch --force-offscreen-rendering`.
+    PVBATCH_XVFB: z.enum(['true', 'false']).default('true'),
     // foamDictionary reads controlDict (application, times) in the inspect step.
     FOAM_DICTIONARY_BIN: z.string().min(1).default('foamDictionary'),
     // postProcess computes best-effort OpenFOAM reference values in the validate

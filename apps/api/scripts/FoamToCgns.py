@@ -9,10 +9,13 @@ Why pvbatch (and NOT python3 + the standalone VTK wheel):
   precisely because it has no writer dependency; this direction cannot.
 
 Headless note:
-  paraview.simple's SaveData can touch a rendering controller that segfaults on a
-  server with no GL context. Run pvbatch with --force-offscreen-rendering (the
-  backend does) and a ParaView built with OSMesa. This script creates NO view, so
-  nothing should need a real GL context.
+  Importing paraview.simple instantiates a rendering pipeline controller that
+  SEGFAULTS on a server with no GL context (a ParaView build without OSMesa) —
+  even before this script runs, and even with --force-offscreen-rendering. The
+  backend therefore launches this under `xvfb-run -a` (a virtual X display) by
+  default; install it with `apt install xvfb`. If your pvbatch has working
+  offscreen GL (OSMesa), set PVBATCH_XVFB=false to use --force-offscreen-rendering
+  instead. This script itself creates NO view.
 
 What it does, per the CFD-Post pipeline spec:
   * reads the OpenFOAM case at its LATEST time directory (the solved results);
