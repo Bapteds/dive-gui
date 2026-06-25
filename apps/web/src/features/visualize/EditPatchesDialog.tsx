@@ -95,7 +95,13 @@ export function EditPatchesDialog({
 
   const onSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (hasErrors) return;
+    if (hasErrors) {
+      // Move focus to the first row that needs fixing (Web Interface Guidelines:
+      // focus the first error on submit) rather than disabling the submit button.
+      const firstBad = rows.findIndex((row) => rowError(row) !== null);
+      if (firstBad >= 0) document.getElementById(`patch-name-${firstBad}`)?.focus();
+      return;
+    }
 
     const edits: MeshPatchEdit[] = rows
       .filter((row) => row.name.trim() !== row.from || row.type !== row.originalType)
@@ -167,6 +173,7 @@ export function EditPatchesDialog({
                       </span>
                       <Input
                         id={nameId}
+                        name={`patch-name-${index}`}
                         value={row.name}
                         onChange={(event) => setName(index, event.target.value)}
                         disabled={edit.isPending}
@@ -199,7 +206,7 @@ export function EditPatchesDialog({
             <Button type="button" variant="secondary" onClick={onClose} disabled={edit.isPending}>
               Cancel
             </Button>
-            <Button type="submit" loading={edit.isPending} disabled={hasErrors}>
+            <Button type="submit" loading={edit.isPending}>
               Save changes
             </Button>
           </DialogFooter>

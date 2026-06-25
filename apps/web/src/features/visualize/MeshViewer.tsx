@@ -306,7 +306,10 @@ function BackupBar({
 
   return (
     <div className="shrink-0 rounded-md border border-border bg-bg p-3">
-      <div className="flex items-center gap-2 text-xs text-text-secondary">
+      <div
+        className="flex items-center gap-2 text-xs text-text-secondary"
+        aria-live="polite"
+      >
         <Diamond className="size-3 shrink-0 text-neutral" aria-hidden="true" />
         <span className="min-w-0 truncate" title={status}>
           {status}
