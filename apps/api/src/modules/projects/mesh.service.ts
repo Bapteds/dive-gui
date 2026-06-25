@@ -635,23 +635,30 @@ export async function autoPatchMesh(
   // 0/ fields now reference patches that no longer exist. Realign every field's
   // boundaryField to the new mesh patches (a valid BC per geometric type) so the
   // case stays runnable — the same sync used after a template/scaffold. Only on
-  // success, and best-effort: a sync hiccup must not turn a good run into a
-  // failure (the autoPatch result is still reported either way).
+  // success; a sync failure must not turn a good run into a failure, but it IS
+  // surfaced in the captured output (and counted) so it never fails silently.
+  let syncNote = '';
   if (!commandFailed(result)) {
     try {
-      await syncBoundaryFields(viewer, projectId);
-    } catch {
-      // Leave the fields as-is; the mesh was still patched successfully.
+      const sync = await syncBoundaryFields(viewer, projectId);
+      syncNote = `\n[sync] aligned 0/ fields to ${sync.patches.length} patches`;
+      if (sync.updated.length) syncNote += ` (updated ${sync.updated.join(', ')})`;
+      else syncNote += ' (no field files needed changes)';
+    } catch (err) {
+      syncNote = `\n[sync] WARNING: could not realign 0/ fields: ${
+        err instanceof Error ? err.message : String(err)
+      }`;
     }
   }
 
   // Surface a runner-level reason (missing binary / timeout) in the captured
   // output, mirroring the conversion step report.
-  const extra = result.spawnError
-    ? `\n[runner] ${result.spawnError}`
-    : result.timedOut
-      ? '\n[runner] command timed out'
-      : '';
+  const extra =
+    (result.spawnError
+      ? `\n[runner] ${result.spawnError}`
+      : result.timedOut
+        ? '\n[runner] command timed out'
+        : '') + syncNote;
 
   // Re-read the boundary so the UI can report the resulting patches (autoPatch
   // replaces them with auto-generated patches). Best-effort: an unreadable
