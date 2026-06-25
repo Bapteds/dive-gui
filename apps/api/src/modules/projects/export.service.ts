@@ -331,17 +331,31 @@ async function convertToCgns(
 
   const produced = (await readExportBytes(projectId, 'cgns')) !== null;
   const ok = !result.spawnError && !result.timedOut && result.exitCode === 0 && produced;
+
+  // A crash inside paraview.simple's PyVTKObject wrapping (PipelineController New)
+  // is almost always a VTK version conflict: a pip-installed `vtk` wheel shadows
+  // ParaView's own VTK for the system python pvbatch uses. Detect the signature
+  // and point at the fix (isolate the pip vtk in a venv).
+  const crashed =
+    !produced &&
+    (result.exitCode === null ||
+      /SIGSEGV|PipelineController|non-zero reference count/.test(result.stderr));
   const xvfbHint =
     useXvfb && result.spawnError
       ? ' (is xvfb installed? `apt install xvfb`, or set PVBATCH_XVFB=false for an OSMesa pvbatch)'
       : '';
+  const conflictHint = crashed
+    ? '\n[runner] pvbatch crashed in VTK wrapping — this is a pip `vtk` wheel shadowing ' +
+      "ParaView's own VTK. Move the pip vtk into a venv and point CGNS_PYTHON_BIN / " +
+      'MESH_PYTHON_BIN at it, so the system python pvbatch uses has no conflicting vtk.'
+    : '';
   const extra = result.spawnError
     ? `\n[runner] ${result.spawnError}${xvfbHint}`
     : result.timedOut
       ? '\n[runner] pvbatch timed out'
       : !produced && result.exitCode === 0
         ? `\n[runner] pvbatch exited 0 but ${outCgns} was not created`
-        : '';
+        : conflictHint;
 
   return {
     id: 'convert',
