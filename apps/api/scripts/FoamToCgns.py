@@ -96,24 +96,28 @@ def main():
         _set_if_present(reader, ["Decomposepolyhedra", "DecomposePolyhedra"], 0)
 
         # First pass: this populates TimestepValues AND the reader's list of
-        # AVAILABLE cell arrays. The array selection must be set AFTER this — set
-        # before, the names validate against an empty list and nothing is selected
-        # (which is how a CGNS came out mesh-only, with no fields).
+        # AVAILABLE cell/point arrays.
         reader.UpdatePipeline()
 
-        # Enable the cell arrays to actually carry the solution. Default: ALL
-        # available; if a field list was given, the intersection with what the
-        # reader exposes (so a face-flux like `phi`, absent from cell arrays, is
-        # dropped without disabling the rest).
+        # Enable ALL available cell arrays so the solution fields are written.
+        # CRITICAL: only set the selection when the available list is NON-EMPTY.
+        # Setting `reader.CellArrays = []` DISABLES every array — that is what
+        # produced mesh-only CGNS files. When the list comes back empty, leave the
+        # reader's defaults untouched (they read all arrays).
         try:
-            available = list(reader.CellArrays.Available)
-            if want_fields:
-                wanted = [f for f in want_fields if f in available]
-                reader.CellArrays = wanted if wanted else available
-            else:
-                reader.CellArrays = available
-        except Exception:  # noqa: BLE001 - fall back to the reader's defaults.
-            pass
+            avail_cells = list(reader.CellArrays.Available)
+        except Exception:  # noqa: BLE001
+            avail_cells = []
+        try:
+            avail_points = list(reader.PointArrays.Available)
+        except Exception:  # noqa: BLE001
+            avail_points = []
+        if avail_cells:
+            reader.CellArrays = avail_cells
+        sys.stderr.write(
+            "[diag] available cell arrays: %s\n[diag] available point arrays: %s\n"
+            % (",".join(avail_cells) or "(none)", ",".join(avail_points) or "(none)")
+        )
 
         # Time selection. `want_time == "all"` writes the WHOLE series (one CGNS
         # per time step, FileName_<i>.cgns — ParaView's CGNS writer cannot put a
@@ -132,19 +136,22 @@ def main():
             target = times[-1] if times else 0.0
         reader.UpdatePipeline(target)
 
-        # Guard: a CGNS with no field data is useless for CFD-Post. `reader.CellData`
-        # lists the cell arrays in the current output; fail loudly if there are none
-        # (and no point arrays either) so the pipeline reports it instead of writing
-        # a mesh-only file.
+        # Guard + diagnostics: report exactly what landed in the output, and fail
+        # loudly on a mesh-only result instead of writing a useless CGNS.
         try:
             cell_names = [a.Name for a in reader.CellData]
             point_names = [a.Name for a in reader.PointData]
         except Exception:  # noqa: BLE001 - introspection is best-effort.
-            cell_names, point_names = ["?"], []
+            cell_names, point_names = [], []
+        sys.stderr.write(
+            "[diag] OUTPUT cell data: %s\n[diag] OUTPUT point data: %s\n"
+            % (",".join(cell_names) or "(none)", ",".join(point_names) or "(none)")
+        )
         if not cell_names and not point_names:
             sys.stderr.write(
                 "KO: the OpenFOAM reader loaded no solution fields at time %s "
-                "(mesh-only CGNS). Check the time directory has fields.\n" % target
+                "(mesh-only CGNS). The [diag] lines above show what the reader "
+                "exposed; check the time directory has fields.\n" % target
             )
             sys.exit(1)
 
