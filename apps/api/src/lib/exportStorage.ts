@@ -14,12 +14,17 @@
 // path segment, exactly like caseStorage / vizStorage.
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import AdmZip from 'adm-zip';
 import { EXPORT_DIRNAME } from '@dive/shared';
 import { assertSafeId, storageRoot } from './fileTreeStorage';
 
 /** Filenames of the artifacts within a project's export directory. */
 export const EXPORT_FILES = {
+  // out.cgns is the convert step's output BASE: a single-time export writes
+  // out.cgns; an all-times export writes out_<i>.cgns and the backend zips them
+  // into out_cgns.zip (the actual download for a series).
   cgns: 'out.cgns',
+  cgnsZip: 'out_cgns.zip',
   convertScript: 'convert.py',
   profile: 'profile.json',
   validation: 'validation.json',
@@ -108,4 +113,40 @@ export async function readExportJson<T>(
   } catch {
     return null;
   }
+}
+
+/**
+ * The CGNS files the convert step produced, sorted by name. A single-time export
+ * is `out.cgns`; an all-times export is `out_0.cgns`, `out_1.cgns`, … (one per
+ * solved time). Excludes the zip itself. Returns absolute paths.
+ */
+export async function listCgnsFiles(projectId: string): Promise<string[]> {
+  const dir = exportDirAbsolute(projectId);
+  let names: string[];
+  try {
+    names = await fs.readdir(dir);
+  } catch {
+    return [];
+  }
+  return names
+    .filter((n) => n.endsWith('.cgns') && (n === EXPORT_FILES.cgns || n.startsWith('out_')))
+    .sort()
+    .map((n) => path.join(dir, n));
+}
+
+/**
+ * Zip the produced CGNS file(s) into out_cgns.zip for a single download, and
+ * return how many were zipped (0 when none). The series-or-single output is
+ * always offered as one archive so the download model stays uniform.
+ */
+export async function zipCgnsFiles(projectId: string): Promise<number> {
+  const files = await listCgnsFiles(projectId);
+  if (files.length === 0) return 0;
+  const zip = new AdmZip();
+  for (const file of files) {
+    zip.addLocalFile(file);
+  }
+  await ensureExportDir(projectId);
+  zip.writeZip(exportFilePath(projectId, 'cgnsZip'));
+  return files.length;
 }

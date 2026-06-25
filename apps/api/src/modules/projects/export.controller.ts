@@ -33,7 +33,8 @@ const ARTIFACT_HEADERS: Record<
   ExportArtifactParam,
   { file: keyof typeof EXPORT_FILES; type: string; filename: string }
 > = {
-  cgns: { file: 'cgns', type: 'application/octet-stream', filename: EXPORT_FILES.cgns },
+  // The CGNS download is the zip of the produced file(s) (series or single).
+  cgns: { file: 'cgnsZip', type: 'application/zip', filename: EXPORT_FILES.cgnsZip },
   session: { file: 'session', type: 'text/plain; charset=utf-8', filename: EXPORT_FILES.session },
   memo: { file: 'memo', type: 'text/markdown; charset=utf-8', filename: EXPORT_FILES.memo },
   report: { file: 'report', type: 'text/markdown; charset=utf-8', filename: EXPORT_FILES.report },

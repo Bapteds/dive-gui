@@ -195,7 +195,7 @@ describe('GET /projects/:id/export (+ download)', () => {
     expect(after.body.status.artifacts.cgns).toBe(true);
   });
 
-  it('downloads the produced CGNS as an attachment', async () => {
+  it('downloads the produced CGNS as a zip attachment', async () => {
     const { id, auth } = await makeProject('export-dl@dive-turbinen.test');
     await writeSolvedCase(id);
     await request(app).post(`/api/v1/projects/${id}/export`).set('Authorization', auth);
@@ -206,8 +206,11 @@ describe('GET /projects/:id/export (+ download)', () => {
       .buffer()
       .parse(binaryParser);
     expect(res.status).toBe(200);
-    expect(res.headers['content-disposition']).toContain('out.cgns');
-    expect(res.body.toString()).toBe('fake-cgns-bytes');
+    expect(res.headers['content-type']).toContain('application/zip');
+    expect(res.headers['content-disposition']).toContain('out_cgns.zip');
+    // A real zip of the produced CGNS file(s) — non-empty, with the zip magic.
+    expect(res.body.length).toBeGreaterThan(0);
+    expect(res.body.slice(0, 2).toString()).toBe('PK');
   });
 
   it('returns 404 downloading an artifact that has not been produced', async () => {

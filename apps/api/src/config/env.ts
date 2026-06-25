@@ -125,6 +125,11 @@ const envSchema = z
     // relative to the module, cwd-independent). Set only to override.
     FOAM_TO_CGNS_SCRIPT: z.string().default(''),
     CGNS_INSPECT_SCRIPT: z.string().default(''),
+    // Export the WHOLE time series (one CGNS per solved time, zipped) vs only the
+    // latest time. ParaView's CGNS writer cannot pack a transient series into one
+    // file, so "all" produces out_<i>.cgns files that the backend zips. Default
+    // 'true' (the time evolution); 'false' exports just the final result.
+    EXPORT_ALL_TIMES: z.enum(['true', 'false']).default('true'),
     // --- OpenFOAM solver run (Solver tab) -------------------------------------
     // The app's first long-running background job. A run spawns the solver
     // (e.g. simpleFoam) in the case directory, pipes its output to a persisted

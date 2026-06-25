@@ -46,7 +46,7 @@ export function useRunExport(projectId: string) {
 
 /** Default download filename per artifact. */
 const ARTIFACT_FILENAMES: Record<ExportArtifact, string> = {
-  cgns: 'out.cgns',
+  cgns: 'out_cgns.zip',
   session: 'session.cse',
   memo: 'LOAD_CFDPOST.md',
   report: 'REPORT.md',

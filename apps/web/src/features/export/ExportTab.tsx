@@ -46,7 +46,7 @@ const STEP_META: Array<{ id: ExportStepId; label: string; tool: string }> = [
 ];
 
 const ARTIFACTS: Array<{ key: ExportArtifact; label: string }> = [
-  { key: 'cgns', label: 'CGNS (out.cgns)' },
+  { key: 'cgns', label: 'CGNS (.zip)' },
   { key: 'session', label: 'CFD-Post session' },
   { key: 'memo', label: 'Load memo' },
   { key: 'report', label: 'Report' },
@@ -448,15 +448,13 @@ function Downloads({ projectId, artifacts }: { projectId: string; artifacts: Exp
 function CfdPostMemo({ profile }: { profile: CaseProfile }) {
   const points: string[] = [
     'Load with File → Load Results (never “Load Case”).',
+    'The CGNS download is a .zip with one file per time step — unzip, then load the series in CFD-Post (it reads it as a transient case).',
     profile.incompressible
       ? `Pressure is kinematic (p/ρ): the solver ${profile.solver} is incompressible, so CFD-Post pressures are ÷ρ. Multiply by density for Pa — not a bug.`
       : `Pressure is in Pa (the solver ${profile.solver} is compressible).`,
   ];
   if (profile.emptyPatches.length) {
     points.push(`Empty patches were excluded (${profile.emptyPatches.join(', ')}) to avoid “Invalid File / empty surfaces”.`);
-  }
-  if (!profile.steady) {
-    points.push('Transient case: CFD-Post handles CGNS transient poorly — only the latest time is exported.');
   }
   return (
     <div className="rounded-md border border-primary/30 bg-primary-tint p-4">

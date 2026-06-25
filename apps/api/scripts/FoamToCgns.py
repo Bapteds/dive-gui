@@ -1,6 +1,9 @@
 #!/usr/bin/env pvbatch
 """OpenFOAM (solved case) -> CGNS for Ansys CFD-Post. Run with ParaView pvbatch.
-Usage: pvbatch FoamToCgns.py <case.foam> <out.cgns> [time] [field1,field2,...]
+Usage: pvbatch FoamToCgns.py <case.foam> <out.cgns> [time|all] [field1,field2,...]
+
+  time = a number pins that time; "all" writes the WHOLE time series (one CGNS
+  per step, <out>_<i>.cgns); omitted/empty = the latest time only.
 
 Why pvbatch (and NOT python3 + the standalone VTK wheel):
   Writing CGNS is a ParaView-only capability. Core VTK ships a CGNS *reader*
@@ -112,9 +115,15 @@ def main():
         except Exception:  # noqa: BLE001 - fall back to the reader's defaults.
             pass
 
-        # Resolve and read the LATEST time directory (the solved results).
+        # Time selection. `want_time == "all"` writes the WHOLE series (one CGNS
+        # per time step, FileName_<i>.cgns — ParaView's CGNS writer cannot put a
+        # transient series in one file); a number pins that time; otherwise the
+        # latest. We always read the latest once first to validate the fields.
         times = list(getattr(reader, "TimestepValues", []) or [])
-        if want_time is not None:
+        all_times = want_time is not None and want_time.strip().lower() == "all"
+        if all_times:
+            target = times[-1] if times else 0.0
+        elif want_time is not None:
             try:
                 target = float(want_time)
             except ValueError:
@@ -141,7 +150,14 @@ def main():
 
         # Write CGNS in ADF (UseHDF5=0). SaveData picks the CGNS writer from the
         # .cgns extension; cell data is preserved (we never interpolated to points).
-        SaveData(out, proxy=reader, UseHDF5=0)
+        if all_times:
+            # WriteAllTimeSteps runs the writer once per time, suffixing the name.
+            try:
+                SaveData(out, proxy=reader, UseHDF5=0, WriteAllTimeSteps=1, FileNameSuffix="_%d")
+            except Exception:  # noqa: BLE001 - fall back to the writer's default suffix.
+                SaveData(out, proxy=reader, UseHDF5=0, WriteAllTimeSteps=1)
+        else:
+            SaveData(out, proxy=reader, UseHDF5=0)
         Delete(reader)
     except Exception as exc:  # noqa: BLE001 - one-shot CLI: report and fail.
         import traceback
@@ -149,13 +165,20 @@ def main():
         sys.stderr.write("KO: CGNS export failed: %s\n%s\n" % (exc, traceback.format_exc()))
         sys.exit(1)
 
-    if not os.path.isfile(out) or os.path.getsize(out) == 0:
-        sys.stderr.write("KO: CGNS not created (or empty): %s\n" % out)
+    # Verify output exists. The series writes <base>_<i>.cgns, the single writes
+    # <base>.cgns; glob the base prefix to cover both.
+    import glob
+
+    base = out[:-5] if out.endswith(".cgns") else out  # strip ".cgns"
+    produced = sorted(glob.glob(base + "*.cgns"))
+    produced = [p for p in produced if os.path.getsize(p) > 0]
+    if not produced:
+        sys.stderr.write("KO: CGNS not created (or empty): %s*.cgns\n" % base)
         sys.exit(1)
 
     sys.stdout.write(
-        "OK: CGNS written (time=%s, fields=%s) -> %s\n"
-        % (target, ",".join(cell_names) or "(none)", out)
+        "OK: CGNS written (%d file(s), time=%s, fields=%s) -> %s\n"
+        % (len(produced), "all" if all_times else target, ",".join(cell_names) or "(none)", out)
     )
     sys.exit(0)
 

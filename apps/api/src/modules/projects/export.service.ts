@@ -38,10 +38,12 @@ import {
   clearExport,
   ensureExportDir,
   exportFilePath,
+  listCgnsFiles,
   readExportBytes,
   readExportJson,
   readExportText,
   writeExportFile,
+  zipCgnsFiles,
 } from '../../lib/exportStorage';
 import { assertProjectVisible, type Viewer } from './projects.service';
 
@@ -278,29 +280,32 @@ async function inspectCase(
 
 /**
  * Step 2 - convert. touch case.foam, copy the bundled converter into export/ for
- * transparency, then run pvbatch FoamToCgns.py -> export/out.cgns. pvbatch runs
- * with --force-offscreen-rendering so SaveData has no GL dependency on a headless
- * server. The step fails if out.cgns is not produced.
+ * transparency, then run pvbatch FoamToCgns.py. With EXPORT_ALL_TIMES it exports
+ * the WHOLE time series (out_<i>.cgns, then zipped); otherwise just the latest
+ * time (out.cgns). The step fails if no CGNS is produced.
  */
 async function convertToCgns(
   projectId: string,
   caseDir: string,
   profile: CaseProfile,
-): Promise<ExportStep> {
+): Promise<{ step: ExportStep; files: string[] }> {
   const foam = path.join(caseDir, 'case.foam');
   if (!(await pathExists(foam))) await fs.writeFile(foam, '');
 
   const script = bundledScript(env.FOAM_TO_CGNS_SCRIPT, 'FoamToCgns.py');
   if (!(await pathExists(script))) {
     return {
-      id: 'convert',
-      label: STEP_LABELS.convert,
-      command: `${env.PVBATCH_BIN} ${script}`,
-      status: 'failed',
-      exitCode: null,
-      stdout: '',
-      stderr: `Converter not found at ${script}. Set FOAM_TO_CGNS_SCRIPT to its absolute path.`,
-      durationMs: 0,
+      files: [],
+      step: {
+        id: 'convert',
+        label: STEP_LABELS.convert,
+        command: `${env.PVBATCH_BIN} ${script}`,
+        status: 'failed',
+        exitCode: null,
+        stdout: '',
+        stderr: `Converter not found at ${script}. Set FOAM_TO_CGNS_SCRIPT to its absolute path.`,
+        durationMs: 0,
+      },
     };
   }
   // Keep a copy beside the output so the exact converter is auditable.
@@ -309,7 +314,9 @@ async function convertToCgns(
 
   const outCgns = exportFilePath(projectId, 'cgns');
   const fieldsCsv = profile.fields.join(',');
-  const scriptArgs = [script, foam, outCgns, profile.latestTime ?? '', fieldsCsv];
+  // "all" => the whole time series; else the latest solved time.
+  const timeArg = env.EXPORT_ALL_TIMES === 'true' ? 'all' : (profile.latestTime ?? '');
+  const scriptArgs = [script, foam, outCgns, timeArg, fieldsCsv];
 
   // Importing paraview.simple crashes (rendering controller New() SIGSEGV) on a
   // headless box with no GL context. Default: give pvbatch a virtual X display
@@ -341,7 +348,11 @@ async function convertToCgns(
     timeoutMs: env.CONVERSION_STEP_TIMEOUT_MS,
   });
 
-  const produced = (await readExportBytes(projectId, 'cgns')) !== null;
+  // Collect the produced CGNS file(s) (single out.cgns, or the out_<i>.cgns
+  // series) and zip them into one downloadable archive.
+  const files = await listCgnsFiles(projectId);
+  const produced = files.length > 0;
+  if (produced) await zipCgnsFiles(projectId);
   const ok = !result.spawnError && !result.timedOut && result.exitCode === 0 && produced;
 
   // A crash inside paraview.simple's PyVTKObject wrapping (PipelineController New)
@@ -370,14 +381,17 @@ async function convertToCgns(
         : conflictHint;
 
   return {
-    id: 'convert',
-    label: STEP_LABELS.convert,
-    command: display,
-    status: ok ? 'success' : 'failed',
-    exitCode: result.exitCode,
-    stdout: tail(result.stdout),
-    stderr: tail(result.stderr + extra),
-    durationMs: result.durationMs,
+    files,
+    step: {
+      id: 'convert',
+      label: STEP_LABELS.convert,
+      command: display,
+      status: ok ? 'success' : 'failed',
+      exitCode: result.exitCode,
+      stdout: tail(result.stdout),
+      stderr: tail(result.stderr + extra),
+      durationMs: result.durationMs,
+    },
   };
 }
 
@@ -403,9 +417,9 @@ interface CgnsReport {
 async function validateCgns(
   projectId: string,
   profile: CaseProfile,
+  cgns: string,
 ): Promise<{ step: ExportStep; validation: ExportValidation }> {
   const script = bundledScript(env.CGNS_INSPECT_SCRIPT, 'CgnsInspect.py');
-  const cgns = exportFilePath(projectId, 'cgns');
   const display = `${env.MESH_PYTHON_BIN} ${script} ${cgns}`;
 
   if (!(await pathExists(script))) {
@@ -557,12 +571,16 @@ function renderLoadMemo(profile: CaseProfile): string {
   const emptyNote = profile.emptyPatches.length
     ? `- **Surfaces vides exclues** : ${profile.emptyPatches.join(', ')} (0 face) — normal, évite l'erreur « Invalid File / surfaces vides ».`
     : `- Aucune surface vide à exclure.`;
-  return `# Charger \`out.cgns\` dans Ansys CFD-Post
+  const seriesNote =
+    env.EXPORT_ALL_TIMES === 'true'
+      ? `- **Série temporelle** : le téléchargement est un **zip** contenant un CGNS par pas de temps (\`out_0.cgns\`, \`out_1.cgns\`, …). Dézippe, puis dans CFD-Post charge la série (Load Results) — CFD-Post la traite comme un cas transitoire (un pas de temps à la fois).`
+      : `- **Temps unique** : le téléchargement est le dernier temps résolu (\`out.cgns\`).`;
+  return `# Charger le CGNS dans Ansys CFD-Post
 
 ## Comment charger
 - **File → Load Results** (jamais « Load Case »).
-- Ou en batch : \`cfdpost -batch session.cse out.cgns\`.
 - CFD-Post ne lit pas OpenFOAM nativement ; le CGNS est le pont neutre.
+${seriesNote}
 
 ## Profil du cas
 - Solveur : \`${profile.solver}\` (${profile.steady ? 'steady' : 'transitoire'})
@@ -640,13 +658,16 @@ ${validationLines}
 
 /** Which downloadable artifacts the export produced. */
 async function readArtifacts(projectId: string): Promise<ExportArtifacts> {
-  const [cgns, session, memo, report] = await Promise.all([
+  // The CGNS download is the zip (series-or-single, uniform); fall back to the
+  // single out.cgns if for some reason the zip was not written.
+  const [zip, single, session, memo, report] = await Promise.all([
+    readExportBytes(projectId, 'cgnsZip').then((b) => b !== null && b.length > 0),
     readExportBytes(projectId, 'cgns').then((b) => b !== null && b.length > 0),
     readExportText(projectId, 'session').then((t) => t !== null),
     readExportText(projectId, 'memo').then((t) => t !== null),
     readExportText(projectId, 'report').then((t) => t !== null),
   ]);
-  return { cgns, session, memo, report };
+  return { cgns: zip || single, session, memo, report };
 }
 
 /**
@@ -678,13 +699,13 @@ export async function runExport(viewer: Viewer, projectId: string): Promise<Expo
     );
     return finalize(projectId, steps, notes, profile, null);
   }
-  notes.push(`Exporting the latest solved time: ${profile.latestTime}.`);
+  const allTimes = env.EXPORT_ALL_TIMES === 'true';
   if (profile.emptyPatches.length) {
     notes.push(`Excluded ${profile.emptyPatches.length} empty patch(es): ${profile.emptyPatches.join(', ')}.`);
   }
 
   // 2) Convert.
-  const convertStep = await convertToCgns(projectId, caseDir, profile);
+  const { step: convertStep, files } = await convertToCgns(projectId, caseDir, profile);
   steps.push(convertStep);
   if (convertStep.status === 'failed') {
     steps.push(
@@ -693,9 +714,15 @@ export async function runExport(viewer: Viewer, projectId: string): Promise<Expo
     );
     return finalize(projectId, steps, notes, profile, null);
   }
+  notes.push(
+    allTimes
+      ? `Exported the full time series: ${files.length} CGNS file(s), zipped for download.`
+      : `Exported the latest solved time: ${profile.latestTime}.`,
+  );
 
-  // 3) Validate.
-  const { step: validateStep, validation } = await validateCgns(projectId, profile);
+  // 3) Validate the representative CGNS (the last time of the series, or the single file).
+  const representative = files[files.length - 1] ?? exportFilePath(projectId, 'cgns');
+  const { step: validateStep, validation } = await validateCgns(projectId, profile, representative);
   steps.push(validateStep);
 
   // 4) CFD-Post prep (runs even when validation flagged issues — the CGNS exists).
