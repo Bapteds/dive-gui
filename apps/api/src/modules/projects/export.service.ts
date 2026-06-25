@@ -39,8 +39,8 @@ import {
   EXPORT_FILES,
   clearExport,
   ensightDirAbsolute,
+  ensureEnsightCaseExtension,
   ensureExportDir,
-  findEnsightCaseFile,
   readExportBytes,
   readExportJson,
   readExportText,
@@ -321,9 +321,11 @@ async function convertToEnsight(
   if (produced) {
     await ensureExportDir(projectId);
     await moveDir(produced, ensightDirAbsolute(projectId));
+    // foamToEnsight names the master `EnSight_Case` (no extension); add a `.case`
+    // copy so CFD-Post's Load Results dialog shows it. Then zip (incl. the .case).
+    caseFile = await ensureEnsightCaseExtension(projectId);
     fileCount = await zipEnsightDir(projectId);
-    caseFile = await findEnsightCaseFile(projectId);
-    moveNote = `\n[runner] EnSight output: ${fileCount} file(s), case master: ${caseFile ?? 'NOT FOUND'}`;
+    moveNote = `\n[runner] EnSight output: ${fileCount} file(s), load this in CFD-Post: ensight/${caseFile ?? 'NOT FOUND'}`;
   } else if (!commandFailed(result)) {
     moveNote = `\n[runner] foamToEnsight exited 0 but no EnSight/ directory was produced in ${caseDir}`;
   }
@@ -463,8 +465,10 @@ function renderLoadMemo(profile: CaseProfile, caseFile: string | null): string {
 
 ## Comment charger
 1. Dézippe \`ensight.zip\` → dossier \`ensight/\`.
-2. CFD-Post : **File → Load Results** (jamais « Load Case ») → ouvre ${master}.
-   - Au besoin règle « Files of type » sur **EnSight** (ou « All Files »).
+2. CFD-Post : **File → Load Results** (jamais « Load Case »).
+   - **« Files of type » → EnSight** (le sélecteur de format doit être sur **Case**).
+   - Sélectionne le **FICHIER** ${master} (pas le dossier — CFD-Post n'accepte pas un dossier).
+   - foamToEnsight nomme le maître \`EnSight_Case\` sans extension ; j'ai ajouté une copie \`.case\` pour qu'il apparaisse dans le dialogue. Si tu ne le vois pas, mets « Files of type » sur **All Files**.
 3. EnSight Gold est écrit par l'utilitaire **natif OpenFOAM \`foamToEnsight\`** (pas de ParaView) et porte **toute la série temporelle** : utilise la barre de temps de CFD-Post pour parcourir les pas.
 
 ## Profil du cas

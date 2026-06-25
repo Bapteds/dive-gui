@@ -61,7 +61,8 @@ const successRunner: CommandRunner = async (spec) => {
     const caseDir = spec.args[spec.args.indexOf('-case') + 1];
     const dir = path.join(caseDir, 'EnSight');
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, 'Ensight.case'), ENSIGHT_CASE);
+    // Real foamToEnsight names the master EnSight_Case (NO .case extension).
+    await fs.writeFile(path.join(dir, 'EnSight_Case'), ENSIGHT_CASE);
     await fs.writeFile(path.join(dir, 'geometry'), 'fake-ensight-geometry');
     return ok(spec, 'foamToEnsight: wrote EnSight/');
   }
@@ -129,8 +130,11 @@ describe('POST /projects/:id/export', () => {
     expect(result.profile.latestTime).toBe('100');
     expect(result.profile.patches).toEqual(['inlet', 'outlet', 'walls']);
 
-    // Validation parsed the .case: time steps = 3, variables p + U.
+    // The master got a `.case` extension so CFD-Post's dialog can show it.
     expect(result.validation.status).toBe('pass');
+    const masterCheck = result.validation.checks.find((c: { name: string }) => c.name === 'EnSight case master');
+    expect(masterCheck.value).toMatch(/\.case$/);
+    // Validation parsed the .case: time steps = 3, variables p + U.
     const varCheck = result.validation.checks.find((c: { name: string }) => c.name === 'Variables present');
     expect(varCheck.value).toContain('U');
     expect(varCheck.value).toContain('p');

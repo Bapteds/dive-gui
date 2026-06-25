@@ -166,6 +166,27 @@ export async function findEnsightCaseFile(projectId: string): Promise<string | n
 }
 
 /**
+ * Ensure the EnSight master has a `.case` extension. foamToEnsight names it
+ * `EnSight_Case` (no extension), which Ansys CFD-Post's "Load Results" dialog
+ * does NOT show (it filters on *.case / *.encas). Copy it to `<name>.case` so
+ * CFD-Post can pick it. No-op when a `.case`/`.encas` master already exists.
+ * Returns the relative name of the `.case` file to load (or null when no master).
+ */
+export async function ensureEnsightCaseExtension(projectId: string): Promise<string | null> {
+  const master = await findEnsightCaseFile(projectId);
+  if (!master) return null;
+  if (/\.(case|encas)$/i.test(master)) return master;
+  const dir = ensightDirAbsolute(projectId);
+  const withExt = `${master}.case`;
+  try {
+    await fs.copyFile(path.join(dir, master), path.join(dir, withExt));
+    return withExt;
+  } catch {
+    return master;
+  }
+}
+
+/**
  * Zip the whole EnSight output directory into ensight.zip for a single download,
  * returning the number of files zipped (0 when the dir is missing/empty).
  */
