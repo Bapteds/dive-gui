@@ -92,16 +92,27 @@ def main():
         # the original topology). Best-effort: the toggle name varies / may absent.
         _set_if_present(reader, ["Decomposepolyhedra", "DecomposePolyhedra"], 0)
 
-        # Restrict to the requested fields when given (else export everything CGNS
-        # can carry). The cell-array selection property is exposed as `CellArrays`.
-        if want_fields:
-            try:
-                reader.CellArrays = want_fields
-            except Exception:  # noqa: BLE001 - keep all arrays if selection fails.
-                pass
+        # First pass: this populates TimestepValues AND the reader's list of
+        # AVAILABLE cell arrays. The array selection must be set AFTER this — set
+        # before, the names validate against an empty list and nothing is selected
+        # (which is how a CGNS came out mesh-only, with no fields).
+        reader.UpdatePipeline()
+
+        # Enable the cell arrays to actually carry the solution. Default: ALL
+        # available; if a field list was given, the intersection with what the
+        # reader exposes (so a face-flux like `phi`, absent from cell arrays, is
+        # dropped without disabling the rest).
+        try:
+            available = list(reader.CellArrays.Available)
+            if want_fields:
+                wanted = [f for f in want_fields if f in available]
+                reader.CellArrays = wanted if wanted else available
+            else:
+                reader.CellArrays = available
+        except Exception:  # noqa: BLE001 - fall back to the reader's defaults.
+            pass
 
         # Resolve and read the LATEST time directory (the solved results).
-        reader.UpdatePipeline()
         times = list(getattr(reader, "TimestepValues", []) or [])
         if want_time is not None:
             try:
@@ -111,6 +122,22 @@ def main():
         else:
             target = times[-1] if times else 0.0
         reader.UpdatePipeline(target)
+
+        # Guard: a CGNS with no field data is useless for CFD-Post. `reader.CellData`
+        # lists the cell arrays in the current output; fail loudly if there are none
+        # (and no point arrays either) so the pipeline reports it instead of writing
+        # a mesh-only file.
+        try:
+            cell_names = [a.Name for a in reader.CellData]
+            point_names = [a.Name for a in reader.PointData]
+        except Exception:  # noqa: BLE001 - introspection is best-effort.
+            cell_names, point_names = ["?"], []
+        if not cell_names and not point_names:
+            sys.stderr.write(
+                "KO: the OpenFOAM reader loaded no solution fields at time %s "
+                "(mesh-only CGNS). Check the time directory has fields.\n" % target
+            )
+            sys.exit(1)
 
         # Write CGNS in ADF (UseHDF5=0). SaveData picks the CGNS writer from the
         # .cgns extension; cell data is preserved (we never interpolated to points).
@@ -126,7 +153,10 @@ def main():
         sys.stderr.write("KO: CGNS not created (or empty): %s\n" % out)
         sys.exit(1)
 
-    sys.stdout.write("OK: CGNS written (time=%s) -> %s\n" % (target, out))
+    sys.stdout.write(
+        "OK: CGNS written (time=%s, fields=%s) -> %s\n"
+        % (target, ",".join(cell_names) or "(none)", out)
+    )
     sys.exit(0)
 
 
