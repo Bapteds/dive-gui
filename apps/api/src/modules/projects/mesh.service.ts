@@ -21,9 +21,11 @@ import path from 'node:path';
 import {
   BOUNDARY_FILE,
   MESH_FILES,
+  collapseBoundaryToSinglePatch,
   getFieldPatchType,
   isValidPatchName,
   parseBoundaryPatches,
+  removeEmptyBoundaryPatches,
   renameBoundaryPatch,
   renameFieldBoundaryPatch,
   setBoundaryPatchType,
@@ -583,10 +585,12 @@ export interface AutoPatchResult {
  * goes stale (boundary mtime) and is rebuilt on the next manifest fetch — the
  * client drops its mesh queries on success.
  *
- * On success the 0/ fields are realigned to the new patch set (see
- * syncBoundaryFields) so the case stays runnable: autoPatch replaces the patches
- * wholesale, which would otherwise leave the field boundaryFields referencing
- * patches that no longer exist.
+ * To keep re-runs idempotent, the boundary is first collapsed to a single patch
+ * (autoPatch keeps existing patches and appends fresh autoN ones, so re-running
+ * would otherwise accumulate stale 0-face patches and climb auto0…auto100); the
+ * empty patches autoPatch leaves are then dropped. On success the 0/ fields are
+ * realigned to the new patch set (see syncBoundaryFields) so the case stays
+ * runnable. A failed run restores the pre-collapse boundary untouched.
  *
  * autoPatch reads system/controlDict, so the minimal base files are scaffolded
  * first when the case has none (same as the conversion pipeline), letting the
@@ -621,6 +625,19 @@ export async function autoPatchMesh(
   }
 
   const caseDir = caseDirAbsolute(projectId);
+
+  // Re-patch from a clean slate. autoPatch KEEPS the existing patches in its
+  // output and appends fresh autoN patches, so re-running it accumulates stale
+  // 0-face patches and the numbering climbs (auto0…auto100). Collapsing the
+  // boundary to one patch first makes every run start fresh and number from
+  // auto0. We snapshot the pre-collapse boundary to restore it if autoPatch
+  // fails (so a failed run never leaves the mesh as a single collapsed patch).
+  const boundaryBefore = await readCaseFile(projectId, BOUNDARY_FILE);
+  const preCollapse = boundaryBefore ? boundaryBefore.toString('utf8') : null;
+  if (preCollapse) {
+    await writeCaseFile(projectId, BOUNDARY_FILE, collapseBoundaryToSinglePatch(preCollapse));
+  }
+
   // autoPatch <featureAngle> -overwrite, scoped to this case. The angle is a
   // validated finite number and every token is real argv (never a shell string),
   // so a user-supplied value can never be interpreted as a command.
@@ -631,14 +648,23 @@ export async function autoPatchMesh(
   );
   const result = await runCommand({ ...plan, timeoutMs: env.CONVERSION_STEP_TIMEOUT_MS });
 
-  // autoPatch replaces the boundary patches WHOLESALE (auto0, auto1, …), so the
-  // 0/ fields now reference patches that no longer exist. Realign every field's
-  // boundaryField to the new mesh patches (a valid BC per geometric type) so the
-  // case stays runnable — the same sync used after a template/scaffold. Only on
-  // success; a sync failure must not turn a good run into a failure, but it IS
-  // surfaced in the captured output (and counted) so it never fails silently.
   let syncNote = '';
   if (!commandFailed(result)) {
+    // Drop the empty patches autoPatch leaves behind (the collapsed defaultFaces
+    // it reassigned to autoN), so only the real patches remain.
+    const afterBuffer = await readCaseFile(projectId, BOUNDARY_FILE);
+    if (afterBuffer) {
+      const after = afterBuffer.toString('utf8');
+      const cleaned = removeEmptyBoundaryPatches(after);
+      if (cleaned !== after) await writeCaseFile(projectId, BOUNDARY_FILE, cleaned);
+    }
+
+    // autoPatch replaced the boundary patches wholesale, so the 0/ fields now
+    // reference patches that no longer exist. Realign every field's
+    // boundaryField to the new mesh patches (a valid BC per geometric type) so
+    // the case stays runnable — the same sync used after a template/scaffold. A
+    // sync failure must not turn a good run into a failure, but it IS surfaced
+    // in the captured output so it never fails silently.
     try {
       const sync = await syncBoundaryFields(viewer, projectId);
       syncNote = `\n[sync] aligned 0/ fields to ${sync.patches.length} patches`;
@@ -649,6 +675,10 @@ export async function autoPatchMesh(
         err instanceof Error ? err.message : String(err)
       }`;
     }
+  } else if (preCollapse) {
+    // autoPatch failed: put the original (pre-collapse) boundary back so we don't
+    // leave the user's mesh as a single collapsed patch.
+    await writeCaseFile(projectId, BOUNDARY_FILE, preCollapse);
   }
 
   // Surface a runner-level reason (missing binary / timeout) in the captured

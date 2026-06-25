@@ -3,7 +3,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   BASE_FILE_PATHS,
+  collapseBoundaryToSinglePatch,
   parseBoundaryPatches,
+  removeEmptyBoundaryPatches,
   renderBaseFile,
 } from '../src/lib/openfoamCase';
 import { normalizeCasePaths } from '../src/lib/caseStorage';
@@ -41,6 +43,44 @@ FoamFile
     }
 )
 `;
+
+describe('collapseBoundaryToSinglePatch', () => {
+  it('merges every patch into one covering all boundary faces', () => {
+    const collapsed = collapseBoundaryToSinglePatch(BOUNDARY);
+    expect(parseBoundaryPatches(collapsed)).toEqual(['defaultFaces']);
+    // nFaces = 80 + 80 + 200; startFace = min(4500, 4580, 4660).
+    expect(collapsed).toMatch(/nFaces\s+360/);
+    expect(collapsed).toMatch(/startFace\s+4500/);
+    expect(collapsed).toContain('class       polyBoundaryMesh'); // FoamFile header kept
+  });
+
+  it('returns the content unchanged when there are no patch face ranges', () => {
+    const empty = 'FoamFile { object boundary; }\n0\n(\n)\n';
+    expect(collapseBoundaryToSinglePatch(empty)).toBe(empty);
+  });
+});
+
+describe('removeEmptyBoundaryPatches', () => {
+  const WITH_EMPTY = `FoamFile { class polyBoundaryMesh; object boundary; }
+3
+(
+    defaultFaces { type patch; nFaces 0; startFace 100; }
+    auto0 { type patch; nFaces 12; startFace 100; }
+    auto1 { type wall; nFaces 20; startFace 112; }
+)
+`;
+
+  it('drops zero-face patches and renumbers the count', () => {
+    const cleaned = removeEmptyBoundaryPatches(WITH_EMPTY);
+    expect(parseBoundaryPatches(cleaned)).toEqual(['auto0', 'auto1']);
+    expect(cleaned).not.toMatch(/defaultFaces\s*\{/);
+    expect(cleaned).toMatch(/\n2\n\(/); // count updated to 2
+  });
+
+  it('returns the content unchanged when no patch is empty', () => {
+    expect(removeEmptyBoundaryPatches(BOUNDARY)).toBe(BOUNDARY);
+  });
+});
 
 describe('parseBoundaryPatches', () => {
   it('extracts patch names and ignores the FoamFile header', () => {

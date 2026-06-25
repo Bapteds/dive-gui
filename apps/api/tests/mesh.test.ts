@@ -469,6 +469,70 @@ describe('POST /projects/:id/mesh/auto-patch', () => {
     expect(res.body.result.command).toContain('autoPatch 30 -overwrite');
   });
 
+  it('collapses before autoPatch and drops the empty patches it leaves behind', async () => {
+    let capturedInput = '';
+    const collapsingRunner: CommandRunner = async (spec) => {
+      runCount += 1;
+      if (spec.command === 'autoPatch') {
+        const caseDir = spec.args[spec.args.indexOf('-case') + 1];
+        const bpath = path.join(caseDir, 'constant', 'polyMesh', 'boundary');
+        capturedInput = await fs.readFile(bpath, 'utf8');
+        // Mimic autoPatch keeping the collapsed patch (now 0 faces) + new autos.
+        await fs.writeFile(
+          bpath,
+          `FoamFile { class polyBoundaryMesh; object boundary; }
+4
+(
+    defaultFaces { type patch; nFaces 0; startFace 100; }
+    auto0 { type patch; nFaces 12; startFace 100; }
+    auto1 { type patch; nFaces 8; startFace 112; }
+    auto2 { type wall; nFaces 20; startFace 120; }
+)
+`,
+        );
+        return ok(spec, 'End\n');
+      }
+      return ok(spec, '');
+    };
+    setCommandRunner(collapsingRunner);
+    const { id, auth } = await makeProject('mesh-autopatch-collapse@dive-turbinen.test');
+    await writePolyMesh(id); // inlet + walls
+    await writeCaseFile(id, '0/U', FIELD_U);
+
+    const res = await autoPatch(id, auth, { featureAngle: 45 });
+    expect(res.status).toBe(200);
+
+    // autoPatch was handed a single collapsed patch, not inlet/walls.
+    expect(capturedInput).toMatch(/defaultFaces\s*\{/);
+    expect((capturedInput.match(/startFace/g) ?? []).length).toBe(1);
+
+    // The empty defaultFaces was removed; only the real patches remain.
+    expect(res.body.result.patches).toEqual(['auto0', 'auto1', 'auto2']);
+    const boundary = (await readCaseFile(id, 'constant/polyMesh/boundary'))?.toString('utf8') ?? '';
+    expect(boundary).not.toMatch(/defaultFaces\s*\{/);
+
+    // 0/ fields realigned to the real patches (no stale defaultFaces).
+    const field = (await readCaseFile(id, '0/U'))?.toString('utf8') ?? '';
+    expect(field).toMatch(/auto0\s*\{/);
+    expect(field).not.toMatch(/defaultFaces/);
+  });
+
+  it('restores the original boundary when autoPatch fails (no collapsed leftover)', async () => {
+    setCommandRunner(failRunner);
+    const { id, auth } = await makeProject('mesh-autopatch-restore@dive-turbinen.test');
+    await writePolyMesh(id);
+
+    const res = await autoPatch(id, auth, { featureAngle: 45 });
+    expect(res.status).toBe(200);
+    expect(res.body.result.success).toBe(false);
+
+    // The mesh is untouched: the pre-collapse inlet/walls boundary is back.
+    const boundary = (await readCaseFile(id, 'constant/polyMesh/boundary'))?.toString('utf8') ?? '';
+    expect(boundary).toMatch(/inlet\s*\{/);
+    expect(boundary).toMatch(/walls\s*\{/);
+    expect(boundary).not.toMatch(/defaultFaces\s*\{/);
+  });
+
   it('realigns the 0/ field boundaryFields to the new auto-generated patches', async () => {
     setCommandRunner(autoPatchRunner);
     const { id, auth } = await makeProject('mesh-autopatch-sync@dive-turbinen.test');

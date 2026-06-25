@@ -628,6 +628,80 @@ export function renameBoundaryPatch(content: string, from: string, to: string): 
   return renamePatchHeader(content, from, to);
 }
 
+/** The standard polyBoundaryMesh FoamFile header, used when none can be preserved. */
+const BOUNDARY_FOAMFILE_HEADER = `FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       polyBoundaryMesh;
+    location    "constant/polyMesh";
+    object      boundary;
+}`;
+
+/**
+ * Collapse every boundary patch into a SINGLE patch that covers all boundary
+ * faces. The boundary faces are the contiguous tail of the mesh face list and
+ * the patches partition them with no gaps, so one patch with
+ * `startFace = min(startFace)` and `nFaces = sum(nFaces)` is valid and covers
+ * exactly the same faces.
+ *
+ * This exists for re-running OpenFOAM's autoPatch: autoPatch keeps the existing
+ * patches in its output and appends fresh `autoN` patches, so re-running it on an
+ * already-patched mesh accumulates stale (0-face) patches and the numbering keeps
+ * climbing. Collapsing to one patch first makes each run start from a clean slate
+ * and number from `auto0` again. Returns the content unchanged when no patch with
+ * an nFaces/startFace pair is found.
+ */
+export function collapseBoundaryToSinglePatch(content: string, patchName = 'defaultFaces'): string {
+  const nFaces = [...content.matchAll(/\bnFaces\s+(\d+)/g)].map((m) => Number(m[1]));
+  const startFaces = [...content.matchAll(/\bstartFace\s+(\d+)/g)].map((m) => Number(m[1]));
+  if (nFaces.length === 0 || startFaces.length === 0) return content;
+
+  const total = nFaces.reduce((sum, n) => sum + n, 0);
+  const start = Math.min(...startFaces);
+  const headerMatch = content.match(/FoamFile\s*\{[^}]*\}/);
+  const header = headerMatch ? headerMatch[0] : BOUNDARY_FOAMFILE_HEADER;
+
+  return (
+    `${header}\n\n1\n(\n` +
+    `    ${patchName}\n    {\n        type            patch;\n` +
+    `        nFaces          ${total};\n        startFace       ${start};\n    }\n)\n`
+  );
+}
+
+/**
+ * Drop every boundary patch with zero faces (`nFaces 0`) and renumber the patch
+ * count. autoPatch leaves the pre-existing patches behind as empty entries; this
+ * removes them so only the real, populated patches remain. Patch blocks in a
+ * boundary file contain no nested braces (groups use parentheses), so a
+ * non-greedy `{…}` match is safe. Returns the content unchanged when nothing is
+ * empty (or it cannot be parsed).
+ */
+export function removeEmptyBoundaryPatches(content: string): string {
+  const headerMatch = content.match(/FoamFile\s*\{[^}]*\}/);
+  if (!headerMatch) return content;
+  const header = headerMatch[0];
+  const body = content.slice(headerMatch.index! + header.length);
+
+  const blockRe = /([A-Za-z_][A-Za-z0-9_]*)\s*\{[^{}]*\}/g;
+  const kept: string[] = [];
+  let removed = 0;
+  let match: RegExpExecArray | null;
+  while ((match = blockRe.exec(body)) !== null) {
+    const block = match[0];
+    const nf = block.match(/\bnFaces\s+(\d+)/);
+    if (nf && Number(nf[1]) === 0) {
+      removed += 1;
+      continue;
+    }
+    kept.push(block.trim());
+  }
+  if (removed === 0) return content;
+
+  const list = kept.map((block) => `    ${block}`).join('\n');
+  return `${header}\n\n${kept.length}\n(\n${list}\n)\n`;
+}
+
 /**
  * Find the brace span of the `boundaryField { … }` dictionary in a field file,
  * or null when absent. Brace-matched from the first `{` after the keyword.
