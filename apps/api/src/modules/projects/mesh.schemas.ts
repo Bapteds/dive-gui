@@ -54,3 +54,31 @@ export const setPatchTypeSchema = z.object({
 });
 
 export type SetPatchTypeInput = z.infer<typeof setPatchTypeSchema>;
+
+/**
+ * Body for a BATCH patch edit (the Visualize "edit names & types" overlay):
+ * a non-empty list of `{ from, to, type }`. Each `to` is a valid OpenFOAM word
+ * and each `type` one of `MESH_PATCH_TYPES`; cross-edit checks (existence,
+ * collisions, duplicate `from`) are done by the service against the live mesh.
+ */
+export const editPatchesSchema = z.object({
+  edits: z
+    .array(
+      z.object({
+        from: z.string().trim().min(1, 'The current patch name is required'),
+        to: z
+          .string()
+          .trim()
+          .min(1, 'A new patch name is required')
+          .max(80, 'Patch name is too long')
+          .regex(
+            /^[A-Za-z_][A-Za-z0-9_]*$/,
+            'Use letters, digits, or underscore; it must not start with a digit',
+          ),
+        type: z.enum(MESH_PATCH_TYPES),
+      }),
+    )
+    .min(1, 'At least one patch edit is required'),
+});
+
+export type EditPatchesInput = z.infer<typeof editPatchesSchema>;

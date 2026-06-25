@@ -6,14 +6,23 @@ import { AppError } from '../../lib/AppError';
 import type { Viewer } from './projects.service';
 import {
   autoPatchMesh,
+  editMeshPatches,
+  getMeshBackup,
   getMeshEdges,
   getMeshGeometry,
   getMeshManifest,
   rebuildMesh,
   renameMeshPatch,
+  restoreMeshBackup,
+  saveMeshBackup,
   setPatchType,
 } from './mesh.service';
-import type { AutoPatchInput, RenamePatchInput, SetPatchTypeInput } from './mesh.schemas';
+import type {
+  AutoPatchInput,
+  EditPatchesInput,
+  RenamePatchInput,
+  SetPatchTypeInput,
+} from './mesh.schemas';
 
 /** Build the acting viewer (id + role) or fail defensively. */
 function requireViewer(req: Request): Viewer {
@@ -76,4 +85,29 @@ export async function autoPatchController(req: Request, res: Response): Promise<
   const { featureAngle } = req.body as AutoPatchInput;
   const result = await autoPatchMesh(requireViewer(req), req.params.id, featureAngle);
   res.status(200).json({ result });
+}
+
+/** PUT /projects/:id/mesh/patches — apply a batch of name/type edits at once. */
+export async function editMeshPatchesController(req: Request, res: Response): Promise<void> {
+  const { edits } = req.body as EditPatchesInput;
+  const result = await editMeshPatches(requireViewer(req), req.params.id, edits);
+  res.status(200).json(result);
+}
+
+/** GET /projects/:id/mesh/backup — status of the single backup slot (or null). */
+export async function getMeshBackupController(req: Request, res: Response): Promise<void> {
+  const backup = await getMeshBackup(requireViewer(req), req.params.id);
+  res.status(200).json({ backup });
+}
+
+/** POST /projects/:id/mesh/backup — overwrite the backup slot with the current case. */
+export async function saveMeshBackupController(req: Request, res: Response): Promise<void> {
+  const backup = await saveMeshBackup(requireViewer(req), req.params.id);
+  res.status(200).json({ backup });
+}
+
+/** POST /projects/:id/mesh/backup/restore — restore the case from the backup slot. */
+export async function restoreMeshBackupController(req: Request, res: Response): Promise<void> {
+  const manifest = await restoreMeshBackup(requireViewer(req), req.params.id);
+  res.status(200).json({ manifest });
 }

@@ -40,11 +40,15 @@ import {
 } from './conversion.controller';
 import {
   autoPatchController,
+  editMeshPatchesController,
+  getMeshBackupController,
   getMeshEdgesController,
   getMeshGeometryController,
   getMeshManifestController,
   rebuildMeshController,
   renameMeshPatchController,
+  restoreMeshBackupController,
+  saveMeshBackupController,
   setMeshPatchTypeController,
 } from './mesh.controller';
 import {
@@ -54,7 +58,12 @@ import {
   startRunController,
   stopRunController,
 } from './runs.controller';
-import { autoPatchSchema, renamePatchSchema, setPatchTypeSchema } from './mesh.schemas';
+import {
+  autoPatchSchema,
+  editPatchesSchema,
+  renamePatchSchema,
+  setPatchTypeSchema,
+} from './mesh.schemas';
 import { createFileSchema, filePathQuerySchema, movePathSchema } from './files.schemas';
 import { runIdParamSchema, startRunSchema } from './runs.schemas';
 import { cgnsNameQuerySchema, convertCgnsSchema } from './conversion.schemas';
@@ -261,6 +270,31 @@ export function createProjectsRouter(): Router {
     '/:id/mesh/auto-patch',
     validate({ params: projectIdParamSchema, body: autoPatchSchema }),
     asyncHandler(autoPatchController),
+  );
+  // Batch edit: rename and/or retype many patches at once (the "edit names &
+  // types" overlay). Propagated into the 0/ fields; the original case is backed
+  // up before the first edit so the change is reversible.
+  router.put(
+    '/:id/mesh/patches',
+    validate({ params: projectIdParamSchema, body: editPatchesSchema }),
+    asyncHandler(editMeshPatchesController),
+  );
+  // Single-slot mesh backup: read its status, overwrite it with the current
+  // case, or restore the case (mesh + 0/ fields) from it.
+  router.get(
+    '/:id/mesh/backup',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(getMeshBackupController),
+  );
+  router.post(
+    '/:id/mesh/backup',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(saveMeshBackupController),
+  );
+  router.post(
+    '/:id/mesh/backup/restore',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(restoreMeshBackupController),
   );
 
   // Apply a shared template to this project's case: preview the conflicts, then

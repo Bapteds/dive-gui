@@ -8,8 +8,10 @@
 
 import type {
   ConversionStepId,
+  MeshBackupInfo,
   MeshManifest,
   MeshPatch,
+  MeshPatchEdit,
   MeshPatchType,
   ResidualSample,
   Role,
@@ -351,7 +353,7 @@ export interface ConvertCgnsInput {
 // ---- 3D mesh viewer ("Visualize" tab) ----
 
 /** Re-export of the shared mesh shapes (one patch; the full manifest). */
-export type { MeshPatch, MeshManifest, MeshPatchType };
+export type { MeshPatch, MeshManifest, MeshPatchType, MeshPatchEdit, MeshBackupInfo };
 
 /** `GET /projects/:id/mesh/manifest` and `POST /projects/:id/mesh/rebuild` response. */
 export interface MeshManifestResponse {
@@ -383,6 +385,12 @@ export interface AutoPatchResult {
 /** `POST /projects/:id/mesh/auto-patch` response. */
 export interface AutoPatchResponse {
   result: AutoPatchResult;
+}
+
+/** `GET /projects/:id/mesh/backup` and `POST /projects/:id/mesh/backup` response. */
+export interface MeshBackupResponse {
+  /** The backup slot status, or null when no backup has been taken yet. */
+  backup: MeshBackupInfo | null;
 }
 
 // ---- Solver runs ("Solver" tab) -------------------------------------------

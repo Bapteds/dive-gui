@@ -18,8 +18,11 @@ import type {
   ImportCaseResponse,
   MoveCaseEntryResponse,
   ListProjectsResponse,
+  MeshBackupInfo,
+  MeshBackupResponse,
   MeshManifest,
   MeshManifestResponse,
+  MeshPatchEdit,
   MeshPatchType,
   Project,
   ProjectResponse,
@@ -238,6 +241,37 @@ export async function autoPatchMesh(id: string, featureAngle: number): Promise<A
     featureAngle,
   });
   return data.result;
+}
+
+/**
+ * Apply a batch of patch name/type edits at once (the "edit names & types"
+ * overlay). Propagated into the 0/ fields server-side; returns the refreshed
+ * patch-name list. The original case is backed up before the first edit.
+ */
+export async function editMeshPatches(
+  id: string,
+  edits: MeshPatchEdit[],
+): Promise<{ patches: string[] }> {
+  return apiClient.put<{ patches: string[] }>(`/projects/${id}/mesh/patches`, { edits });
+}
+
+/** Status of the project's single mesh-backup slot, or null when none taken. */
+export async function getMeshBackup(id: string): Promise<MeshBackupInfo | null> {
+  const data = await apiClient.get<MeshBackupResponse>(`/projects/${id}/mesh/backup`);
+  return data.backup;
+}
+
+/** Overwrite the backup slot with the current case (the "make this the baseline" action). */
+export async function saveMeshBackup(id: string): Promise<MeshBackupInfo> {
+  const data = await apiClient.post<MeshBackupResponse>(`/projects/${id}/mesh/backup`);
+  // The slot always exists after a save, so `backup` is non-null here.
+  return data.backup as MeshBackupInfo;
+}
+
+/** Restore the case (mesh + 0/ fields) from the backup slot; returns the fresh manifest. */
+export async function restoreMeshBackup(id: string): Promise<MeshManifest> {
+  const data = await apiClient.post<MeshManifestResponse>(`/projects/${id}/mesh/backup/restore`);
+  return data.manifest;
 }
 
 // ---- Applying a shared template to this project's case ----

@@ -93,6 +93,33 @@ export interface MeshManifest {
 }
 
 /**
+ * One row of a batch patch edit from the Visualize tab: rename `from` -> `to`
+ * (equal when only the type changes) and set its geometric `type`. The server
+ * applies every edit in one pass over the boundary file and the 0/ fields.
+ */
+export interface MeshPatchEdit {
+  /** Current (pre-edit) patch name — identifies the patch to change. */
+  from: string;
+  /** New patch name (a valid OpenFOAM word; equal to `from` to keep the name). */
+  to: string;
+  /** New geometric type (propagated into the 0/ fields for constraint types). */
+  type: MeshPatchType;
+}
+
+/**
+ * Status of a project's single mesh-backup slot. `kind` is 'original' for the
+ * automatic snapshot taken before the first modification, 'manual' for an
+ * explicit overwrite. Timestamps are ISO 8601.
+ */
+export interface MeshBackupInfo {
+  /** When the slot was first captured. */
+  createdAt: string;
+  /** When the slot was last written (original capture or overwrite). */
+  updatedAt: string;
+  kind: 'original' | 'manual';
+}
+
+/**
  * Geometric boundary types a mesh patch can be set to from the Visualize tab
  * (the `type` keyword in constant/polyMesh/boundary). The constraint types
  * (empty / symmetry / symmetryPlane / wedge) require every field's boundaryField
