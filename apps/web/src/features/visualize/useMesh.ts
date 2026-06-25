@@ -1,14 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   autoPatchMesh,
+  editMeshPatches,
+  getMeshBackup,
   getMeshEdges,
   getMeshGeometry,
   getMeshManifest,
   rebuildMesh,
   renameMeshPatch,
+  restoreMeshBackup,
+  saveMeshBackup,
   setMeshPatchType,
 } from '@/lib/api/projects';
-import type { AutoPatchResult, MeshManifest, MeshPatchType } from '@/lib/api/types';
+import type {
+  AutoPatchResult,
+  MeshBackupInfo,
+  MeshManifest,
+  MeshPatchEdit,
+  MeshPatchType,
+} from '@/lib/api/types';
 
 /**
  * useMesh - React Query hooks for the 3D mesh viewer ("Visualize" tab).
@@ -36,6 +46,10 @@ export const meshGeometryQueryKey = (projectId: string) =>
 /** Query key for a project's cell-edge buffer. */
 export const meshEdgesQueryKey = (projectId: string) =>
   ['projects', projectId, 'mesh', 'edges'] as const;
+
+/** Query key for a project's mesh-backup slot status. */
+export const meshBackupQueryKey = (projectId: string) =>
+  ['projects', projectId, 'mesh', 'backup'] as const;
 
 /**
  * Load the patch manifest. The first call builds the render on the server, so
@@ -157,6 +171,72 @@ export function useAutoPatch(projectId: string) {
     onSuccess: (result) => {
       if (!result.success) return;
       queryClient.removeQueries({ queryKey: meshManifestQueryKey(projectId) });
+      queryClient.removeQueries({ queryKey: meshGeometryQueryKey(projectId) });
+      queryClient.removeQueries({ queryKey: meshEdgesQueryKey(projectId) });
+      void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'files'] });
+      // The first edit captures the original backup server-side; refresh status.
+      void queryClient.invalidateQueries({ queryKey: meshBackupQueryKey(projectId) });
+    },
+  });
+}
+
+/**
+ * Apply a batch of patch name/type edits (the "edit names & types" overlay). The
+ * boundary file and 0/ fields change server-side, so drop the cached render
+ * (rebuilt on the next manifest fetch) and refresh the case tree + backup status
+ * (the first edit captures the original).
+ */
+export function useEditPatches(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<{ patches: string[] }, Error, MeshPatchEdit[]>({
+    mutationFn: (edits) => editMeshPatches(projectId, edits),
+    onSuccess: () => {
+      queryClient.removeQueries({ queryKey: meshManifestQueryKey(projectId) });
+      queryClient.removeQueries({ queryKey: meshGeometryQueryKey(projectId) });
+      queryClient.removeQueries({ queryKey: meshEdgesQueryKey(projectId) });
+      void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'files'] });
+      void queryClient.invalidateQueries({ queryKey: meshBackupQueryKey(projectId) });
+    },
+  });
+}
+
+/**
+ * Status of the project's single mesh-backup slot (null when none taken yet).
+ * Retries are disabled: an absent backup is a definitive state, not an error.
+ */
+export function useMeshBackupQuery(projectId: string, enabled = true) {
+  return useQuery<MeshBackupInfo | null>({
+    queryKey: meshBackupQueryKey(projectId),
+    queryFn: () => getMeshBackup(projectId),
+    enabled,
+    retry: false,
+    staleTime: FIVE_MINUTES,
+    gcTime: FIVE_MINUTES,
+  });
+}
+
+/** Overwrite the backup slot with the current case; refresh the backup status. */
+export function useSaveBackup(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<MeshBackupInfo>({
+    mutationFn: () => saveMeshBackup(projectId),
+    onSuccess: (backup) => {
+      queryClient.setQueryData(meshBackupQueryKey(projectId), backup);
+    },
+  });
+}
+
+/**
+ * Restore the case (mesh + 0/ fields) from the backup slot. The whole case
+ * changed, so drop the cached render (rebuilt on the next manifest fetch) and
+ * refresh the case tree; the manifest comes back fresh from the restore.
+ */
+export function useRestoreBackup(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<MeshManifest>({
+    mutationFn: () => restoreMeshBackup(projectId),
+    onSuccess: (manifest) => {
+      queryClient.setQueryData(meshManifestQueryKey(projectId), manifest);
       queryClient.removeQueries({ queryKey: meshGeometryQueryKey(projectId) });
       queryClient.removeQueries({ queryKey: meshEdgesQueryKey(projectId) });
       void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'files'] });

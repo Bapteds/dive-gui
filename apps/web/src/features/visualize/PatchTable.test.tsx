@@ -4,9 +4,10 @@ import type { MeshPatch } from '@/lib/api/types';
 import { PatchTable } from './PatchTable';
 
 /**
- * PatchTable tests: the Name/Type/nFaces list renders, rows are selectable (and
- * toggle off), the selected row is marked aria-selected, and "Show all" clears
- * the selection (and is disabled when nothing is selected).
+ * PatchTable tests: the read-only Name/Type/nFaces list renders, rows are
+ * selectable (and toggle off), the selected row is marked aria-selected, the
+ * type shows as plain text (editing happens in the overlay, not inline), and
+ * "Show all" clears the selection (and is disabled when nothing is selected).
  */
 
 const patches: MeshPatch[] = [
@@ -45,37 +46,10 @@ describe('PatchTable', () => {
     expect(otherRow).toHaveAttribute('aria-selected', 'false');
   });
 
-  it('exposes a per-row rename action that does not select the row', () => {
-    const onSelect = vi.fn();
-    const onRename = vi.fn();
-    render(
-      <PatchTable patches={patches} selected={null} onSelect={onSelect} onRename={onRename} />,
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Rename walls' }));
-    expect(onRename).toHaveBeenCalledWith('walls');
-    expect(onSelect).not.toHaveBeenCalled();
-  });
-
-  it('hides the rename action when onRename is not provided', () => {
-    render(<PatchTable patches={patches} selected={null} onSelect={() => {}} />);
-    expect(screen.queryByRole('button', { name: /rename/i })).not.toBeInTheDocument();
-  });
-
-  it('exposes a per-row type select that changes the type without selecting the row', () => {
-    const onSelect = vi.fn();
-    const onSetType = vi.fn();
-    render(
-      <PatchTable patches={patches} selected={null} onSelect={onSelect} onSetType={onSetType} />,
-    );
-    const select = screen.getByRole('combobox', { name: 'Type for inlet' });
-    fireEvent.change(select, { target: { value: 'wall' } });
-    expect(onSetType).toHaveBeenCalledWith('inlet', 'wall');
-    expect(onSelect).not.toHaveBeenCalled();
-  });
-
-  it('shows the type as read-only text when onSetType is not provided', () => {
+  it('is read-only: shows the type as plain text with no inline edit controls', () => {
     render(<PatchTable patches={patches} selected={null} onSelect={() => {}} />);
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /rename/i })).not.toBeInTheDocument();
     expect(screen.getByText('patch')).toBeInTheDocument();
   });
 

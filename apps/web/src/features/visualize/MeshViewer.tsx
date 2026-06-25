@@ -2,23 +2,45 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { AlertTriangle, Grid3x3, Loader2, Maximize, MonitorX, Scissors } from 'lucide-react';
+import {
+  AlertTriangle,
+  Grid3x3,
+  Loader2,
+  Maximize,
+  MonitorX,
+  Pencil,
+  RotateCcw,
+  Save,
+  Scissors,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Diamond } from '@/components/brand/Diamond';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { toast } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
 import { ApiError } from '@/lib/api/client';
-import type { MeshPatch, MeshPatchType } from '@/lib/api/types';
+import type { MeshBackupInfo, MeshPatch } from '@/lib/api/types';
 import { PatchTable } from './PatchTable';
-import { RenamePatchDialog } from './RenamePatchDialog';
+import { EditPatchesDialog } from './EditPatchesDialog';
 import { AutoPatchDialog } from './AutoPatchDialog';
 import {
+  useMeshBackupQuery,
   useMeshEdgesQuery,
   useMeshGeometryQuery,
   useMeshManifestQuery,
   useRebuildMesh,
-  useSetPatchType,
+  useRestoreBackup,
+  useSaveBackup,
 } from './useMesh';
 
 /**
@@ -61,10 +83,12 @@ function detectWebgl(): boolean {
 export function MeshViewer({ projectId }: { projectId: string }) {
   const webglAvailable = useMemo(detectWebgl, []);
   const [selected, setSelected] = useState<string | null>(null);
-  // The patch being renamed, or null when the rename dialog is closed.
-  const [renameTarget, setRenameTarget] = useState<string | null>(null);
+  // Whether the "edit names & types" overlay is open.
+  const [editOpen, setEditOpen] = useState(false);
   // Whether the auto-patch dialog is open.
   const [autoPatchOpen, setAutoPatchOpen] = useState(false);
+  // Whether the destructive "restore backup" confirmation is open.
+  const [restoreOpen, setRestoreOpen] = useState(false);
 
   const manifest = useMeshManifestQuery(projectId);
   const patches = manifest.data?.patches ?? [];
@@ -76,23 +100,34 @@ export function MeshViewer({ projectId }: { projectId: string }) {
   const geometry = useMeshGeometryQuery(projectId, viewerEnabled);
   const edges = useMeshEdgesQuery(projectId, viewerEnabled);
   const rebuild = useRebuildMesh(projectId);
-  const setPatchType = useSetPatchType(projectId);
+  // The backup slot exists only for a real mesh; gate its query on a built manifest.
+  const backup = useMeshBackupQuery(projectId, manifest.isSuccess);
+  const saveBackup = useSaveBackup(projectId);
+  const restore = useRestoreBackup(projectId);
 
   const handleRebuild = () => {
     setSelected(null);
     rebuild.mutate();
   };
 
-  const handleSetType = (name: string, type: string) => {
-    setPatchType.mutate(
-      { patch: name, type: type as MeshPatchType },
-      {
-        onError: (error) =>
-          toast.error(
-            error instanceof ApiError ? error.message : 'Could not change the patch type.',
-          ),
+  const handleSaveBackup = () => {
+    saveBackup.mutate(undefined, {
+      onSuccess: () => toast.success('Backup updated to the current mesh.'),
+      onError: (error) =>
+        toast.error(error instanceof ApiError ? error.message : 'Could not save the backup.'),
+    });
+  };
+
+  const handleRestore = () => {
+    restore.mutate(undefined, {
+      onSuccess: () => {
+        setSelected(null);
+        setRestoreOpen(false);
+        toast.success('Mesh restored from backup.');
       },
-    );
+      onError: (error) =>
+        toast.error(error instanceof ApiError ? error.message : 'Could not restore the backup.'),
+    });
   };
 
   return (
@@ -101,9 +136,9 @@ export function MeshViewer({ projectId }: { projectId: string }) {
         aria-label="3D mesh preview"
         className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border bg-surface shadow-sm lg:grid lg:grid-cols-[minmax(220px,18rem)_1fr]"
       >
-        {/* Left: patch table (or its loading / empty stand-ins). */}
-        <div className="flex min-h-0 flex-col border-b border-border p-4 sm:p-5 lg:border-b-0 lg:border-r">
-          <div className="flex shrink-0 items-center justify-between gap-2 pb-3">
+        {/* Left: patch table (or its loading / empty stand-ins) + backup bar. */}
+        <div className="flex min-h-0 flex-col gap-3 border-b border-border p-4 sm:p-5 lg:border-b-0 lg:border-r">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
             <h2 className="min-w-0 text-sm font-semibold text-text">
               Boundary patches
               {hasPatches && (
@@ -112,30 +147,50 @@ export function MeshViewer({ projectId }: { projectId: string }) {
                 </span>
               )}
             </h2>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="shrink-0"
-              onClick={() => setAutoPatchOpen(true)}
-            >
-              <Scissors strokeWidth={1.75} aria-hidden="true" />
-              Auto-patch
-            </Button>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => setEditOpen(true)}
+                disabled={!hasPatches}
+              >
+                <Pencil strokeWidth={1.75} aria-hidden="true" />
+                Edit names &amp; types
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setAutoPatchOpen(true)}
+                disabled={!manifest.isSuccess}
+              >
+                <Scissors strokeWidth={1.75} aria-hidden="true" />
+                Auto-patch
+              </Button>
+            </div>
           </div>
-          {manifest.isPending ? (
-            <PatchTableSkeleton />
-          ) : manifest.isError ? (
-            <p className="text-sm text-text-secondary">{manifestErrorMessage(manifest.error)}</p>
-          ) : !hasPatches ? (
-            <p className="text-sm text-text-secondary">No boundary patches in this mesh.</p>
-          ) : (
-            <PatchTable
-              patches={patches}
-              selected={selected}
-              onSelect={setSelected}
-              onRename={setRenameTarget}
-              onSetType={handleSetType}
+
+          <div className="flex min-h-0 flex-1 flex-col">
+            {manifest.isPending ? (
+              <PatchTableSkeleton />
+            ) : manifest.isError ? (
+              <p className="text-sm text-text-secondary">{manifestErrorMessage(manifest.error)}</p>
+            ) : !hasPatches ? (
+              <p className="text-sm text-text-secondary">No boundary patches in this mesh.</p>
+            ) : (
+              <PatchTable patches={patches} selected={selected} onSelect={setSelected} />
+            )}
+          </div>
+
+          {manifest.isSuccess && (
+            <BackupBar
+              info={backup.data ?? null}
+              loading={backup.isPending}
+              saving={saveBackup.isPending}
+              restoring={restore.isPending}
+              onSave={handleSaveBackup}
+              onRestore={() => setRestoreOpen(true)}
             />
           )}
         </div>
@@ -157,14 +212,17 @@ export function MeshViewer({ projectId }: { projectId: string }) {
         </div>
       </section>
 
-      <RenamePatchDialog
+      <EditPatchesDialog
         projectId={projectId}
-        from={renameTarget}
-        existingNames={patches.map((patch) => patch.name)}
-        onClose={() => setRenameTarget(null)}
-        onRenamed={(oldName, newName) => {
-          // Keep the selection (and its 3D highlight) on the patch after rename.
-          setSelected((current) => (current === oldName ? newName : current));
+        open={editOpen}
+        patches={patches}
+        onClose={() => setEditOpen(false)}
+        onSaved={(renames) => {
+          // Keep the selection (and its 3D highlight) on a renamed patch.
+          setSelected((current) => {
+            const match = renames.find((r) => r.from === current);
+            return match ? match.to : current;
+          });
         }}
       />
 
@@ -176,7 +234,110 @@ export function MeshViewer({ projectId }: { projectId: string }) {
         // selection no longer applies once the viewer rebuilds.
         onPatched={() => setSelected(null)}
       />
+
+      <AlertDialog
+        open={restoreOpen}
+        onOpenChange={(open) => {
+          if (!restore.isPending) setRestoreOpen(open);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Restore the mesh from backup?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This replaces the current mesh and the 0/ fields with the saved backup. Any changes
+              made since the backup will be lost.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={restore.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                // Keep the dialog open while the restore runs; close on success.
+                event.preventDefault();
+                handleRestore();
+              }}
+            >
+              {restore.isPending ? 'Restoring…' : 'Restore'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
+  );
+}
+
+/** Locale-aware date+time for the backup status line (matches the app's en-GB). */
+const backupTimeFormatter = new Intl.DateTimeFormat('en-GB', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+});
+
+/**
+ * BackupBar - the single-slot mesh backup controls at the foot of the left
+ * panel. Shows the slot status (original capture or manual overwrite, with its
+ * time), a non-destructive "Overwrite" action, and a destructive "Restore" that
+ * is confirmed before running. Both actions are disabled until a backup exists
+ * for Restore, and while either is in flight.
+ */
+function BackupBar({
+  info,
+  loading,
+  saving,
+  restoring,
+  onSave,
+  onRestore,
+}: {
+  info: MeshBackupInfo | null;
+  loading: boolean;
+  saving: boolean;
+  restoring: boolean;
+  onSave: () => void;
+  onRestore: () => void;
+}) {
+  const status = (() => {
+    if (loading) return 'Checking backup…';
+    if (!info) return 'No backup yet — created automatically on your first edit.';
+    const when = backupTimeFormatter.format(new Date(info.updatedAt));
+    return info.kind === 'original' ? `Original saved ${when}` : `Backup saved ${when}`;
+  })();
+
+  const busy = saving || restoring;
+
+  return (
+    <div className="shrink-0 rounded-md border border-border bg-bg p-3">
+      <div className="flex items-center gap-2 text-xs text-text-secondary">
+        <Diamond className="size-3 shrink-0 text-neutral" aria-hidden="true" />
+        <span className="min-w-0 truncate" title={status}>
+          {status}
+        </span>
+      </div>
+      <div className="mt-2.5 flex items-center gap-2">
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="flex-1"
+          onClick={onSave}
+          loading={saving}
+          disabled={busy}
+        >
+          <Save strokeWidth={1.75} aria-hidden="true" />
+          {info ? 'Overwrite backup' : 'Save backup'}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="flex-1 text-danger hover:bg-danger-tint hover:text-danger"
+          onClick={onRestore}
+          disabled={busy || !info}
+        >
+          <RotateCcw strokeWidth={1.75} aria-hidden="true" />
+          Restore
+        </Button>
+      </div>
+    </div>
   );
 }
 

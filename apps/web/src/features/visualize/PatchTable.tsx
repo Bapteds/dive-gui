@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Layers, Pencil } from 'lucide-react';
-import { MESH_PATCH_TYPES } from '@dive/shared';
+import { Layers } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Table,
@@ -14,8 +13,10 @@ import { cn } from '@/lib/utils';
 import type { MeshPatch } from '@/lib/api/types';
 
 /**
- * PatchTable - the Name / Type / nFaces list of boundary patches (preserves the
- * original inspector's F4/F5/F6).
+ * PatchTable - the read-only Name / Type / nFaces list of boundary patches
+ * (preserves the original inspector's F4/F5/F6). Editing names and types now
+ * happens in a single overlay (EditPatchesDialog), so this table is purely for
+ * inspection and 3D selection.
  *
  * Selection is shared with the 3D canvas: clicking a row selects that patch
  * (highlighted orange in the scene and dimmed elsewhere); the selected row gets
@@ -32,18 +33,12 @@ export function PatchTable({
   patches,
   selected,
   onSelect,
-  onRename,
-  onSetType,
 }: {
   patches: MeshPatch[];
   /** Currently selected patch name, or null for "show all". */
   selected: string | null;
   /** Select a patch (or null to clear). */
   onSelect: (name: string | null) => void;
-  /** Open the rename flow for a patch (omit to hide the rename affordance). */
-  onRename?: (name: string) => void;
-  /** Change a patch's geometric type (omit to show the type as read-only text). */
-  onSetType?: (name: string, type: string) => void;
 }) {
   const selectedRowRef = useRef<HTMLTableRowElement>(null);
 
@@ -77,11 +72,6 @@ export function PatchTable({
               <TableHead>Name</TableHead>
               <TableHead>Type</TableHead>
               <TableHead className="text-right">nFaces</TableHead>
-              {onRename && (
-                <TableHead className="w-px">
-                  <span className="sr-only">Actions</span>
-                </TableHead>
-              )}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -113,40 +103,10 @@ export function PatchTable({
                   >
                     {patch.name}
                   </TableCell>
-                  {onSetType ? (
-                    // Keep row click/keys from firing when using the type select.
-                    <TableCell
-                      className="h-11 text-text-secondary"
-                      onClick={(event) => event.stopPropagation()}
-                      onKeyDown={(event) => event.stopPropagation()}
-                    >
-                      <PatchTypeSelect patch={patch} onSetType={onSetType} />
-                    </TableCell>
-                  ) : (
-                    <TableCell className="h-11 text-text-secondary">{patch.type}</TableCell>
-                  )}
+                  <TableCell className="h-11 text-text-secondary">{patch.type}</TableCell>
                   <TableCell className="h-11 text-right text-text-secondary">
                     {numberFormatter.format(patch.nFaces)}
                   </TableCell>
-                  {onRename && (
-                    // Keep row click/keys from firing when interacting with the action.
-                    <TableCell
-                      className="h-11 pl-0 pr-2 text-right"
-                      onClick={(event) => event.stopPropagation()}
-                      onKeyDown={(event) => event.stopPropagation()}
-                    >
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-text-secondary hover:text-text"
-                        aria-label={`Rename ${patch.name}`}
-                        onClick={() => onRename(patch.name)}
-                      >
-                        <Pencil strokeWidth={1.75} aria-hidden="true" />
-                      </Button>
-                    </TableCell>
-                  )}
                 </TableRow>
               );
             })}
@@ -154,40 +114,5 @@ export function PatchTable({
         </Table>
       </div>
     </div>
-  );
-}
-
-/**
- * A native select to change a patch's geometric type. A type not in the settable
- * set (e.g. cyclic / processor) is still shown as the current option so it is
- * never silently dropped. Constraint types are propagated into the 0/ fields
- * server-side. Native select carries explicit background + text colors per the
- * design guidelines.
- */
-function PatchTypeSelect({
-  patch,
-  onSetType,
-}: {
-  patch: MeshPatch;
-  onSetType: (name: string, type: string) => void;
-}) {
-  const known = (MESH_PATCH_TYPES as readonly string[]).includes(patch.type);
-  const options = known ? [...MESH_PATCH_TYPES] : [patch.type, ...MESH_PATCH_TYPES];
-
-  return (
-    <select
-      aria-label={`Type for ${patch.name}`}
-      value={patch.type}
-      onChange={(event) => {
-        if (event.target.value !== patch.type) onSetType(patch.name, event.target.value);
-      }}
-      className="w-full max-w-[10rem] rounded-sm border border-border bg-surface px-2 py-1 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-    >
-      {options.map((type) => (
-        <option key={type} value={type}>
-          {type}
-        </option>
-      ))}
-    </select>
   );
 }
