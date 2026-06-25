@@ -5,9 +5,9 @@ import { PatchTable } from './PatchTable';
 
 /**
  * PatchTable tests: the read-only Name/Type/nFaces list renders, rows are
- * selectable (and toggle off), the selected row is marked aria-selected, the
- * type shows as plain text (editing happens in the overlay, not inline), and
- * "Show all" clears the selection (and is disabled when nothing is selected).
+ * selectable (and toggle off), the selected row is marked aria-selected, and the
+ * type shows as plain text (editing happens in the overlay, not inline). "Show
+ * all" lives in the toolbar above the table, not in this component.
  */
 
 const patches: MeshPatch[] = [
@@ -46,24 +46,11 @@ describe('PatchTable', () => {
     expect(otherRow).toHaveAttribute('aria-selected', 'false');
   });
 
-  it('is read-only: shows the type as plain text with no inline edit controls', () => {
+  it('is read-only with no inline edit controls or toolbar buttons', () => {
     render(<PatchTable patches={patches} selected={null} onSelect={() => {}} />);
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /rename/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /show all/i })).not.toBeInTheDocument();
     expect(screen.getByText('patch')).toBeInTheDocument();
-  });
-
-  it('disables "Show all" until something is selected, then clears the selection', () => {
-    const onSelect = vi.fn();
-    const { rerender } = render(
-      <PatchTable patches={patches} selected={null} onSelect={onSelect} />,
-    );
-    const showAll = screen.getByRole('button', { name: /show all/i });
-    expect(showAll).toBeDisabled();
-
-    rerender(<PatchTable patches={patches} selected="inlet" onSelect={onSelect} />);
-    expect(screen.getByRole('button', { name: /show all/i })).toBeEnabled();
-    fireEvent.click(screen.getByRole('button', { name: /show all/i }));
-    expect(onSelect).toHaveBeenCalledWith(null);
   });
 });

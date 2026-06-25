@@ -5,6 +5,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import {
   AlertTriangle,
   Grid3x3,
+  Layers,
   Loader2,
   Maximize,
   MonitorX,
@@ -137,26 +138,38 @@ export function MeshViewer({ projectId }: { projectId: string }) {
         className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border bg-surface shadow-sm lg:grid lg:grid-cols-[minmax(220px,18rem)_1fr]"
       >
         {/* Left: patch table (or its loading / empty stand-ins) + backup bar. */}
-        <div className="flex min-h-0 flex-col gap-3 border-b border-border p-4 sm:p-5 lg:border-b-0 lg:border-r">
-          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
-            <h2 className="min-w-0 text-sm font-semibold text-text">
-              Boundary patches
-              {hasPatches && (
-                <span className="ml-1.5 font-normal tabular-nums text-text-secondary">
-                  ({patches.length})
-                </span>
-              )}
-            </h2>
-            <div className="flex shrink-0 items-center gap-2">
+        <div className="flex min-h-0 min-w-0 flex-col gap-3 border-b border-border p-4 sm:p-5 lg:border-b-0 lg:border-r">
+          <h2 className="shrink-0 text-sm font-semibold text-text">
+            Boundary patches
+            {hasPatches && (
+              <span className="ml-1.5 font-normal tabular-nums text-text-secondary">
+                ({patches.length})
+              </span>
+            )}
+          </h2>
+
+          <div className="flex shrink-0 flex-col gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="w-full"
+              onClick={() => setEditOpen(true)}
+              disabled={!hasPatches}
+            >
+              <Pencil strokeWidth={1.75} aria-hidden="true" />
+              Edit names &amp; types
+            </Button>
+            <div className="grid grid-cols-2 gap-2">
               <Button
                 type="button"
-                variant="secondary"
+                variant="ghost"
                 size="sm"
-                onClick={() => setEditOpen(true)}
-                disabled={!hasPatches}
+                onClick={() => setSelected(null)}
+                disabled={selected === null}
               >
-                <Pencil strokeWidth={1.75} aria-hidden="true" />
-                Edit names &amp; types
+                <Layers strokeWidth={1.75} aria-hidden="true" />
+                Show all
               </Button>
               <Button
                 type="button"
@@ -171,7 +184,7 @@ export function MeshViewer({ projectId }: { projectId: string }) {
             </div>
           </div>
 
-          <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             {manifest.isPending ? (
               <PatchTableSkeleton />
             ) : manifest.isError ? (
@@ -315,12 +328,12 @@ function BackupBar({
           {status}
         </span>
       </div>
-      <div className="mt-2.5 flex items-center gap-2">
+      <div className="mt-2.5 flex flex-col gap-2">
         <Button
           type="button"
           variant="secondary"
           size="sm"
-          className="flex-1"
+          className="w-full"
           onClick={onSave}
           loading={saving}
           disabled={busy}
@@ -332,12 +345,12 @@ function BackupBar({
           type="button"
           variant="ghost"
           size="sm"
-          className="flex-1 text-danger hover:bg-danger-tint hover:text-danger"
+          className="w-full text-danger hover:bg-danger-tint hover:text-danger"
           onClick={onRestore}
           disabled={busy || !info}
         >
           <RotateCcw strokeWidth={1.75} aria-hidden="true" />
-          Restore
+          Restore from backup
         </Button>
       </div>
     </div>

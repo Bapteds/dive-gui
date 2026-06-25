@@ -1,6 +1,4 @@
 import { useEffect, useRef } from 'react';
-import { Layers } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import {
   Table,
   TableBody,
@@ -13,17 +11,17 @@ import { cn } from '@/lib/utils';
 import type { MeshPatch } from '@/lib/api/types';
 
 /**
- * PatchTable - the read-only Name / Type / nFaces list of boundary patches
- * (preserves the original inspector's F4/F5/F6). Editing names and types now
- * happens in a single overlay (EditPatchesDialog), so this table is purely for
- * inspection and 3D selection.
+ * PatchTable - the read-only Name / Type / nFaces list of boundary patches.
+ * Editing names and types now happens in a single overlay (EditPatchesDialog),
+ * and "Show all" lives in the toolbar above, so this is purely the inspection +
+ * 3D-selection table.
  *
  * Selection is shared with the 3D canvas: clicking a row selects that patch
  * (highlighted orange in the scene and dimmed elsewhere); the selected row gets
  * a full accent-tint wash + semibold name + aria-selected (the orange wash is
- * the visual link to the highlighted surface, not a side stripe). "Show all"
- * clears the selection (F6). Rows are keyboard-activatable (Enter/Space). When
- * the selection is driven from the canvas, the selected row scrolls into view.
+ * the visual link to the highlighted surface, not a side stripe). Rows are
+ * keyboard-activatable (Enter/Space). When the selection is driven from the
+ * canvas, the selected row scrolls into view.
  */
 
 /** Locale-aware integer formatter for the face counts (matches the app's en-GB). */
@@ -52,67 +50,58 @@ export function PatchTable({
   }, [selected]);
 
   return (
-    <div className="flex min-h-0 flex-col gap-3">
-      <Button
-        type="button"
-        variant="secondary"
-        size="sm"
-        className="w-full"
-        onClick={() => onSelect(null)}
-        disabled={selected === null}
-      >
-        <Layers strokeWidth={1.75} aria-hidden="true" />
-        Show all
-      </Button>
-
-      <div className="min-h-0 flex-1 overflow-auto overscroll-contain rounded-md border border-border">
-        <Table>
-          <TableHeader className="sticky top-0 z-base">
-            <TableRow className="hover:bg-bg">
-              <TableHead>Name</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead className="text-right">nFaces</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {patches.map((patch) => {
-              const isSelected = patch.name === selected;
-              return (
-                <TableRow
-                  key={patch.name}
-                  ref={isSelected ? selectedRowRef : undefined}
-                  tabIndex={0}
-                  aria-selected={isSelected}
-                  onClick={() => onSelect(isSelected ? null : patch.name)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      onSelect(isSelected ? null : patch.name);
-                    }
-                  }}
+    <div className="min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain rounded-md border border-border">
+      <Table>
+        <TableHeader className="sticky top-0 z-base">
+          <TableRow className="hover:bg-bg">
+            <TableHead className="px-3 first:pl-3.5">Name</TableHead>
+            <TableHead className="px-3">Type</TableHead>
+            <TableHead className="px-3 text-right last:pr-3.5">nFaces</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {patches.map((patch) => {
+            const isSelected = patch.name === selected;
+            return (
+              <TableRow
+                key={patch.name}
+                ref={isSelected ? selectedRowRef : undefined}
+                tabIndex={0}
+                aria-selected={isSelected}
+                onClick={() => onSelect(isSelected ? null : patch.name)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onSelect(isSelected ? null : patch.name);
+                  }
+                }}
+                className={cn(
+                  'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring',
+                  isSelected && 'bg-accent-tint hover:bg-accent-tint',
+                )}
+              >
+                <TableCell
                   className={cn(
-                    'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring',
-                    isSelected && 'bg-accent-tint hover:bg-accent-tint',
+                    'h-11 px-3 font-mono text-text first:pl-3.5',
+                    isSelected ? 'font-semibold' : 'font-normal',
                   )}
                 >
-                  <TableCell
-                    className={cn(
-                      'h-11 font-mono text-text',
-                      isSelected ? 'font-semibold' : 'font-normal',
-                    )}
-                  >
-                    {patch.name}
-                  </TableCell>
-                  <TableCell className="h-11 text-text-secondary">{patch.type}</TableCell>
-                  <TableCell className="h-11 text-right text-text-secondary">
-                    {numberFormatter.format(patch.nFaces)}
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
-      </div>
+                  {patch.name}
+                </TableCell>
+                <TableCell
+                  className="h-11 max-w-[7.5rem] truncate px-3 text-text-secondary"
+                  title={patch.type}
+                >
+                  {patch.type}
+                </TableCell>
+                <TableCell className="h-11 whitespace-nowrap px-3 text-right text-text-secondary last:pr-3.5">
+                  {numberFormatter.format(patch.nFaces)}
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
     </div>
   );
 }
