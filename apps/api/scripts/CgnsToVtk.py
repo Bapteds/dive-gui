@@ -1,16 +1,26 @@
-#!/usr/bin/env pvpython
-"""CGNS (ADF/HDF5) -> legacy VTK (ASCII) via VTK (bundled with ParaView).
-Run with pvpython.
-Usage: pvpython CgnsToVtk.py input.cgns [out.vtk]
+#!/usr/bin/env python3
+"""CGNS (ADF/HDF5) -> legacy VTK (ASCII) via the standalone VTK wheel.
+Run with a plain python3 that has `pip install vtk`.
+Usage: python3 CgnsToVtk.py input.cgns [out.vtk]
 
-Why raw VTK and NOT paraview.simple:
+Run with python3, NOT pvpython:
+  This script imports only raw vtkmodules (the standalone `pip install vtk`
+  wheel) — never paraview.simple — so it does not need ParaView at all. Running
+  it under `pvpython` is actively harmful: pvpython preloads ParaView's OWN
+  bundled VTK, and importing a different pip-installed VTK on top of that mixes
+  two incompatible VTK builds in one process. The symptoms are exactly what we
+  hit: vtkCGNSReader.SetFileName silently no-ops (GetFileName stays empty ->
+  RequestInformation reports "File name not set") and the process segfaults
+  inside vtkPythonUtil. A single, consistent VTK under python3 avoids all of it.
+
+Why raw VTK and NOT paraview.simple (kept for the record):
   paraview.simple's reader/SaveData go through the ParaView *server manager*
   and, for SaveData, a *rendering* pipeline controller
   (vtkSMParaViewPipelineControllerWithRendering). On a headless server with no
   display / OpenGL context that controller segfaults (SIGSEGV) before anything
-  is written. The vtkmodules below are the same VTK classes underneath, but with
-  no server-manager and no rendering, so the conversion is purely data-side and
-  cannot hit that crash.
+  is written. The vtkmodules used here are the same VTK classes underneath, but
+  with no server-manager and no rendering, so the conversion is purely
+  data-side and cannot hit that crash.
 
 Why we never touch reader.GetOutput() until the read is confirmed good:
   vtkCGNSReader::RequestInformation emits "File name not set" and returns
@@ -105,7 +115,7 @@ def iter_leaf_datasets(dobj):
 
 def main():
     if len(sys.argv) < 2:
-        sys.stderr.write("usage: pvpython CgnsToVtk.py input.cgns [out.vtk]\n")
+        sys.stderr.write("usage: python3 CgnsToVtk.py input.cgns [out.vtk]\n")
         sys.exit(2)
 
     infile = os.path.abspath(sys.argv[1])
@@ -133,7 +143,8 @@ def main():
         from vtkmodules.vtkCommonCore import vtkCommand
     except ImportError as exc:
         sys.stderr.write(
-            "KO: run this with pvpython (VTK modules unavailable): %s\n" % exc
+            "KO: VTK modules unavailable - run with a python3 that has "
+            "`pip install vtk`: %s\n" % exc
         )
         sys.exit(1)
 

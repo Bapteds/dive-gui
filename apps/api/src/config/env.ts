@@ -48,8 +48,14 @@ const envSchema = z
     // assume they are on PATH. When a binary is absent the pipeline reports a
     // clear per-step "not found" instead of crashing.
     //
-    // ParaView's python used to run the CGNS->VTK script. On Debian: `pvpython`.
-    PVPYTHON_BIN: z.string().min(1).default('pvpython'),
+    // Python interpreter used to run the CGNS->VTK script. The script uses only
+    // the standalone VTK wheel (`pip install vtk`), NOT paraview.simple, so it
+    // must run under a plain `python3` that imports that wheel. Do NOT use
+    // `pvpython`: it preloads ParaView's bundled VTK, and importing a different
+    // pip-installed VTK on top of it mixes two incompatible builds in one
+    // process — the CGNS reader's SetFileName silently no-ops ("File name not
+    // set") and the process segfaults.
+    CGNS_PYTHON_BIN: z.string().min(1).default('python3'),
     // Absolute path to the CGNS->VTK ParaView script. Empty => the script
     // bundled with the API at apps/api/scripts/CgnsToVtk.py (resolved relative to
     // the module, cwd-independent). Set this only to point at a script kept

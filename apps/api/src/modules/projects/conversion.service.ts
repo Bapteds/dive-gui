@@ -5,7 +5,7 @@
 // `constant/polyMesh` for the case, using a chosen template for the surrounding
 // configuration, by running an external three-step toolchain:
 //
-//   1. pvpython CgnsToVtk.py <cgns> <vtk>     (ParaView)        -> legacy VTK
+//   1. python3 CgnsToVtk.py <cgns> <vtk>      (standalone VTK)  -> legacy VTK
 //   2. vtkUnstructuredToFoam -case <case> <vtk>  (OpenFOAM)     -> constant/polyMesh
 //   3. checkMesh -case <case>                    (OpenFOAM)     -> mesh report
 //
@@ -87,7 +87,7 @@ export interface ConversionResult {
 
 /** Human labels for each pipeline step. */
 const STEP_LABELS: Record<ConversionStepId, string> = {
-  cgnsToVtk: 'Convert CGNS to VTK (pvpython)',
+  cgnsToVtk: 'Convert CGNS to VTK (python3 + VTK)',
   vtkToFoam: 'Build polyMesh (vtkUnstructuredToFoam)',
   checkMesh: 'Check mesh (checkMesh)',
 };
@@ -265,13 +265,14 @@ export async function convertCgnsToFoam(
   const timeoutMs = env.CONVERSION_STEP_TIMEOUT_MS;
   const steps: ConversionStep[] = [];
 
-  // --- Step 1: CGNS -> VTK via pvpython ---
+  // --- Step 1: CGNS -> VTK via python3 + the standalone VTK wheel ---
   const scriptPath = cgnsToVtkScript();
-  const step1Display = `${env.PVPYTHON_BIN} ${scriptPath} ${cgnsAbs} ${vtkAbs}`;
+  const step1Display = `${env.CGNS_PYTHON_BIN} ${scriptPath} ${cgnsAbs} ${vtkAbs}`;
 
   // Fail fast with an actionable message if the conversion script is missing,
-  // rather than surfacing a cryptic pvpython error. The script is not shipped in
-  // the app, so a server must set CGNS_TO_VTK_SCRIPT.
+  // rather than surfacing a cryptic interpreter error. The script IS shipped
+  // with the API (apps/api/scripts/CgnsToVtk.py); this guards a server that
+  // points CGNS_TO_VTK_SCRIPT at a path that does not exist.
   if (!(await pathExists(scriptPath))) {
     steps.push({
       id: 'cgnsToVtk',
@@ -291,7 +292,7 @@ export async function convertCgnsToFoam(
   }
 
   const r1 = await runCommand({
-    command: env.PVPYTHON_BIN,
+    command: env.CGNS_PYTHON_BIN,
     args: [scriptPath, cgnsAbs, vtkAbs],
     cwd: path.dirname(cgnsAbs),
     env: process.env,

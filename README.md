@@ -104,16 +104,19 @@ Errors use a normalized envelope `{ error: { code, message } }`. Enforced busine
 
 A project's **Mesh conversion** card converts an uploaded `.cgns` mesh into the case's `constant/polyMesh` by running an external three-step toolchain on the server:
 
-1. `pvpython CgnsToVtk.py <cgns> <vtk>` (ParaView) → legacy VTK
+1. `python3 CgnsToVtk.py <cgns> <vtk>` (standalone VTK wheel) → legacy VTK
 2. `vtkUnstructuredToFoam -case <case> <vtk>` (OpenFOAM) → `constant/polyMesh`
 3. `checkMesh -case <case>` (OpenFOAM) → mesh report
 
-The CGNS→VTK script ships with the API at `apps/api/scripts/CgnsToVtk.py`; the **binaries** (`pvpython`, the OpenFOAM utilities) are **not bundled** - install them on the deploy host and point the API at them. A missing/failed tool never crashes the API: each step is captured as a structured result and the convert endpoint returns `200` with a per-step report (the UI shows the logs).
+The CGNS→VTK script ships with the API at `apps/api/scripts/CgnsToVtk.py`; the **binaries** (`python3` + the `vtk` wheel, the OpenFOAM utilities) are **not bundled** - install them on the deploy host and point the API at them. A missing/failed tool never crashes the API: each step is captured as a structured result and the convert endpoint returns `200` with a per-step report (the UI shows the logs).
+
+> **Do not run step 1 with `pvpython`.** The script imports only the standalone `vtk` wheel, not `paraview.simple`. Under `pvpython` the pip VTK is loaded on top of ParaView's own bundled VTK in one process; the two builds mix, `SetFileName` silently no-ops ("File name not set") and the process segfaults. Use a plain `python3` that has `pip install vtk`.
 
 **Debian install (example):**
 
 ```bash
-sudo apt-get install -y paraview        # provides pvpython
+sudo apt-get install -y python3-pip
+pip3 install vtk                        # the standalone VTK wheel (provides vtkmodules)
 # Install OpenFOAM per opencfd/openfoam.org instructions for your distro.
 ```
 
@@ -121,7 +124,7 @@ sudo apt-get install -y paraview        # provides pvpython
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `PVPYTHON_BIN` | `pvpython` | ParaView's Python. On Windows it is `pvpython.exe` and rarely on PATH - set the full path, e.g. `C:\Program Files\ParaView 5.12.0\bin\pvpython.exe`. |
+| `CGNS_PYTHON_BIN` | `python3` | Plain Python interpreter with the `vtk` wheel installed (`pip install vtk`). **Not** `pvpython` — see the warning above. |
 | `CGNS_TO_VTK_SCRIPT` | `apps/api/scripts/CgnsToVtk.py` | Bundled with the API (resolved relative to the module, cwd-independent). Set only to override. |
 | `VTK_TO_FOAM_BIN` | `vtkUnstructuredToFoam` | OpenFOAM utility (on PATH once the env is sourced). |
 | `CHECK_MESH_BIN` | `checkMesh` | OpenFOAM utility. |

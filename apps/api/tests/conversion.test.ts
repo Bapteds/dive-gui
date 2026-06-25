@@ -1,5 +1,5 @@
 // Integration tests for CGNS upload and the CGNS -> OpenFOAM conversion
-// pipeline. The external toolchain (ParaView pvpython + OpenFOAM utilities) is
+// pipeline. The external toolchain (python3 + VTK, plus OpenFOAM utilities) is
 // not installed in CI / on a dev box, so the command runner is swapped for a
 // fake that simulates each step (and writes the files the real tools would),
 // letting us exercise the full orchestration: template application, base-file
@@ -30,11 +30,11 @@ function ok(spec: { command: string; args: string[] }, stdout: string): CommandR
 
 /**
  * A fake runner that simulates the whole toolchain succeeding, writing the same
- * artefacts the real tools would: pvpython writes the VTK; vtkUnstructuredToFoam
+ * artefacts the real tools would: python3 writes the VTK; vtkUnstructuredToFoam
  * writes constant/polyMesh; checkMesh just reports.
  */
 const successRunner: CommandRunner = async (spec) => {
-  if (spec.command === 'pvpython') {
+  if (spec.command === 'python3') {
     const vtkAbs = spec.args[2];
     await fs.mkdir(path.dirname(vtkAbs), { recursive: true });
     await fs.writeFile(vtkAbs, '# vtk DataFile Version 2.0\nfake\n');
@@ -55,9 +55,9 @@ const successRunner: CommandRunner = async (spec) => {
   return ok(spec, '');
 };
 
-/** A fake runner that fails on the very first step (pvpython) and writes nothing. */
+/** A fake runner that fails on the very first step (python3) and writes nothing. */
 const failFirstRunner: CommandRunner = async (spec) => {
-  if (spec.command === 'pvpython') {
+  if (spec.command === 'python3') {
     return {
       command: spec.command,
       args: spec.args,
@@ -73,7 +73,7 @@ const failFirstRunner: CommandRunner = async (spec) => {
 
 /** A fake runner that simulates a missing binary at step 1 (ENOENT). */
 const missingBinaryRunner: CommandRunner = async (spec) => {
-  if (spec.command === 'pvpython') {
+  if (spec.command === 'python3') {
     return {
       command: spec.command,
       args: spec.args,
@@ -82,7 +82,7 @@ const missingBinaryRunner: CommandRunner = async (spec) => {
       stderr: '',
       durationMs: 0,
       timedOut: false,
-      spawnError: 'ENOENT: spawn pvpython ENOENT',
+      spawnError: 'ENOENT: spawn python3 ENOENT',
     };
   }
   return ok(spec, '');

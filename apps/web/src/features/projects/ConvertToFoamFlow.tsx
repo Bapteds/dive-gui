@@ -70,7 +70,7 @@ import {
 
 /** The three pipeline steps in order, with concise labels and the real tool. */
 const STEP_META: Array<{ id: ConversionStepId; label: string; tool: string }> = [
-  { id: 'cgnsToVtk', label: 'Convert CGNS to VTK', tool: 'pvpython' },
+  { id: 'cgnsToVtk', label: 'Convert CGNS to VTK', tool: 'python3' },
   { id: 'vtkToFoam', label: 'Build polyMesh', tool: 'vtkUnstructuredToFoam' },
   { id: 'checkMesh', label: 'Check mesh', tool: 'checkMesh' },
 ];

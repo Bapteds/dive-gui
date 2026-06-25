@@ -47,7 +47,7 @@ const cgnsFile: CgnsFile = { name: 'rotor.cgns', size: 1310720 };
 const successResult: ConversionResult = {
   success: true,
   steps: [
-    { id: 'cgnsToVtk', label: 'Convert CGNS to VTK', command: 'pvpython CgnsToVtk.py rotor.cgns rotor.vtk', status: 'success', exitCode: 0, stdout: 'OK: VTK written', stderr: '', durationMs: 1200 },
+    { id: 'cgnsToVtk', label: 'Convert CGNS to VTK', command: 'python3 CgnsToVtk.py rotor.cgns rotor.vtk', status: 'success', exitCode: 0, stdout: 'OK: VTK written', stderr: '', durationMs: 1200 },
     { id: 'vtkToFoam', label: 'Build polyMesh', command: 'vtkUnstructuredToFoam -case . rotor.vtk', status: 'success', exitCode: 0, stdout: 'Foam mesh written', stderr: '', durationMs: 800 },
     { id: 'checkMesh', label: 'Check mesh', command: 'checkMesh -case .', status: 'success', exitCode: 0, stdout: 'Mesh OK.', stderr: '', durationMs: 500 },
   ],

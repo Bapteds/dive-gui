@@ -45,7 +45,7 @@ export const CGNS_EXTENSION = '.cgns';
 /**
  * Ordered identifiers of the CGNS -> OpenFOAM conversion pipeline steps, shared
  * so the API and the web client label each step (and its log) identically.
- *   - cgnsToVtk:   pvpython CgnsToVtk.py  -> legacy VTK
+ *   - cgnsToVtk:   python3 CgnsToVtk.py  -> legacy VTK
  *   - vtkToFoam:   vtkUnstructuredToFoam  -> constant/polyMesh
  *   - checkMesh:   checkMesh              -> mesh quality report
  */
