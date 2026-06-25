@@ -20,18 +20,18 @@ import { assertSafeId, storageRoot } from './fileTreeStorage';
 
 /** Filenames of the artifacts within a project's export directory. */
 export const EXPORT_FILES = {
-  // The EnSight Gold output (a directory tree written by foamToEnsight into
-  // export/ensight/) zipped into a single download.
-  ensightZip: 'ensight.zip',
+  // out.cgns is the convert step's output BASE: a single-time export writes
+  // out.cgns; an all-times export writes out_<i>.cgns and the backend zips them
+  // into out_cgns.zip (the actual download for a series).
+  cgns: 'out.cgns',
+  cgnsZip: 'out_cgns.zip',
+  convertScript: 'convert.py',
   profile: 'profile.json',
   validation: 'validation.json',
   session: 'session.cse',
   memo: 'LOAD_CFDPOST.md',
   report: 'REPORT.md',
 } as const;
-
-/** EnSight output sub-directory name within a project's export directory. */
-export const ENSIGHT_SUBDIR = 'ensight';
 
 /** Absolute path to a project's export root (the id is validated; may not exist). */
 export function exportDirAbsolute(projectId: string): string {
@@ -115,89 +115,38 @@ export async function readExportJson<T>(
   }
 }
 
-/** Absolute path to the EnSight output sub-directory (export/ensight/). */
-export function ensightDirAbsolute(projectId: string): string {
-  return path.join(exportDirAbsolute(projectId), ENSIGHT_SUBDIR);
-}
-
-/** Recursively list files under the EnSight output dir (relative paths). */
-async function walkRelative(root: string, base = ''): Promise<string[]> {
-  let entries: import('node:fs').Dirent[];
+/**
+ * The CGNS files the convert step produced, sorted by name. A single-time export
+ * is `out.cgns`; an all-times export is `out_0.cgns`, `out_1.cgns`, … (one per
+ * solved time). Excludes the zip itself. Returns absolute paths.
+ */
+export async function listCgnsFiles(projectId: string): Promise<string[]> {
+  const dir = exportDirAbsolute(projectId);
+  let names: string[];
   try {
-    entries = await fs.readdir(path.join(root, base), { withFileTypes: true });
+    names = await fs.readdir(dir);
   } catch {
     return [];
   }
-  const out: string[] = [];
-  for (const entry of entries) {
-    const rel = base ? `${base}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) out.push(...(await walkRelative(root, rel)));
-    else if (entry.isFile()) out.push(rel);
-  }
-  return out;
+  return names
+    .filter((n) => n.endsWith('.cgns') && (n === EXPORT_FILES.cgns || n.startsWith('out_')))
+    .sort()
+    .map((n) => path.join(dir, n));
 }
 
 /**
- * Find the EnSight master "case" file in the output dir, or null. foamToEnsight
- * names it `EnSight_Case` (no extension) on some versions and `*.case` on others,
- * so try the conventional extensions, then the bare name, then any file whose
- * first line declares the EnSight Gold format. Returns the relative filename.
+ * Zip the produced CGNS file(s) into out_cgns.zip for a single download, and
+ * return how many were zipped (0 when none). The series-or-single output is
+ * always offered as one archive so the download model stays uniform.
  */
-export async function findEnsightCaseFile(projectId: string): Promise<string | null> {
-  const dir = ensightDirAbsolute(projectId);
-  const files = await walkRelative(dir);
-  if (files.length === 0) return null;
-
-  const byExt = files.find((f) => /\.(case|encas)$/i.test(f));
-  if (byExt) return byExt;
-  const named = files.find((f) => /(^|\/)EnSight_Case$/.test(f));
-  if (named) return named;
-  // Last resort: a top-level file whose header is an EnSight case ("FORMAT ...").
-  for (const f of files) {
-    if (f.includes('/')) continue;
-    try {
-      const head = await fs.readFile(path.join(dir, f), 'utf8');
-      if (/^\s*FORMAT[\s\S]{0,80}ensight/i.test(head)) return f;
-    } catch {
-      /* skip */
-    }
-  }
-  return null;
-}
-
-/**
- * Ensure the EnSight master has a `.case` extension. foamToEnsight names it
- * `EnSight_Case` (no extension), which Ansys CFD-Post's "Load Results" dialog
- * does NOT show (it filters on *.case / *.encas). Copy it to `<name>.case` so
- * CFD-Post can pick it. No-op when a `.case`/`.encas` master already exists.
- * Returns the relative name of the `.case` file to load (or null when no master).
- */
-export async function ensureEnsightCaseExtension(projectId: string): Promise<string | null> {
-  const master = await findEnsightCaseFile(projectId);
-  if (!master) return null;
-  if (/\.(case|encas)$/i.test(master)) return master;
-  const dir = ensightDirAbsolute(projectId);
-  const withExt = `${master}.case`;
-  try {
-    await fs.copyFile(path.join(dir, master), path.join(dir, withExt));
-    return withExt;
-  } catch {
-    return master;
-  }
-}
-
-/**
- * Zip the whole EnSight output directory into ensight.zip for a single download,
- * returning the number of files zipped (0 when the dir is missing/empty).
- */
-export async function zipEnsightDir(projectId: string): Promise<number> {
-  const dir = ensightDirAbsolute(projectId);
-  const files = await walkRelative(dir);
+export async function zipCgnsFiles(projectId: string): Promise<number> {
+  const files = await listCgnsFiles(projectId);
   if (files.length === 0) return 0;
   const zip = new AdmZip();
-  // Keep the files under an `ensight/` root inside the archive so it unzips tidily.
-  zip.addLocalFolder(dir, ENSIGHT_SUBDIR);
+  for (const file of files) {
+    zip.addLocalFile(file);
+  }
   await ensureExportDir(projectId);
-  zip.writeZip(exportFilePath(projectId, 'ensightZip'));
+  zip.writeZip(exportFilePath(projectId, 'cgnsZip'));
   return files.length;
 }

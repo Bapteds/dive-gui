@@ -164,22 +164,20 @@ export const RUN_DIRNAME = 'runs';
 
 /**
  * Directory name (under a project's storage subtree, sibling of `case/`, `cgns/`,
- * `viz/`, `runs/`) holding the CFD-Post export artifacts (the EnSight output zip,
- * the case profile, the validation report, the CFD-Post session/memo, and the
- * final REPORT.md). Kept apart from the case so an export never touches case
- * inputs and a case reset never wipes a produced export.
+ * `viz/`, `runs/`) holding the CFD-Post export artifacts (out.cgns, the generated
+ * convert script + logs, the case profile, the validation report, the CFD-Post
+ * session/memo, and the final REPORT.md). Kept apart from the case so an export
+ * never touches case inputs and a case reset never wipes a produced CGNS.
  */
 export const EXPORT_DIRNAME = 'export';
 
 /**
- * Ordered identifiers of the OpenFOAM -> EnSight (CFD-Post) export pipeline steps,
+ * Ordered identifiers of the OpenFOAM -> CGNS (CFD-Post) export pipeline steps,
  * shared so the API and the web client label each step (and its log) identically.
- * EnSight Gold is written by the native OpenFOAM `foamToEnsight` (no ParaView),
- * carries the full time series, and is read directly by Ansys CFD-Post.
- *   - inspect:  profile the case (parse controlDict/boundary + checkMesh)
- *   - convert:  foamToEnsight -> export/ensight/ (all times), zipped
- *   - validate: parse the EnSight .case (time steps + variables present)
- *   - cfdpost:  write the CFD-Post session + load memo
+ *   - inspect:  profile the case (foamDictionary + checkMesh) -> CaseProfile
+ *   - convert:  pvbatch FoamToCgns.py -> export/out.cgns (ADF, cell-centered)
+ *   - validate: re-read the CGNS + best-effort OpenFOAM reference comparison
+ *   - cfdpost:  write the CFD-Post session.cse + load memo
  */
 export const EXPORT_STEPS = ['inspect', 'convert', 'validate', 'cfdpost'] as const;
 export type ExportStepId = (typeof EXPORT_STEPS)[number];
@@ -236,14 +234,16 @@ export interface CaseProfile {
   outletGuess: string | null;
 }
 
-/** One row of the export-fidelity validation table. */
+/** One row of the conversion-fidelity validation table. */
 export interface ValidationCheck {
-  /** What is being checked (e.g. "EnSight case", "time steps", "variables"). */
+  /** What is being checked (e.g. "fields present", "velocity max"). */
   name: string;
-  /** Expected reference (e.g. the case's fields), or '-' when not applicable. */
+  /** OpenFOAM reference value, or '-' when not computed. */
   reference: string;
-  /** Value read back from the produced EnSight output, or '-'. */
-  value: string;
+  /** Value read back from the CGNS, or '-'. */
+  cgns: string;
+  /** Difference / relative error, or '-'. */
+  delta: string;
   verdict: 'pass' | 'fail' | 'info';
 }
 
@@ -255,8 +255,8 @@ export interface ExportValidation {
 
 /** Which downloadable artifacts the export produced (drives the download buttons). */
 export interface ExportArtifacts {
-  /** export/ensight.zip (the EnSight Gold output) is present and non-empty. */
-  ensight: boolean;
+  /** export/out.cgns is present and non-empty. */
+  cgns: boolean;
   /** export/session.cse is present. */
   session: boolean;
   /** export/LOAD_CFDPOST.md is present. */

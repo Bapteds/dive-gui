@@ -1,23 +1,21 @@
-// OpenFOAM -> EnSight export for Ansys CFD-Post: business logic ("Export" tab).
+// OpenFOAM -> CGNS export for Ansys CFD-Post: business logic ("Export" tab).
 //
-// A SOLVED OpenFOAM case is turned into EnSight Gold output that CFD-Post can load
-// (File -> Load Results), without Fluent and WITHOUT ParaView: the convert step is
-// the NATIVE OpenFOAM `foamToEnsight` utility, which writes the full time series.
-// Run as a 4-step pipeline (mirrors conversion.service.ts: injectable runner,
+// The reverse of the CGNS->Foam import: a SOLVED OpenFOAM case is turned into a
+// CGNS file CFD-Post can load (File -> Load Results), without Fluent. The chain,
+// run as a 4-step pipeline (mirrors conversion.service.ts: injectable runner,
 // configurable binaries, per-step structured results, short-circuit on failure):
 //
 //   1. inspect : profile the case (solver, steady, latest time, fields, patches,
 //                empty patches, polyhedra) -> CaseProfile. Gate: must be solved.
-//   2. convert : foamToEnsight -> <case>/EnSight/, moved to export/ensight/ and
-//                zipped to ensight.zip (the download). Native OpenFOAM, all times.
-//   3. validate: parse the EnSight .case (time steps + variables present). Pure
-//                Node text parsing — no python / ParaView needed.
-//   4. cfdpost : write a CFD-Post session + a load memo. CFD-Post is NOT on the
-//                server, so we only PRODUCE these files.
+//   2. convert : pvbatch FoamToCgns.py -> export/out.cgns (ADF, cell-centred).
+//                Writing CGNS is ParaView-only (core VTK has no CGNS writer).
+//   3. validate: re-read the CGNS (VTK wheel) for fidelity (fields, cell-centred,
+//                no empty zones) + a best-effort physical cross-check.
+//   4. cfdpost : write a CFD-Post session.cse skeleton + a load memo. CFD-Post is
+//                NOT on the server, so we only PRODUCE these files.
 //
-// Artifacts live under the project's export/ store (sibling of case/). The
-// foamToEnsight output is moved OUT of the case immediately, so an export never
-// leaves anything behind in the case inputs.
+// Artifacts live under the project's export/ store (sibling of case/), never in
+// the case, so an export never mutates case inputs.
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
@@ -33,27 +31,28 @@ import {
 import { env } from '../../config/env';
 import { AppError } from '../../lib/AppError';
 import { runCommand } from '../../lib/commandRunner';
-import { commandFailed, planOpenfoamCommand } from '../../lib/openfoamCommand';
+import { planOpenfoamCommand } from '../../lib/openfoamCommand';
 import { caseDirAbsolute, readCaseFile } from '../../lib/caseStorage';
 import {
   EXPORT_FILES,
   clearExport,
-  ensightDirAbsolute,
-  ensureEnsightCaseExtension,
   ensureExportDir,
+  exportDirAbsolute,
+  exportFilePath,
+  listCgnsFiles,
   readExportBytes,
   readExportJson,
   readExportText,
   writeExportFile,
-  zipEnsightDir,
+  zipCgnsFiles,
 } from '../../lib/exportStorage';
 import { assertProjectVisible, type Viewer } from './projects.service';
 
 /** Human labels for each pipeline step. */
 const STEP_LABELS: Record<ExportStepId, string> = {
   inspect: 'Inspect case',
-  convert: 'Convert to EnSight (foamToEnsight)',
-  validate: 'Validate the EnSight output',
+  convert: 'Convert to CGNS (pvbatch)',
+  validate: 'Validate the CGNS',
   cfdpost: 'Prepare CFD-Post session',
 };
 
@@ -72,6 +71,16 @@ async function pathExists(absPath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Resolve a bundled script path (configured override, else the one shipped with the API). */
+function bundledScript(configured: string, filename: string): string {
+  const trimmed = configured.trim();
+  if (trimmed) return trimmed;
+  // `scripts/` is not compiled, so it is three levels up to apps/api from both
+  // src/modules/projects and dist/modules/projects (cwd-independent, like the
+  // conversion / viewer scripts).
+  return path.resolve(__dirname, '../../../scripts', filename);
 }
 
 /** A skipped step (an earlier step failed). */
@@ -122,6 +131,20 @@ async function latestSolvedTime(
     entries = [];
   }
   return { time: latest, fields: entries.sort() };
+}
+
+/**
+ * All written time directory names (numeric, incl. 0), ascending. These are the
+ * time VALUES that line up with ParaView's per-timestep CGNS series (index 0 =
+ * the first/smallest time), used to stamp the transient CGNS's TimeValues.
+ */
+async function listSolvedTimeValues(caseDir: string): Promise<string[]> {
+  try {
+    const names = await fs.readdir(caseDir);
+    return names.filter((n) => TIME_DIR_RE.test(n)).sort((a, b) => Number(a) - Number(b));
+  } catch {
+    return [];
+  }
 }
 
 /** Steady-state solvers (single converged field) vs transient (time accurate). */
@@ -270,83 +293,149 @@ async function inspectCase(
   };
 }
 
-/** Candidate directory names foamToEnsight writes its output to (in the case). */
-const ENSIGHT_OUTPUT_DIRS = ['EnSight', 'Ensight', 'ensight'];
-
-/** Move a directory, falling back to copy+remove across filesystems. */
-async function moveDir(from: string, to: string): Promise<void> {
-  try {
-    await fs.rename(from, to);
-  } catch {
-    await fs.cp(from, to, { recursive: true });
-    await fs.rm(from, { recursive: true, force: true });
-  }
-}
-
 /**
- * Step 2 - convert. Run the NATIVE OpenFOAM `foamToEnsight` (no ParaView), which
- * writes EnSight Gold output (the full time series by default; -latestTime for
- * only the final time) into <case>/EnSight/. We then MOVE that out of the case
- * into export/ensight/ (so the case is never polluted) and zip it for download.
- * The step fails if no EnSight output (with a case master) is produced.
+ * Step 2 - convert. touch case.foam, copy the bundled converter into export/ for
+ * transparency, then run pvbatch FoamToCgns.py. With EXPORT_ALL_TIMES it exports
+ * the WHOLE time series (out_<i>.cgns, then zipped); otherwise just the latest
+ * time (out.cgns). The step fails if no CGNS is produced.
  */
-async function convertToEnsight(
+async function convertToCgns(
   projectId: string,
   caseDir: string,
-): Promise<{ step: ExportStep; caseFile: string | null; fileCount: number }> {
-  // Clear any stale output from a previous run, in the case and in export/.
-  for (const name of ENSIGHT_OUTPUT_DIRS) {
-    await fs.rm(path.join(caseDir, name), { recursive: true, force: true }).catch(() => undefined);
+  profile: CaseProfile,
+): Promise<{ step: ExportStep; cgnsPath: string | null }> {
+  const foam = path.join(caseDir, 'case.foam');
+  if (!(await pathExists(foam))) await fs.writeFile(foam, '');
+
+  const script = bundledScript(env.FOAM_TO_CGNS_SCRIPT, 'FoamToCgns.py');
+  if (!(await pathExists(script))) {
+    return {
+      cgnsPath: null,
+      step: {
+        id: 'convert',
+        label: STEP_LABELS.convert,
+        command: `${env.PVBATCH_BIN} ${script}`,
+        status: 'failed',
+        exitCode: null,
+        stdout: '',
+        stderr: `Converter not found at ${script}. Set FOAM_TO_CGNS_SCRIPT to its absolute path.`,
+        durationMs: 0,
+      },
+    };
   }
-  await fs.rm(ensightDirAbsolute(projectId), { recursive: true, force: true }).catch(() => undefined);
+  // Keep a copy beside the output so the exact converter is auditable.
+  await ensureExportDir(projectId);
+  await fs.copyFile(script, exportFilePath(projectId, 'convertScript')).catch(() => undefined);
 
-  const allTimes = env.EXPORT_ALL_TIMES === 'true';
-  const args = ['-case', caseDir];
-  if (!allTimes) args.push('-latestTime');
-  // ASCII EnSight is more compatible with CFD-Post's reader than the default
-  // binary (which CFD-Post often refuses to load for OpenFOAM output).
-  if (env.EXPORT_ENSIGHT_ASCII === 'true') args.push('-ascii');
-  const plan = planOpenfoamCommand(env.FOAM_TO_ENSIGHT_BIN, args, caseDir);
-  const result = await runCommand({ ...plan, timeoutMs: env.CONVERSION_STEP_TIMEOUT_MS });
+  const outCgns = exportFilePath(projectId, 'cgns');
+  const fieldsCsv = profile.fields.join(',');
+  // "all" => the whole time series; else the latest solved time.
+  const timeArg = env.EXPORT_ALL_TIMES === 'true' ? 'all' : (profile.latestTime ?? '');
+  const scriptArgs = [script, foam, outCgns, timeArg, fieldsCsv];
 
-  // foamToEnsight writes <case>/EnSight/. Find it and move it into export/.
-  let caseFile: string | null = null;
-  let fileCount = 0;
-  let moveNote = '';
-  let produced: string | null = null;
-  for (const name of ENSIGHT_OUTPUT_DIRS) {
-    const candidate = path.join(caseDir, name);
-    if (await pathExists(candidate)) {
-      produced = candidate;
-      break;
+  // Importing paraview.simple crashes (rendering controller New() SIGSEGV) on a
+  // headless box with no GL context. Default: give pvbatch a virtual X display
+  // via `xvfb-run -a`. Otherwise (OSMesa build) force offscreen rendering instead.
+  const useXvfb = env.PVBATCH_XVFB === 'true';
+  const command = useXvfb ? 'xvfb-run' : env.PVBATCH_BIN;
+  const args = useXvfb
+    ? ['-a', env.PVBATCH_BIN, ...scriptArgs]
+    : ['--force-offscreen-rendering', ...scriptArgs];
+  const display = `${command} ${args.join(' ')}`;
+
+  // Optionally prepend ParaView's own VTK to PYTHONPATH so it wins over a pip vtk
+  // wheel in site-packages (the cause of the import-time SIGSEGV).
+  const pvPythonPath = env.PVBATCH_PYTHONPATH.trim();
+  const childEnv = pvPythonPath
+    ? {
+        ...process.env,
+        PYTHONPATH: process.env.PYTHONPATH
+          ? `${pvPythonPath}${path.delimiter}${process.env.PYTHONPATH}`
+          : pvPythonPath,
+      }
+    : process.env;
+
+  const result = await runCommand({
+    command,
+    args,
+    cwd: caseDir,
+    env: childEnv,
+    timeoutMs: env.CONVERSION_STEP_TIMEOUT_MS,
+  });
+
+  // What pvbatch produced: a single out.cgns (latest-time mode) or the per-time
+  // out_<i>.cgns series (all-times mode).
+  const files = await listCgnsFiles(projectId);
+  const series = files.filter((f) => /out_\d+\.cgns$/.test(f)).sort();
+  let mergeNote = '';
+  let cgnsPath: string | null = null;
+
+  if (series.length > 0) {
+    // Merge the per-timestep series into ONE transient CGNS (BaseIterativeData)
+    // so CFD-Post shows the whole evolution on its time bar. Best-effort: on
+    // failure, fall back to the per-timestep zip so the user still gets the data.
+    const mergeScript = bundledScript('', 'CgnsMergeTime.py');
+    const timeValues = (await listSolvedTimeValues(caseDir)).join(',');
+    const merge = await runCommand({
+      command: env.MESH_PYTHON_BIN,
+      args: [mergeScript, outCgns, timeValues, ...series],
+      cwd: exportDirAbsolute(projectId),
+      env: process.env,
+      timeoutMs: env.CONVERSION_STEP_TIMEOUT_MS,
+    });
+    if (merge.exitCode === 0 && (await pathExists(outCgns))) {
+      // Success: one transient out.cgns. Drop the now-redundant series files.
+      for (const f of series) await fs.rm(f, { force: true }).catch(() => undefined);
+      cgnsPath = outCgns;
+      mergeNote = `\n[merge] ${merge.stdout.trim() || 'transient CGNS written'}`;
+    } else {
+      // Fallback: keep the series, offered as a zip.
+      await zipCgnsFiles(projectId);
+      cgnsPath = series[series.length - 1];
+      mergeNote =
+        '\n[merge] WARNING: could not merge into a single transient CGNS; ' +
+        `falling back to the per-timestep zip.\n${merge.stderr || merge.stdout}`;
     }
-  }
-  if (produced) {
-    await ensureExportDir(projectId);
-    await moveDir(produced, ensightDirAbsolute(projectId));
-    // foamToEnsight names the master `EnSight_Case` (no extension); add a `.case`
-    // copy so CFD-Post's Load Results dialog shows it. Then zip (incl. the .case).
-    caseFile = await ensureEnsightCaseExtension(projectId);
-    fileCount = await zipEnsightDir(projectId);
-    moveNote = `\n[runner] EnSight output: ${fileCount} file(s), load this in CFD-Post: ensight/${caseFile ?? 'NOT FOUND'}`;
-  } else if (!commandFailed(result)) {
-    moveNote = `\n[runner] foamToEnsight exited 0 but no EnSight/ directory was produced in ${caseDir}`;
+  } else if (files.length > 0) {
+    // Latest-time mode: out.cgns is the single file.
+    cgnsPath = files[0];
   }
 
-  const ok = !commandFailed(result) && fileCount > 0 && caseFile !== null;
-  const extra = result.spawnError
-    ? `\n[runner] ${result.spawnError} (is foamToEnsight on PATH? set FOAM_TO_ENSIGHT_BIN / source the OpenFOAM env via OPENFOAM_BASHRC)`
-    : result.timedOut
-      ? '\n[runner] foamToEnsight timed out'
-      : moveNote;
+  const produced = cgnsPath !== null;
+  const ok = !result.spawnError && !result.timedOut && result.exitCode === 0 && produced;
+
+  // A crash inside paraview.simple's PyVTKObject wrapping (PipelineController New)
+  // is almost always a VTK version conflict: a pip-installed `vtk` wheel shadows
+  // ParaView's own VTK for the system python pvbatch uses. Detect the signature
+  // and point at the fix (isolate the pip vtk in a venv).
+  const crashed =
+    !produced &&
+    (result.exitCode === null ||
+      /SIGSEGV|PipelineController|non-zero reference count/.test(result.stderr));
+  const xvfbHint =
+    useXvfb && result.spawnError
+      ? ' (is xvfb installed? `apt install xvfb`, or set PVBATCH_XVFB=false for an OSMesa pvbatch)'
+      : '';
+  const conflictHint = crashed
+    ? '\n[runner] pvbatch crashed in VTK wrapping — this is a pip `vtk` wheel shadowing ' +
+      "ParaView's own VTK. Move the pip vtk into a venv and point CGNS_PYTHON_BIN / " +
+      'MESH_PYTHON_BIN at it, so the system python pvbatch uses has no conflicting vtk.'
+    : '';
+  const extra =
+    (result.spawnError
+      ? `\n[runner] ${result.spawnError}${xvfbHint}`
+      : result.timedOut
+        ? '\n[runner] pvbatch timed out'
+        : !produced && result.exitCode === 0
+          ? `\n[runner] pvbatch exited 0 but no CGNS was created`
+          : conflictHint) + mergeNote;
 
   return {
-    caseFile,
-    fileCount,
+    cgnsPath,
     step: {
       id: 'convert',
       label: STEP_LABELS.convert,
-      command: plan.display,
+      command: display,
       status: ok ? 'success' : 'failed',
       exitCode: result.exitCode,
       stdout: tail(result.stdout),
@@ -356,49 +445,121 @@ async function convertToEnsight(
   };
 }
 
+/** Shape of the JSON emitted by CgnsInspect.py. */
+interface CgnsReport {
+  cellArrays: string[];
+  pointArrays: string[];
+  nZones: number;
+  nCells: number;
+  nPoints: number;
+  emptyZones: number;
+  velocityMax: number | null;
+}
+
 /**
- * Step 3 - validate. Parse the produced EnSight `.case` master (plain text — no
- * python / ParaView): confirm it exists, count the time steps, and list the
- * variables, checking the case's fields carried through. Validation FAILs only
- * when the case master is missing or unreadable; the counts are informational.
+ * Step 3 - validate. Re-reads the CGNS (VTK wheel) and checks fidelity: data is
+ * present, CELL-centred (not interpolated to points), no empty zones, and the
+ * expected fields are there. The physical velocity-max row is informational (we
+ * report the CGNS value; an OpenFOAM reference comparison is out of scope here
+ * and would need fragile postProcess parsing). Validation FAILs only on a real
+ * structural problem, never on a missing best-effort reference.
  */
-async function validateEnsight(
+async function validateCgns(
   projectId: string,
   profile: CaseProfile,
-  caseFile: string | null,
+  cgns: string,
 ): Promise<{ step: ExportStep; validation: ExportValidation }> {
+  const script = bundledScript(env.CGNS_INSPECT_SCRIPT, 'CgnsInspect.py');
+  const display = `${env.MESH_PYTHON_BIN} ${script} ${cgns}`;
+
+  if (!(await pathExists(script))) {
+    const validation: ExportValidation = {
+      status: 'fail',
+      checks: [{ name: 'CGNS reader script', reference: '-', cgns: 'missing', delta: '-', verdict: 'fail' }],
+    };
+    await writeExportFile(projectId, 'validation', JSON.stringify(validation, null, 2));
+    return {
+      validation,
+      step: {
+        id: 'validate',
+        label: STEP_LABELS.validate,
+        command: display,
+        status: 'failed',
+        exitCode: null,
+        stdout: '',
+        stderr: `Validator not found at ${script}. Set CGNS_INSPECT_SCRIPT to its absolute path.`,
+        durationMs: 0,
+      },
+    };
+  }
+
+  const result = await runCommand({
+    command: env.MESH_PYTHON_BIN,
+    args: [script, cgns],
+    cwd: path.dirname(cgns),
+    env: process.env,
+    timeoutMs: env.CONVERSION_STEP_TIMEOUT_MS,
+  });
+
+  let report: CgnsReport | null = null;
+  if (result.exitCode === 0) {
+    try {
+      report = JSON.parse(result.stdout.trim().split('\n').pop() ?? '') as CgnsReport;
+    } catch {
+      report = null;
+    }
+  }
+
   const checks: ValidationCheck[] = [];
-
-  if (!caseFile) {
-    checks.push({ name: 'EnSight case master', reference: '-', value: 'missing', verdict: 'fail' });
+  if (!report) {
+    checks.push({ name: 'CGNS readable', reference: '-', cgns: 'unreadable', delta: '-', verdict: 'fail' });
   } else {
-    const text = (await readEnsightCaseText(projectId, caseFile)) ?? '';
-    checks.push({ name: 'EnSight case master', reference: '-', value: caseFile, verdict: 'pass' });
+    const cellArrays = report.cellArrays ?? [];
+    const pointArrays = report.pointArrays ?? [];
 
-    // Time steps: parse "number of steps: N" from the TIME section.
-    const stepsMatch = text.match(/number of steps:\s*(\d+)/i);
-    const steps = stepsMatch ? Number(stepsMatch[1]) : null;
+    // Fields present: at least one expected field carried through.
+    const expected = profile.fields;
+    const carried = cellArrays.length > 0 || pointArrays.length > 0;
     checks.push({
-      name: 'Time steps',
-      reference: '-',
-      value: steps === null ? 'n/a' : String(steps),
-      verdict: 'info',
+      name: 'Fields present',
+      reference: expected.join(', ') || '(none)',
+      cgns: [...cellArrays, ...pointArrays].join(', ') || '(none)',
+      delta: '-',
+      verdict: carried ? 'pass' : 'fail',
     });
 
-    // Variables: each "scalar/vector/tensor per element|node:" line ends with
-    // "<NAME> <filename>", so the variable name is the second-to-last token.
-    const vars: string[] = [];
-    for (const line of text.split('\n')) {
-      const m = line.match(/per\s+(?:element|node)[^:]*:\s*(.+)$/i);
-      if (!m) continue;
-      const tokens = m[1].trim().split(/\s+/);
-      if (tokens.length >= 2) vars.push(tokens[tokens.length - 2]);
-    }
+    // Cell-centred: data must live on cells (no interpolation to nodes).
     checks.push({
-      name: 'Variables present',
-      reference: profile.fields.join(', ') || '(none)',
-      value: vars.join(', ') || '(none parsed)',
-      verdict: vars.length > 0 ? 'pass' : 'info',
+      name: 'Cell-centred data',
+      reference: 'cell',
+      cgns: cellArrays.length ? `cell (${cellArrays.length} arrays)` : `point only (${pointArrays.length})`,
+      delta: '-',
+      verdict: cellArrays.length > 0 ? 'pass' : 'fail',
+    });
+
+    // Non-empty mesh and no empty zones.
+    checks.push({
+      name: 'Mesh non-empty',
+      reference: '> 0 cells',
+      cgns: `${report.nCells} cells / ${report.nZones} zones`,
+      delta: '-',
+      verdict: report.nCells > 0 ? 'pass' : 'fail',
+    });
+    checks.push({
+      name: 'No empty zones',
+      reference: '0',
+      cgns: String(report.emptyZones),
+      delta: '-',
+      verdict: report.emptyZones === 0 ? 'pass' : 'fail',
+    });
+
+    // Physical cross-check (informational): velocity magnitude max in the CGNS.
+    checks.push({
+      name: 'Velocity max (|U|)',
+      reference: '-',
+      cgns: report.velocityMax === null ? 'n/a' : report.velocityMax.toPrecision(4),
+      delta: '-',
+      verdict: 'info',
     });
   }
 
@@ -413,47 +574,44 @@ async function validateEnsight(
     step: {
       id: 'validate',
       label: STEP_LABELS.validate,
-      command: `parse ensight/${caseFile ?? '(missing)'}`,
+      command: display,
       status: status === 'pass' ? 'success' : 'failed',
-      exitCode: status === 'pass' ? 0 : 1,
-      stdout: validation.checks.map((c) => `${c.name}: ${c.value} [${c.verdict}]`).join('\n'),
-      stderr: '',
-      durationMs: 0,
+      exitCode: result.exitCode,
+      stdout: tail(result.stdout),
+      stderr: tail(result.stderr),
+      durationMs: result.durationMs,
     },
   };
 }
 
-/** Read the EnSight master file's text from export/ensight/<caseFile>. */
-async function readEnsightCaseText(projectId: string, caseFile: string): Promise<string | null> {
-  try {
-    return await fs.readFile(path.join(ensightDirAbsolute(projectId), caseFile), 'utf8');
-  } catch {
-    return null;
-  }
-}
-
-/** Render the CFD-Post session.cse skeleton (loads the EnSight case). */
-function renderSessionCse(caseFile: string | null): string {
-  const loadLine = caseFile
-    ? `> load filename=ensight/${caseFile}`
-    : '> # load filename=ensight/<the .case file>';
+/** Render the CFD-Post session.cse skeleton (loads results + a velocity contour). */
+function renderSessionCse(profile: CaseProfile): string {
+  const inlet = profile.inletGuess ?? 'inlet';
+  const outlet = profile.outletGuess ?? 'outlet';
   return `# CFD-Post session generated by DIVE Turbinen.
-# Unzip ensight.zip next to this file first, then:
-#   cfdpost -batch session.cse
-# IMPORTANT: this LOADS RESULTS (EnSight), it does not run a solver.
+# Load with:  cfdpost -batch session.cse out.cgns
+# IMPORTANT: this LOADS RESULTS (out.cgns), it does not run a solver.
 
-${loadLine}
+> load filename=out.cgns
 
 # A minimal velocity contour on the whole domain.
 CONTOUR:Velocity Contour
   Variable = Velocity
   Location List = /DOMAIN
 END
+
+# Mass flow at the guessed inlet / outlet patches (rename if needed).
+EXPRESSION: massFlowIn
+  Expression = massFlow()@${inlet}
+END
+EXPRESSION: massFlowOut
+  Expression = massFlow()@${outlet}
+END
 `;
 }
 
 /** Render the CFD-Post load memo (the caveats that bite first). */
-function renderLoadMemo(profile: CaseProfile, caseFile: string | null): string {
+function renderLoadMemo(profile: CaseProfile): string {
   const pressureNote = profile.incompressible
     ? `- **Pression cinématique** : le solveur \`${profile.solver}\` est incompressible, donc \`p\` est en m²/s² (p/ρ). Dans CFD-Post les pressions seront divisées par ρ — multiplie par la densité pour des Pa. Ce n'est pas un bug.`
     : `- **Pression** : le solveur \`${profile.solver}\` est compressible, \`p\` est déjà en Pa.`;
@@ -463,16 +621,16 @@ function renderLoadMemo(profile: CaseProfile, caseFile: string | null): string {
   const emptyNote = profile.emptyPatches.length
     ? `- **Surfaces vides exclues** : ${profile.emptyPatches.join(', ')} (0 face) — normal, évite l'erreur « Invalid File / surfaces vides ».`
     : `- Aucune surface vide à exclure.`;
-  const master = caseFile ? `\`ensight/${caseFile}\`` : 'le fichier `.case`';
-  return `# Charger l'export EnSight dans Ansys CFD-Post
+  const timeNote =
+    env.EXPORT_ALL_TIMES === 'true'
+      ? `- **Toute la temporalité dans UN fichier** : \`out.cgns\` est un **CGNS transitoire** qui contient tous les pas de temps. Dans CFD-Post, utilise la **barre de temps** (Timestep Selector) pour parcourir l'évolution. *(Si un zip \`out_cgns.zip\` est fourni à la place, la fusion transitoire a échoué — charge alors les fichiers un par un.)*`
+      : `- **Temps unique** : \`out.cgns\` contient le dernier temps résolu.`;
+  return `# Charger le CGNS dans Ansys CFD-Post
 
 ## Comment charger
-1. Dézippe \`ensight.zip\` → dossier \`ensight/\`.
-2. CFD-Post : **File → Load Results** (jamais « Load Case »).
-   - **« Files of type » → EnSight** (le sélecteur de format doit être sur **Case**).
-   - Sélectionne le **FICHIER** ${master} (pas le dossier — CFD-Post n'accepte pas un dossier).
-   - foamToEnsight nomme le maître \`EnSight_Case\` sans extension ; j'ai ajouté une copie \`.case\` pour qu'il apparaisse dans le dialogue. Si tu ne le vois pas, mets « Files of type » sur **All Files**.
-3. EnSight Gold est écrit par l'utilitaire **natif OpenFOAM \`foamToEnsight\`** (pas de ParaView) et porte **toute la série temporelle** : utilise la barre de temps de CFD-Post pour parcourir les pas.
+- **File → Load Results** (jamais « Load Case ») → ouvre \`out.cgns\`.
+- « Files of type » : **CGNS** si besoin.
+${timeNote}
 
 ## Profil du cas
 - Solveur : \`${profile.solver}\` (${profile.steady ? 'steady' : 'transitoire'})
@@ -484,17 +642,14 @@ function renderLoadMemo(profile: CaseProfile, caseFile: string | null): string {
 ${pressureNote}
 ${polyNote}
 ${emptyNote}
+- Données conservées **aux centres de cellules** (pas de lissage vers les nœuds).
 `;
 }
 
 /** Step 4 - cfdpost. Writes session.cse + the load memo (server does not run CFD-Post). */
-async function prepareCfdPost(
-  projectId: string,
-  profile: CaseProfile,
-  caseFile: string | null,
-): Promise<ExportStep> {
-  await writeExportFile(projectId, 'session', renderSessionCse(caseFile));
-  await writeExportFile(projectId, 'memo', renderLoadMemo(profile, caseFile));
+async function prepareCfdPost(projectId: string, profile: CaseProfile): Promise<ExportStep> {
+  await writeExportFile(projectId, 'session', renderSessionCse(profile));
+  await writeExportFile(projectId, 'memo', renderLoadMemo(profile));
   return {
     id: 'cfdpost',
     label: STEP_LABELS.cfdpost,
@@ -518,10 +673,10 @@ function renderReport(
     .join('\n');
   const validationLines = validation
     ? validation.checks
-        .map((c) => `| ${c.name} | ${c.reference} | ${c.value} | ${c.verdict} |`)
+        .map((c) => `| ${c.name} | ${c.reference} | ${c.cgns} | ${c.verdict} |`)
         .join('\n')
     : '(not run)';
-  return `# Export OpenFOAM → EnSight (CFD-Post) — rapport
+  return `# Export OpenFOAM → CGNS (CFD-Post) — rapport
 
 ## Étapes
 ${stepLines}
@@ -541,24 +696,27 @@ ${
 }
 
 ## Validation : ${validation?.status?.toUpperCase() ?? 'N/A'}
-| Contrôle | Référence | EnSight | Verdict |
+| Contrôle | Référence | CGNS | Verdict |
 | --- | --- | --- | --- |
 ${validationLines}
 
 ## Chargement CFD-Post
-Dézippe \`ensight.zip\`, puis File → Load Results sur le fichier \`.case\`. Voir LOAD_CFDPOST.md pour les pièges (pression ×ρ si incompressible, surfaces vides).
+\`cfdpost -batch session.cse out.cgns\` (ou File → Load Results). Voir LOAD_CFDPOST.md pour les pièges (pression ×ρ si incompressible, surfaces vides, transitoire).
 `;
 }
 
 /** Which downloadable artifacts the export produced. */
 async function readArtifacts(projectId: string): Promise<ExportArtifacts> {
-  const [ensight, session, memo, report] = await Promise.all([
-    readExportBytes(projectId, 'ensightZip').then((b) => b !== null && b.length > 0),
+  // The CGNS download is the zip (series-or-single, uniform); fall back to the
+  // single out.cgns if for some reason the zip was not written.
+  const [zip, single, session, memo, report] = await Promise.all([
+    readExportBytes(projectId, 'cgnsZip').then((b) => b !== null && b.length > 0),
+    readExportBytes(projectId, 'cgns').then((b) => b !== null && b.length > 0),
     readExportText(projectId, 'session').then((t) => t !== null),
     readExportText(projectId, 'memo').then((t) => t !== null),
     readExportText(projectId, 'report').then((t) => t !== null),
   ]);
-  return { ensight, session, memo, report };
+  return { cgns: zip || single, session, memo, report };
 }
 
 /**
@@ -584,8 +742,8 @@ export async function runExport(viewer: Viewer, projectId: string): Promise<Expo
   steps.push(inspectStep);
   if (inspectStep.status === 'failed' || !profile) {
     steps.push(
-      skipped('convert', `${env.FOAM_TO_ENSIGHT_BIN} -case <case>`),
-      skipped('validate', 'parse the EnSight .case'),
+      skipped('convert', `${env.PVBATCH_BIN} FoamToCgns.py`),
+      skipped('validate', `${env.MESH_PYTHON_BIN} CgnsInspect.py`),
       skipped('cfdpost', 'write session.cse + memo'),
     );
     return finalize(projectId, steps, notes, profile, null);
@@ -595,28 +753,28 @@ export async function runExport(viewer: Viewer, projectId: string): Promise<Expo
     notes.push(`Excluded ${profile.emptyPatches.length} empty patch(es): ${profile.emptyPatches.join(', ')}.`);
   }
 
-  // 2) Convert (native foamToEnsight, moved out of the case + zipped).
-  const { step: convertStep, caseFile, fileCount } = await convertToEnsight(projectId, caseDir);
+  // 2) Convert (pvbatch series -> single transient CGNS).
+  const { step: convertStep, cgnsPath } = await convertToCgns(projectId, caseDir, profile);
   steps.push(convertStep);
-  if (convertStep.status === 'failed') {
+  if (convertStep.status === 'failed' || !cgnsPath) {
     steps.push(
-      skipped('validate', 'parse the EnSight .case'),
+      skipped('validate', `${env.MESH_PYTHON_BIN} CgnsInspect.py`),
       skipped('cfdpost', 'write session.cse + memo'),
     );
     return finalize(projectId, steps, notes, profile, null);
   }
   notes.push(
     allTimes
-      ? `Exported the full time series to EnSight (${fileCount} file(s), zipped).`
-      : `Exported the latest solved time to EnSight (${fileCount} file(s), zipped).`,
+      ? 'Exported all time steps into one transient CGNS (out.cgns) — use the CFD-Post time bar.'
+      : `Exported the latest solved time: ${profile.latestTime}.`,
   );
 
-  // 3) Validate the produced EnSight output (parse the .case master).
-  const { step: validateStep, validation } = await validateEnsight(projectId, profile, caseFile);
+  // 3) Validate the produced CGNS (the transient out.cgns, or the single file).
+  const { step: validateStep, validation } = await validateCgns(projectId, profile, cgnsPath);
   steps.push(validateStep);
 
-  // 4) CFD-Post prep (runs even when validation flagged issues — the output exists).
-  steps.push(await prepareCfdPost(projectId, profile, caseFile));
+  // 4) CFD-Post prep (runs even when validation flagged issues — the CGNS exists).
+  steps.push(await prepareCfdPost(projectId, profile));
 
   return finalize(projectId, steps, notes, profile, validation);
 }
@@ -650,7 +808,7 @@ export async function getExportStatus(
   const profile = await readExportJson<CaseProfile>(projectId, 'profile');
   const validation = await readExportJson<ExportValidation>(projectId, 'validation');
   const artifacts = await readArtifacts(projectId);
-  if (!profile && !artifacts.ensight) return null;
+  if (!profile && !artifacts.cgns) return null;
   return { profile, validation, artifacts };
 }
 

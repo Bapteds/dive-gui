@@ -413,7 +413,7 @@ export type {
 };
 
 /** The downloadable export artifacts and their route param. */
-export type ExportArtifact = 'ensight' | 'session' | 'memo' | 'report';
+export type ExportArtifact = 'cgns' | 'session' | 'memo' | 'report';
 
 /** The last export's persisted status (null when no export has run). */
 export interface ExportStatus {

@@ -1,9 +1,9 @@
-// Integration tests for the OpenFOAM -> EnSight export ("Export" tab). The real
-// tools (OpenFOAM foamToEnsight + checkMesh) are not installed in CI, so the
-// command runner is swapped for a fake that writes the EnSight output a real
-// foamToEnsight would (a .case master + a geometry file in <case>/EnSight/). This
-// exercises the full orchestration: the solved-case gate, the 4-step pipeline,
-// the move-out-of-case + zip, the .case validation parse, and the download.
+// Integration tests for the OpenFOAM -> CGNS export ("Export" tab). The real
+// tools (ParaView pvbatch, OpenFOAM checkMesh, the VTK wheel) are not installed
+// in CI, so the command runner is swapped for a fake that writes the artifacts
+// the real tools would (a fake CGNS, a checkMesh report, the CgnsInspect JSON).
+// This exercises the full orchestration: the solved-case gate, the 4-step
+// pipeline, validation parsing, artifact download, and visibility scoping.
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -11,7 +11,7 @@ import request from 'supertest';
 import { app, authHeader, createTestUser, resetDatabase } from './helpers';
 import { prisma } from '../src/lib/prisma';
 import { setCommandRunner, type CommandResult, type CommandRunner } from '../src/lib/commandRunner';
-import { caseDirAbsolute, writeCaseFile } from '../src/lib/caseStorage';
+import { writeCaseFile } from '../src/lib/caseStorage';
 
 const BOUNDARY = `FoamFile { class polyBoundaryMesh; object boundary; }
 3
@@ -28,43 +28,49 @@ startTime       0;
 endTime         100;
 `;
 
-/** The EnSight .case master foamToEnsight would write (TIME + VARIABLE sections). */
-const ENSIGHT_CASE = `FORMAT
-type: ensight gold
-
-GEOMETRY
-model: 1 geometry
-
-VARIABLE
-scalar per element: 1 p data/******/p
-vector per element: 1 U data/******/U
-
-TIME
-time set: 1
-number of steps: 3
-filename start number: 0
-filename increment: 1
-time values:
-0 50 100
+const FIELD_U = `FoamFile { class volVectorField; object U; }
+internalField uniform (0 0 0);
+boundaryField { inlet { type fixedValue; value uniform (1 0 0); } }
 `;
+
+/** The JSON CgnsInspect.py would print for a healthy export. */
+const CGNS_REPORT = {
+  cellArrays: ['U', 'p'],
+  pointArrays: [],
+  nZones: 1,
+  nCells: 100,
+  nPoints: 80,
+  emptyZones: 0,
+  velocityMax: 12.3,
+};
 
 function ok(spec: { command: string; args: string[] }, stdout: string): CommandResult {
   return { command: spec.command, args: spec.args, exitCode: 0, stdout, stderr: '', durationMs: 1, timedOut: false };
 }
 
-/** A runner that simulates checkMesh + foamToEnsight succeeding. */
+/** A runner that simulates the whole export toolchain succeeding. */
 const successRunner: CommandRunner = async (spec) => {
   if (spec.command === 'checkMesh') {
     return ok(spec, 'Mesh stats\npolyhedra: 0\nMesh OK.\n');
   }
-  if (spec.command === 'foamToEnsight') {
-    const caseDir = spec.args[spec.args.indexOf('-case') + 1];
-    const dir = path.join(caseDir, 'EnSight');
-    await fs.mkdir(dir, { recursive: true });
-    // Real foamToEnsight names the master EnSight_Case (NO .case extension).
-    await fs.writeFile(path.join(dir, 'EnSight_Case'), ENSIGHT_CASE);
-    await fs.writeFile(path.join(dir, 'geometry'), 'fake-ensight-geometry');
-    return ok(spec, 'foamToEnsight: wrote EnSight/');
+  if (spec.args.some((a) => a.includes('FoamToCgns'))) {
+    // all-times: pvbatch writes a per-timestep series next to the out base.
+    const out = spec.args.find((a) => a.endsWith('out.cgns'));
+    if (out) {
+      const dir = path.dirname(out);
+      await fs.writeFile(path.join(dir, 'out_0.cgns'), 'frame-0');
+      await fs.writeFile(path.join(dir, 'out_1.cgns'), 'frame-1');
+    }
+    return ok(spec, 'OK: CGNS written (2 file(s))');
+  }
+  if (spec.args.some((a) => a.includes('CgnsMergeTime'))) {
+    // Merge the series into one transient out.cgns.
+    const out = spec.args.find((a) => a.endsWith('out.cgns'));
+    if (out) await fs.writeFile(out, 'fake-transient-cgns');
+    return ok(spec, 'OK: transient CGNS written (2 time steps)');
+  }
+  if (spec.args.some((a) => a.includes('CgnsInspect'))) {
+    return ok(spec, JSON.stringify(CGNS_REPORT));
   }
   return ok(spec, '');
 };
@@ -80,7 +86,7 @@ async function makeProject(email: string): Promise<{ auth: string; id: string }>
 async function writeSolvedCase(projectId: string): Promise<void> {
   await writeCaseFile(projectId, 'constant/polyMesh/boundary', BOUNDARY);
   await writeCaseFile(projectId, 'system/controlDict', CONTROL_DICT);
-  await writeCaseFile(projectId, '100/U', 'FoamFile { object U; }\ninternalField uniform (0 0 0);\n');
+  await writeCaseFile(projectId, '100/U', FIELD_U);
   await writeCaseFile(projectId, '100/p', 'FoamFile { object p; }\ninternalField uniform 0;\n');
 }
 
@@ -127,25 +133,20 @@ describe('POST /projects/:id/export', () => {
     expect(result.steps.every((s: { status: string }) => s.status === 'success')).toBe(true);
 
     expect(result.profile.solver).toBe('simpleFoam');
+    expect(result.profile.steady).toBe(true);
+    expect(result.profile.incompressible).toBe(true);
     expect(result.profile.latestTime).toBe('100');
+    expect(result.profile.fields).toEqual(['U', 'p']);
     expect(result.profile.patches).toEqual(['inlet', 'outlet', 'walls']);
+    expect(result.profile.inletGuess).toBe('inlet');
 
-    // The master got a `.case` extension so CFD-Post's dialog can show it.
     expect(result.validation.status).toBe('pass');
-    const masterCheck = result.validation.checks.find((c: { name: string }) => c.name === 'EnSight case master');
-    expect(masterCheck.value).toMatch(/\.case$/);
-    // Validation parsed the .case: time steps = 3, variables p + U.
-    const varCheck = result.validation.checks.find((c: { name: string }) => c.name === 'Variables present');
-    expect(varCheck.value).toContain('U');
-    expect(varCheck.value).toContain('p');
-    expect(result.artifacts).toMatchObject({ ensight: true, session: true, memo: true, report: true });
-
-    // The EnSight output was moved OUT of the case (case never polluted).
-    await expect(fs.stat(path.join(caseDirAbsolute(id), 'EnSight'))).rejects.toBeTruthy();
+    expect(result.artifacts).toMatchObject({ cgns: true, session: true, memo: true, report: true });
   });
 
   it('fails the inspect step (and skips the rest) when the case is not solved', async () => {
     const { id, auth } = await makeProject('export-nosol@dive-turbinen.test');
+    // Mesh + controlDict but NO time directory > 0 -> nothing to export.
     await writeCaseFile(id, 'constant/polyMesh/boundary', BOUNDARY);
     await writeCaseFile(id, 'system/controlDict', CONTROL_DICT);
 
@@ -156,14 +157,15 @@ describe('POST /projects/:id/export', () => {
     expect(steps[0]).toMatchObject({ id: 'inspect', status: 'failed' });
     expect(steps[0].stderr).toMatch(/no solved results/i);
     expect(steps.slice(1).every((s: { status: string }) => s.status === 'skipped')).toBe(true);
-    expect(res.body.result.artifacts.ensight).toBe(false);
+    expect(res.body.result.artifacts.cgns).toBe(false);
   });
 
-  it('fails convert (and skips validate/cfdpost) when foamToEnsight writes nothing', async () => {
+  it('fails convert (and skips validate/cfdpost) when pvbatch does not write the CGNS', async () => {
     setCommandRunner(async (spec) => {
       if (spec.command === 'checkMesh') return ok(spec, 'polyhedra: 0\n');
-      if (spec.command === 'foamToEnsight') {
-        return { command: spec.command, args: spec.args, exitCode: 1, stdout: '', stderr: 'KO: no times', durationMs: 1, timedOut: false };
+      if (spec.args.some((a) => a.includes('FoamToCgns'))) {
+        // pvbatch exits non-zero and writes nothing.
+        return { command: spec.command, args: spec.args, exitCode: 1, stdout: '', stderr: 'KO: segfault', durationMs: 1, timedOut: false };
       }
       return ok(spec, '');
     });
@@ -175,7 +177,7 @@ describe('POST /projects/:id/export', () => {
     expect(res.body.result.success).toBe(false);
     const byId = Object.fromEntries(res.body.result.steps.map((s: { id: string; status: string }) => [s.id, s.status]));
     expect(byId).toMatchObject({ inspect: 'success', convert: 'failed', validate: 'skipped', cfdpost: 'skipped' });
-    expect(res.body.result.artifacts.ensight).toBe(false);
+    expect(res.body.result.artifacts.cgns).toBe(false);
   });
 
   it('returns 404 for a project the viewer cannot see', async () => {
@@ -202,30 +204,63 @@ describe('GET /projects/:id/export (+ download)', () => {
     const after = await request(app).get(`/api/v1/projects/${id}/export`).set('Authorization', auth);
     expect(after.status).toBe(200);
     expect(after.body.status.profile.solver).toBe('simpleFoam');
-    expect(after.body.status.artifacts.ensight).toBe(true);
+    expect(after.body.status.artifacts.cgns).toBe(true);
   });
 
-  it('downloads the EnSight output as a zip attachment', async () => {
+  it('downloads the single transient CGNS (out.cgns) the merge produced', async () => {
     const { id, auth } = await makeProject('export-dl@dive-turbinen.test');
     await writeSolvedCase(id);
     await request(app).post(`/api/v1/projects/${id}/export`).set('Authorization', auth);
 
     const res = await request(app)
-      .get(`/api/v1/projects/${id}/export/download/ensight`)
+      .get(`/api/v1/projects/${id}/export/download/cgns`)
+      .set('Authorization', auth)
+      .buffer()
+      .parse(binaryParser);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('application/octet-stream');
+    expect(res.headers['content-disposition']).toContain('out.cgns');
+    expect(res.body.toString()).toBe('fake-transient-cgns');
+  });
+
+  it('falls back to the per-timestep zip when the transient merge fails', async () => {
+    setCommandRunner(async (spec) => {
+      if (spec.command === 'checkMesh') return ok(spec, 'polyhedra: 0\n');
+      if (spec.args.some((a) => a.includes('FoamToCgns'))) {
+        const out = spec.args.find((a) => a.endsWith('out.cgns'));
+        if (out) {
+          const dir = path.dirname(out);
+          await fs.writeFile(path.join(dir, 'out_0.cgns'), 'frame-0');
+          await fs.writeFile(path.join(dir, 'out_1.cgns'), 'frame-1');
+        }
+        return ok(spec, 'OK: 2 files');
+      }
+      if (spec.args.some((a) => a.includes('CgnsMergeTime'))) {
+        // Merge fails and writes no out.cgns.
+        return { command: spec.command, args: spec.args, exitCode: 1, stdout: '', stderr: 'KO: bad pointers', durationMs: 1, timedOut: false };
+      }
+      if (spec.args.some((a) => a.includes('CgnsInspect'))) return ok(spec, JSON.stringify(CGNS_REPORT));
+      return ok(spec, '');
+    });
+    const { id, auth } = await makeProject('export-dl-zip@dive-turbinen.test');
+    await writeSolvedCase(id);
+    await request(app).post(`/api/v1/projects/${id}/export`).set('Authorization', auth);
+
+    const res = await request(app)
+      .get(`/api/v1/projects/${id}/export/download/cgns`)
       .set('Authorization', auth)
       .buffer()
       .parse(binaryParser);
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('application/zip');
-    expect(res.headers['content-disposition']).toContain('ensight.zip');
-    expect(res.body.length).toBeGreaterThan(0);
+    expect(res.headers['content-disposition']).toContain('out_cgns.zip');
     expect(res.body.slice(0, 2).toString()).toBe('PK');
   });
 
   it('returns 404 downloading an artifact that has not been produced', async () => {
     const { id, auth } = await makeProject('export-dl-missing@dive-turbinen.test');
     const res = await request(app)
-      .get(`/api/v1/projects/${id}/export/download/ensight`)
+      .get(`/api/v1/projects/${id}/export/download/cgns`)
       .set('Authorization', auth);
     expect(res.status).toBe(404);
   });
