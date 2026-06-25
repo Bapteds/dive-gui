@@ -163,6 +163,125 @@ export const CONSTRAINT_PATCH_TYPES = [
 export const RUN_DIRNAME = 'runs';
 
 /**
+ * Directory name (under a project's storage subtree, sibling of `case/`, `cgns/`,
+ * `viz/`, `runs/`) holding the CFD-Post export artifacts (out.cgns, the generated
+ * convert script + logs, the case profile, the validation report, the CFD-Post
+ * session/memo, and the final REPORT.md). Kept apart from the case so an export
+ * never touches case inputs and a case reset never wipes a produced CGNS.
+ */
+export const EXPORT_DIRNAME = 'export';
+
+/**
+ * Ordered identifiers of the OpenFOAM -> CGNS (CFD-Post) export pipeline steps,
+ * shared so the API and the web client label each step (and its log) identically.
+ *   - inspect:  profile the case (foamDictionary + checkMesh) -> CaseProfile
+ *   - convert:  pvbatch FoamToCgns.py -> export/out.cgns (ADF, cell-centered)
+ *   - validate: re-read the CGNS + best-effort OpenFOAM reference comparison
+ *   - cfdpost:  write the CFD-Post session.cse + load memo
+ */
+export const EXPORT_STEPS = ['inspect', 'convert', 'validate', 'cfdpost'] as const;
+export type ExportStepId = (typeof EXPORT_STEPS)[number];
+
+/** One executed (or skipped) step of the export pipeline. */
+export interface ExportStep {
+  /** Stable id shared with the client (see EXPORT_STEPS). */
+  id: ExportStepId;
+  /** Human-readable step name. */
+  label: string;
+  /** The logical command line that was run (for transparency in the UI). */
+  command: string;
+  /**
+   * 'success' (clean), 'warning' (ran but with caveats — e.g. a best-effort
+   * validation that could not compute every reference), 'failed', or 'skipped'
+   * (an earlier step failed).
+   */
+  status: 'success' | 'warning' | 'failed' | 'skipped';
+  /** Process exit code, or null when killed / never spawned. */
+  exitCode: number | null;
+  /** Captured stdout (tail, truncated). */
+  stdout: string;
+  /** Captured stderr (tail, truncated). */
+  stderr: string;
+  /** Wall-clock duration in ms (0 for a skipped step). */
+  durationMs: number;
+}
+
+/**
+ * Profile of the OpenFOAM case the export was run on (from the inspect step).
+ * Drives the convert (field list) and the CFD-Post memo (pressure-unit caveat).
+ */
+export interface CaseProfile {
+  /** Latest written time directory (the results exported), or null if none. */
+  latestTime: string | null;
+  /** Steady (single final time) vs transient. */
+  steady: boolean;
+  /** Incompressible solver => kinematic pressure (p in m^2/s^2), needs xrho note. */
+  incompressible: boolean;
+  /** Solver application from controlDict (e.g. simpleFoam). */
+  solver: string;
+  /** Turbulence model (e.g. kEpsilon), or 'unknown'. */
+  turbulenceModel: string;
+  /** Field names found in the latest time directory. */
+  fields: string[];
+  /** True when checkMesh reports polyhedral cells (CFD-Post tessellation risk). */
+  hasPolyhedra: boolean;
+  /** All boundary patch names. */
+  patches: string[];
+  /** Patches with zero faces (excluded; cause empty surfaces in CFD-Post). */
+  emptyPatches: string[];
+  /** Best guess at the inlet/outlet patch names (for the session.cse skeleton). */
+  inletGuess: string | null;
+  outletGuess: string | null;
+}
+
+/** One row of the conversion-fidelity validation table. */
+export interface ValidationCheck {
+  /** What is being checked (e.g. "fields present", "velocity max"). */
+  name: string;
+  /** OpenFOAM reference value, or '-' when not computed. */
+  reference: string;
+  /** Value read back from the CGNS, or '-'. */
+  cgns: string;
+  /** Difference / relative error, or '-'. */
+  delta: string;
+  verdict: 'pass' | 'fail' | 'info';
+}
+
+/** Outcome of the validate step: overall status plus the per-check table. */
+export interface ExportValidation {
+  status: 'pass' | 'fail';
+  checks: ValidationCheck[];
+}
+
+/** Which downloadable artifacts the export produced (drives the download buttons). */
+export interface ExportArtifacts {
+  /** export/out.cgns is present and non-empty. */
+  cgns: boolean;
+  /** export/session.cse is present. */
+  session: boolean;
+  /** export/LOAD_CFDPOST.md is present. */
+  memo: boolean;
+  /** export/REPORT.md is present. */
+  report: boolean;
+}
+
+/** Outcome of an export run: per-step report + profile + validation + artifacts. */
+export interface ExportResult {
+  /** True only when every step succeeded (warnings still count as not-failed). */
+  success: boolean;
+  /** The four pipeline steps, in order. */
+  steps: ExportStep[];
+  /** Informational notes (latest time exported, caveats, …). */
+  notes: string[];
+  /** The inspected case profile (null when inspect failed). */
+  profile: CaseProfile | null;
+  /** The validation table + status (null when convert failed before validation). */
+  validation: ExportValidation | null;
+  /** Which artifacts are downloadable. */
+  artifacts: ExportArtifacts;
+}
+
+/**
  * Lifecycle states of a solver run, shared so the API (Prisma `status` String,
  * the reconciliation logic) and the web client (status badge, history) agree.
  *  - queued/running: active (a process is, or is about to be, executing).

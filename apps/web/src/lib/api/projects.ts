@@ -17,6 +17,11 @@ import type {
   DeleteCaseFileResponse,
   ImportCaseResponse,
   MoveCaseEntryResponse,
+  ExportArtifact,
+  ExportResult,
+  ExportRunResponse,
+  ExportStatus,
+  ExportStatusResponse,
   ListProjectsResponse,
   MeshBackupInfo,
   MeshBackupResponse,
@@ -272,6 +277,29 @@ export async function saveMeshBackup(id: string): Promise<MeshBackupInfo> {
 export async function restoreMeshBackup(id: string): Promise<MeshManifest> {
   const data = await apiClient.post<MeshManifestResponse>(`/projects/${id}/mesh/backup/restore`);
   return data.manifest;
+}
+
+// ---- OpenFOAM -> CGNS export ("Export" tab) -------------------------------
+
+/**
+ * Run the full OpenFOAM -> CGNS export pipeline (inspect -> convert -> validate ->
+ * cfdpost). Resolves with the per-step report even when a tool fails (the steps
+ * carry the logs); only access errors reject.
+ */
+export async function runExport(id: string): Promise<ExportResult> {
+  const data = await apiClient.post<ExportRunResponse>(`/projects/${id}/export`);
+  return data.result;
+}
+
+/** The last export's profile/validation/artifacts, or null when none has run. */
+export async function getExportStatus(id: string): Promise<ExportStatus | null> {
+  const data = await apiClient.get<ExportStatusResponse>(`/projects/${id}/export`);
+  return data.status;
+}
+
+/** Download a produced export artifact (out.cgns / session.cse / memo / report) as a Blob. */
+export async function downloadExportArtifact(id: string, artifact: ExportArtifact): Promise<Blob> {
+  return apiClient.getBlob(`/projects/${id}/export/download/${artifact}`);
 }
 
 // ---- Applying a shared template to this project's case ----

@@ -7,7 +7,13 @@
  */
 
 import type {
+  CaseProfile,
   ConversionStepId,
+  ExportArtifacts,
+  ExportResult,
+  ExportStep,
+  ExportStepId,
+  ExportValidation,
   MeshBackupInfo,
   MeshManifest,
   MeshPatch,
@@ -18,6 +24,7 @@ import type {
   RunStatus,
   ServerErrorCode,
   SolverId,
+  ValidationCheck,
 } from '@dive/shared';
 
 /** User roles. The super-admin is permanent and cannot be removed or downgraded. */
@@ -391,6 +398,38 @@ export interface AutoPatchResponse {
 export interface MeshBackupResponse {
   /** The backup slot status, or null when no backup has been taken yet. */
   backup: MeshBackupInfo | null;
+}
+
+// ---- OpenFOAM -> CGNS export ("Export" tab) -------------------------------
+
+export type {
+  CaseProfile,
+  ExportStep,
+  ExportStepId,
+  ExportResult,
+  ExportValidation,
+  ValidationCheck,
+  ExportArtifacts,
+};
+
+/** The downloadable export artifacts and their route param. */
+export type ExportArtifact = 'cgns' | 'session' | 'memo' | 'report';
+
+/** The last export's persisted status (null when no export has run). */
+export interface ExportStatus {
+  profile: CaseProfile | null;
+  validation: ExportValidation | null;
+  artifacts: ExportArtifacts;
+}
+
+/** `POST /projects/:id/export` response. */
+export interface ExportRunResponse {
+  result: ExportResult;
+}
+
+/** `GET /projects/:id/export` response. */
+export interface ExportStatusResponse {
+  status: ExportStatus | null;
 }
 
 // ---- Solver runs ("Solver" tab) -------------------------------------------

@@ -59,6 +59,12 @@ import {
   stopRunController,
 } from './runs.controller';
 import {
+  downloadExportArtifactController,
+  getExportStatusController,
+  runExportController,
+} from './export.controller';
+import { exportArtifactParamSchema } from './export.schemas';
+import {
   autoPatchSchema,
   editPatchesSchema,
   renamePatchSchema,
@@ -295,6 +301,25 @@ export function createProjectsRouter(): Router {
     '/:id/mesh/backup/restore',
     validate({ params: projectIdParamSchema }),
     asyncHandler(restoreMeshBackupController),
+  );
+
+  // OpenFOAM -> CGNS export for CFD-Post ("Export" tab). POST runs the 4-step
+  // pipeline; GET returns the last run's profile/validation/artifacts; the
+  // download route streams a produced artifact (out.cgns / session / memo / report).
+  router.post(
+    '/:id/export',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(runExportController),
+  );
+  router.get(
+    '/:id/export',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(getExportStatusController),
+  );
+  router.get(
+    '/:id/export/download/:artifact',
+    validate({ params: exportArtifactParamSchema }),
+    asyncHandler(downloadExportArtifactController),
   );
 
   // Apply a shared template to this project's case: preview the conflicts, then

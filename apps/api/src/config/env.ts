@@ -92,6 +92,24 @@ const envSchema = z
     // Wall-clock timeout (ms) for a single mesh-extraction run. The one-time VTK
     // read of a large ASCII mesh dominates; generous, like the conversion above.
     MESH_BUILD_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
+    // --- OpenFOAM -> CGNS export for CFD-Post (Export tab) ---------------------
+    // Writing CGNS is a ParaView-only capability (core VTK has a CGNS reader but
+    // NO writer), so the convert step runs under ParaView's `pvbatch`. The reader
+    // utilities (foamDictionary, checkMesh) and reference postProcess run as
+    // OpenFOAM tools; the CGNS re-read for validation uses the standalone VTK
+    // wheel under MESH_PYTHON_BIN (no ParaView needed to read). Every binary is
+    // configurable so the same code runs wherever the tools live on the server.
+    PVBATCH_BIN: z.string().min(1).default('pvbatch'),
+    // foamDictionary reads controlDict (application, times) in the inspect step.
+    FOAM_DICTIONARY_BIN: z.string().min(1).default('foamDictionary'),
+    // postProcess computes best-effort OpenFOAM reference values in the validate
+    // step (a tool-name/version mismatch degrades gracefully, never fails).
+    POST_PROCESS_BIN: z.string().min(1).default('postProcess'),
+    // Absolute paths to the bundled export scripts. Empty => the scripts shipped
+    // with the API at apps/api/scripts/{FoamToCgns,CgnsInspect}.py (resolved
+    // relative to the module, cwd-independent). Set only to override.
+    FOAM_TO_CGNS_SCRIPT: z.string().default(''),
+    CGNS_INSPECT_SCRIPT: z.string().default(''),
     // --- OpenFOAM solver run (Solver tab) -------------------------------------
     // The app's first long-running background job. A run spawns the solver
     // (e.g. simpleFoam) in the case directory, pipes its output to a persisted
