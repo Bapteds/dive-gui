@@ -469,6 +469,25 @@ describe('POST /projects/:id/mesh/auto-patch', () => {
     expect(res.body.result.command).toContain('autoPatch 30 -overwrite');
   });
 
+  it('realigns the 0/ field boundaryFields to the new auto-generated patches', async () => {
+    setCommandRunner(autoPatchRunner);
+    const { id, auth } = await makeProject('mesh-autopatch-sync@dive-turbinen.test');
+    await writePolyMesh(id);
+    await writeCaseFile(id, '0/U', FIELD_U); // boundaryField for inlet/walls
+
+    const res = await autoPatch(id, auth, { featureAngle: 45 });
+    expect(res.status).toBe(200);
+    expect(res.body.result.patches).toEqual(['auto0', 'auto1', 'auto2']);
+
+    // 0/U now covers the auto patches and no longer the stale inlet/walls.
+    const field = (await readCaseFile(id, '0/U'))?.toString('utf8') ?? '';
+    expect(field).toMatch(/auto0\s*\{/);
+    expect(field).toMatch(/auto2\s*\{/);
+    expect(field).not.toMatch(/inlet\s*\{/);
+    expect(field).not.toMatch(/walls\s*\{/);
+    expect(field).toContain('internalField uniform (0 0 0)'); // non-boundary content kept
+  });
+
   it('reports a tool failure as success:false with the captured logs (HTTP 200)', async () => {
     setCommandRunner(failRunner);
     const { id, auth } = await makeProject('mesh-autopatch-fail@dive-turbinen.test');

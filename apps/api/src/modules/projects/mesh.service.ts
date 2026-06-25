@@ -64,7 +64,7 @@ import {
   writeBackup,
 } from '../../lib/meshBackupStorage';
 import { assertProjectVisible, type Viewer } from './projects.service';
-import { scaffoldCase } from './files.service';
+import { scaffoldCase, syncBoundaryFields } from './files.service';
 
 /** Keep a captured stderr tail bounded when surfacing a build failure. */
 const OUTPUT_TAIL_CHARS = 4000;
@@ -583,6 +583,11 @@ export interface AutoPatchResult {
  * goes stale (boundary mtime) and is rebuilt on the next manifest fetch — the
  * client drops its mesh queries on success.
  *
+ * On success the 0/ fields are realigned to the new patch set (see
+ * syncBoundaryFields) so the case stays runnable: autoPatch replaces the patches
+ * wholesale, which would otherwise leave the field boundaryFields referencing
+ * patches that no longer exist.
+ *
  * autoPatch reads system/controlDict, so the minimal base files are scaffolded
  * first when the case has none (same as the conversion pipeline), letting the
  * action work on a freshly imported, mesh-only case.
@@ -625,6 +630,20 @@ export async function autoPatchMesh(
     caseDir,
   );
   const result = await runCommand({ ...plan, timeoutMs: env.CONVERSION_STEP_TIMEOUT_MS });
+
+  // autoPatch replaces the boundary patches WHOLESALE (auto0, auto1, …), so the
+  // 0/ fields now reference patches that no longer exist. Realign every field's
+  // boundaryField to the new mesh patches (a valid BC per geometric type) so the
+  // case stays runnable — the same sync used after a template/scaffold. Only on
+  // success, and best-effort: a sync hiccup must not turn a good run into a
+  // failure (the autoPatch result is still reported either way).
+  if (!commandFailed(result)) {
+    try {
+      await syncBoundaryFields(viewer, projectId);
+    } catch {
+      // Leave the fields as-is; the mesh was still patched successfully.
+    }
+  }
 
   // Surface a runner-level reason (missing binary / timeout) in the captured
   // output, mirroring the conversion step report.
