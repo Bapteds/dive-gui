@@ -28,25 +28,26 @@ import type {
 import { downloadArtifact, useExportStatusQuery, useRunExport } from './useExport';
 
 /**
- * ExportTab - the "Export" tab body: turn a SOLVED OpenFOAM case into a CGNS file
- * for Ansys CFD-Post (File -> Load Results), without Fluent.
+ * ExportTab - the "Export" tab body: turn a SOLVED OpenFOAM case into EnSight Gold
+ * output (full time series) for Ansys CFD-Post (File -> Load Results), without
+ * Fluent and without ParaView (native foamToEnsight).
  *
- * A single primary action ("Export to CGNS") runs the server-side 4-step pipeline
- * (inspect -> convert -> validate -> cfdpost). The result is shown as a per-step
- * report, the inspected case profile, a validation table, the downloadable
- * artifacts (out.cgns + the CFD-Post session/memo/report), and the load caveats
- * that bite first (kinematic pressure, empty surfaces, transient).
+ * A single primary action ("Export to EnSight") runs the server-side 4-step
+ * pipeline (inspect -> convert -> validate -> cfdpost). The result is shown as a
+ * per-step report, the inspected case profile, a validation table, the
+ * downloadable artifacts (ensight.zip + the CFD-Post session/memo/report), and
+ * the load caveats that bite first (kinematic pressure, empty surfaces).
  */
 
 const STEP_META: Array<{ id: ExportStepId; label: string; tool: string }> = [
-  { id: 'inspect', label: 'Inspect case', tool: 'foamDictionary · checkMesh' },
-  { id: 'convert', label: 'Convert to CGNS', tool: 'pvbatch' },
-  { id: 'validate', label: 'Validate the CGNS', tool: 'python3 · vtk' },
+  { id: 'inspect', label: 'Inspect case', tool: 'checkMesh' },
+  { id: 'convert', label: 'Convert to EnSight', tool: 'foamToEnsight' },
+  { id: 'validate', label: 'Validate the output', tool: 'parse .case' },
   { id: 'cfdpost', label: 'CFD-Post session', tool: 'session.cse' },
 ];
 
 const ARTIFACTS: Array<{ key: ExportArtifact; label: string }> = [
-  { key: 'cgns', label: 'CGNS (.zip)' },
+  { key: 'ensight', label: 'EnSight (.zip)' },
   { key: 'session', label: 'CFD-Post session' },
   { key: 'memo', label: 'Load memo' },
   { key: 'report', label: 'Report' },
@@ -71,7 +72,7 @@ export function ExportTab({ projectId }: { projectId: string }) {
     });
   };
 
-  const hasAnything = !!steps || !!profile || (artifacts?.cgns ?? false);
+  const hasAnything = !!steps || !!profile || (artifacts?.ensight ?? false);
 
   return (
     <section
@@ -80,14 +81,15 @@ export function ExportTab({ projectId }: { projectId: string }) {
     >
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border p-4 sm:p-5">
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-text">Export to CFD-Post (CGNS)</h2>
+          <h2 className="text-sm font-semibold text-text">Export to CFD-Post (EnSight)</h2>
           <p className="mt-0.5 text-xs text-text-secondary">
-            Convert the solved OpenFOAM results to a CGNS file Ansys CFD-Post can load — no Fluent.
+            Convert the solved OpenFOAM results to EnSight (full time series) for Ansys CFD-Post — no
+            Fluent, no ParaView.
           </p>
         </div>
         <Button type="button" onClick={handleRun} loading={run.isPending} className="shrink-0">
           <Upload strokeWidth={1.75} aria-hidden="true" />
-          {artifacts?.cgns ? 'Re-export' : 'Export to CGNS'}
+          {artifacts?.ensight ? 'Re-export' : 'Export to EnSight'}
         </Button>
       </header>
 
@@ -128,9 +130,10 @@ function RunningState() {
     <div className="grid place-items-center gap-3 py-16 text-center">
       <Loader2 className="size-6 animate-spin text-primary" strokeWidth={1.75} aria-hidden="true" />
       <div>
-        <p className="text-sm font-medium text-text">Exporting to CGNS…</p>
+        <p className="text-sm font-medium text-text">Exporting to EnSight…</p>
         <p className="mt-1 text-xs text-text-secondary">
-          Inspecting the case, running pvbatch, then validating. This can take a while on a large mesh.
+          Inspecting the case, running foamToEnsight, then validating. This can take a while on a
+          large transient case.
         </p>
       </div>
     </div>
@@ -145,7 +148,7 @@ function EmptyState() {
       <div className="max-w-md">
         <p className="text-sm font-medium text-text">No export yet</p>
         <p className="mt-1 text-xs text-text-secondary">
-          Run a solver first, then export the solved results to a CGNS file for CFD-Post. The export
+          Run a solver first, then export the solved results to EnSight for CFD-Post. The export
           reads the latest solved time and never modifies the case.
         </p>
       </div>
@@ -377,7 +380,7 @@ function ValidationCard({ validation }: { validation: ExportValidation }) {
               <p className="text-sm text-text">{check.name}</p>
               <p className="break-words font-mono text-xs text-text-secondary" translate="no">
                 {check.reference !== '-' && <span>ref: {check.reference} · </span>}
-                cgns: {check.cgns}
+                got: {check.value}
               </p>
             </div>
             <Verdict verdict={check.verdict} />
@@ -402,7 +405,7 @@ function Verdict({ verdict }: { verdict: 'pass' | 'fail' | 'info' }) {
 /** Download buttons for the produced artifacts. */
 function Downloads({ projectId, artifacts }: { projectId: string; artifacts: ExportArtifacts }) {
   const available: Record<ExportArtifact, boolean> = {
-    cgns: artifacts.cgns,
+    ensight: artifacts.ensight,
     session: artifacts.session,
     memo: artifacts.memo,
     report: artifacts.report,
@@ -447,8 +450,8 @@ function Downloads({ projectId, artifacts }: { projectId: string; artifacts: Exp
 /** The CFD-Post load caveats (derived from the profile), with the key reminders. */
 function CfdPostMemo({ profile }: { profile: CaseProfile }) {
   const points: string[] = [
-    'Load with File → Load Results (never “Load Case”).',
-    'The CGNS download is a .zip with one file per time step — unzip, then load the series in CFD-Post (it reads it as a transient case).',
+    'Unzip ensight.zip, then File → Load Results on the .case file (never “Load Case”).',
+    'EnSight Gold carries the full time series — use the CFD-Post time bar to step through it.',
     profile.incompressible
       ? `Pressure is kinematic (p/ρ): the solver ${profile.solver} is incompressible, so CFD-Post pressures are ÷ρ. Multiply by density for Pa — not a bug.`
       : `Pressure is in Pa (the solver ${profile.solver} is compressible).`,

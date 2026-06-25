@@ -33,8 +33,8 @@ const ARTIFACT_HEADERS: Record<
   ExportArtifactParam,
   { file: keyof typeof EXPORT_FILES; type: string; filename: string }
 > = {
-  // The CGNS download is the zip of the produced file(s) (series or single).
-  cgns: { file: 'cgnsZip', type: 'application/zip', filename: EXPORT_FILES.cgnsZip },
+  // The main results download is the zip of the EnSight Gold output.
+  ensight: { file: 'ensightZip', type: 'application/zip', filename: EXPORT_FILES.ensightZip },
   session: { file: 'session', type: 'text/plain; charset=utf-8', filename: EXPORT_FILES.session },
   memo: { file: 'memo', type: 'text/markdown; charset=utf-8', filename: EXPORT_FILES.memo },
   report: { file: 'report', type: 'text/markdown; charset=utf-8', filename: EXPORT_FILES.report },

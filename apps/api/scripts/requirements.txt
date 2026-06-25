@@ -3,10 +3,9 @@
 #   pip3 install -r requirements.txt
 # Conservative version floors.
 
-# CgnsToVtk.py (CGNS -> legacy VTK) and CgnsInspect.py (export validation read).
-# Standalone VTK wheel, run under python3 (CGNS_PYTHON_BIN / MESH_PYTHON_BIN), NOT
-# pvpython. NOTE: FoamToCgns.py (OpenFOAM -> CGNS) is NOT here — writing CGNS is
-# ParaView-only, so it runs under pvbatch (install ParaView separately).
+# CgnsToVtk.py (CGNS -> legacy VTK, the mesh IMPORT path). Standalone VTK wheel,
+# run under python3 (CGNS_PYTHON_BIN), NOT pvpython.
+# NOTE: the CFD-Post EXPORT uses foamToEnsight (native OpenFOAM) — no python here.
 vtk>=9.2
 
 # extractPatches.py (OpenFOAM boundary patches -> GLB).

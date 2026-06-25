@@ -92,43 +92,14 @@ const envSchema = z
     // Wall-clock timeout (ms) for a single mesh-extraction run. The one-time VTK
     // read of a large ASCII mesh dominates; generous, like the conversion above.
     MESH_BUILD_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
-    // --- OpenFOAM -> CGNS export for CFD-Post (Export tab) ---------------------
-    // Writing CGNS is a ParaView-only capability (core VTK has a CGNS reader but
-    // NO writer), so the convert step runs under ParaView's `pvbatch`. The reader
-    // utilities (foamDictionary, checkMesh) and reference postProcess run as
-    // OpenFOAM tools; the CGNS re-read for validation uses the standalone VTK
-    // wheel under MESH_PYTHON_BIN (no ParaView needed to read). Every binary is
-    // configurable so the same code runs wherever the tools live on the server.
-    PVBATCH_BIN: z.string().min(1).default('pvbatch'),
-    // Importing paraview.simple instantiates a rendering pipeline controller that
-    // SEGFAULTS on a headless server with no GL context (ParaView without OSMesa).
-    // The standard fix is to give it a virtual X display via `xvfb-run`. When
-    // 'true' (default), the convert step runs `xvfb-run -a pvbatch …` (requires
-    // `apt install xvfb`); set 'false' only if pvbatch has working offscreen GL
-    // (an OSMesa build), in which case it runs `pvbatch --force-offscreen-rendering`.
-    PVBATCH_XVFB: z.enum(['true', 'false']).default('true'),
-    // A pip-installed `vtk` wheel in the system site-packages SHADOWS ParaView's
-    // own VTK for the python pvbatch uses, which crashes paraview.simple on import
-    // (PyVTKObject wrapping SIGSEGV — a VTK ABI mismatch). When set, this is
-    // PREPENDED to pvbatch's PYTHONPATH so ParaView's own vtkmodules win — point
-    // it at the directory that holds ParaView's VTK python (e.g. where
-    // `paraview/` and its `vtkmodules/` live). Non-destructive alternative to
-    // isolating the pip vtk in a venv. Empty => leave PYTHONPATH untouched.
-    PVBATCH_PYTHONPATH: z.string().default(''),
-    // foamDictionary reads controlDict (application, times) in the inspect step.
-    FOAM_DICTIONARY_BIN: z.string().min(1).default('foamDictionary'),
-    // postProcess computes best-effort OpenFOAM reference values in the validate
-    // step (a tool-name/version mismatch degrades gracefully, never fails).
-    POST_PROCESS_BIN: z.string().min(1).default('postProcess'),
-    // Absolute paths to the bundled export scripts. Empty => the scripts shipped
-    // with the API at apps/api/scripts/{FoamToCgns,CgnsInspect}.py (resolved
-    // relative to the module, cwd-independent). Set only to override.
-    FOAM_TO_CGNS_SCRIPT: z.string().default(''),
-    CGNS_INSPECT_SCRIPT: z.string().default(''),
-    // Export the WHOLE time series (one CGNS per solved time, zipped) vs only the
-    // latest time. ParaView's CGNS writer cannot pack a transient series into one
-    // file, so "all" produces out_<i>.cgns files that the backend zips. Default
-    // 'true' (the time evolution); 'false' exports just the final result.
+    // --- OpenFOAM -> EnSight export for CFD-Post (Export tab) ------------------
+    // foamToEnsight is a NATIVE OpenFOAM utility (no ParaView): it writes the case
+    // to EnSight Gold with the full time series, which Ansys CFD-Post reads
+    // directly. Runs in the OpenFOAM environment like checkMesh / autoPatch.
+    FOAM_TO_ENSIGHT_BIN: z.string().min(1).default('foamToEnsight'),
+    // Export the WHOLE time series vs only the latest time. 'true' (default) lets
+    // foamToEnsight write every solved time (the evolution); 'false' adds
+    // -latestTime to export just the final result.
     EXPORT_ALL_TIMES: z.enum(['true', 'false']).default('true'),
     // --- OpenFOAM solver run (Solver tab) -------------------------------------
     // The app's first long-running background job. A run spawns the solver
