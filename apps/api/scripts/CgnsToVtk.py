@@ -12,6 +12,16 @@ Why raw VTK and NOT paraview.simple:
   no server-manager and no rendering, so the conversion is purely data-side and
   cannot hit that crash.
 
+Why we never touch reader.GetOutput() until the read is confirmed good:
+  vtkCGNSReader::RequestInformation emits "File name not set" and returns
+  failure when its FileName is empty at Update() time. Crucially, a reader whose
+  pipeline FAILED still returns a non-None (empty / half-initialized) composite
+  from GetOutput(). Walking that object with NewIterator()/GetCurrentDataObject()
+  hands Python a dangling pointer and SIGSEGVs inside vtkPythonUtil
+  (BuildVTKObject -> GetObjectFromPointer -> GetClassName). So we install a
+  vtkErrorObserver, run UpdateInformation() first, and bail with a clean "KO:"
+  the moment the reader reports an error - before any GetOutput() access.
+
 Success/failure contract (mirrors extractPatches.py):
   * On success: print a line starting with "OK:" to stdout and exit 0.
   * On failure: print a line starting with "KO:" to stderr and exit 1.
@@ -20,6 +30,53 @@ Success/failure contract (mirrors extractPatches.py):
 
 import os
 import sys
+
+
+# CGNS files are either HDF5-backed (the modern default) or ADF-backed (legacy).
+# A quick header sniff turns "not a CGNS file at all" (truncated upload, wrong
+# file, HTML error page, etc.) into a precise message instead of a deep VTK error.
+_HDF5_MAGIC = b"\x89HDF\r\n\x1a\n"
+_ADF_MAGIC = b"ADF Database Version"  # appears near the start of ADF/native CGNS
+
+
+def sniff_cgns(path):
+    """Return (looks_like_cgns: bool, detail: str) from the file's first bytes."""
+    try:
+        size = os.path.getsize(path)
+    except OSError as exc:
+        return False, "cannot stat file: %s" % exc
+    if size == 0:
+        return False, "file is empty (0 bytes) - upload likely incomplete"
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(64)
+    except OSError as exc:
+        return False, "cannot read file: %s" % exc
+    if head.startswith(_HDF5_MAGIC):
+        return True, "HDF5-backed CGNS"
+    if _ADF_MAGIC in head:
+        return True, "ADF-backed CGNS"
+    # Not a hard failure on its own (some valid files vary), but worth reporting.
+    preview = head[:16]
+    return False, "header is neither HDF5 nor ADF (first bytes: %r)" % preview
+
+
+def vtk_versions():
+    """Best-effort '(VTK x.y.z / ParaView a.b.c)' string for diagnostics."""
+    bits = []
+    try:
+        from vtkmodules.vtkCommonCore import vtkVersion
+
+        bits.append("VTK %s" % vtkVersion.GetVTKVersion())
+    except Exception:  # noqa: BLE001 - diagnostics only, never fatal.
+        pass
+    try:
+        import paraview
+
+        bits.append("ParaView %s" % paraview.__version__)
+    except Exception:  # noqa: BLE001 - diagnostics only, never fatal.
+        pass
+    return " / ".join(bits) if bits else "version unknown"
 
 
 def iter_leaf_datasets(dobj):
@@ -62,24 +119,82 @@ def main():
         else os.path.splitext(infile)[0] + ".vtk"
     )
 
+    # Fail fast on a file that is plainly not a CGNS container, with a precise
+    # reason, before VTK ever opens it.
+    ok, detail = sniff_cgns(infile)
+    if not ok:
+        sys.stderr.write("KO: %s is not a readable CGNS file: %s\n" % (infile, detail))
+        sys.exit(1)
+
     try:
         from vtkmodules.vtkIOCGNSReader import vtkCGNSReader
         from vtkmodules.vtkFiltersCore import vtkAppendFilter
         from vtkmodules.vtkIOLegacy import vtkUnstructuredGridWriter
+        from vtkmodules.vtkCommonCore import vtkCommand
     except ImportError as exc:
         sys.stderr.write(
             "KO: run this with pvpython (VTK modules unavailable): %s\n" % exc
         )
         sys.exit(1)
 
+    # Error observer: VTK errors are non-fatal by default (they print and the
+    # pipeline keeps a failed state), so we capture them to (a) report the real
+    # reason and (b) STOP before reading a failed reader's output, which would
+    # segfault. See the module docstring.
+    errors = []
+
+    def on_error(_obj, _evt, msg):
+        errors.append(msg)
+
     # 1. Read the whole CGNS file (all bases / zones). No rendering, no SM.
     reader = vtkCGNSReader()
+    reader.AddObserver(vtkCommand.ErrorEvent, on_error)
     reader.SetFileName(infile)
+
+    # Confirm the filename actually propagated. vtkCGNSReader stores FileName as
+    # a std::string via vtkSetStdStringFromCharMacro; if a ParaView build wraps
+    # that setter incorrectly the value silently stays empty and the reader
+    # later reports "File name not set". Catch that here with a clear message
+    # instead of a downstream crash. Best-effort: only an empty getter result is
+    # treated as a hard failure, so a build that doesn't expose GetFileName can
+    # never turn an otherwise-working conversion into an error.
+    try:
+        set_name = reader.GetFileName()
+        getter_ok = True
+    except Exception:  # noqa: BLE001 - getter is a diagnostic, never fatal here.
+        set_name = None
+        getter_ok = False
+    if getter_ok and not (set_name or "").strip():
+        sys.stderr.write(
+            "KO: reader did not accept the file name "
+            "(SetFileName(%r) -> GetFileName()=%r) [%s]. "
+            "This is a ParaView/VTK build issue with the CGNS reader's "
+            "string setter, not a problem with the file.\n"
+            % (infile, set_name, vtk_versions())
+        )
+        sys.exit(1)
+
+    # RequestInformation runs here; if FileName were empty or the file
+    # unreadable, the error observer captures it and we never touch GetOutput().
+    reader.UpdateInformation()
+    if errors:
+        sys.stderr.write(
+            "KO: CGNS read failed during UpdateInformation [%s]: %s\n"
+            % (vtk_versions(), " | ".join(m.strip() for m in errors))
+        )
+        sys.exit(1)
+
     reader.Update()
+    if errors:
+        sys.stderr.write(
+            "KO: CGNS read failed during Update [%s]: %s\n"
+            % (vtk_versions(), " | ".join(m.strip() for m in errors))
+        )
+        sys.exit(1)
 
     output = reader.GetOutput()
-    if output is None:
-        sys.stderr.write("KO: CGNS read returned no output (unreadable file).\n")
+    if output is None or not output.IsA("vtkDataObject"):
+        sys.stderr.write("KO: CGNS read returned no usable output.\n")
         sys.exit(1)
 
     # 2. Merge every grid block into a single unstructured grid. vtkAppendFilter
