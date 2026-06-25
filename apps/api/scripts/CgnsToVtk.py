@@ -229,11 +229,33 @@ def main():
         sys.stderr.write("KO: merged mesh is empty (no cells).\n")
         sys.exit(1)
 
+    # The consumer (OpenFOAM's vtkUnstructuredToFoam) only needs mesh topology -
+    # points and cells. Strip every data array so the file is pure geometry:
+    #   * field data is otherwise emitted as a top-of-file FIELD block that
+    #     OpenFOAM's legacy reader rejects ("Wrong token type - expected label");
+    #   * point/cell arrays are unused for mesh conversion and only add parser
+    #     surface (and size).
+    merged.GetFieldData().Initialize()
+    merged.GetPointData().Initialize()
+    merged.GetCellData().Initialize()
+
     # 3. Write legacy VTK in ASCII: plain text, robust for meshio / gmshToFoam.
     writer = vtkUnstructuredGridWriter()
     writer.SetFileName(out)
     writer.SetInputData(merged)
     writer.SetFileTypeToASCII()
+
+    # Pin the CLASSIC (4.2) legacy layout. VTK >= 9.1 defaults its legacy writer
+    # to "DataFile Version 5.1", which writes CELLS as separate OFFSETS /
+    # CONNECTIVITY arrays. OpenFOAM's vtkUnstructuredToFoam is a hand-rolled
+    # legacy parser that only understands the classic "CELLS n size / <count> ..."
+    # layout, so 5.1 breaks it. Guarded: older VTK has no SetFileVersion and
+    # already writes the classic layout.
+    try:
+        writer.SetFileVersion(writer.VTK_LEGACY_READER_VERSION_4_2)
+    except AttributeError:
+        pass
+
     writer.Write()
 
     if not os.path.isfile(out):
