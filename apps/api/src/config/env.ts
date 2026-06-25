@@ -107,6 +107,14 @@ const envSchema = z
     // `apt install xvfb`); set 'false' only if pvbatch has working offscreen GL
     // (an OSMesa build), in which case it runs `pvbatch --force-offscreen-rendering`.
     PVBATCH_XVFB: z.enum(['true', 'false']).default('true'),
+    // A pip-installed `vtk` wheel in the system site-packages SHADOWS ParaView's
+    // own VTK for the python pvbatch uses, which crashes paraview.simple on import
+    // (PyVTKObject wrapping SIGSEGV — a VTK ABI mismatch). When set, this is
+    // PREPENDED to pvbatch's PYTHONPATH so ParaView's own vtkmodules win — point
+    // it at the directory that holds ParaView's VTK python (e.g. where
+    // `paraview/` and its `vtkmodules/` live). Non-destructive alternative to
+    // isolating the pip vtk in a venv. Empty => leave PYTHONPATH untouched.
+    PVBATCH_PYTHONPATH: z.string().default(''),
     // foamDictionary reads controlDict (application, times) in the inspect step.
     FOAM_DICTIONARY_BIN: z.string().min(1).default('foamDictionary'),
     // postProcess computes best-effort OpenFOAM reference values in the validate

@@ -321,11 +321,23 @@ async function convertToCgns(
     : ['--force-offscreen-rendering', ...scriptArgs];
   const display = `${command} ${args.join(' ')}`;
 
+  // Optionally prepend ParaView's own VTK to PYTHONPATH so it wins over a pip vtk
+  // wheel in site-packages (the cause of the import-time SIGSEGV).
+  const pvPythonPath = env.PVBATCH_PYTHONPATH.trim();
+  const childEnv = pvPythonPath
+    ? {
+        ...process.env,
+        PYTHONPATH: process.env.PYTHONPATH
+          ? `${pvPythonPath}${path.delimiter}${process.env.PYTHONPATH}`
+          : pvPythonPath,
+      }
+    : process.env;
+
   const result = await runCommand({
     command,
     args,
     cwd: caseDir,
-    env: process.env,
+    env: childEnv,
     timeoutMs: env.CONVERSION_STEP_TIMEOUT_MS,
   });
 
