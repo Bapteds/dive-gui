@@ -120,6 +120,22 @@ async function ensureRunTimeModifiable(projectId: string): Promise<void> {
   await writeCaseFile(projectId, 'system/controlDict', next);
 }
 
+/**
+ * Undo a previous graceful stop before launching a new run. A stopped run leaves
+ * `stopAt writeNow;` in the controlDict (see requestGracefulStop) and, combined
+ * with `runTimeModifiable`, would make the next run write once and exit after a
+ * single iteration. Restore `stopAt endTime;` so a fresh run runs to completion.
+ * Best-effort and idempotent (a no-op unless stopAt is currently writeNow).
+ */
+async function clearGracefulStop(projectId: string): Promise<void> {
+  const buffer = await readCaseFile(projectId, 'system/controlDict');
+  if (!buffer) return;
+  const content = buffer.toString('utf8');
+  if (!/stopAt\s+writeNow\s*;/.test(content)) return;
+  const next = content.replace(/stopAt\s+writeNow\s*;/, 'stopAt endTime;');
+  if (next !== content) await writeCaseFile(projectId, 'system/controlDict', next);
+}
+
 /** Request a graceful OpenFOAM stop: write `stopAt writeNow;` into controlDict. */
 async function requestGracefulStop(projectId: string): Promise<void> {
   const buffer = await readCaseFile(projectId, 'system/controlDict');
@@ -228,6 +244,10 @@ export async function startRun(
   }
 
   const solver = resolveSolver(runnable.solver, input.solver);
+  // A prior stop persisted `stopAt writeNow;` in the controlDict; undo it (and
+  // ensure runTimeModifiable) so this run runs to completion instead of writing
+  // once and exiting after a single iteration.
+  await clearGracefulStop(projectId);
   await ensureRunTimeModifiable(projectId);
 
   // Create the row first so we have an id to derive the log path from.

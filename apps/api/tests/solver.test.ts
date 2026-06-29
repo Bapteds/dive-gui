@@ -16,7 +16,7 @@ import {
   resetDatabase,
 } from './helpers';
 import { prisma } from '../src/lib/prisma';
-import { writeCaseFile } from '../src/lib/caseStorage';
+import { readCaseFile, writeCaseFile } from '../src/lib/caseStorage';
 import {
   setStreamRunner,
   type StreamExit,
@@ -205,6 +205,22 @@ describe('solver run lifecycle', () => {
 
     const settled = await waitForTerminal(id, start.body.run.id, auth);
     expect(settled.status).toBe('stopped');
+  });
+
+  it('clears a leftover `stopAt writeNow;` so a new run is not killed after one write', async () => {
+    const { id, auth } = await makeRunnableProject('solver-reset-stopat@x.test');
+    // Simulate a controlDict poisoned by a previous graceful stop.
+    const before = (await readCaseFile(id, 'system/controlDict'))?.toString('utf8') ?? '';
+    await writeCaseFile(id, 'system/controlDict', before.replace(/stopAt\s+\w+\s*;/, 'stopAt writeNow;'));
+
+    const start = await startRun(id, auth);
+    expect(start.status).toBe(201);
+
+    const after = (await readCaseFile(id, 'system/controlDict'))?.toString('utf8') ?? '';
+    expect(after).toMatch(/stopAt\s+endTime\s*;/);
+    expect(after).not.toMatch(/stopAt\s+writeNow\s*;/);
+
+    await waitForTerminal(id, start.body.run.id, auth);
   });
 });
 
