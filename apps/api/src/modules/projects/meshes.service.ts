@@ -364,6 +364,24 @@ async function cleanupMasterBoundary(masterDir: string): Promise<number> {
   return Math.max(0, before - after);
 }
 
+/** Failed-check count checkMesh reports ("Failed N mesh checks"), or 0 (incl. "Mesh OK"). */
+function countCheckMeshFailures(stdout: string): number {
+  const match = stdout.match(/Failed\s+(\d+)\s+mesh checks/i);
+  return match ? Number(match[1]) : 0;
+}
+
+/**
+ * Current face count of each named patch in the work master's boundary. After a
+ * stitch a fully-fused interface patch is gone or `nFaces 0`; a patch still
+ * carrying faces means stitchMesh matched none/few of them (parts not coincident).
+ */
+async function stitchedFaceCounts(masterDir: string, patches: string[]): Promise<Map<string, number>> {
+  const boundaryAbs = path.join(masterDir, 'constant', 'polyMesh', 'boundary');
+  const details = parseBoundaryPatchDetails(await fs.readFile(boundaryAbs, 'utf8'));
+  const byName = new Map(details.map((d) => [d.name, d.nFaces] as const));
+  return new Map(patches.map((p) => [p, byName.get(p) ?? 0] as const));
+}
+
 /** Replace the project's case mesh with the combined mesh from the work master. */
 async function promoteMasterMesh(projectId: string, masterDir: string): Promise<void> {
   const srcPolyMesh = path.join(masterDir, 'constant', 'polyMesh');
@@ -499,6 +517,12 @@ export async function runMerge(
   for (const stitch of plan.stitches) {
     const masterPatch = resolvePatch(stitch.aMeshId, stitch.aPatch);
     const slavePatch = resolvePatch(stitch.bMeshId, stitch.bPatch);
+    // Pre-stitch face counts (mergeMeshes preserves them) to later tell a real
+    // fusion from a stitch that matched nothing.
+    const origFaces = new Map<string, number>([
+      [masterPatch, patchesOf.get(stitch.aMeshId)!.find((p) => p.name === stitch.aPatch)?.nFaces ?? 0],
+      [slavePatch, patchesOf.get(stitch.bMeshId)!.find((p) => p.name === stitch.bPatch)?.nFaces ?? 0],
+    ]);
     // OpenFOAM.org v11+ stitchMesh takes a single patchPairs list "((master slave))"
     // (not two positional names) and replaced -partial/-perfect with -tol. Pass the
     // tolerance only when configured so the tool's own default (1e-4) otherwise wins.
@@ -510,6 +534,28 @@ export async function runMerge(
     const step = toStep('stitchMesh', `Stitch ${masterPatch} ↔ ${slavePatch}`, planned.display, result);
     steps.push(step);
     if (step.status !== 'success') return finalizeMerge(projectId, steps, notes, false);
+
+    // A stitch can exit 0 yet fuse 0 faces when the patches are not coincident,
+    // leaving both at full nFaces — that promotes two disconnected domains as a
+    // clean success. Fail when nothing fused; warn when only partially fused.
+    const after = await stitchedFaceCounts(masterDir, [masterPatch, slavePatch]);
+    const nothingFused = [masterPatch, slavePatch].every(
+      (p) => (origFaces.get(p) ?? 0) > 0 && (after.get(p) ?? 0) >= (origFaces.get(p) ?? 0),
+    );
+    if (nothingFused) {
+      steps[steps.length - 1] = failStep(
+        'stitchMesh',
+        `Stitch ${masterPatch} ↔ ${slavePatch}`,
+        `stitchMesh ran but fused no faces (${masterPatch} and ${slavePatch} still carry every face). The two patches are almost certainly not coincident: check both parts are in the same coordinate frame with the interface surfaces touching, and raise STITCH_TOL if their meshes differ slightly.`,
+      );
+      return finalizeMerge(projectId, steps, notes, false);
+    }
+    const partial = [masterPatch, slavePatch].filter((p) => (after.get(p) ?? 0) > 0);
+    if (partial.length) {
+      notes.push(
+        `Interface ${masterPatch} ↔ ${slavePatch}: ${partial.map((p) => `${p} still has ${after.get(p)} face(s)`).join(', ')} after stitching — only partially fused; review coincidence / STITCH_TOL.`,
+      );
+    }
   }
   if (plan.stitches.length) notes.push(`Stitched ${plan.stitches.length} interface(s).`);
 
@@ -530,6 +576,14 @@ export async function runMerge(
   const checkStep = toStep('checkMesh', 'Check combined mesh', checkPlan.display, checkResult);
   steps.push(checkStep);
   if (checkStep.status !== 'success') return finalizeMerge(projectId, steps, notes, false);
+  // checkMesh exits 0 even when it reports failed checks, so a clean exit does NOT
+  // mean a clean mesh — surface the count so a "success" never overstates validity.
+  const meshIssues = countCheckMeshFailures(checkResult.stdout);
+  if (meshIssues > 0) {
+    notes.push(
+      `checkMesh reported ${meshIssues} failed mesh check(s) (e.g. non-orthogonality, skewness): the meshes were combined but the result may be low quality — open the checkMesh log and review before running the solver.`,
+    );
+  }
 
   // --- 6) promote: back up, replace the case mesh, realign 0/ fields -------
   // Back up only when there is an existing case to protect; a mesh-only project
@@ -540,7 +594,10 @@ export async function runMerge(
   await promoteMasterMesh(projectId, masterDir);
   try {
     const sync = await syncBoundaryFields(viewer, projectId);
-    if (sync.updated.length) notes.push(`Re-aligned ${sync.updated.length} field(s) to the merged patches.`);
+    if (sync.updated.length)
+      notes.push(
+        `Re-aligned ${sync.updated.length} field(s) to the merged patch set — their boundary conditions were reset to generic defaults because the patches were renamed (m1_*, m2_*, …). Re-specify your inlet / outlet / physical BCs before solving.`,
+      );
   } catch {
     // No 0/ fields to align yet (a mesh-only project): the user makes the case
     // runnable next, which scaffolds them. Not a merge failure.

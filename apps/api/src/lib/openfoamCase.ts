@@ -723,7 +723,10 @@ export function removeEmptyBoundaryPatches(content: string): string {
   const header = headerMatch[0];
   const body = content.slice(headerMatch.index! + header.length);
 
-  const blockRe = /([A-Za-z_][A-Za-z0-9_]*)\s*\{[^{}]*\}/g;
+  // Patch names may contain hyphens (Fluent .msh zone names routinely do, e.g.
+  // "wall-1"); match the same char class as parseBoundaryPatchDetails so a
+  // hyphenated populated patch is kept, not silently dropped from the rewrite.
+  const blockRe = /([A-Za-z_][A-Za-z0-9_-]*)\s*\{[^{}]*\}/g;
   const kept: string[] = [];
   let removed = 0;
   let match: RegExpExecArray | null;

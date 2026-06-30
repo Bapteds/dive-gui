@@ -110,6 +110,18 @@ const mergeFailsRunner: CommandRunner = async (spec) => {
   return ok(spec, '');
 };
 
+/** A runner where stitchMesh runs (exit 0) but fuses NO faces (patches keep every face). */
+const stitchNoOpRunner: CommandRunner = async (spec) => {
+  if (spec.command === 'stitchMesh') return ok(spec, 'Stitched 0 faces');
+  return mergeRunner(spec);
+};
+
+/** A runner like mergeRunner, but checkMesh reports failed checks while still exiting 0. */
+const checkMeshIssuesRunner: CommandRunner = async (spec) =>
+  spec.command === 'checkMesh'
+    ? ok(spec, 'Checking geometry...\n***High non-orthogonality...\nFailed 2 mesh checks.\n')
+    : mergeRunner(spec);
+
 /** Write a fake constant/polyMesh (points + boundary) into a case dir. */
 async function writePolyMesh(caseDir: string): Promise<void> {
   const pm = path.join(caseDir, 'constant', 'polyMesh');
@@ -377,6 +389,37 @@ describe('POST /projects/:id/meshes/merge', () => {
     expect(steps.some((s) => s.kind === 'checkMesh')).toBe(false);
     // No mesh was promoted into the case.
     expect((result.entries as Array<{ path: string }>).some((e) => e.path === 'constant/polyMesh/boundary')).toBe(false);
+  });
+
+  it('fails the merge when a stitch fuses no faces (non-coincident patches)', async () => {
+    setCommandRunner(stitchNoOpRunner);
+    const { id, auth } = await makeProject('mg-nofuse@dive-turbinen.test');
+    const { a, b } = await importTwoParts(id, auth);
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/merge`)
+      .set('Authorization', auth)
+      .send({ order: [a, b], stitches: [{ aMeshId: a, aPatch: 'ifaceA', bMeshId: b, bPatch: 'ifaceB' }] });
+    expect(res.status).toBe(200);
+    const result = res.body.result;
+    expect(result.success).toBe(false);
+    const steps = result.steps as Array<{ kind: string; status: string }>;
+    expect(steps.find((s) => s.kind === 'stitchMesh')!.status).toBe('failed');
+    // Aborted before checkMesh; nothing promoted into the case.
+    expect(steps.some((s) => s.kind === 'checkMesh')).toBe(false);
+    expect((result.entries as Array<{ path: string }>).some((e) => e.path === 'constant/polyMesh/boundary')).toBe(false);
+  });
+
+  it('promotes but warns when checkMesh reports failed checks (exit 0)', async () => {
+    setCommandRunner(checkMeshIssuesRunner);
+    const { id, auth } = await makeProject('mg-checkwarn@dive-turbinen.test');
+    const { a, b } = await importTwoParts(id, auth);
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/merge`)
+      .set('Authorization', auth)
+      .send({ order: [a, b], stitches: [{ aMeshId: a, aPatch: 'ifaceA', bMeshId: b, bPatch: 'ifaceB' }] });
+    expect(res.status).toBe(200);
+    expect(res.body.result.success).toBe(true);
+    expect((res.body.result.notes as string[]).some((n) => /checkMesh reported 2 failed mesh check/i.test(n))).toBe(true);
   });
 
   it('rejects an empty order (422 validation)', async () => {

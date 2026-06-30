@@ -80,6 +80,22 @@ describe('removeEmptyBoundaryPatches', () => {
   it('returns the content unchanged when no patch is empty', () => {
     expect(removeEmptyBoundaryPatches(BOUNDARY)).toBe(BOUNDARY);
   });
+
+  it('keeps a populated hyphenated patch and drops the empty one (Fluent zone names)', () => {
+    const withHyphens = `FoamFile { class polyBoundaryMesh; object boundary; }
+3
+(
+    wall-1 { type wall; nFaces 30; startFace 100; }
+    iface-2 { type patch; nFaces 0; startFace 130; }
+    outlet { type patch; nFaces 8; startFace 130; }
+)
+`;
+    const cleaned = removeEmptyBoundaryPatches(withHyphens);
+    expect(cleaned).toMatch(/wall-1\s*\{/); // the hyphenated populated patch survives
+    expect(cleaned).toMatch(/outlet\s*\{/);
+    expect(cleaned).not.toMatch(/iface-2\s*\{/); // the empty one is dropped
+    expect(cleaned).toMatch(/\n2\n\(/); // count updated to 2
+  });
 });
 
 describe('parseBoundaryPatches', () => {
