@@ -5,9 +5,12 @@
 // projects service enforces. Members may both read and contribute case files;
 // project management (delete, collaborators) remains owner/super-admin only and
 // lives in projects.service.
-import { EDITABLE_FILE_MAX_BYTES } from '@dive/shared';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { EDITABLE_FILE_MAX_BYTES, type MeshImportConversion } from '@dive/shared';
 import { AppError } from '../../lib/AppError';
 import {
+  caseDirAbsolute,
   caseFileExists,
   caseIsEmpty,
   clearCase,
@@ -38,6 +41,8 @@ import {
   type BoundaryPatch,
 } from '../../lib/openfoamCase';
 import { assertProjectVisible, type Viewer } from './projects.service';
+import { ensureOriginalBackup } from '../../lib/meshBackupStorage';
+import { convertMeshFileToCase, meshFileFormat } from '../../lib/meshImport';
 
 /** Result of verifying which mandatory files a case has. */
 export interface CaseVerification {
@@ -115,6 +120,59 @@ export async function importCaseFiles(
 
   const entries = await listCaseTree(projectId);
   return { written, entries };
+}
+
+/** Result of importing a mesh file into the case: report + refreshed tree. */
+export interface ImportMeshFileResult {
+  written: string[];
+  entries: CaseEntry[];
+  conversion: MeshImportConversion;
+}
+
+/**
+ * Import a single .cgns / .msh file as the case mesh: stage it, convert it into
+ * constant/polyMesh (backing up an existing case first), and return the per-step
+ * report with the refreshed tree. A tool failure resolves with
+ * `conversion.success === false` and the logs (the case is left as produced); a
+ * non-mesh file is rejected.
+ */
+export async function importMeshFileIntoCase(
+  viewer: Viewer,
+  projectId: string,
+  file: { name: string; data: Buffer },
+): Promise<ImportMeshFileResult> {
+  await assertProjectVisible(viewer, projectId);
+
+  const format = meshFileFormat(file.name);
+  if (!format) {
+    throw new AppError(
+      400,
+      'NO_MESH',
+      'Unsupported mesh file. Import a .cgns or .msh (or a polyMesh folder / .zip).',
+    );
+  }
+
+  // Back up an existing case before overwriting its mesh (skip an empty case).
+  if (!(await caseIsEmpty(projectId))) {
+    await ensureOriginalBackup(projectId);
+  }
+
+  const caseDir = caseDirAbsolute(projectId);
+  // Stage the upload + intermediate VTK apart from the case so they never show in
+  // the file tree (sibling of case/, removed afterwards).
+  const importDir = path.join(path.dirname(caseDir), '.import');
+  const srcAbs = path.join(importDir, `source${path.extname(file.name).toLowerCase()}`);
+  await fs.mkdir(importDir, { recursive: true });
+  await fs.writeFile(srcAbs, file.data);
+
+  const conversion = await convertMeshFileToCase(caseDir, srcAbs, format, importDir);
+  await fs.rm(importDir, { recursive: true, force: true }).catch(() => undefined);
+
+  const entries = await listCaseTree(projectId);
+  const written = entries
+    .filter((entry) => entry.type === 'file' && entry.path.startsWith('constant/polyMesh/'))
+    .map((entry) => entry.path);
+  return { written, entries, conversion };
 }
 
 /** Remove every imported case file (the "Reset" action). Returns the now-empty tree. */

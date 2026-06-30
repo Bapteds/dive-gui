@@ -28,11 +28,16 @@ import {
   type RawUpload,
 } from './fileTreeStorage';
 
+/** How a mesh source was imported. */
+export type MeshSourceKind = 'folder' | 'zip' | 'cgns' | 'msh';
+
+const MESH_SOURCE_KINDS: readonly MeshSourceKind[] = ['folder', 'zip', 'cgns', 'msh'];
+
 /** Persisted metadata for one imported mesh source. */
 export interface MeshMeta {
   id: string;
   name: string;
-  kind: 'folder' | 'zip';
+  kind: MeshSourceKind;
   /** ISO 8601 import timestamp. */
   createdAt: string;
 }
@@ -54,9 +59,19 @@ export function meshDirAbsolute(projectId: string, meshId: string): string {
   return confineJoin(meshesRootFor(projectId), meshId);
 }
 
-/** Absolute path to one mesh source's polyMesh directory. */
+/**
+ * Absolute path to one mesh source's polyMesh directory. Each source is a
+ * minimal OpenFOAM case (constant/polyMesh + system/), so the mesh-file
+ * converters (vtkUnstructuredToFoam / fluent3DMeshToFoam, run with `-case
+ * <meshDir>`) write straight into it and the merge can stage it as a case.
+ */
 export function meshPolyMeshDir(projectId: string, meshId: string): string {
-  return path.join(meshDirAbsolute(projectId, meshId), 'polyMesh');
+  return path.join(meshDirAbsolute(projectId, meshId), 'constant', 'polyMesh');
+}
+
+/** Absolute path to a mesh source's upload/work directory (`.src`, hidden). */
+export function meshSrcDir(projectId: string, meshId: string): string {
+  return path.join(meshDirAbsolute(projectId, meshId), '.src');
 }
 
 /** Absolute path to the transient merge workspace (purged before each run). */
@@ -65,27 +80,27 @@ export function meshWorkRoot(projectId: string): string {
 }
 
 /**
- * Map every uploaded path onto a clean `polyMesh/<...>` tree: slice from a
- * `polyMesh` segment when present (dropping any wrapper dirs and the case's
- * `constant/`), else nest the file directly under `polyMesh/`. Stays 1:1 with
- * the input — writeNormalizedAt aligns items to normalized paths by index.
+ * Map every uploaded path onto a clean `constant/polyMesh/<...>` tree: slice from
+ * a `polyMesh` segment when present (dropping any wrapper dirs and the case's
+ * `constant/`), else nest the file directly under it. Stays 1:1 with the input —
+ * writeNormalizedAt aligns items to normalized paths by index.
  */
 export function normalizeMeshPaths(rawPaths: string[]): string[] {
   return rawPaths.map((raw) => {
     const segs = sanitizeRelative(raw).split('/');
     const idx = segs.lastIndexOf('polyMesh');
     const rel = idx >= 0 ? segs.slice(idx + 1) : segs;
-    return ['polyMesh', ...rel].join('/');
+    return ['constant', 'polyMesh', ...rel].join('/');
   });
 }
 
 /** A new opaque mesh id (also serves as the source's directory name). */
-function newMeshId(): string {
+export function newMeshId(): string {
   return randomUUID();
 }
 
 /** Write a mesh source's metadata sidecar. */
-async function writeMeshMeta(projectId: string, meta: MeshMeta): Promise<void> {
+export async function writeMeshMeta(projectId: string, meta: MeshMeta): Promise<void> {
   const file = path.join(meshDirAbsolute(projectId, meta.id), 'meta.json');
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, JSON.stringify(meta), 'utf8');
@@ -127,7 +142,9 @@ export async function readMeshMeta(projectId: string, meshId: string): Promise<M
     return {
       id: parsed.id,
       name: parsed.name,
-      kind: parsed.kind === 'zip' ? 'zip' : 'folder',
+      kind: MESH_SOURCE_KINDS.includes(parsed.kind as MeshSourceKind)
+        ? (parsed.kind as MeshSourceKind)
+        : 'folder',
       createdAt: parsed.createdAt,
     };
   } catch {
@@ -159,9 +176,9 @@ export async function meshSourceExists(projectId: string, meshId: string): Promi
   return (await readMeshMeta(projectId, meshId)) !== null;
 }
 
-/** Read a mesh source's polyMesh/boundary file, or null when absent. */
+/** Read a mesh source's constant/polyMesh/boundary file, or null when absent. */
 export function readMeshBoundary(projectId: string, meshId: string): Promise<Buffer | null> {
-  return readFileAt(meshDirAbsolute(projectId, meshId), 'polyMesh/boundary');
+  return readFileAt(meshDirAbsolute(projectId, meshId), 'constant/polyMesh/boundary');
 }
 
 /** Delete a mesh source entirely (its directory and everything under it). */

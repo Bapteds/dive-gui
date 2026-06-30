@@ -31,6 +31,7 @@ import type {
   MergeResult,
   MergeStep,
   MergeStepKind,
+  MeshImportConversion,
   MeshPatch,
   MeshSource,
 } from '@dive/shared';
@@ -55,17 +56,22 @@ import {
   type CaseEntry,
 } from '../../lib/caseStorage';
 import { ensureOriginalBackup } from '../../lib/meshBackupStorage';
+import { convertMeshFileToCase, meshFileFormat } from '../../lib/meshImport';
 import {
   deleteMeshSource,
   importMeshArchive,
   importMeshFolder,
   listMeshSources,
+  meshDirAbsolute,
   meshPolyMeshDir,
   meshSourceExists,
+  meshSrcDir,
+  newMeshId,
   readMeshBoundary,
   readMergePlan,
   resetMeshWork,
   writeMergePlan,
+  writeMeshMeta,
   type MeshMeta,
 } from '../../lib/meshStorage';
 import { assertProjectVisible, type Viewer } from './projects.service';
@@ -77,11 +83,26 @@ export interface MergeRunResult extends MergeResult {
   entries: CaseEntry[];
 }
 
-/** Either a .zip archive or a set of folder files, plus the source's display name. */
+/** One way to import a mesh source: a polyMesh folder, a .zip, or a mesh FILE. */
 export interface MeshImportPayload {
+  /** Display name (folder name / zip name / file name). */
   name: string;
+  /** A .zip archive of a polyMesh. */
   archive?: Buffer;
+  /** A polyMesh folder (each file carrying its relative path). */
   files?: Array<{ relativePath: string; data: Buffer }>;
+  /** A single .cgns / .msh file to convert into a polyMesh. */
+  meshFile?: { name: string; data: Buffer };
+}
+
+/**
+ * Outcome of a library import: the new source (when built), the refreshed list,
+ * and the conversion report when the upload was a mesh FILE (.cgns / .msh).
+ */
+export interface ImportMeshOutcome {
+  mesh?: MeshSource;
+  meshes: MeshSource[];
+  conversion?: MeshImportConversion;
 }
 
 /** Keep captured output bounded on the wire while preserving the useful tail. */
@@ -139,8 +160,13 @@ export async function importMesh(
   viewer: Viewer,
   projectId: string,
   payload: MeshImportPayload,
-): Promise<{ mesh: MeshSource; meshes: MeshSource[] }> {
+): Promise<ImportMeshOutcome> {
   await assertProjectVisible(viewer, projectId);
+
+  // A .cgns / .msh file is converted into a polyMesh source (own report path).
+  if (payload.meshFile) {
+    return importMeshFromFile(projectId, payload.meshFile);
+  }
 
   let meta: MeshMeta;
   if (payload.archive) {
@@ -167,6 +193,49 @@ export async function importMesh(
 
   const [mesh, meshes] = await Promise.all([toMeshSource(projectId, meta), publicMeshes(projectId)]);
   return { mesh, meshes };
+}
+
+/**
+ * Import a .cgns / .msh file as a library source: stage the file, convert it into
+ * the source's constant/polyMesh, and keep the source only if the mesh was built.
+ * Returns the conversion report either way (success === false on a tool failure,
+ * with the source discarded), so the UI can show the logs.
+ */
+async function importMeshFromFile(
+  projectId: string,
+  file: { name: string; data: Buffer },
+): Promise<ImportMeshOutcome> {
+  const format = meshFileFormat(file.name);
+  if (!format) {
+    throw new AppError(
+      400,
+      'NO_MESH',
+      'Unsupported mesh file. Import a .cgns or .msh (or a polyMesh folder / .zip).',
+    );
+  }
+
+  const id = newMeshId();
+  const caseDir = meshDirAbsolute(projectId, id);
+  const srcDir = meshSrcDir(projectId, id);
+  const srcAbs = path.join(srcDir, `source${path.extname(file.name).toLowerCase()}`);
+  await fs.mkdir(srcDir, { recursive: true });
+  await fs.writeFile(srcAbs, file.data);
+
+  const conversion = await convertMeshFileToCase(caseDir, srcAbs, format, srcDir);
+
+  const built = conversion.success && !!(await readMeshBoundary(projectId, id));
+  if (!built) {
+    await deleteMeshSource(projectId, id);
+    return { meshes: await publicMeshes(projectId), conversion };
+  }
+
+  // The polyMesh is built; drop the source + intermediate files (re-importable).
+  await fs.rm(srcDir, { recursive: true, force: true }).catch(() => undefined);
+  const meta: MeshMeta = { id, name: file.name, kind: format, createdAt: new Date().toISOString() };
+  await writeMeshMeta(projectId, meta);
+
+  const [mesh, meshes] = await Promise.all([toMeshSource(projectId, meta), publicMeshes(projectId)]);
+  return { mesh, meshes, conversion };
 }
 
 /** Remove a mesh source from the library. */

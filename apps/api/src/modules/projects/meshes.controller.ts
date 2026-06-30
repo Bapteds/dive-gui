@@ -39,9 +39,10 @@ export async function listMeshesController(req: Request, res: Response): Promise
   res.status(200).json({ meshes });
 }
 
-/** POST /projects/:id/meshes/import — import a polyMesh folder or .zip. */
+/** POST /projects/:id/meshes/import — import a polyMesh folder/.zip, or a .cgns/.msh file. */
 export async function importMeshController(req: Request, res: Response): Promise<void> {
   const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+  const meshFile = files.find((file) => file.fieldname === 'meshFile');
   const archive = files.find((file) => file.fieldname === 'archive');
   const folderFiles = files.filter((file) => file.fieldname === 'files');
   const providedName =
@@ -50,7 +51,12 @@ export async function importMeshController(req: Request, res: Response): Promise
       : '';
 
   let payload: MeshImportPayload;
-  if (archive) {
+  if (meshFile) {
+    payload = {
+      name: providedName || meshFile.originalname,
+      meshFile: { name: meshFile.originalname, data: meshFile.buffer },
+    };
+  } else if (archive) {
     payload = {
       name: providedName || archive.originalname.replace(/\.zip$/i, '') || 'Imported mesh',
       archive: archive.buffer,

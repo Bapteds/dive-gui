@@ -12,6 +12,7 @@ import {
   deleteCaseFileContent,
   getCaseFiles,
   importCaseFiles,
+  importMeshFileIntoCase,
   moveCaseEntry,
   readCaseFileContent,
   resetCase,
@@ -76,9 +77,23 @@ export async function getCaseFilesController(req: Request, res: Response): Promi
   res.status(200).json({ entries });
 }
 
-/** POST /projects/:id/files/import — import a folder or a .zip. */
+/** POST /projects/:id/files/import — import a folder, a .zip, or a .cgns/.msh file. */
 export async function importCaseFilesController(req: Request, res: Response): Promise<void> {
   const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+
+  // A single .cgns / .msh file is converted into the case mesh (own report path).
+  const meshFile = files.find((file) => file.fieldname === 'meshFile');
+  if (meshFile) {
+    const result = await importMeshFileIntoCase(requireViewer(req), req.params.id, {
+      name: meshFile.originalname,
+      data: meshFile.buffer,
+    });
+    res
+      .status(201)
+      .json({ written: result.written, entries: result.entries, conversion: result.conversion });
+    return;
+  }
+
   const archive = files.find((file) => file.fieldname === 'archive');
 
   const payload: ImportPayload = archive

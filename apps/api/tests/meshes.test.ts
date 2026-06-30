@@ -89,6 +89,43 @@ const mergeFailsRunner: CommandRunner = async (spec) => {
   return ok(spec, '');
 };
 
+/** Write a fake constant/polyMesh (points + boundary) into a case dir. */
+async function writePolyMesh(caseDir: string): Promise<void> {
+  const pm = path.join(caseDir, 'constant', 'polyMesh');
+  await fs.mkdir(pm, { recursive: true });
+  await fs.writeFile(path.join(pm, 'points'), 'points-data');
+  await fs.writeFile(path.join(pm, 'boundary'), makeBoundary([{ name: 'inlet' }, { name: 'outlet' }]));
+}
+
+/** A runner that simulates the mesh-file conversion toolchain (CGNS + Fluent) succeeding. */
+const meshImportRunner: CommandRunner = async (spec) => {
+  if (spec.command === 'python3') {
+    // CgnsToVtk: [script, src, vtk] -> write the VTK output the next step reads.
+    const vtkAbs = spec.args[2];
+    await fs.mkdir(path.dirname(vtkAbs), { recursive: true });
+    await fs.writeFile(vtkAbs, '# vtk DataFile Version 4.2\nfake\n');
+    return ok(spec, 'VTK written');
+  }
+  if (spec.command === 'vtkUnstructuredToFoam') {
+    await writePolyMesh(spec.args[1]); // ['-case', caseDir, vtk]
+    return ok(spec, 'Foam mesh written');
+  }
+  if (spec.command === 'fluent3DMeshToFoam') {
+    await writePolyMesh(spec.args[spec.args.indexOf('-case') + 1]); // [src, '-case', caseDir]
+    return ok(spec, 'Foam mesh written');
+  }
+  if (spec.command === 'checkMesh') return ok(spec, 'Mesh OK.\n');
+  return ok(spec, '');
+};
+
+/** A runner whose CGNS->VTK step fails (no mesh produced). */
+const importFailsRunner: CommandRunner = async (spec) => {
+  if (spec.command === 'python3') {
+    return { command: spec.command, args: spec.args, exitCode: 1, stdout: '', stderr: 'CGNS read failed', durationMs: 1, timedOut: false };
+  }
+  return ok(spec, '');
+};
+
 // --- Project + upload helpers ----------------------------------------------
 
 async function makeProject(email: string): Promise<{ userId: string; auth: string; id: string }> {
@@ -132,6 +169,16 @@ function importMesh(id: string, auth: string, files: Array<{ relativePath: strin
   const { body, contentType } = buildMultipart(
     files.map((f) => ({ field: 'files', filename: f.relativePath, data: f.data })),
   );
+  return request(app)
+    .post(`/api/v1/projects/${id}/meshes/import`)
+    .set('Authorization', auth)
+    .set('Content-Type', contentType)
+    .send(body);
+}
+
+/** Import a single mesh FILE (.cgns / .msh) into the library (field 'meshFile'). */
+function importMeshFile(id: string, auth: string, name: string, data: string) {
+  const { body, contentType } = buildMultipart([{ field: 'meshFile', filename: name, data }]);
   return request(app)
     .post(`/api/v1/projects/${id}/meshes/import`)
     .set('Authorization', auth)
@@ -355,5 +402,57 @@ describe('GET/PUT /projects/:id/meshes/plan', () => {
     const res = await request(app).get(`/api/v1/projects/${id}/meshes/plan`).set('Authorization', auth);
     expect(res.status).toBe(200);
     expect(res.body.plan).toBeNull();
+  });
+});
+
+describe('POST /projects/:id/meshes/import (mesh file -> library)', () => {
+  it('converts a .cgns file into a library source', async () => {
+    setCommandRunner(meshImportRunner);
+    const { id, auth } = await makeProject('mi-cgns@dive-turbinen.test');
+    const res = await importMeshFile(id, auth, 'rotor.cgns', 'CGNS-bytes');
+    expect(res.status).toBe(201);
+    expect(res.body.conversion.success).toBe(true);
+    expect(res.body.mesh.name).toBe('rotor.cgns');
+    expect(res.body.mesh.patches.map((p: { name: string }) => p.name)).toEqual(['inlet', 'outlet']);
+    expect(res.body.meshes).toHaveLength(1);
+  });
+
+  it('converts a Fluent .msh file into a library source', async () => {
+    setCommandRunner(meshImportRunner);
+    const { id, auth } = await makeProject('mi-msh@dive-turbinen.test');
+    const res = await importMeshFile(id, auth, 'part.msh', 'MSH-bytes');
+    expect(res.status).toBe(201);
+    expect(res.body.conversion.success).toBe(true);
+    expect(res.body.mesh.name).toBe('part.msh');
+    expect(res.body.meshes).toHaveLength(1);
+  });
+
+  it('reports a conversion failure and keeps no source', async () => {
+    setCommandRunner(importFailsRunner);
+    const { id, auth } = await makeProject('mi-fail@dive-turbinen.test');
+    const res = await importMeshFile(id, auth, 'bad.cgns', 'x');
+    expect(res.status).toBe(201);
+    expect(res.body.conversion.success).toBe(false);
+    expect(res.body.mesh).toBeUndefined();
+    expect(res.body.meshes).toEqual([]);
+  });
+});
+
+describe('POST /projects/:id/files/import (mesh file -> case)', () => {
+  it('converts a .cgns file directly into the case mesh', async () => {
+    setCommandRunner(meshImportRunner);
+    const { id, auth } = await makeProject('fi-cgns@dive-turbinen.test');
+    const { body, contentType } = buildMultipart([
+      { field: 'meshFile', filename: 'rotor.cgns', data: 'CGNS' },
+    ]);
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/import`)
+      .set('Authorization', auth)
+      .set('Content-Type', contentType)
+      .send(body);
+    expect(res.status).toBe(201);
+    expect(res.body.conversion.success).toBe(true);
+    const paths = (res.body.entries as Array<{ path: string }>).map((e) => e.path);
+    expect(paths).toContain('constant/polyMesh/boundary');
   });
 });
