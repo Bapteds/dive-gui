@@ -2,10 +2,12 @@
 // sources, plus the transient workspace used to merge them.
 //
 // Layout:  <STORAGE_DIR>/projects/<projectId>/meshes/
-//            <meshId>/polyMesh/{points,faces,owner,neighbour,boundary,...}
+//            <meshId>/constant/polyMesh/{points,faces,owner,neighbour,boundary,...}
 //            <meshId>/meta.json    ({ id, name, kind, createdAt })
 //            merge.json            (the last MergePlan, for re-runs)
 //            .work/                (transient merge workspace, purged each run)
+//          <meshId> is a READABLE slug of the source name (unique per project,
+//          e.g. meshes/rotor/), not an opaque UUID — see uniqueMeshId.
 //
 // Mesh sources are *inputs* to the merge, kept deliberately apart from the
 // OpenFOAM case tree (caseStorage.ts) so importing a mesh — or resetting the
@@ -13,7 +15,6 @@
 // path-traversal-safe core in fileTreeStorage.ts, pinned to the project's
 // meshes root. Mirrors cgnsStorage.ts (the single-CGNS-source equivalent).
 import { promises as fs } from 'node:fs';
-import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { MergePlan } from '@dive/shared';
 import {
@@ -94,9 +95,41 @@ export function normalizeMeshPaths(rawPaths: string[]): string[] {
   });
 }
 
-/** A new opaque mesh id (also serves as the source's directory name). */
-export function newMeshId(): string {
-  return randomUUID();
+/**
+ * Turn a human mesh name into an id- and directory-safe slug: lowercase ASCII,
+ * every run of other characters collapsed to a single dash. Always assertSafeId-
+ * valid (/^[A-Za-z0-9_-]+$/); falls back to "mesh" when nothing survives.
+ */
+export function slugifyMeshName(name: string): string {
+  const slug = name
+    .normalize('NFKD')
+    .replace(/\p{Diacritic}/gu, '') // strip accents (é -> e)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug || 'mesh';
+}
+
+/**
+ * A unique, READABLE mesh id derived from `name`: its slug, suffixed -2, -3, …
+ * when a sibling source already occupies that directory. Replaces the old opaque
+ * UUID so a source's folder — and the merge plan that references it by id — are
+ * self-describing (meshes/rotor/, meshes/stator/). The id IS the directory name.
+ */
+export async function uniqueMeshId(projectId: string, name: string): Promise<string> {
+  const base = slugifyMeshName(name);
+  let taken: Set<string>;
+  try {
+    const dirents = await fs.readdir(meshesRootFor(projectId), { withFileTypes: true });
+    taken = new Set(dirents.filter((d) => d.isDirectory()).map((d) => d.name));
+  } catch {
+    taken = new Set(); // no meshes/ dir yet
+  }
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base}-${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
 }
 
 /** Write a mesh source's metadata sidecar. */
@@ -112,7 +145,7 @@ export async function importMeshFolder(
   name: string,
   files: RawUpload[],
 ): Promise<MeshMeta> {
-  const id = newMeshId();
+  const id = await uniqueMeshId(projectId, name);
   await writeNormalizedAt(meshDirAbsolute(projectId, id), files, normalizeMeshPaths);
   const meta: MeshMeta = { id, name, kind: 'folder', createdAt: new Date().toISOString() };
   await writeMeshMeta(projectId, meta);
@@ -125,7 +158,7 @@ export async function importMeshArchive(
   name: string,
   archive: Buffer,
 ): Promise<MeshMeta> {
-  const id = newMeshId();
+  const id = await uniqueMeshId(projectId, name);
   await extractArchiveAt(meshDirAbsolute(projectId, id), archive, normalizeMeshPaths);
   const meta: MeshMeta = { id, name, kind: 'zip', createdAt: new Date().toISOString() };
   await writeMeshMeta(projectId, meta);

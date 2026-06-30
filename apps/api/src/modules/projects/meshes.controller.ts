@@ -53,7 +53,9 @@ export async function importMeshController(req: Request, res: Response): Promise
   let payload: MeshImportPayload;
   if (meshFile) {
     payload = {
-      name: providedName || meshFile.originalname,
+      // Default to the file's basename without extension (rotor.cgns -> "rotor")
+      // so the derived slug id is clean; an explicit `name` from the UI wins.
+      name: providedName || meshFile.originalname.replace(/\.[^./\\]+$/, ''),
       meshFile: { name: meshFile.originalname, data: meshFile.buffer },
     };
   } else if (archive) {

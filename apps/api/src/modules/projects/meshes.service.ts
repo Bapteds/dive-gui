@@ -66,10 +66,10 @@ import {
   meshPolyMeshDir,
   meshSourceExists,
   meshSrcDir,
-  newMeshId,
   readMeshBoundary,
   readMergePlan,
   resetMeshWork,
+  uniqueMeshId,
   writeMergePlan,
   writeMeshMeta,
   type MeshMeta,
@@ -165,7 +165,7 @@ export async function importMesh(
 
   // A .cgns / .msh file is converted into a polyMesh source (own report path).
   if (payload.meshFile) {
-    return importMeshFromFile(projectId, payload.meshFile);
+    return importMeshFromFile(projectId, payload.meshFile, payload.name);
   }
 
   let meta: MeshMeta;
@@ -196,14 +196,16 @@ export async function importMesh(
 }
 
 /**
- * Import a .cgns / .msh file as a library source: stage the file, convert it into
- * the source's constant/polyMesh, and keep the source only if the mesh was built.
- * Returns the conversion report either way (success === false on a tool failure,
- * with the source discarded), so the UI can show the logs.
+ * Import a .cgns / .msh file as a library source named `name` (its slug becomes
+ * the source id/directory): stage the file, convert it into the source's
+ * constant/polyMesh, and keep the source only if the mesh was built. Returns the
+ * conversion report either way (success === false on a tool failure, with the
+ * source discarded), so the UI can show the logs.
  */
 async function importMeshFromFile(
   projectId: string,
   file: { name: string; data: Buffer },
+  name: string,
 ): Promise<ImportMeshOutcome> {
   const format = meshFileFormat(file.name);
   if (!format) {
@@ -214,7 +216,7 @@ async function importMeshFromFile(
     );
   }
 
-  const id = newMeshId();
+  const id = await uniqueMeshId(projectId, name);
   const caseDir = meshDirAbsolute(projectId, id);
   const srcDir = meshSrcDir(projectId, id);
   const srcAbs = path.join(srcDir, `source${path.extname(file.name).toLowerCase()}`);
@@ -231,7 +233,7 @@ async function importMeshFromFile(
 
   // The polyMesh is built; drop the source + intermediate files (re-importable).
   await fs.rm(srcDir, { recursive: true, force: true }).catch(() => undefined);
-  const meta: MeshMeta = { id, name: file.name, kind: format, createdAt: new Date().toISOString() };
+  const meta: MeshMeta = { id, name, kind: format, createdAt: new Date().toISOString() };
   await writeMeshMeta(projectId, meta);
 
   const [mesh, meshes] = await Promise.all([toMeshSource(projectId, meta), publicMeshes(projectId)]);

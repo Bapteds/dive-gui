@@ -256,6 +256,8 @@ describe('POST /projects/:id/meshes/import', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.mesh.name).toBe('inlet-part');
+    // The id is the readable slug of the source name, not an opaque UUID.
+    expect(res.body.mesh.id).toBe('inlet-part');
     expect(res.body.mesh.patches.map((p: { name: string }) => p.name)).toEqual(['inlet', 'ifaceA', 'wallsA']);
     expect(res.body.mesh.patches.find((p: { name: string }) => p.name === 'wallsA').type).toBe('wall');
     expect(res.body.meshes).toHaveLength(1);
@@ -447,7 +449,9 @@ describe('POST /projects/:id/meshes/import (mesh file -> library)', () => {
     const res = await importMeshFile(id, auth, 'rotor.cgns', 'CGNS-bytes');
     expect(res.status).toBe(201);
     expect(res.body.conversion.success).toBe(true);
-    expect(res.body.mesh.name).toBe('rotor.cgns');
+    // The display name drops the extension and the id is its readable slug.
+    expect(res.body.mesh.name).toBe('rotor');
+    expect(res.body.mesh.id).toBe('rotor');
     expect(res.body.mesh.patches.map((p: { name: string }) => p.name)).toEqual(['inlet', 'outlet']);
     expect(res.body.meshes).toHaveLength(1);
   });
@@ -458,8 +462,22 @@ describe('POST /projects/:id/meshes/import (mesh file -> library)', () => {
     const res = await importMeshFile(id, auth, 'part.msh', 'MSH-bytes');
     expect(res.status).toBe(201);
     expect(res.body.conversion.success).toBe(true);
-    expect(res.body.mesh.name).toBe('part.msh');
+    expect(res.body.mesh.name).toBe('part');
+    expect(res.body.mesh.id).toBe('part');
     expect(res.body.meshes).toHaveLength(1);
+  });
+
+  it('gives a second same-named file a distinct slug id (-2)', async () => {
+    setCommandRunner(meshImportRunner);
+    const { id, auth } = await makeProject('mi-dup@dive-turbinen.test');
+    const first = await importMeshFile(id, auth, 'rotor.cgns', 'CGNS-1');
+    const second = await importMeshFile(id, auth, 'rotor.cgns', 'CGNS-2');
+    expect(first.body.mesh.id).toBe('rotor');
+    expect(second.body.mesh.id).toBe('rotor-2');
+    // Both display the same human name; only the id disambiguates them.
+    expect(second.body.mesh.name).toBe('rotor');
+    const list = await request(app).get(`/api/v1/projects/${id}/meshes`).set('Authorization', auth);
+    expect(list.body.meshes).toHaveLength(2);
   });
 
   it('reports a conversion failure and keeps no source', async () => {
