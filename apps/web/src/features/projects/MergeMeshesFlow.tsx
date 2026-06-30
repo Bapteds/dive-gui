@@ -10,6 +10,7 @@ import {
   ChevronRight,
   CircleDashed,
   FileArchive,
+  FileCog,
   FolderUp,
   Loader2,
   MinusCircle,
@@ -33,7 +34,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { toast } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
 import { ApiError } from '@/lib/api/client';
-import type { MergeRunResult, MergeStep, MergeStepKind, MeshSource, StitchPair } from '@/lib/api/types';
+import type {
+  ImportStep,
+  MergeRunResult,
+  MergeStep,
+  MergeStepKind,
+  MeshSource,
+  StitchPair,
+} from '@/lib/api/types';
 import {
   useDeleteMesh,
   useImportMesh,
@@ -41,6 +49,7 @@ import {
   useMeshesQuery,
   useRunMerge,
 } from '@/features/projects/useMeshes';
+import { ImportReport } from '@/features/projects/ImportReport';
 
 /**
  * MergeMeshesFlow - the guided "Merge meshes" dialog, opened from the Case files
@@ -270,8 +279,11 @@ function SourcesStep({
   const { isPending, isError, refetch, isRefetching } = query;
   const folderInputRef = useRef<HTMLInputElement>(null);
   const zipInputRef = useRef<HTMLInputElement>(null);
+  const meshFileInputRef = useRef<HTMLInputElement>(null);
   const importMesh = useImportMesh(projectId);
-  const [importingKind, setImportingKind] = useState<'folder' | 'zip' | null>(null);
+  const [importingKind, setImportingKind] = useState<'folder' | 'zip' | 'file' | null>(null);
+  // The failed conversion of the last .cgns/.msh import (cleared on a new import).
+  const [convReport, setConvReport] = useState<ImportStep[] | null>(null);
 
   // The folder picker needs the non-standard webkitdirectory/directory attrs.
   useEffect(() => {
@@ -281,14 +293,23 @@ function SourcesStep({
     input.setAttribute('directory', '');
   }, []);
 
-  const handleImport = async (kind: 'folder' | 'zip', files: File[]) => {
+  const runImport = async (kind: 'folder' | 'zip' | 'file', files: File[]) => {
     if (files.length === 0) return;
     setImportingKind(kind);
+    setConvReport(null);
     try {
-      const result = await importMesh.mutateAsync(
-        kind === 'folder' ? { kind, files } : { kind, file: files[0] },
-      );
-      toast.success(`Added ${result.mesh.name}.`);
+      const result =
+        kind === 'folder'
+          ? await importMesh.mutateAsync({ kind: 'folder', files })
+          : kind === 'zip'
+            ? await importMesh.mutateAsync({ kind: 'zip', file: files[0] })
+            : await importMesh.mutateAsync({ kind: 'file', file: files[0] });
+      if (result.conversion && !result.conversion.success) {
+        setConvReport(result.conversion.steps);
+        toast.error('Mesh conversion failed. See the report below.');
+      } else if (result.mesh) {
+        toast.success(`Added ${result.mesh.name}.`);
+      }
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Import failed. Please try again.');
     } finally {
@@ -315,7 +336,7 @@ function SourcesStep({
         className="sr-only"
         tabIndex={-1}
         aria-hidden="true"
-        onChange={(event) => void handleImport('folder', takeFiles(event.currentTarget))}
+        onChange={(event) => void runImport('folder', takeFiles(event.currentTarget))}
       />
       <input
         ref={zipInputRef}
@@ -324,7 +345,16 @@ function SourcesStep({
         className="sr-only"
         tabIndex={-1}
         aria-hidden="true"
-        onChange={(event) => void handleImport('zip', takeFiles(event.currentTarget))}
+        onChange={(event) => void runImport('zip', takeFiles(event.currentTarget))}
+      />
+      <input
+        ref={meshFileInputRef}
+        type="file"
+        accept=".cgns,.msh"
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={(event) => void runImport('file', takeFiles(event.currentTarget))}
       />
 
       {isPending ? (
@@ -368,7 +398,7 @@ function SourcesStep({
               size="sm"
               onClick={() => folderInputRef.current?.click()}
               loading={importingKind === 'folder'}
-              disabled={importingKind === 'zip'}
+              disabled={importingKind !== null && importingKind !== 'folder'}
             >
               <FolderUp strokeWidth={1.75} aria-hidden="true" />
               Import folder
@@ -379,12 +409,33 @@ function SourcesStep({
               size="sm"
               onClick={() => zipInputRef.current?.click()}
               loading={importingKind === 'zip'}
-              disabled={importingKind === 'folder'}
+              disabled={importingKind !== null && importingKind !== 'zip'}
             >
               <FileArchive strokeWidth={1.75} aria-hidden="true" />
               Import .zip
             </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => meshFileInputRef.current?.click()}
+              loading={importingKind === 'file'}
+              disabled={importingKind !== null && importingKind !== 'file'}
+            >
+              <FileCog strokeWidth={1.75} aria-hidden="true" />
+              Import .cgns / .msh
+            </Button>
           </div>
+
+          {convReport && (
+            <div className="rounded-md border border-danger/40 bg-danger-tint/60 px-4 py-3">
+              <p className="mb-2 flex items-center gap-2 text-sm font-medium text-text">
+                <AlertCircle className="size-4 shrink-0 text-danger" strokeWidth={1.75} aria-hidden="true" />
+                Mesh conversion failed
+              </p>
+              <ImportReport steps={convReport} />
+            </div>
+          )}
         </div>
       )}
 
@@ -506,11 +557,11 @@ function EmptyHint() {
         <Diamond size={14} className="text-primary" />
       </span>
       <p className="text-sm text-text-secondary">
-        No meshes imported yet. Import each part&rsquo;s{' '}
+        No meshes imported yet. Import each part as a{' '}
         <code className="font-mono text-[0.8125rem] text-text" translate="no">
           polyMesh
         </code>{' '}
-        folder (or a .zip) to combine them.
+        folder, a .zip, or a .cgns / .msh file to combine them.
       </p>
     </div>
   );

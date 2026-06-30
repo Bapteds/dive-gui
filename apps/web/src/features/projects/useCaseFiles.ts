@@ -6,6 +6,7 @@ import {
   getCaseFileContent,
   getCaseFiles,
   importCaseFolder,
+  importCaseMeshFile,
   importCaseZip,
   moveCasePath,
   resetCase,
@@ -46,16 +47,24 @@ export function useCaseFilesQuery(projectId: string) {
   });
 }
 
-/** Import a folder or a .zip, then write the refreshed tree into the cache. */
+/** Import a folder, a .zip, or a .cgns/.msh file, then refresh the tree cache. */
 export function useImportCase(projectId: string) {
   const queryClient = useQueryClient();
-  return useMutation<ImportCaseResponse, Error, { kind: 'folder'; files: File[] } | { kind: 'zip'; file: File }>({
+  return useMutation<
+    ImportCaseResponse,
+    Error,
+    { kind: 'folder'; files: File[] } | { kind: 'zip'; file: File } | { kind: 'file'; file: File }
+  >({
     mutationFn: (input) =>
       input.kind === 'folder'
         ? importCaseFolder(projectId, input.files)
-        : importCaseZip(projectId, input.file),
+        : input.kind === 'zip'
+          ? importCaseZip(projectId, input.file)
+          : importCaseMeshFile(projectId, input.file),
     onSuccess: (result) => {
       queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
+      // A converted mesh replaces constant/polyMesh: drop stale content caches.
+      queryClient.removeQueries({ queryKey: [...caseFilesQueryKey(projectId), 'content'] });
     },
   });
 }

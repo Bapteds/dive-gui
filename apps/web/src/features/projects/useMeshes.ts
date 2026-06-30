@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   deleteMesh,
   getMergePlan,
+  importMeshFile,
   importMeshFolder,
   importMeshZip,
   listMeshes,
@@ -49,18 +50,20 @@ export function useMergePlanQuery(projectId: string) {
   });
 }
 
-/** Import a polyMesh (folder or .zip), then write the refreshed list into the cache. */
+/** Import a polyMesh (folder/.zip) or a .cgns/.msh file, then refresh the list cache. */
 export function useImportMesh(projectId: string) {
   const queryClient = useQueryClient();
   return useMutation<
     ImportMeshResponse,
     Error,
-    { kind: 'folder'; files: File[] } | { kind: 'zip'; file: File }
+    { kind: 'folder'; files: File[] } | { kind: 'zip'; file: File } | { kind: 'file'; file: File }
   >({
     mutationFn: (input) =>
       input.kind === 'folder'
         ? importMeshFolder(projectId, input.files)
-        : importMeshZip(projectId, input.file),
+        : input.kind === 'zip'
+          ? importMeshZip(projectId, input.file)
+          : importMeshFile(projectId, input.file),
     onSuccess: (result) => {
       queryClient.setQueryData(meshesQueryKey(projectId), result.meshes);
     },

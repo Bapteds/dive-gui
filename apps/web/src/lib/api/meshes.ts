@@ -63,6 +63,13 @@ export async function importMeshZip(projectId: string, file: File): Promise<Impo
   return apiClient.postForm<ImportMeshResponse>(`/projects/${projectId}/meshes/import`, form);
 }
 
+/** Import a single .cgns / .msh mesh file into the library (converted to a polyMesh). */
+export async function importMeshFile(projectId: string, file: File): Promise<ImportMeshResponse> {
+  const form = new FormData();
+  form.append('meshFile', file, file.name);
+  return apiClient.postForm<ImportMeshResponse>(`/projects/${projectId}/meshes/import`, form);
+}
+
 /** Remove a mesh source from the library. */
 export async function deleteMesh(projectId: string, meshId: string): Promise<DeleteMeshResponse> {
   return apiClient.delete<DeleteMeshResponse>(`/projects/${projectId}/meshes/${meshId}`);

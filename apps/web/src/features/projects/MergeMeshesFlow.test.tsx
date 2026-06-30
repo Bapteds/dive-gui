@@ -18,6 +18,7 @@ vi.mock('@/lib/api/meshes', () => ({
   getMeshPatches: vi.fn(),
   importMeshFolder: vi.fn(),
   importMeshZip: vi.fn(),
+  importMeshFile: vi.fn(),
   deleteMesh: vi.fn(),
   runMerge: vi.fn(),
   getMergePlan: vi.fn(),
@@ -135,5 +136,38 @@ describe('MergeMeshesFlow', () => {
     });
     // The checkMesh log is expanded by default, so its output is visible.
     await waitFor(() => expect(screen.getByText('Mesh OK.')).toBeInTheDocument());
+  });
+
+  it('shows the conversion report when a .cgns/.msh import fails', async () => {
+    vi.mocked(meshesApi.listMeshes).mockResolvedValue([]);
+    vi.mocked(meshesApi.importMeshFile).mockResolvedValue({
+      meshes: [],
+      conversion: {
+        success: false,
+        steps: [
+          {
+            tool: 'python3',
+            label: 'Convert CGNS to VTK',
+            command: 'python3 CgnsToVtk.py rotor.cgns rotor.vtk',
+            status: 'failed',
+            exitCode: 1,
+            stdout: '',
+            stderr: 'KO: CGNS read failed',
+            durationMs: 5,
+          },
+        ],
+      },
+    });
+    renderFlow();
+
+    await screen.findByRole('button', { name: /import \.cgns \/ \.msh/i });
+    const input = document.querySelector('input[accept=".cgns,.msh"]') as HTMLInputElement;
+    const file = new File(['cgns-bytes'], 'rotor.cgns', { type: 'application/octet-stream' });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    expect(await screen.findByText('Mesh conversion failed')).toBeInTheDocument();
+    // The failed step's log is expanded by default, so its stderr is visible.
+    await waitFor(() => expect(screen.getByText('KO: CGNS read failed')).toBeInTheDocument());
+    expect(meshesApi.importMeshFile).toHaveBeenCalledWith('p1', file);
   });
 });

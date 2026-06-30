@@ -14,11 +14,13 @@ import type {
   ExportStep,
   ExportStepId,
   ExportValidation,
+  ImportStep,
   MergePlan,
   MergeResult,
   MergeStep,
   MergeStepKind,
   MeshBackupInfo,
+  MeshImportConversion,
   MeshManifest,
   MeshPatch,
   MeshPatchEdit,
@@ -185,6 +187,8 @@ export interface VerifyCaseResponse {
 export interface ImportCaseResponse {
   written: string[];
   entries: CaseEntry[];
+  /** Present when the import was a .cgns/.msh file (the conversion report). */
+  conversion?: MeshImportConversion;
 }
 
 /** `POST /projects/:id/files/scaffold` response. */
@@ -366,7 +370,16 @@ export interface ConvertCgnsInput {
 // ---- Multi-mesh import + merge ("Merge meshes" flow) ----------------------
 
 /** Re-export of the shared mesh-library + merge shapes. */
-export type { MeshSource, StitchPair, MergePlan, MergeStep, MergeStepKind, MergeResult };
+export type {
+  MeshSource,
+  StitchPair,
+  MergePlan,
+  MergeStep,
+  MergeStepKind,
+  MergeResult,
+  ImportStep,
+  MeshImportConversion,
+};
 
 /** `GET /projects/:id/meshes` response. */
 export interface MeshesResponse {
@@ -375,8 +388,11 @@ export interface MeshesResponse {
 
 /** `POST /projects/:id/meshes/import` response. */
 export interface ImportMeshResponse {
-  mesh: MeshSource;
+  /** The new source (absent when a .cgns/.msh conversion failed). */
+  mesh?: MeshSource;
   meshes: MeshSource[];
+  /** Present when the import was a .cgns/.msh file (the conversion report). */
+  conversion?: MeshImportConversion;
 }
 
 /** `DELETE /projects/:id/meshes/:meshId` response. */

@@ -5,6 +5,7 @@ import {
   Download,
   File as FileIcon,
   FileArchive,
+  FileCog,
   Folder,
   FolderTree,
   FolderUp,
@@ -29,11 +30,19 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { toast } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
 import { ApiError } from '@/lib/api/client';
 import { downloadCase } from '@/lib/api/projects';
-import type { CaseEntry, CaseVerification } from '@/lib/api/types';
+import type { CaseEntry, CaseVerification, ImportStep } from '@/lib/api/types';
 import {
   useCaseFilesQuery,
   useImportCase,
@@ -44,6 +53,7 @@ import {
 import { CaseSummary } from '@/features/projects/CaseSummary';
 import { ConvertToFoamFlow } from '@/features/projects/ConvertToFoamFlow';
 import { MergeMeshesFlow } from '@/features/projects/MergeMeshesFlow';
+import { ImportReport } from '@/features/projects/ImportReport';
 import { ApplyTemplateFlow } from '@/features/templates/ApplyTemplateFlow';
 
 /**
@@ -106,6 +116,7 @@ export function CaseFilesSection({
 
   const folderInputRef = useRef<HTMLInputElement>(null);
   const zipInputRef = useRef<HTMLInputElement>(null);
+  const meshFileInputRef = useRef<HTMLInputElement>(null);
 
   // The folder picker needs the non-standard `webkitdirectory`/`directory`
   // attributes, which are not part of React's typed input props; set them on
@@ -122,7 +133,9 @@ export function CaseFilesSection({
   const scaffold = useScaffoldCase(projectId);
 
   // Which import control is busy, so only that button shows a spinner.
-  const [importingKind, setImportingKind] = useState<'folder' | 'zip' | null>(null);
+  const [importingKind, setImportingKind] = useState<'folder' | 'zip' | 'file' | null>(null);
+  // The failed conversion of the last .cgns/.msh import (drives a report dialog).
+  const [convReport, setConvReport] = useState<ImportStep[] | null>(null);
   const [downloading, setDownloading] = useState(false);
   // The verification that opened the overlay (null = overlay closed).
   const [pendingVerification, setPendingVerification] = useState<CaseVerification | null>(null);
@@ -135,16 +148,25 @@ export function CaseFilesSection({
 
   const hasFiles = !!entries && entries.some((entry) => entry.type === 'file');
 
-  const handleImport = async (kind: 'folder' | 'zip', files: File[]) => {
+  const handleImport = async (kind: 'folder' | 'zip' | 'file', files: File[]) => {
     if (files.length === 0) return;
     setImportingKind(kind);
+    setConvReport(null);
     try {
-      const result = await importCase.mutateAsync(
-        kind === 'folder' ? { kind, files } : { kind, file: files[0] },
-      );
-      toast.success(
-        `Imported ${result.written.length} file${result.written.length === 1 ? '' : 's'}.`,
-      );
+      const result =
+        kind === 'folder'
+          ? await importCase.mutateAsync({ kind: 'folder', files })
+          : kind === 'zip'
+            ? await importCase.mutateAsync({ kind: 'zip', file: files[0] })
+            : await importCase.mutateAsync({ kind: 'file', file: files[0] });
+      if (result.conversion && !result.conversion.success) {
+        setConvReport(result.conversion.steps);
+        toast.error('Mesh conversion failed. See the report.');
+      } else {
+        toast.success(
+          `Imported ${result.written.length} file${result.written.length === 1 ? '' : 's'}.`,
+        );
+      }
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Import failed. Please try again.');
     } finally {
@@ -230,6 +252,15 @@ export function CaseFilesSection({
         aria-hidden="true"
         onChange={(event) => void handleImport('zip', takeFiles(event.currentTarget))}
       />
+      <input
+        ref={meshFileInputRef}
+        type="file"
+        accept=".cgns,.msh"
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={(event) => void handleImport('file', takeFiles(event.currentTarget))}
+      />
 
       <Tabs
         value={tab}
@@ -273,6 +304,7 @@ export function CaseFilesSection({
             <ImportPrompt
               onPickFolder={() => folderInputRef.current?.click()}
               onPickZip={() => zipInputRef.current?.click()}
+              onPickMeshFile={() => meshFileInputRef.current?.click()}
               onConvert={() => setConvertOpen(true)}
               onMerge={() => setMergeOpen(true)}
               importingKind={importingKind}
@@ -286,7 +318,7 @@ export function CaseFilesSection({
                   size="sm"
                   onClick={() => folderInputRef.current?.click()}
                   loading={importingKind === 'folder'}
-                  disabled={importingKind === 'zip'}
+                  disabled={importingKind !== null && importingKind !== 'folder'}
                 >
                   <FolderUp strokeWidth={1.75} aria-hidden="true" />
                   Import folder
@@ -297,10 +329,21 @@ export function CaseFilesSection({
                   size="sm"
                   onClick={() => zipInputRef.current?.click()}
                   loading={importingKind === 'zip'}
-                  disabled={importingKind === 'folder'}
+                  disabled={importingKind !== null && importingKind !== 'zip'}
                 >
                   <FileArchive strokeWidth={1.75} aria-hidden="true" />
                   Import .zip
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => meshFileInputRef.current?.click()}
+                  loading={importingKind === 'file'}
+                  disabled={importingKind !== null && importingKind !== 'file'}
+                >
+                  <FileCog strokeWidth={1.75} aria-hidden="true" />
+                  Import .cgns / .msh
                 </Button>
                 <Button
                   type="button"
@@ -381,6 +424,30 @@ export function CaseFilesSection({
       {mergeOpen && (
         <MergeMeshesFlow projectId={projectId} onClose={() => setMergeOpen(false)} />
       )}
+
+      {convReport && (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setConvReport(null);
+          }}
+        >
+          <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto overscroll-contain">
+            <DialogHeader>
+              <DialogTitle>Mesh conversion failed</DialogTitle>
+              <DialogDescription>
+                A step in the import pipeline failed. Expand its log for the details.
+              </DialogDescription>
+            </DialogHeader>
+            <ImportReport steps={convReport} />
+            <DialogFooter className="mt-2">
+              <Button type="button" onClick={() => setConvReport(null)}>
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </section>
   );
 }
@@ -393,15 +460,17 @@ export function CaseFilesSection({
 function ImportPrompt({
   onPickFolder,
   onPickZip,
+  onPickMeshFile,
   onConvert,
   onMerge,
   importingKind,
 }: {
   onPickFolder: () => void;
   onPickZip: () => void;
+  onPickMeshFile: () => void;
   onConvert: () => void;
   onMerge: () => void;
-  importingKind: 'folder' | 'zip' | null;
+  importingKind: 'folder' | 'zip' | 'file' | null;
 }) {
   return (
     <div className="flex flex-col items-center gap-3 rounded-md border border-dashed border-border-strong px-6 py-12 text-center lg:my-auto">
@@ -420,7 +489,7 @@ function ImportPrompt({
             type="button"
             onClick={onPickFolder}
             loading={importingKind === 'folder'}
-            disabled={importingKind === 'zip'}
+            disabled={importingKind !== null && importingKind !== 'folder'}
           >
             <FolderUp strokeWidth={1.75} aria-hidden="true" />
             Import folder
@@ -430,10 +499,20 @@ function ImportPrompt({
             variant="secondary"
             onClick={onPickZip}
             loading={importingKind === 'zip'}
-            disabled={importingKind === 'folder'}
+            disabled={importingKind !== null && importingKind !== 'zip'}
           >
             <FileArchive strokeWidth={1.75} aria-hidden="true" />
             Import .zip
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={onPickMeshFile}
+            loading={importingKind === 'file'}
+            disabled={importingKind !== null && importingKind !== 'file'}
+          >
+            <FileCog strokeWidth={1.75} aria-hidden="true" />
+            Import .cgns / .msh
           </Button>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
