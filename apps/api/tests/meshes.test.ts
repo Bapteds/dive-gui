@@ -490,22 +490,3 @@ describe('POST /projects/:id/meshes/import (mesh file -> library)', () => {
     expect(res.body.meshes).toEqual([]);
   });
 });
-
-describe('POST /projects/:id/files/import (mesh file -> case)', () => {
-  it('converts a .cgns file directly into the case mesh', async () => {
-    setCommandRunner(meshImportRunner);
-    const { id, auth } = await makeProject('fi-cgns@dive-turbinen.test');
-    const { body, contentType } = buildMultipart([
-      { field: 'meshFile', filename: 'rotor.cgns', data: 'CGNS' },
-    ]);
-    const res = await request(app)
-      .post(`/api/v1/projects/${id}/files/import`)
-      .set('Authorization', auth)
-      .set('Content-Type', contentType)
-      .send(body);
-    expect(res.status).toBe(201);
-    expect(res.body.conversion.success).toBe(true);
-    const paths = (res.body.entries as Array<{ path: string }>).map((e) => e.path);
-    expect(paths).toContain('constant/polyMesh/boundary');
-  });
-});

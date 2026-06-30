@@ -113,13 +113,6 @@ export async function importCaseZip(id: string, file: File): Promise<ImportCaseR
   return apiClient.postForm<ImportCaseResponse>(`/projects/${id}/files/import`, form);
 }
 
-/** Import a single .cgns / .msh mesh file as the case mesh (converted to a polyMesh). */
-export async function importCaseMeshFile(id: string, file: File): Promise<ImportCaseResponse> {
-  const form = new FormData();
-  form.append('meshFile', file, file.name);
-  return apiClient.postForm<ImportCaseResponse>(`/projects/${id}/files/import`, form);
-}
-
 /** Verify which mandatory files the case has. */
 export async function verifyCase(id: string): Promise<CaseVerification> {
   const data = await apiClient.get<VerifyCaseResponse>(`/projects/${id}/files/verify`);

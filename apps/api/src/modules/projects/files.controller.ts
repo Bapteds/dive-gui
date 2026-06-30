@@ -12,7 +12,6 @@ import {
   deleteCaseFileContent,
   getCaseFiles,
   importCaseFiles,
-  importMeshFileIntoCase,
   moveCaseEntry,
   readCaseFileContent,
   resetCase,
@@ -27,10 +26,9 @@ import {
 import type { MovePathInput } from './files.schemas';
 
 /**
- * Multipart parser for case imports. Files are buffered in memory (mesh files
- * are written straight to disk afterwards). A folder upload sends each file in
- * the `files` field with its relative path as the part filename; a zip sends a
- * single `archive` field.
+ * Multipart parser for case imports. Files are buffered in memory. A folder
+ * upload sends each file in the `files` field with its relative path as the part
+ * filename; a zip sends a single `archive` field.
  */
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -77,23 +75,9 @@ export async function getCaseFilesController(req: Request, res: Response): Promi
   res.status(200).json({ entries });
 }
 
-/** POST /projects/:id/files/import — import a folder, a .zip, or a .cgns/.msh file. */
+/** POST /projects/:id/files/import — import a case folder or a .zip. */
 export async function importCaseFilesController(req: Request, res: Response): Promise<void> {
   const files = (req.files as Express.Multer.File[] | undefined) ?? [];
-
-  // A single .cgns / .msh file is converted into the case mesh (own report path).
-  const meshFile = files.find((file) => file.fieldname === 'meshFile');
-  if (meshFile) {
-    const result = await importMeshFileIntoCase(requireViewer(req), req.params.id, {
-      name: meshFile.originalname,
-      data: meshFile.buffer,
-    });
-    res
-      .status(201)
-      .json({ written: result.written, entries: result.entries, conversion: result.conversion });
-    return;
-  }
-
   const archive = files.find((file) => file.fieldname === 'archive');
 
   const payload: ImportPayload = archive
