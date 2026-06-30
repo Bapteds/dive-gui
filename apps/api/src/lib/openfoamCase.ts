@@ -551,6 +551,46 @@ export function parseBoundaryPatchesWithTypes(content: string): BoundaryPatch[] 
   return result;
 }
 
+/** One mesh boundary patch with its geometric type AND boundary face count. */
+export interface BoundaryPatchDetail {
+  name: string;
+  type: string;
+  nFaces: number;
+}
+
+/**
+ * Parse the boundary patches with their geometric `type` AND `nFaces` from a
+ * constant/polyMesh/boundary file. Like parseBoundaryPatchesWithTypes but also
+ * reads each patch's face count — used to describe a mesh source in the library
+ * and merge UI (where face counts help pick the right interface patch). Order
+ * preserved, de-duplicated by name.
+ */
+export function parseBoundaryPatchDetails(content: string): BoundaryPatchDetail[] {
+  const cleaned = content.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  const result: BoundaryPatchDetail[] = [];
+  const seen = new Set<string>();
+  const blockStart = /([A-Za-z_][A-Za-z0-9_-]*)\s*\{/g;
+  let match: RegExpExecArray | null;
+  while ((match = blockStart.exec(cleaned)) !== null) {
+    const name = match[1];
+    if (name === 'FoamFile' || seen.has(name)) continue;
+    const open = cleaned.indexOf('{', match.index);
+    const close = matchBrace(cleaned, open);
+    if (close < 0) continue;
+    const block = cleaned.slice(open, close + 1);
+    const typeMatch = block.match(/\btype\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/);
+    const nFacesMatch = block.match(/\bnFaces\s+(\d+)\s*;/);
+    result.push({
+      name,
+      type: typeMatch ? typeMatch[1] : 'patch',
+      nFaces: nFacesMatch ? Number(nFacesMatch[1]) : 0,
+    });
+    seen.add(name);
+    blockStart.lastIndex = close;
+  }
+  return result;
+}
+
 /** A valid boundary-field BC for a field on a patch of the given geometric type. */
 function defaultFieldBc(fieldName: string, geometricType: string): string {
   if ((CONSTRAINT_PATCH_TYPES as readonly string[]).includes(geometricType)) {
