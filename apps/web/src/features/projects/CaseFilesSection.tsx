@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
+  Combine,
   Download,
   File as FileIcon,
   FileArchive,
@@ -42,6 +43,7 @@ import {
 } from '@/features/projects/useCaseFiles';
 import { CaseSummary } from '@/features/projects/CaseSummary';
 import { ConvertToFoamFlow } from '@/features/projects/ConvertToFoamFlow';
+import { MergeMeshesFlow } from '@/features/projects/MergeMeshesFlow';
 import { ApplyTemplateFlow } from '@/features/templates/ApplyTemplateFlow';
 
 /**
@@ -128,6 +130,8 @@ export function CaseFilesSection({
   const [tab, setTab] = useState<'files' | 'summary'>('files');
   // Whether the guided CGNS -> Foam conversion dialog is open.
   const [convertOpen, setConvertOpen] = useState(false);
+  // Whether the guided multi-mesh merge dialog is open.
+  const [mergeOpen, setMergeOpen] = useState(false);
 
   const hasFiles = !!entries && entries.some((entry) => entry.type === 'file');
 
@@ -270,6 +274,7 @@ export function CaseFilesSection({
               onPickFolder={() => folderInputRef.current?.click()}
               onPickZip={() => zipInputRef.current?.click()}
               onConvert={() => setConvertOpen(true)}
+              onMerge={() => setMergeOpen(true)}
               importingKind={importingKind}
             />
           ) : (
@@ -305,6 +310,15 @@ export function CaseFilesSection({
                 >
                   <Workflow strokeWidth={1.75} aria-hidden="true" />
                   Convert mesh
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setMergeOpen(true)}
+                >
+                  <Combine strokeWidth={1.75} aria-hidden="true" />
+                  Merge meshes
                 </Button>
                 <Button asChild variant="secondary" size="sm">
                   <Link to={`/projects/${projectId}/edit`}>
@@ -363,23 +377,30 @@ export function CaseFilesSection({
       {convertOpen && (
         <ConvertToFoamFlow projectId={projectId} onClose={() => setConvertOpen(false)} />
       )}
+
+      {mergeOpen && (
+        <MergeMeshesFlow projectId={projectId} onClose={() => setMergeOpen(false)} />
+      )}
     </section>
   );
 }
 
 /**
  * Empty state: a diamond mark, the two import actions (orange CTA = folder), and
- * a subordinate "Convert a CGNS mesh" path for users who start from a mesh.
+ * subordinate "Convert a CGNS mesh" / "Merge meshes" paths for users who start
+ * from a mesh source (one CGNS, or several polyMesh parts to combine).
  */
 function ImportPrompt({
   onPickFolder,
   onPickZip,
   onConvert,
+  onMerge,
   importingKind,
 }: {
   onPickFolder: () => void;
   onPickZip: () => void;
   onConvert: () => void;
+  onMerge: () => void;
   importingKind: 'folder' | 'zip' | null;
 }) {
   return (
@@ -415,16 +436,28 @@ function ImportPrompt({
             Import .zip
           </Button>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="text-primary hover:bg-primary-tint hover:text-primary"
-          onClick={onConvert}
-        >
-          <Workflow strokeWidth={1.75} aria-hidden="true" />
-          Convert a CGNS mesh
-        </Button>
+        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="text-primary hover:bg-primary-tint hover:text-primary"
+            onClick={onConvert}
+          >
+            <Workflow strokeWidth={1.75} aria-hidden="true" />
+            Convert a CGNS mesh
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="text-primary hover:bg-primary-tint hover:text-primary"
+            onClick={onMerge}
+          >
+            <Combine strokeWidth={1.75} aria-hidden="true" />
+            Merge meshes
+          </Button>
+        </div>
       </div>
     </div>
   );

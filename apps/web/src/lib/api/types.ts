@@ -14,16 +14,22 @@ import type {
   ExportStep,
   ExportStepId,
   ExportValidation,
+  MergePlan,
+  MergeResult,
+  MergeStep,
+  MergeStepKind,
   MeshBackupInfo,
   MeshManifest,
   MeshPatch,
   MeshPatchEdit,
   MeshPatchType,
+  MeshSource,
   ResidualSample,
   Role,
   RunStatus,
   ServerErrorCode,
   SolverId,
+  StitchPair,
   ValidationCheck,
 } from '@dive/shared';
 
@@ -355,6 +361,48 @@ export interface ConvertCgnsResponse {
 export interface ConvertCgnsInput {
   cgnsFile: string;
   templateId: string;
+}
+
+// ---- Multi-mesh import + merge ("Merge meshes" flow) ----------------------
+
+/** Re-export of the shared mesh-library + merge shapes. */
+export type { MeshSource, StitchPair, MergePlan, MergeStep, MergeStepKind, MergeResult };
+
+/** `GET /projects/:id/meshes` response. */
+export interface MeshesResponse {
+  meshes: MeshSource[];
+}
+
+/** `POST /projects/:id/meshes/import` response. */
+export interface ImportMeshResponse {
+  mesh: MeshSource;
+  meshes: MeshSource[];
+}
+
+/** `DELETE /projects/:id/meshes/:meshId` response. */
+export interface DeleteMeshResponse {
+  meshes: MeshSource[];
+}
+
+/** `GET /projects/:id/meshes/:meshId/patches` response. */
+export interface MeshPatchesResponse {
+  patches: MeshPatch[];
+}
+
+/** Outcome of a merge run: the shared report plus the refreshed case tree. */
+export type MergeRunResult = MergeResult & {
+  /** Refreshed case tree after a successful promote (unchanged on failure). */
+  entries: CaseEntry[];
+};
+
+/** `POST /projects/:id/meshes/merge` response. */
+export interface MergeResponse {
+  result: MergeRunResult;
+}
+
+/** `GET /projects/:id/meshes/plan` and `PUT` response. */
+export interface MergePlanResponse {
+  plan: MergePlan | null;
 }
 
 // ---- 3D mesh viewer ("Visualize" tab) ----
