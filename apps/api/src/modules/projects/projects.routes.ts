@@ -39,6 +39,15 @@ import {
   uploadCgnsController,
 } from './conversion.controller';
 import {
+  deleteMeshController,
+  getMergePlanController,
+  getMeshPatchesController,
+  importMeshController,
+  listMeshesController,
+  mergeMeshesController,
+  saveMergePlanController,
+} from './meshes.controller';
+import {
   autoPatchController,
   editMeshPatchesController,
   getMeshBackupController,
@@ -73,6 +82,7 @@ import {
 import { createFileSchema, filePathQuerySchema, movePathSchema } from './files.schemas';
 import { runIdParamSchema, startRunSchema } from './runs.schemas';
 import { cgnsNameQuerySchema, convertCgnsSchema } from './conversion.schemas';
+import { meshIdParamSchema, mergePlanSchema } from './meshes.schemas';
 import {
   addCollaboratorSchema,
   collaboratorParamSchema,
@@ -234,6 +244,48 @@ export function createProjectsRouter(): Router {
     '/:id/cgns/convert',
     validate({ params: projectIdParamSchema, body: convertCgnsSchema }),
     asyncHandler(convertCgnsController),
+  );
+
+  // Mesh library + merge ("Merge meshes" flow). Import several polyMesh sources
+  // into a reusable per-project library, then combine + conformally stitch a
+  // chosen subset into the case's constant/polyMesh. Import reuses the shared
+  // multipart parser; merge/plan take a JSON MergePlan body. Static sub-paths
+  // (import/plan/merge) are registered before the dynamic ":meshId" routes.
+  router.get(
+    '/:id/meshes',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(listMeshesController),
+  );
+  router.post(
+    '/:id/meshes/import',
+    validate({ params: projectIdParamSchema }),
+    parseCaseUpload,
+    asyncHandler(importMeshController),
+  );
+  router.get(
+    '/:id/meshes/plan',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(getMergePlanController),
+  );
+  router.put(
+    '/:id/meshes/plan',
+    validate({ params: projectIdParamSchema, body: mergePlanSchema }),
+    asyncHandler(saveMergePlanController),
+  );
+  router.post(
+    '/:id/meshes/merge',
+    validate({ params: projectIdParamSchema, body: mergePlanSchema }),
+    asyncHandler(mergeMeshesController),
+  );
+  router.get(
+    '/:id/meshes/:meshId/patches',
+    validate({ params: meshIdParamSchema }),
+    asyncHandler(getMeshPatchesController),
+  );
+  router.delete(
+    '/:id/meshes/:meshId',
+    validate({ params: meshIdParamSchema }),
+    asyncHandler(deleteMeshController),
   );
 
   // 3D mesh viewer ("Visualize" tab). The manifest call builds the render on
