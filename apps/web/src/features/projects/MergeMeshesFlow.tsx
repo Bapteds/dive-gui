@@ -28,6 +28,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Field } from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
 import { Diamond } from '@/components/brand/Diamond';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -284,6 +286,8 @@ function SourcesStep({
   const [importingKind, setImportingKind] = useState<'folder' | 'zip' | 'file' | null>(null);
   // The failed conversion of the last .cgns/.msh import (cleared on a new import).
   const [convReport, setConvReport] = useState<ImportStep[] | null>(null);
+  // Optional business name for the next import; its slug becomes the source dir.
+  const [name, setName] = useState('');
 
   // The folder picker needs the non-standard webkitdirectory/directory attrs.
   useEffect(() => {
@@ -297,17 +301,19 @@ function SourcesStep({
     if (files.length === 0) return;
     setImportingKind(kind);
     setConvReport(null);
+    const trimmed = name.trim() || undefined;
     try {
       const result =
         kind === 'folder'
-          ? await importMesh.mutateAsync({ kind: 'folder', files })
+          ? await importMesh.mutateAsync({ kind: 'folder', files, name: trimmed })
           : kind === 'zip'
-            ? await importMesh.mutateAsync({ kind: 'zip', file: files[0] })
-            : await importMesh.mutateAsync({ kind: 'file', file: files[0] });
+            ? await importMesh.mutateAsync({ kind: 'zip', file: files[0], name: trimmed })
+            : await importMesh.mutateAsync({ kind: 'file', file: files[0], name: trimmed });
       if (result.conversion && !result.conversion.success) {
         setConvReport(result.conversion.steps);
         toast.error('Mesh conversion failed. See the report below.');
       } else if (result.mesh) {
+        setName('');
         toast.success(`Added ${result.mesh.name}.`);
       }
     } catch (err) {
@@ -390,6 +396,21 @@ function SourcesStep({
           ) : (
             <EmptyHint />
           )}
+
+          <Field
+            label="Name"
+            helperText="Optional. Used to name and store the mesh you import next, e.g. rotor. Defaults to the file or folder name."
+          >
+            <Input
+              name="meshName"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="e.g. rotor"
+              disabled={importingKind !== null}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </Field>
 
           <div className="flex flex-wrap items-center gap-2">
             <Button

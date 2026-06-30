@@ -56,14 +56,16 @@ export function useImportMesh(projectId: string) {
   return useMutation<
     ImportMeshResponse,
     Error,
-    { kind: 'folder'; files: File[] } | { kind: 'zip'; file: File } | { kind: 'file'; file: File }
+    | { kind: 'folder'; files: File[]; name?: string }
+    | { kind: 'zip'; file: File; name?: string }
+    | { kind: 'file'; file: File; name?: string }
   >({
     mutationFn: (input) =>
       input.kind === 'folder'
-        ? importMeshFolder(projectId, input.files)
+        ? importMeshFolder(projectId, input.files, input.name)
         : input.kind === 'zip'
-          ? importMeshZip(projectId, input.file)
-          : importMeshFile(projectId, input.file),
+          ? importMeshZip(projectId, input.file, input.name)
+          : importMeshFile(projectId, input.file, input.name),
     onSuccess: (result) => {
       queryClient.setQueryData(meshesQueryKey(projectId), result.meshes);
     },

@@ -41,32 +41,47 @@ function meshNameFromFolder(files: File[]): string {
 /**
  * Import a polyMesh folder into the library. Each file carries its relative path
  * (webkitRelativePath) as the multipart part filename so the server keeps the
- * polyMesh tree; the top folder name is sent as the source's display name.
+ * polyMesh tree; an explicit `name` (else the top folder name) is sent as the
+ * source's display name and slug.
  */
 export async function importMeshFolder(
   projectId: string,
   files: File[],
+  name?: string,
 ): Promise<ImportMeshResponse> {
   const form = new FormData();
   for (const file of files) {
     form.append('files', file, file.webkitRelativePath || file.name);
   }
-  const name = meshNameFromFolder(files);
-  if (name) form.append('name', name);
+  const resolved = name?.trim() || meshNameFromFolder(files);
+  if (resolved) form.append('name', resolved);
   return apiClient.postForm<ImportMeshResponse>(`/projects/${projectId}/meshes/import`, form);
 }
 
-/** Import a .zip of a polyMesh into the library. */
-export async function importMeshZip(projectId: string, file: File): Promise<ImportMeshResponse> {
+/** Import a .zip of a polyMesh into the library (optionally named). */
+export async function importMeshZip(
+  projectId: string,
+  file: File,
+  name?: string,
+): Promise<ImportMeshResponse> {
   const form = new FormData();
   form.append('archive', file, file.name);
+  if (name?.trim()) form.append('name', name.trim());
   return apiClient.postForm<ImportMeshResponse>(`/projects/${projectId}/meshes/import`, form);
 }
 
-/** Import a single .cgns / .msh mesh file into the library (converted to a polyMesh). */
-export async function importMeshFile(projectId: string, file: File): Promise<ImportMeshResponse> {
+/**
+ * Import a single .cgns / .msh mesh file into the library (converted to a
+ * polyMesh). An explicit `name` (else the file basename) becomes its slug.
+ */
+export async function importMeshFile(
+  projectId: string,
+  file: File,
+  name?: string,
+): Promise<ImportMeshResponse> {
   const form = new FormData();
   form.append('meshFile', file, file.name);
+  if (name?.trim()) form.append('name', name.trim());
   return apiClient.postForm<ImportMeshResponse>(`/projects/${projectId}/meshes/import`, form);
 }
 

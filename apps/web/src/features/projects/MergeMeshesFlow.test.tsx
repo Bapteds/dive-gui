@@ -168,6 +168,23 @@ describe('MergeMeshesFlow', () => {
     expect(await screen.findByText('Mesh conversion failed')).toBeInTheDocument();
     // The failed step's log is expanded by default, so its stderr is visible.
     await waitFor(() => expect(screen.getByText('KO: CGNS read failed')).toBeInTheDocument());
-    expect(meshesApi.importMeshFile).toHaveBeenCalledWith('p1', file);
+    expect(meshesApi.importMeshFile).toHaveBeenCalledWith('p1', file, undefined);
+  });
+
+  it('sends the typed name with a .cgns/.msh import', async () => {
+    vi.mocked(meshesApi.listMeshes).mockResolvedValue([]);
+    vi.mocked(meshesApi.importMeshFile).mockResolvedValue({
+      mesh: { id: 'rotor', name: 'rotor', createdAt: '2026-06-30T08:00:00.000Z', patches: [] },
+      meshes: [],
+    });
+    renderFlow();
+
+    await screen.findByRole('button', { name: /import \.cgns \/ \.msh/i });
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'rotor' } });
+    const input = document.querySelector('input[accept=".cgns,.msh"]') as HTMLInputElement;
+    const file = new File(['cgns-bytes'], 'wheel.cgns', { type: 'application/octet-stream' });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => expect(meshesApi.importMeshFile).toHaveBeenCalledWith('p1', file, 'rotor'));
   });
 });
