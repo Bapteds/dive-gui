@@ -67,6 +67,22 @@ const envSchema = z
     // autoPatch: divides the external boundary faces into patches by feature
     // angle, used by the "Auto-patch boundaries" action on the Visualize tab.
     AUTO_PATCH_BIN: z.string().min(1).default('autoPatch'),
+    // --- Multi-mesh merge (Merge meshes flow) ---------------------------------
+    // mergeMeshes combines several imported polyMesh sources into one master
+    // mesh; stitchMesh then conformally fuses chosen patch pairs (e.g. one part's
+    // outlet against the next part's inlet) into internal interfaces, yielding a
+    // single continuous domain. Same operational model as the other OpenFOAM
+    // tools above (configurable, sourced via OPENFOAM_BASHRC, absent on a Windows
+    // dev box -> a clean per-step "not found" rather than a crash).
+    MERGE_MESHES_BIN: z.string().min(1).default('mergeMeshes'),
+    STITCH_MESH_BIN: z.string().min(1).default('stitchMesh'),
+    // stitchMesh face-matching mode: '-partial' tolerates patches whose faces
+    // only partly coincide (the safe default for separately-built parts);
+    // '-perfect' requires an exact 1:1 face match across the whole interface.
+    STITCH_MODE: z.enum(['-partial', '-perfect']).default('-partial'),
+    // Per-step wall-clock timeout (ms) for a merge command (mergeMeshes /
+    // stitchMesh / checkMesh on a large combined mesh). Generous, like conversion.
+    MERGE_STEP_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
     // Optional path to an OpenFOAM `etc/bashrc`. When set, OpenFOAM utilities run
     // inside `bash -c 'source <bashrc> && exec "$@"'` so their environment is
     // available; arguments are passed as real argv (never interpolated), so this
