@@ -49,6 +49,7 @@ import {
 } from '../../lib/openfoamCase';
 import {
   caseDirAbsolute,
+  caseIsEmpty,
   listCaseTree,
   readCaseFile,
   type CaseEntry,
@@ -455,7 +456,11 @@ export async function runMerge(
   if (checkStep.status !== 'success') return finalizeMerge(projectId, steps, notes, false);
 
   // --- 6) promote: back up, replace the case mesh, realign 0/ fields -------
-  await ensureOriginalBackup(projectId);
+  // Back up only when there is an existing case to protect; a mesh-only project
+  // has no case/ dir yet (ensureOriginalBackup would fail copying a missing dir).
+  if (!(await caseIsEmpty(projectId))) {
+    await ensureOriginalBackup(projectId);
+  }
   await promoteMasterMesh(projectId, masterDir);
   try {
     const sync = await syncBoundaryFields(viewer, projectId);
