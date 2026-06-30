@@ -159,6 +159,25 @@ const importFailsRunner: CommandRunner = async (spec) => {
   return ok(spec, '');
 };
 
+/** A runner simulating autoPatch: split the boundary into autoN + an empty leftover. */
+const autoPatchRunner: CommandRunner = async (spec) => {
+  if (spec.command === 'autoPatch') {
+    const caseDir = spec.args[spec.args.indexOf('-case') + 1];
+    const boundaryAbs = path.join(caseDir, 'constant', 'polyMesh', 'boundary');
+    // autoPatch keeps the (collapsed) patch as empty and appends the split patches.
+    await fs.writeFile(
+      boundaryAbs,
+      makeBoundary([
+        { name: 'defaultFaces', nFaces: 0 },
+        { name: 'auto0', nFaces: 12 },
+        { name: 'auto1', type: 'wall', nFaces: 8 },
+      ]),
+    );
+    return ok(spec, 'autoPatch: created 2 patches');
+  }
+  return ok(spec, '');
+};
+
 // --- Project + upload helpers ----------------------------------------------
 
 async function makeProject(email: string): Promise<{ userId: string; auth: string; id: string }> {
@@ -531,5 +550,51 @@ describe('POST /projects/:id/meshes/import (mesh file -> library)', () => {
     expect(res.body.conversion.success).toBe(false);
     expect(res.body.mesh).toBeUndefined();
     expect(res.body.meshes).toEqual([]);
+  });
+});
+
+describe('POST /meshes/:meshId/auto-patch + /patches/rename (re-patch a library mesh)', () => {
+  it('splits a single-patch library mesh, then names a patch', async () => {
+    setCommandRunner(autoPatchRunner);
+    const { id, auth } = await makeProject('mr-repatch@dive-turbinen.test');
+    const imported = await importMesh(id, auth, meshFiles('part', makeBoundary([{ name: 'defaultFaces' }])));
+    const meshId = imported.body.mesh.id;
+
+    const split = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/${meshId}/auto-patch`)
+      .set('Authorization', auth)
+      .send({ featureAngle: 45 });
+    expect(split.status).toBe(200);
+    expect(split.body.result.success).toBe(true);
+    // The empty leftover is cleaned up; only the split patches remain.
+    expect(split.body.mesh.patches.map((p: { name: string }) => p.name)).toEqual(['auto0', 'auto1']);
+
+    const renamed = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/${meshId}/patches/rename`)
+      .set('Authorization', auth)
+      .send({ from: 'auto0', to: 'interface' });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.mesh.patches.map((p: { name: string }) => p.name)).toEqual(['interface', 'auto1']);
+  });
+
+  it('rejects renaming a patch onto an existing name (409 PATCH_EXISTS)', async () => {
+    const { id, auth } = await makeProject('mr-dup@dive-turbinen.test');
+    const { a } = await importTwoParts(id, auth);
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/${a}/patches/rename`)
+      .set('Authorization', auth)
+      .send({ from: 'inlet', to: 'ifaceA' });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('PATCH_EXISTS');
+  });
+
+  it('returns 404 when auto-patching an unknown mesh', async () => {
+    setCommandRunner(autoPatchRunner);
+    const { id, auth } = await makeProject('mr-404@dive-turbinen.test');
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/ghost/auto-patch`)
+      .set('Authorization', auth)
+      .send({ featureAngle: 45 });
+    expect(res.status).toBe(404);
   });
 });

@@ -41,6 +41,8 @@ import { runCommand, type CommandResult } from '../../lib/commandRunner';
 import { commandFailed, planOpenfoamCommand } from '../../lib/openfoamCommand';
 import {
   BOUNDARY_FILE,
+  collapseBoundaryToSinglePatch,
+  isValidPatchName,
   parseBoundaryPatchDetails,
   removeEmptyBoundaryPatches,
   renameBoundaryPatch,
@@ -67,6 +69,7 @@ import {
   meshSourceExists,
   meshSrcDir,
   readMeshBoundary,
+  readMeshMeta,
   readMergePlan,
   resetMeshWork,
   uniqueMeshId,
@@ -149,6 +152,133 @@ export async function getMeshPatches(
   }
   const boundary = await readMeshBoundary(projectId, meshId);
   return boundary ? parseBoundaryPatchDetails(boundary.toString('utf8')) : [];
+}
+
+/** Outcome of re-patching a library mesh: the autoPatch run + the refreshed source. */
+export interface MeshSourceAutoPatchOutcome {
+  result: {
+    success: boolean;
+    command: string;
+    exitCode: number | null;
+    stdout: string;
+    stderr: string;
+    durationMs: number;
+  };
+  mesh?: MeshSource;
+  meshes: MeshSource[];
+}
+
+/**
+ * Split a library mesh's boundary into patches by feature angle (OpenFOAM
+ * `autoPatch`), so a single-patch import (e.g. a .cgns that arrived as one
+ * `defaultFaces`) gets distinct, stitchable patches. autoPatch needs a minimal
+ * system/, written for the run and removed after; the boundary is collapsed to
+ * one patch first so each run numbers from auto0, and restored on failure. Never
+ * throws on a tool failure — returns `result.success: false` plus the logs.
+ *
+ * @throws 404 NOT_FOUND (project not visible or mesh absent).
+ */
+export async function autoPatchMeshSource(
+  viewer: Viewer,
+  projectId: string,
+  meshId: string,
+  featureAngle: number,
+): Promise<MeshSourceAutoPatchOutcome> {
+  await assertProjectVisible(viewer, projectId);
+  if (!(await meshSourceExists(projectId, meshId))) {
+    throw new AppError(404, 'NOT_FOUND', 'Mesh source not found');
+  }
+  const meshDir = meshDirAbsolute(projectId, meshId);
+  const boundaryAbs = path.join(meshPolyMeshDir(projectId, meshId), 'boundary');
+
+  // autoPatch reads system/controlDict; library sources have none, so write the
+  // minimal trio just for the run and drop it after (staging never copies it).
+  const systemFiles: BaseFilePath[] = ['system/controlDict', 'system/fvSchemes', 'system/fvSolution'];
+  for (const file of systemFiles) {
+    const abs = path.join(meshDir, file);
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, renderBaseFile(file, []), 'utf8');
+  }
+
+  // Re-patch from a clean slate: collapse to one patch so each run numbers from
+  // auto0 (autoPatch otherwise keeps existing patches and appends autoN). Keep the
+  // pre-collapse boundary to restore it if the tool fails.
+  const preCollapse = await fs.readFile(boundaryAbs, 'utf8');
+  await fs.writeFile(boundaryAbs, collapseBoundaryToSinglePatch(preCollapse), 'utf8');
+
+  const plan = planOpenfoamCommand(
+    env.AUTO_PATCH_BIN,
+    [String(featureAngle), '-overwrite', '-case', meshDir],
+    meshDir,
+  );
+  const cmd = await runCommand({ ...plan, timeoutMs: env.CONVERSION_STEP_TIMEOUT_MS });
+
+  if (!commandFailed(cmd)) {
+    // Drop the empty patches autoPatch leaves behind (the collapsed one it split).
+    const after = await fs.readFile(boundaryAbs, 'utf8');
+    const cleaned = removeEmptyBoundaryPatches(after);
+    if (cleaned !== after) await fs.writeFile(boundaryAbs, cleaned, 'utf8');
+  } else {
+    await fs.writeFile(boundaryAbs, preCollapse, 'utf8'); // failed: restore as-was
+  }
+  await fs.rm(path.join(meshDir, 'system'), { recursive: true, force: true }).catch(() => undefined);
+
+  const extra = cmd.spawnError
+    ? `\n[runner] ${cmd.spawnError}`
+    : cmd.timedOut
+      ? '\n[runner] command timed out'
+      : '';
+  const result = {
+    success: !commandFailed(cmd),
+    command: plan.display,
+    exitCode: cmd.exitCode,
+    stdout: tail(cmd.stdout),
+    stderr: tail(cmd.stderr + extra),
+    durationMs: cmd.durationMs,
+  };
+
+  const meta = await readMeshMeta(projectId, meshId);
+  const mesh = result.success && meta ? await toMeshSource(projectId, meta) : undefined;
+  return { result, mesh, meshes: await publicMeshes(projectId) };
+}
+
+/**
+ * Rename a patch of a library mesh (its boundary file is the only source of patch
+ * names; a library source carries no 0/ fields to propagate to). Lets the user
+ * give the auto-split patches meaningful names (inlet / outlet / interface) to
+ * stitch on. Returns the refreshed source + list.
+ *
+ * @throws 404 NOT_FOUND, 409 NO_MESH / PATCH_EXISTS, 422 VALIDATION_ERROR.
+ */
+export async function renameMeshSourcePatch(
+  viewer: Viewer,
+  projectId: string,
+  meshId: string,
+  from: string,
+  to: string,
+): Promise<{ mesh: MeshSource; meshes: MeshSource[] }> {
+  await assertProjectVisible(viewer, projectId);
+  if (!isValidPatchName(to)) {
+    throw new AppError(422, 'VALIDATION_ERROR', 'A patch name must be a single word (letters, digits, underscore).');
+  }
+  const meta = await readMeshMeta(projectId, meshId);
+  if (!meta) throw new AppError(404, 'NOT_FOUND', 'Mesh source not found');
+  const boundary = await readMeshBoundary(projectId, meshId);
+  if (!boundary) throw new AppError(409, 'NO_MESH', 'This mesh has no polyMesh boundary.');
+  const content = boundary.toString('utf8');
+  const names = parseBoundaryPatchDetails(content).map((patch) => patch.name);
+  if (!names.includes(from)) {
+    throw new AppError(404, 'NOT_FOUND', `Patch "${from}" was not found in this mesh.`);
+  }
+  if (from !== to) {
+    if (names.includes(to)) {
+      throw new AppError(409, 'PATCH_EXISTS', `A patch named "${to}" already exists.`);
+    }
+    const boundaryAbs = path.join(meshPolyMeshDir(projectId, meshId), 'boundary');
+    await fs.writeFile(boundaryAbs, renameBoundaryPatch(content, from, to), 'utf8');
+  }
+  const [mesh, meshes] = await Promise.all([toMeshSource(projectId, meta), publicMeshes(projectId)]);
+  return { mesh, meshes };
 }
 
 /**

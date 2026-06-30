@@ -39,12 +39,14 @@ import {
   uploadCgnsController,
 } from './conversion.controller';
 import {
+  autoPatchMeshSourceController,
   deleteMeshController,
   getMergePlanController,
   getMeshPatchesController,
   importMeshController,
   listMeshesController,
   mergeMeshesController,
+  renameMeshSourcePatchController,
   saveMergePlanController,
 } from './meshes.controller';
 import {
@@ -82,7 +84,12 @@ import {
 import { createFileSchema, filePathQuerySchema, movePathSchema } from './files.schemas';
 import { runIdParamSchema, startRunSchema } from './runs.schemas';
 import { cgnsNameQuerySchema, convertCgnsSchema } from './conversion.schemas';
-import { meshIdParamSchema, mergePlanSchema } from './meshes.schemas';
+import {
+  meshIdParamSchema,
+  meshSourceAutoPatchSchema,
+  meshSourceRenamePatchSchema,
+  mergePlanSchema,
+} from './meshes.schemas';
 import {
   addCollaboratorSchema,
   collaboratorParamSchema,
@@ -281,6 +288,18 @@ export function createProjectsRouter(): Router {
     '/:id/meshes/:meshId/patches',
     validate({ params: meshIdParamSchema }),
     asyncHandler(getMeshPatchesController),
+  );
+  // Re-patch a LIBRARY mesh before merging: split its boundary by feature angle
+  // (so a single-patch .cgns import gets stitchable patches), then name them.
+  router.post(
+    '/:id/meshes/:meshId/auto-patch',
+    validate({ params: meshIdParamSchema, body: meshSourceAutoPatchSchema }),
+    asyncHandler(autoPatchMeshSourceController),
+  );
+  router.post(
+    '/:id/meshes/:meshId/patches/rename',
+    validate({ params: meshIdParamSchema, body: meshSourceRenamePatchSchema }),
+    asyncHandler(renameMeshSourcePatchController),
   );
   router.delete(
     '/:id/meshes/:meshId',

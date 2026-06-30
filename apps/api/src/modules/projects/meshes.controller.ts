@@ -7,16 +7,22 @@ import type { Request, Response } from 'express';
 import { AppError } from '../../lib/AppError';
 import type { Viewer } from './projects.service';
 import {
+  autoPatchMeshSource,
   getMergePlan,
   getMeshPatches,
   importMesh,
   listMeshes,
   removeMesh,
+  renameMeshSourcePatch,
   runMerge,
   saveMergePlan,
   type MeshImportPayload,
 } from './meshes.service';
-import type { MergePlanInput } from './meshes.schemas';
+import type {
+  MergePlanInput,
+  MeshSourceAutoPatchInput,
+  MeshSourceRenamePatchInput,
+} from './meshes.schemas';
 
 /** Build the acting viewer (id + role) or fail defensively. */
 function requireViewer(req: Request): Viewer {
@@ -86,6 +92,31 @@ export async function deleteMeshController(req: Request, res: Response): Promise
 export async function getMeshPatchesController(req: Request, res: Response): Promise<void> {
   const patches = await getMeshPatches(requireViewer(req), req.params.id, req.params.meshId);
   res.status(200).json({ patches });
+}
+
+/** POST /projects/:id/meshes/:meshId/auto-patch — split a library mesh by feature angle. */
+export async function autoPatchMeshSourceController(req: Request, res: Response): Promise<void> {
+  const { featureAngle } = req.body as MeshSourceAutoPatchInput;
+  const result = await autoPatchMeshSource(
+    requireViewer(req),
+    req.params.id,
+    req.params.meshId,
+    featureAngle,
+  );
+  res.status(200).json(result);
+}
+
+/** POST /projects/:id/meshes/:meshId/patches/rename — name a library mesh patch. */
+export async function renameMeshSourcePatchController(req: Request, res: Response): Promise<void> {
+  const { from, to } = req.body as MeshSourceRenamePatchInput;
+  const result = await renameMeshSourcePatch(
+    requireViewer(req),
+    req.params.id,
+    req.params.meshId,
+    from,
+    to,
+  );
+  res.status(200).json(result);
 }
 
 /** POST /projects/:id/meshes/merge — run the merge pipeline. */
