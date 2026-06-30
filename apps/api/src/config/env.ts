@@ -76,10 +76,11 @@ const envSchema = z
     // dev box -> a clean per-step "not found" rather than a crash).
     MERGE_MESHES_BIN: z.string().min(1).default('mergeMeshes'),
     STITCH_MESH_BIN: z.string().min(1).default('stitchMesh'),
-    // stitchMesh face-matching mode: '-partial' tolerates patches whose faces
-    // only partly coincide (the safe default for separately-built parts);
-    // '-perfect' requires an exact 1:1 face match across the whole interface.
-    STITCH_MODE: z.enum(['-partial', '-perfect']).default('-partial'),
+    // stitchMesh face-matching tolerance (relative to local edge length). OpenFOAM
+    // v11+ replaced the old -partial/-perfect modes with a single -tol value; empty
+    // means "use stitchMesh's own default" (1e-4). Raise it for separately-built
+    // parts whose interface faces only approximately coincide.
+    STITCH_TOL: z.string().default(''),
     // Per-step wall-clock timeout (ms) for a merge command (mergeMeshes /
     // stitchMesh / checkMesh on a large combined mesh). Generous, like conversion.
     MERGE_STEP_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),

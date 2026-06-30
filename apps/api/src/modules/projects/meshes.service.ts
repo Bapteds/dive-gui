@@ -476,11 +476,14 @@ export async function runMerge(
   const masterDir = caseDirOf(order[0]);
 
   // --- 2) mergeMeshes: combine every additional source into the master -----
+  // OpenFOAM.org v11+ dropped mergeMeshes' positional case arguments: the master
+  // is the -case (here masterDir) and every mesh to fold in is named via the
+  // -addCases list option. One case per step keeps each its own row in the report.
   for (let i = 1; i < order.length; i += 1) {
     const id = order[i];
     const planned = planOpenfoamCommand(
       env.MERGE_MESHES_BIN,
-      [masterDir, caseDirOf(id), '-overwrite'],
+      ['-case', masterDir, '-addCases', `("${caseDirOf(id)}")`, '-overwrite'],
       masterDir,
     );
     const result = await runCommand({ ...planned, timeoutMs });
@@ -494,11 +497,13 @@ export async function runMerge(
   for (const stitch of plan.stitches) {
     const masterPatch = resolvePatch(stitch.aMeshId, stitch.aPatch);
     const slavePatch = resolvePatch(stitch.bMeshId, stitch.bPatch);
-    const planned = planOpenfoamCommand(
-      env.STITCH_MESH_BIN,
-      [masterPatch, slavePatch, '-overwrite', env.STITCH_MODE, '-case', masterDir],
-      masterDir,
-    );
+    // OpenFOAM.org v11+ stitchMesh takes a single patchPairs list "((master slave))"
+    // (not two positional names) and replaced -partial/-perfect with -tol. Pass the
+    // tolerance only when configured so the tool's own default (1e-4) otherwise wins.
+    const stitchArgs = [`((${masterPatch} ${slavePatch}))`, '-overwrite', '-case', masterDir];
+    const tol = env.STITCH_TOL.trim();
+    if (tol) stitchArgs.push('-tol', tol);
+    const planned = planOpenfoamCommand(env.STITCH_MESH_BIN, stitchArgs, masterDir);
     const result = await runCommand({ ...planned, timeoutMs });
     const step = toStep('stitchMesh', `Stitch ${masterPatch} ↔ ${slavePatch}`, planned.display, result);
     steps.push(step);

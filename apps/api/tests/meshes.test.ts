@@ -57,21 +57,42 @@ function ok(spec: { command: string; args: string[] }, stdout: string): CommandR
   return { command: spec.command, args: spec.args, exitCode: 0, stdout, stderr: '', durationMs: 1, timedOut: false };
 }
 
+/**
+ * Every OpenFOAM invocation the merge pipeline makes, in order. Lets a test pin
+ * the exact CLI contract (the real mergeMeshes / stitchMesh are not in CI), so a
+ * regression back to the pre-v11 positional signature is caught here, not on the
+ * server. Reset in beforeEach.
+ */
+const recordedCommands: Array<{ command: string; args: string[] }> = [];
+
+/** Pull the single path out of a -addCases list literal, e.g. ("/a/b") -> /a/b. */
+function addCasePath(addCasesArg: string): string {
+  return addCasesArg.match(/"([^"]+)"/)?.[1] ?? '';
+}
+
+/** Pull the two patch names out of a stitchMesh patchPairs literal "((a b))". */
+function patchPair(pairsArg: string): string[] {
+  return pairsArg.replace(/[()]/g, ' ').trim().split(/\s+/);
+}
+
 /** A runner that simulates the whole merge toolchain succeeding. */
 const mergeRunner: CommandRunner = async (spec) => {
+  recordedCommands.push({ command: spec.command, args: [...spec.args] });
   if (spec.command === 'mergeMeshes') {
-    // args: [masterDir, addDir, '-overwrite']
-    const masterB = path.join(spec.args[0], 'constant', 'polyMesh', 'boundary');
-    const addB = path.join(spec.args[1], 'constant', 'polyMesh', 'boundary');
+    // v11+: ['-case', masterDir, '-addCases', '("<addDir>")', '-overwrite']
+    const masterDir = spec.args[spec.args.indexOf('-case') + 1];
+    const addDir = addCasePath(spec.args[spec.args.indexOf('-addCases') + 1]);
+    const masterB = path.join(masterDir, 'constant', 'polyMesh', 'boundary');
+    const addB = path.join(addDir, 'constant', 'polyMesh', 'boundary');
     const merged = mergeBoundaries(await fs.readFile(masterB, 'utf8'), await fs.readFile(addB, 'utf8'));
     await fs.writeFile(masterB, merged);
     return ok(spec, 'Merged meshes');
   }
   if (spec.command === 'stitchMesh') {
-    // args: [masterPatch, slavePatch, '-overwrite', '-partial', '-case', masterDir]
+    // v11+: ['((master slave))', '-overwrite', '-case', masterDir]
     const caseDir = spec.args[spec.args.indexOf('-case') + 1];
     const boundaryAbs = path.join(caseDir, 'constant', 'polyMesh', 'boundary');
-    const stitched = zeroOutPatches(await fs.readFile(boundaryAbs, 'utf8'), [spec.args[0], spec.args[1]]);
+    const stitched = zeroOutPatches(await fs.readFile(boundaryAbs, 'utf8'), patchPair(spec.args[0]));
     await fs.writeFile(boundaryAbs, stitched);
     return ok(spec, 'Stitched patches');
   }
@@ -206,6 +227,7 @@ function caseBoundary(id: string, auth: string) {
 beforeEach(async () => {
   await resetDatabase();
   await fs.rm('./test-storage', { recursive: true, force: true });
+  recordedCommands.length = 0;
   setCommandRunner(mergeRunner);
 });
 
@@ -295,6 +317,19 @@ describe('POST /projects/:id/meshes/merge', () => {
     // The stitched interface patches are fused away; the rest survive, prefixed.
     const names = result.boundaryPatches.map((p: { name: string }) => p.name).sort();
     expect(names).toEqual(['m1_inlet', 'm1_wallsA', 'm2_outlet', 'm2_wallsB']);
+
+    // The merge invoked the OpenFOAM.org v11+ CLI, not the old positional signature
+    // (mergeMeshes uses -addCases; stitchMesh a single patchPairs list, no -partial).
+    const mergeCall = recordedCommands.find((c) => c.command === 'mergeMeshes')!;
+    expect(mergeCall.args).toEqual([
+      '-case', expect.any(String), '-addCases', expect.stringMatching(/^\("[^"]+"\)$/), '-overwrite',
+    ]);
+    const stitchCall = recordedCommands.find((c) => c.command === 'stitchMesh')!;
+    expect(stitchCall.args[0]).toBe('((m1_ifaceA m2_ifaceB))');
+    expect(stitchCall.args).toContain('-overwrite');
+    expect(stitchCall.args).not.toContain('-partial');
+    expect(stitchCall.args).not.toContain('-perfect');
+
     // The combined mesh was promoted into the case.
     const paths = (result.entries as Array<{ path: string }>).map((e) => e.path);
     expect(paths).toContain('constant/polyMesh/boundary');
