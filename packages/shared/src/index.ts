@@ -154,6 +154,117 @@ export const CONSTRAINT_PATCH_TYPES = [
   'processor',
 ] as const;
 
+// ---------------------------------------------------------------------------
+// Multi-mesh import & merge (mergeMeshes / stitchMesh).
+//
+// A project can hold a LIBRARY of imported polyMesh sources, kept apart from the
+// case under the meshes/ subtree (like cgns/). The "merge" pipeline combines
+// them into the project's single constant/polyMesh — the artifact every other
+// feature (Visualize, Solver, Export) already consumes — by combining the meshes
+// (mergeMeshes) and conformally fusing chosen patch pairs into internal
+// interfaces (stitchMesh). Shared so the API and the web client agree on the
+// plan they exchange and the per-step report they render.
+// ---------------------------------------------------------------------------
+
+/**
+ * Directory name (under a project's storage subtree, sibling of case/, cgns/,
+ * viz/, runs/, export/) holding the reusable library of imported polyMesh
+ * sources and the transient merge workspace. Kept apart from the case so
+ * importing a mesh never touches case inputs and a case reset never wipes the
+ * library.
+ */
+export const MESHES_DIRNAME = 'meshes';
+
+/**
+ * Ordered kinds of step the merge pipeline emits. Unlike the fixed-length
+ * conversion/export pipelines, a merge runs a VARIABLE number of steps (one
+ * `prepare` per source, one `mergeMeshes` per added source, one `stitchMesh` per
+ * pair), so each step carries a `kind` (not a unique id) plus a human label.
+ *   - prepare:     stage a source as a case + prefix its patches (collision-free)
+ *   - mergeMeshes: combine an additional mesh into the master (OpenFOAM mergeMeshes)
+ *   - stitchMesh:  conformally fuse a chosen patch pair into an internal interface
+ *   - cleanup:     drop the zero-face patches stitchMesh leaves behind
+ *   - checkMesh:   validate the combined mesh
+ */
+export const MERGE_STEP_KINDS = [
+  'prepare',
+  'mergeMeshes',
+  'stitchMesh',
+  'cleanup',
+  'checkMesh',
+] as const;
+export type MergeStepKind = (typeof MERGE_STEP_KINDS)[number];
+
+/** One imported polyMesh source in a project's mesh library. */
+export interface MeshSource {
+  /** Opaque id (also the source's directory name under meshes/). */
+  id: string;
+  /** Display name (defaults to the uploaded folder/zip name). */
+  name: string;
+  /** Boundary patches parsed from the source's constant/polyMesh/boundary. */
+  patches: MeshPatch[];
+  /** ISO 8601 import timestamp (drives the default merge order). */
+  createdAt: string;
+}
+
+/**
+ * One conformal connection to make: fuse patch `aPatch` of mesh `aMeshId` to
+ * patch `bPatch` of mesh `bMeshId`. The two patches must be geometrically
+ * coincident; stitchMesh turns their faces into an internal interface so flow
+ * passes continuously between the two parts.
+ */
+export interface StitchPair {
+  aMeshId: string;
+  aPatch: string;
+  bMeshId: string;
+  bPatch: string;
+}
+
+/**
+ * A merge plan: the ordered list of source mesh ids to combine (the first is the
+ * master) plus the patch pairs to stitch afterwards. An empty `stitches` just
+ * combines the meshes side by side without connecting them.
+ */
+export interface MergePlan {
+  order: string[];
+  stitches: StitchPair[];
+}
+
+/** One executed (or skipped) step of the merge pipeline. */
+export interface MergeStep {
+  /** Which kind of step this is (see MERGE_STEP_KINDS). */
+  kind: MergeStepKind;
+  /** Human-readable step name (e.g. "Stitch m1.outlet ↔ m2.inlet"). */
+  label: string;
+  /** The logical command line that was run (for transparency in the UI). */
+  command: string;
+  /** 'success' (exit 0), 'failed', or 'skipped' (an earlier step failed). */
+  status: 'success' | 'failed' | 'skipped';
+  /** Process exit code, or null when killed / never spawned / not a command. */
+  exitCode: number | null;
+  /** Captured stdout (tail, truncated). */
+  stdout: string;
+  /** Captured stderr (tail, truncated). */
+  stderr: string;
+  /** Wall-clock duration in ms (0 for a skipped/instant step). */
+  durationMs: number;
+}
+
+/**
+ * Outcome of a merge run: the per-step report plus the patches of the resulting
+ * combined mesh. The API augments this with the refreshed case tree on the wire.
+ */
+export interface MergeResult {
+  /** True only when every step succeeded and the combined mesh was promoted. */
+  success: boolean;
+  /** The pipeline steps, in execution order. */
+  steps: MergeStep[];
+  /** Informational notes (sources combined, pairs stitched, patches dropped, …). */
+  notes: string[];
+  /** Boundary patches of the resulting constant/polyMesh (empty on failure). */
+  boundaryPatches: MeshPatch[];
+}
+
 /**
  * Directory name (under a project's storage subtree, sibling of `case/`,
  * `cgns/`, `viz/`) holding solver-run logs and artifacts. Kept apart from the
@@ -364,6 +475,10 @@ export const SERVER_ERROR_CODES = [
   'NO_MESH',
   'MESH_NOT_BUILT',
   'MESH_BUILD_FAILED',
+  'NO_MESHES',
+  'INVALID_MERGE_PLAN',
+  'STITCH_PATCH_NOT_FOUND',
+  'MESH_MERGE_FAILED',
   'SCRIPT_MISSING',
   'PATCH_EXISTS',
   'NOT_RUNNABLE',
