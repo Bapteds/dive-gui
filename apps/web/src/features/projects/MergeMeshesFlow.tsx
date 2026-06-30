@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { UseQueryResult } from '@tanstack/react-query';
 import {
   AlertCircle,
@@ -15,6 +15,7 @@ import {
   Loader2,
   MinusCircle,
   Plus,
+  Scissors,
   Trash2,
   Workflow,
   XCircle,
@@ -41,14 +42,17 @@ import type {
   MergeRunResult,
   MergeStep,
   MergeStepKind,
+  MeshPatch,
   MeshSource,
   StitchPair,
 } from '@/lib/api/types';
 import {
+  useAutoPatchMeshSource,
   useDeleteMesh,
   useImportMesh,
   useMergePlanQuery,
   useMeshesQuery,
+  useRenameMeshSourcePatch,
   useRunMerge,
 } from '@/features/projects/useMeshes';
 import { ImportReport } from '@/features/projects/ImportReport';
@@ -494,6 +498,8 @@ function MeshRow({
   onMoveDown: () => void;
 }) {
   const remove = useDeleteMesh(projectId);
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
 
   const handleRemove = async () => {
     try {
@@ -505,67 +511,233 @@ function MeshRow({
   };
 
   return (
-    <li className="flex items-center gap-3 px-3 py-2.5">
-      <span className="grid size-8 shrink-0 place-items-center rounded-sm bg-primary-tint text-xs font-semibold tabular-nums text-primary">
-        {position}
-      </span>
-      <Boxes className="size-4 shrink-0 text-primary" strokeWidth={1.75} aria-hidden="true" />
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="min-w-0 truncate text-sm font-medium text-text" title={mesh.name}>
-            {mesh.name}
-          </span>
-          {isMaster && (
-            <span className="shrink-0 rounded-sm bg-primary-tint px-1.5 py-0.5 text-[0.6875rem] font-medium text-primary">
-              Base
+    <li className="flex flex-col">
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <span className="grid size-8 shrink-0 place-items-center rounded-sm bg-primary-tint text-xs font-semibold tabular-nums text-primary">
+          {position}
+        </span>
+        <Boxes className="size-4 shrink-0 text-primary" strokeWidth={1.75} aria-hidden="true" />
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 truncate text-sm font-medium text-text" title={mesh.name}>
+              {mesh.name}
             </span>
-          )}
+            {isMaster && (
+              <span className="shrink-0 rounded-sm bg-primary-tint px-1.5 py-0.5 text-[0.6875rem] font-medium text-primary">
+                Base
+              </span>
+            )}
+          </span>
+          <button
+            type="button"
+            onClick={() => setOpen((value) => !value)}
+            aria-expanded={open}
+            aria-controls={panelId}
+            className="-ml-0.5 flex w-fit items-center gap-1 rounded-sm px-0.5 text-xs text-text-secondary transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
+          >
+            <ChevronDown
+              className={cn('size-3 transition-transform', open && 'rotate-180')}
+              strokeWidth={1.75}
+              aria-hidden="true"
+            />
+            <span className="tabular-nums">
+              {mesh.patches.length} patch{mesh.patches.length === 1 ? '' : 'es'}
+            </span>
+          </button>
         </span>
-        <span className="text-xs text-text-secondary tabular-nums">
-          {mesh.patches.length} patch{mesh.patches.length === 1 ? '' : 'es'}
-        </span>
-      </span>
 
-      <div className="flex shrink-0 items-center">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-8 text-text-secondary"
-          aria-label={`Move ${mesh.name} up`}
-          disabled={isFirst}
-          onClick={onMoveUp}
-        >
-          <ArrowUp strokeWidth={1.75} aria-hidden="true" />
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-8 text-text-secondary"
-          aria-label={`Move ${mesh.name} down`}
-          disabled={isLast}
-          onClick={onMoveDown}
-        >
-          <ArrowDown strokeWidth={1.75} aria-hidden="true" />
-        </Button>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-8 text-text-secondary hover:bg-danger-tint hover:text-danger"
-              aria-label={`Remove ${mesh.name}`}
-              loading={remove.isPending}
-              onClick={() => void handleRemove()}
-            >
-              <Trash2 strokeWidth={1.75} aria-hidden="true" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Remove from library</TooltipContent>
-        </Tooltip>
+        <div className="flex shrink-0 items-center">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-8 text-text-secondary"
+            aria-label={`Move ${mesh.name} up`}
+            disabled={isFirst}
+            onClick={onMoveUp}
+          >
+            <ArrowUp strokeWidth={1.75} aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-8 text-text-secondary"
+            aria-label={`Move ${mesh.name} down`}
+            disabled={isLast}
+            onClick={onMoveDown}
+          >
+            <ArrowDown strokeWidth={1.75} aria-hidden="true" />
+          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8 text-text-secondary hover:bg-danger-tint hover:text-danger"
+                aria-label={`Remove ${mesh.name}`}
+                loading={remove.isPending}
+                onClick={() => void handleRemove()}
+              >
+                <Trash2 strokeWidth={1.75} aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Remove from library</TooltipContent>
+          </Tooltip>
+        </div>
       </div>
+
+      {open && (
+        <div id={panelId} className="border-t border-border bg-bg px-3 py-3">
+          <PatchEditor projectId={projectId} mesh={mesh} />
+        </div>
+      )}
+    </li>
+  );
+}
+
+/**
+ * Re-patch a library mesh before merging: split its boundary into patches by
+ * feature angle (so a single-patch import becomes stitchable), then give each a
+ * meaningful name. Operates on the library source, not the case.
+ */
+function PatchEditor({ projectId, mesh }: { projectId: string; mesh: MeshSource }) {
+  const autoPatch = useAutoPatchMeshSource(projectId);
+  const [angle, setAngle] = useState('30');
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const handleSplit = async () => {
+    setFailure(null);
+    try {
+      const res = await autoPatch.mutateAsync({ meshId: mesh.id, featureAngle: Number(angle) });
+      if (!res.result.success) {
+        setFailure(res.result.stderr || res.result.stdout || 'autoPatch failed.');
+        toast.error('Auto-split failed. See the log below.');
+      } else {
+        toast.success(`Split into ${res.mesh?.patches.length ?? 0} patch(es).`);
+      }
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Auto-split failed. Please try again.');
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-end gap-2">
+        <Field
+          label="Split by feature angle (°)"
+          helperText="Splits the outer surface into patches at edges sharper than this angle. Use it when an import arrived as a single patch."
+        >
+          <Input
+            type="number"
+            inputMode="numeric"
+            name="featureAngle"
+            min={0}
+            max={180}
+            value={angle}
+            onChange={(event) => setAngle(event.target.value)}
+            disabled={autoPatch.isPending}
+            autoComplete="off"
+            className="w-28"
+          />
+        </Field>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={() => void handleSplit()}
+          loading={autoPatch.isPending}
+        >
+          <Scissors strokeWidth={1.75} aria-hidden="true" />
+          Split patches
+        </Button>
+      </div>
+
+      {failure && (
+        <div className="rounded-md border border-danger/40 bg-danger-tint/60 px-3 py-2">
+          <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-text">
+            <AlertCircle className="size-3.5 shrink-0 text-danger" strokeWidth={1.75} aria-hidden="true" />
+            autoPatch failed
+          </p>
+          <pre className="max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words text-[0.6875rem] leading-relaxed text-text-secondary">
+            {failure}
+          </pre>
+        </div>
+      )}
+
+      {mesh.patches.length > 0 ? (
+        <ul className="flex flex-col gap-1.5">
+          {mesh.patches.map((patch) => (
+            <PatchRenameRow key={patch.name} projectId={projectId} meshId={mesh.id} patch={patch} />
+          ))}
+        </ul>
+      ) : (
+        <p className="text-xs text-text-secondary">No patches yet. Split the mesh to create some.</p>
+      )}
+    </div>
+  );
+}
+
+/** One patch row: rename it inline (Enter or the button); shows its type + face count. */
+function PatchRenameRow({
+  projectId,
+  meshId,
+  patch,
+}: {
+  projectId: string;
+  meshId: string;
+  patch: MeshPatch;
+}) {
+  const rename = useRenameMeshSourcePatch(projectId);
+  const [value, setValue] = useState(patch.name);
+  const id = useId();
+  const next = value.trim();
+  const changed = next !== patch.name && next.length > 0;
+
+  const handleRename = async () => {
+    if (!changed) return;
+    try {
+      await rename.mutateAsync({ meshId, from: patch.name, to: next });
+      toast.success(`Renamed to ${next}.`);
+    } catch (err) {
+      setValue(patch.name);
+      toast.error(err instanceof ApiError ? err.message : 'Could not rename the patch.');
+    }
+  };
+
+  return (
+    <li className="flex items-center gap-2">
+      <label htmlFor={id} className="sr-only">
+        Rename patch {patch.name}
+      </label>
+      <Input
+        id={id}
+        name="patchName"
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') void handleRename();
+        }}
+        disabled={rename.isPending}
+        spellCheck={false}
+        autoComplete="off"
+        className="h-8 min-w-0 flex-1 font-mono text-xs"
+      />
+      <span className="shrink-0 text-xs text-text-secondary tabular-nums">
+        {patch.type}, {patch.nFaces}
+      </span>
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        className="h-8 shrink-0"
+        disabled={!changed}
+        loading={rename.isPending}
+        onClick={() => void handleRename()}
+      >
+        Rename
+      </Button>
     </li>
   );
 }

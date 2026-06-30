@@ -20,6 +20,8 @@ vi.mock('@/lib/api/meshes', () => ({
   importMeshZip: vi.fn(),
   importMeshFile: vi.fn(),
   deleteMesh: vi.fn(),
+  autoPatchMeshSource: vi.fn(),
+  renameMeshSourcePatch: vi.fn(),
   runMerge: vi.fn(),
   getMergePlan: vi.fn(),
   saveMergePlan: vi.fn(),
@@ -186,5 +188,35 @@ describe('MergeMeshesFlow', () => {
     fireEvent.change(input, { target: { files: [file] } });
 
     await waitFor(() => expect(meshesApi.importMeshFile).toHaveBeenCalledWith('p1', file, 'rotor'));
+  });
+
+  it('splits and renames a library mesh patch from its row', async () => {
+    vi.mocked(meshesApi.listMeshes).mockResolvedValue([meshA, meshB]);
+    vi.mocked(meshesApi.autoPatchMeshSource).mockResolvedValue({
+      result: { success: true, command: 'autoPatch 30 -overwrite', exitCode: 0, stdout: '', stderr: '', durationMs: 5 },
+      mesh: { ...meshA, patches: [{ name: 'auto0', type: 'patch', nFaces: 12 }] },
+      meshes: [meshA, meshB],
+    });
+    vi.mocked(meshesApi.renameMeshSourcePatch).mockResolvedValue({
+      mesh: { ...meshA, patches: [{ name: 'interface', type: 'patch', nFaces: 20 }] },
+      meshes: [meshA, meshB],
+    });
+    renderFlow();
+
+    // Expand the first mesh's patch editor (the "N patches" toggle).
+    expect(await screen.findByText('inlet-part')).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: /\d+ patch/i })[0]);
+
+    // Split by feature angle.
+    fireEvent.click(screen.getByRole('button', { name: /split patches/i }));
+    await waitFor(() => expect(meshesApi.autoPatchMeshSource).toHaveBeenCalledWith('p1', 'm1', 30));
+
+    // Rename a patch inline (Enter submits).
+    const input = screen.getByLabelText('Rename patch ifaceA');
+    fireEvent.change(input, { target: { value: 'interface' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() =>
+      expect(meshesApi.renameMeshSourcePatch).toHaveBeenCalledWith('p1', 'm1', 'ifaceA', 'interface'),
+    );
   });
 });

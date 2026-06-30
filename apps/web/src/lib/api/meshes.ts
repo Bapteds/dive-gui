@@ -1,5 +1,6 @@
 import { apiClient } from './client';
 import type {
+  AutoPatchMeshSourceResponse,
   DeleteMeshResponse,
   ImportMeshResponse,
   MergePlan,
@@ -10,6 +11,7 @@ import type {
   MeshPatchesResponse,
   MeshSource,
   MeshesResponse,
+  RenameMeshSourcePatchResponse,
 } from './types';
 
 /**
@@ -29,6 +31,35 @@ export async function getMeshPatches(projectId: string, meshId: string): Promise
     `/projects/${projectId}/meshes/${meshId}/patches`,
   );
   return data.patches;
+}
+
+/**
+ * Split a library mesh's boundary into patches by feature angle (OpenFOAM
+ * autoPatch). Resolves with the report even on a tool failure (result.success
+ * === false); only access / missing-mesh errors reject.
+ */
+export async function autoPatchMeshSource(
+  projectId: string,
+  meshId: string,
+  featureAngle: number,
+): Promise<AutoPatchMeshSourceResponse> {
+  return apiClient.post<AutoPatchMeshSourceResponse>(
+    `/projects/${projectId}/meshes/${meshId}/auto-patch`,
+    { featureAngle },
+  );
+}
+
+/** Give a library mesh patch a meaningful name (to stitch on). */
+export async function renameMeshSourcePatch(
+  projectId: string,
+  meshId: string,
+  from: string,
+  to: string,
+): Promise<RenameMeshSourcePatchResponse> {
+  return apiClient.post<RenameMeshSourcePatchResponse>(
+    `/projects/${projectId}/meshes/${meshId}/patches/rename`,
+    { from, to },
+  );
 }
 
 /** Top-level folder name of a folder upload (becomes the source's display name). */

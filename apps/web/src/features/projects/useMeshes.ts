@@ -1,19 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  autoPatchMeshSource,
   deleteMesh,
   getMergePlan,
   importMeshFile,
   importMeshFolder,
   importMeshZip,
   listMeshes,
+  renameMeshSourcePatch,
   runMerge,
 } from '@/lib/api/meshes';
 import type {
+  AutoPatchMeshSourceResponse,
   DeleteMeshResponse,
   ImportMeshResponse,
   MergePlan,
   MergeRunResult,
   MeshSource,
+  RenameMeshSourcePatchResponse,
 } from '@/lib/api/types';
 import { caseFilesQueryKey } from '@/features/projects/useCaseFiles';
 
@@ -77,6 +81,32 @@ export function useDeleteMesh(projectId: string) {
   const queryClient = useQueryClient();
   return useMutation<DeleteMeshResponse, Error, { meshId: string }>({
     mutationFn: ({ meshId }) => deleteMesh(projectId, meshId),
+    onSuccess: (result) => {
+      queryClient.setQueryData(meshesQueryKey(projectId), result.meshes);
+    },
+  });
+}
+
+/** Split a library mesh's patches (autoPatch), then refresh the list cache. */
+export function useAutoPatchMeshSource(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<AutoPatchMeshSourceResponse, Error, { meshId: string; featureAngle: number }>({
+    mutationFn: ({ meshId, featureAngle }) => autoPatchMeshSource(projectId, meshId, featureAngle),
+    onSuccess: (result) => {
+      queryClient.setQueryData(meshesQueryKey(projectId), result.meshes);
+    },
+  });
+}
+
+/** Rename a library mesh patch, then refresh the list cache. */
+export function useRenameMeshSourcePatch(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<
+    RenameMeshSourcePatchResponse,
+    Error,
+    { meshId: string; from: string; to: string }
+  >({
+    mutationFn: ({ meshId, from, to }) => renameMeshSourcePatch(projectId, meshId, from, to),
     onSuccess: (result) => {
       queryClient.setQueryData(meshesQueryKey(projectId), result.meshes);
     },

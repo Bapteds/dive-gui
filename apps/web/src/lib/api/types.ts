@@ -405,6 +405,30 @@ export interface MeshPatchesResponse {
   patches: MeshPatch[];
 }
 
+/** The autoPatch run report when re-patching a library mesh (no reject on tool failure). */
+export interface MeshSourceAutoPatchRun {
+  success: boolean;
+  command: string;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+}
+
+/** `POST /projects/:id/meshes/:meshId/auto-patch` response. */
+export interface AutoPatchMeshSourceResponse {
+  result: MeshSourceAutoPatchRun;
+  /** The refreshed source with its new patches (absent on a tool failure). */
+  mesh?: MeshSource;
+  meshes: MeshSource[];
+}
+
+/** `POST /projects/:id/meshes/:meshId/patches/rename` response. */
+export interface RenameMeshSourcePatchResponse {
+  mesh: MeshSource;
+  meshes: MeshSource[];
+}
+
 /** Outcome of a merge run: the shared report plus the refreshed case tree. */
 export type MergeRunResult = MergeResult & {
   /** Refreshed case tree after a successful promote (unchanged on failure). */
