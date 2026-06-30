@@ -83,6 +83,13 @@ const envSchema = z
     // Per-step wall-clock timeout (ms) for a merge command (mergeMeshes /
     // stitchMesh / checkMesh on a large combined mesh). Generous, like conversion.
     MERGE_STEP_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
+    // Fluent/Ansys .msh -> constant/polyMesh, for the "Import mesh file" path
+    // (a single .msh becomes a polyMesh without going through the CGNS chain).
+    // Point this at `gmshToFoam` instead if your .msh is a Gmsh mesh — same
+    // invocation shape (<file> -case <dir>). FLUENT_TO_FOAM_SCALE, when set, adds
+    // `-scale <factor>` (e.g. 0.001 to convert mm to m).
+    FLUENT_TO_FOAM_BIN: z.string().min(1).default('fluent3DMeshToFoam'),
+    FLUENT_TO_FOAM_SCALE: z.string().default(''),
     // Optional path to an OpenFOAM `etc/bashrc`. When set, OpenFOAM utilities run
     // inside `bash -c 'source <bashrc> && exec "$@"'` so their environment is
     // available; arguments are passed as real argv (never interpolated), so this

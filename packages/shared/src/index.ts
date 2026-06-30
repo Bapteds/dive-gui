@@ -265,6 +265,50 @@ export interface MergeResult {
   boundaryPatches: MeshPatch[];
 }
 
+// ---------------------------------------------------------------------------
+// Mesh-file import (a single .cgns or Fluent .msh -> constant/polyMesh).
+//
+// Importing a mesh as a FILE (not an OpenFOAM polyMesh folder) runs a small,
+// template-less conversion toolchain that lands a constant/polyMesh in a target
+// case (the project case for the first import, or a library source for a merge):
+//   - .cgns: python3 CgnsToVtk.py -> vtkUnstructuredToFoam -> checkMesh
+//   - .msh:  fluent3DMeshToFoam   -> checkMesh   (Fluent/Ansys; gmshToFoam works too)
+// Shared so the API and the web client agree on the accepted extensions and the
+// per-step report.
+// ---------------------------------------------------------------------------
+
+/** Mesh-file extensions the import can convert into a polyMesh (case-insensitive). */
+export const MESH_IMPORT_EXTENSIONS = ['.cgns', '.msh'] as const;
+export type MeshImportExtension = (typeof MESH_IMPORT_EXTENSIONS)[number];
+
+/** One executed (or skipped) step of a mesh-file conversion. */
+export interface ImportStep {
+  /** The OpenFOAM/Python tool that ran (e.g. 'vtkUnstructuredToFoam'). */
+  tool: string;
+  /** Human-readable step name. */
+  label: string;
+  /** The logical command line that was run (for transparency in the UI). */
+  command: string;
+  /** 'success' (exit 0), 'failed', or 'skipped' (an earlier step failed). */
+  status: 'success' | 'failed' | 'skipped';
+  /** Process exit code, or null when killed / never spawned. */
+  exitCode: number | null;
+  /** Captured stdout (tail, truncated). */
+  stdout: string;
+  /** Captured stderr (tail, truncated). */
+  stderr: string;
+  /** Wall-clock duration in ms (0 for a skipped step). */
+  durationMs: number;
+}
+
+/** Outcome of converting a mesh file into a polyMesh: per-step report + success. */
+export interface MeshImportConversion {
+  /** True only when every conversion step succeeded. */
+  success: boolean;
+  /** The conversion steps, in execution order. */
+  steps: ImportStep[];
+}
+
 /**
  * Directory name (under a project's storage subtree, sibling of `case/`,
  * `cgns/`, `viz/`) holding solver-run logs and artifacts. Kept apart from the
