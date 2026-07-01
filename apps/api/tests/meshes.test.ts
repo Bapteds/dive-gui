@@ -701,14 +701,20 @@ describe('GET /projects/:id/meshes/:meshId/{manifest,geometry,edges} (source ren
     expect(geo.body.equals(FAKE_GLB)).toBe(true);
   });
 
-  it('returns 409 MESH_NOT_BUILT for geometry before the manifest build', async () => {
-    const { id, auth } = await makeProject('ms-geo-missing@dive-turbinen.test');
+  it('builds the render on demand when geometry is fetched before the manifest', async () => {
+    // Regression: the Assemble tab fetches a source's geometry directly (never its
+    // manifest), so geometry must build the render itself instead of 409-ing.
+    setCommandRunner(sourceVizRunner);
+    const { id, auth } = await makeProject('ms-geo-direct@dive-turbinen.test');
     const imported = await importMesh(id, auth, meshFiles('part', makeBoundary([{ name: 'inlet' }])));
     const res = await request(app)
       .get(`/api/v1/projects/${id}/meshes/${imported.body.mesh.id}/geometry`)
-      .set('Authorization', auth);
-    expect(res.status).toBe(409);
-    expect(res.body.error.code).toBe('MESH_NOT_BUILT');
+      .set('Authorization', auth)
+      .buffer()
+      .parse(binaryParser);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('model/gltf-binary');
+    expect(res.body.equals(FAKE_GLB)).toBe(true);
   });
 
   it('serves 204 for source edges before a build, then the buffer after', async () => {

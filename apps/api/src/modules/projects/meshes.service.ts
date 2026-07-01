@@ -862,9 +862,23 @@ async function buildMeshSourceViz(projectId: string, meshId: string): Promise<vo
 }
 
 /**
+ * Ensure a source's render exists and is current, building it (bounded, in-request)
+ * only when the GLB is missing or stale. Shared by the manifest AND geometry
+ * endpoints so EITHER is a valid build trigger: the Assemble tab fetches a source's
+ * geometry directly (its patch names come from the library list, not this manifest),
+ * so geometry must build the render itself instead of 409-ing when asked "out of
+ * order". Only geometry (never edges) also triggers a build, so a single source is
+ * never built twice concurrently.
+ */
+async function ensureMeshSourceViz(projectId: string, meshId: string): Promise<void> {
+  if (await meshSourceVizIsStale(projectId, meshId)) {
+    await buildMeshSourceViz(projectId, meshId);
+  }
+}
+
+/**
  * Return a library source's patch manifest, building its render on demand when
- * missing or stale. The client calls this first; it may trigger the (bounded)
- * synchronous build.
+ * missing or stale (a bounded synchronous build).
  *
  * @throws 404 NOT_FOUND if the project is not visible or the source is unknown.
  * @throws 500/502 if the build fails (see buildMeshSourceViz).
@@ -879,9 +893,7 @@ export async function getMeshSourceManifest(
     throw new AppError(404, 'NOT_FOUND', 'Mesh source not found');
   }
 
-  if (await meshSourceVizIsStale(projectId, meshId)) {
-    await buildMeshSourceViz(projectId, meshId);
-  }
+  await ensureMeshSourceViz(projectId, meshId);
 
   const stored = await readMeshSourceVizManifest(projectId, meshId);
   if (!stored) {
@@ -891,12 +903,13 @@ export async function getMeshSourceManifest(
 }
 
 /**
- * Return a library source's rendered GLB geometry bytes. The manifest call builds
- * the render, so by the time the client fetches geometry the artifact normally
- * exists; a missing GLB means the client asked out of order.
+ * Return a library source's rendered GLB geometry bytes, building the render on
+ * demand when missing or stale. The Assemble tab fetches geometry directly (it does
+ * not read this source's manifest), so geometry is a self-sufficient build trigger
+ * rather than a read that assumes a prior manifest call.
  *
  * @throws 404 NOT_FOUND if the project is not visible or the source is unknown.
- * @throws 409 MESH_NOT_BUILT if the geometry has not been built yet.
+ * @throws 500/502 if the build fails (see buildMeshSourceViz).
  */
 export async function getMeshSourceGeometry(
   viewer: Viewer,
@@ -907,9 +920,12 @@ export async function getMeshSourceGeometry(
   if (!(await meshSourceExists(projectId, meshId))) {
     throw new AppError(404, 'NOT_FOUND', 'Mesh source not found');
   }
+  await ensureMeshSourceViz(projectId, meshId);
   const glb = await readMeshSourceVizGlb(projectId, meshId);
   if (!glb) {
-    throw new AppError(409, 'MESH_NOT_BUILT', 'The 3D preview has not been built yet.');
+    // ensureMeshSourceViz throws on a failed build, so a null GLB here is an
+    // unexpected post-build anomaly rather than "not built yet".
+    throw new AppError(502, 'MESH_BUILD_FAILED', 'The 3D preview could not be built.');
   }
   return glb;
 }
