@@ -10,22 +10,25 @@ import type { AssemblyViewerProps } from './AssemblyViewer';
  *
  * jsdom has no WebGL, so the three.js AssemblyViewer is mocked to a stub that
  * exposes the two callbacks the real canvas fires: `onPickBaseFace` (the user
- * clicked a base face) and `onPreviewTransform` (the live-computed placement).
- * The meshes + projects APIs are mocked so the real workspace logic runs. The
- * tests drive a full placement and assert the `runMerge` payload carries the
- * expected `interfaces` (with coupling) and `transforms`, that switching the
- * coupling changes it, and that choosing the project case mesh as the base sends
- * `order[0] === '__case__'`.
+ * clicked a base face, which sets the coupling's base patch and never moves the
+ * part) and `onTransformChange` (the gizmo repositioned the active ghost). The
+ * meshes + projects APIs are mocked so the real workspace logic runs.
+ *
+ * The tests prove the KEY behaviour: a part can be COUPLED and merged with NO
+ * transform (it stays at its imported position), a part the user repositions
+ * produces a `transforms` entry, the coupling value is `'nonConformal'`, and the
+ * project case mesh as base sends `order[0] === '__case__'`.
  *
  * The math itself (that this `(q, t)` == the server result) is proven separately
  * and exactly in `placement.test.ts`.
  */
 
-// A stub viewer: buttons drive the pick + preview callbacks the canvas would fire.
+// A stub viewer: buttons drive the pick + gizmo callbacks the canvas would fire.
 vi.mock('./AssemblyViewer', () => ({
   AssemblyViewer: (props: AssemblyViewerProps) => (
     <div data-testid="assembly-viewer">
       <span>active:{props.active?.meshId ?? 'none'}</span>
+      <span>reposition:{String(props.reposition)}</span>
       <button
         type="button"
         onClick={() =>
@@ -37,14 +40,14 @@ vi.mock('./AssemblyViewer', () => ({
       <button
         type="button"
         onClick={() =>
-          props.onPreviewTransform({
+          props.onTransformChange({
             meshId: props.active?.meshId ?? '',
             rotation: [0, 0, 0, 1],
             translation: [1, 2, 3],
           })
         }
       >
-        mock emit preview
+        mock move part
       </button>
     </div>
   ),
@@ -101,22 +104,20 @@ const caseManifest: MeshManifest = {
   generatedAt: '2026-07-01T08:00:00.000Z',
 };
 
-const caseTree: CaseEntry[] = [
-  { path: 'constant/polyMesh/boundary', type: 'file', size: 10 },
-];
+const caseTree: CaseEntry[] = [{ path: 'constant/polyMesh/boundary', type: 'file', size: 10 }];
 
 const successResult: MergeRunResult = {
   success: true,
   steps: [
     { kind: 'prepare', label: 'Prepare housing', command: '', status: 'success', exitCode: null, stdout: 'staged', stderr: '', durationMs: 0 },
-    { kind: 'prepare', label: 'Prepare rotor', command: '', status: 'success', exitCode: null, stdout: 'Transformed + staged', stderr: '', durationMs: 0 },
-    { kind: 'mergeMeshes', label: 'Combine rotor', command: 'mergeMeshes . rotor -addCases', status: 'success', exitCode: 0, stdout: 'Merged', stderr: '', durationMs: 40 },
-    { kind: 'nonConformalCouple', label: 'Couple rotor.mount ↔ housing.baseTop', command: 'nonConformalCouple ...', status: 'success', exitCode: 0, stdout: 'Coupled', stderr: '', durationMs: 30 },
+    { kind: 'prepare', label: 'Prepare rotor', command: '', status: 'success', exitCode: null, stdout: 'staged', stderr: '', durationMs: 0 },
+    { kind: 'mergeMeshes', label: 'Combine rotor', command: 'mergeMeshes . rotor -overwrite', status: 'success', exitCode: 0, stdout: 'Merged', stderr: '', durationMs: 40 },
+    { kind: 'nonConformalCouple', label: 'Couple rotor.mount ↔ housing.baseTop', command: 'cyclicAMI retype', status: 'success', exitCode: 0, stdout: 'Coupled', stderr: '', durationMs: 30 },
     { kind: 'cleanup', label: 'Clean up empty patches', command: '', status: 'skipped', exitCode: null, stdout: 'Skipped', stderr: '', durationMs: 0 },
     { kind: 'checkMesh', label: 'Check combined mesh', command: 'checkMesh -case .', status: 'success', exitCode: 0, stdout: 'Mesh OK.', stderr: '', durationMs: 20 },
   ],
-  notes: ['Transformed 1 part before merging.'],
-  boundaryPatches: [{ name: 'm2_blades', type: 'wall', nFaces: 300 }],
+  notes: ['Combined 2 meshes with mergeMeshes.'],
+  boundaryPatches: [{ name: 'blades', type: 'wall', nFaces: 300 }],
   entries: [{ path: 'constant/polyMesh/boundary', type: 'file', size: 10 }],
 };
 
@@ -138,6 +139,14 @@ function partSelectButton(name: RegExp): HTMLElement {
     .find((el) => el.hasAttribute('aria-pressed'));
   if (!button) throw new Error('part select button not found');
   return button;
+}
+
+/** Drive selecting the rotor and coupling it to the base (no reposition). */
+async function selectAndCoupleRotor() {
+  fireEvent.click(partSelectButton(/rotor/i));
+  expect(await screen.findByText('active:p2')).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText(/mating patch/i), { target: { value: 'mount' } });
+  fireEvent.click(screen.getByRole('button', { name: /mock pick face/i }));
 }
 
 beforeEach(() => {
@@ -166,30 +175,27 @@ describe('AssemblyWorkspace', () => {
     expect(screen.getByRole('button', { name: /^merge$/i })).toBeDisabled();
   });
 
-  it('places a part and merges with a non-conformal interface + transforms payload', async () => {
+  it('surfaces the non-destructive note near the Merge CTA', async () => {
+    renderWorkspace();
+    expect(await screen.findByText('rotor')).toBeInTheDocument();
+    expect(
+      screen.getByText(/the previous mesh is backed up and restorable from the visualize tab/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/parts stay separate \(cyclicami\)/i)).toBeInTheDocument();
+  });
+
+  it('couples a part and merges with NO transform (the part stays at its imported position)', async () => {
     renderWorkspace();
 
     // The library + the base canvas are ready.
     expect(await screen.findByText('rotor')).toBeInTheDocument();
     expect(await screen.findByTestId('assembly-viewer')).toBeInTheDocument();
 
-    // Select the added part; its geometry loads and it becomes the active ghost.
-    fireEvent.click(partSelectButton(/rotor/i));
-    expect(await screen.findByText('active:p2')).toBeInTheDocument();
+    // Select the added part, choose the mating patch, and pick a base face. This
+    // defines the couple WITHOUT moving the part (no confirm, no reposition).
+    await selectAndCoupleRotor();
 
-    // Choose the mating patch, pick a base face, and let the viewer emit the
-    // live-computed placement (the mock stands in for the real math).
-    fireEvent.change(screen.getByLabelText(/mating patch/i), { target: { value: 'mount' } });
-    fireEvent.click(screen.getByRole('button', { name: /mock pick face/i }));
-    fireEvent.click(screen.getByRole('button', { name: /mock emit preview/i }));
-
-    // Confirm the placement.
-    const confirm = screen.getByRole('button', { name: /confirm placement/i });
-    await waitFor(() => expect(confirm).toBeEnabled());
-    fireEvent.click(confirm);
-
-    // Merge: interfaces (pre-seeded) -> confirm -> report. Each step swaps the
-    // dialog content, so re-query globally (and wait out the content transition).
+    // Straight to Merge: interfaces (pre-seeded) -> confirm -> report.
     fireEvent.click(screen.getByRole('button', { name: /^merge$/i }));
     expect(await screen.findByText('Couple the parts')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
@@ -203,25 +209,46 @@ describe('AssemblyWorkspace', () => {
       interfaces: [
         { aMeshId: 'p2', aPatch: 'mount', bMeshId: 'base', bPatch: 'baseTop', coupling: 'nonConformal' },
       ],
-      transforms: [{ meshId: 'p2', rotation: [0, 0, 0, 1], translation: [1, 2, 3] }],
+      // No transform: the part was never repositioned, so it stays as imported.
+      transforms: [],
     });
-    // The checkMesh log is expanded by default, so its output is visible.
     await waitFor(() => expect(screen.getByText('Mesh OK.')).toBeInTheDocument());
   });
 
-  it('switches the coupling to a conformal stitch in the payload', async () => {
+  it('adds a transforms entry only for a part the user repositions', async () => {
     renderWorkspace();
 
     expect(await screen.findByText('rotor')).toBeInTheDocument();
-    fireEvent.click(partSelectButton(/rotor/i));
-    expect(await screen.findByText('active:p2')).toBeInTheDocument();
+    await selectAndCoupleRotor();
 
-    fireEvent.change(screen.getByLabelText(/mating patch/i), { target: { value: 'mount' } });
-    fireEvent.click(screen.getByRole('button', { name: /mock pick face/i }));
-    fireEvent.click(screen.getByRole('button', { name: /mock emit preview/i }));
-    const confirm = screen.getByRole('button', { name: /confirm placement/i });
-    await waitFor(() => expect(confirm).toBeEnabled());
-    fireEvent.click(confirm);
+    // Opt in to repositioning: the 6-DOF numeric fields appear.
+    fireEvent.click(screen.getByRole('switch', { name: /reposition this part/i }));
+    expect(await screen.findByLabelText(/position x in m/i)).toBeInTheDocument();
+
+    // The gizmo moves the ghost (the mock stands in for a real drag).
+    fireEvent.click(screen.getByRole('button', { name: /mock move part/i }));
+
+    fireEvent.click(screen.getByRole('button', { name: /^merge$/i }));
+    expect(await screen.findByText('Couple the parts')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+    expect(await screen.findByText('Merge the assembly?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /merge assembly/i }));
+
+    expect(await screen.findByText('Assembly merged')).toBeInTheDocument();
+    expect(meshesApi.runMerge).toHaveBeenCalledWith('p1', {
+      order: ['base', 'p2'],
+      interfaces: [
+        { aMeshId: 'p2', aPatch: 'mount', bMeshId: 'base', bPatch: 'baseTop', coupling: 'nonConformal' },
+      ],
+      transforms: [{ meshId: 'p2', rotation: [0, 0, 0, 1], translation: [1, 2, 3] }],
+    });
+  });
+
+  it('switches the coupling to a conformal stitch in the payload (still no transform)', async () => {
+    renderWorkspace();
+
+    expect(await screen.findByText('rotor')).toBeInTheDocument();
+    await selectAndCoupleRotor();
 
     fireEvent.click(screen.getByRole('button', { name: /^merge$/i }));
     expect(await screen.findByText('Couple the parts')).toBeInTheDocument();
@@ -239,11 +266,11 @@ describe('AssemblyWorkspace', () => {
       interfaces: [
         { aMeshId: 'p2', aPatch: 'mount', bMeshId: 'base', bPatch: 'baseTop', coupling: 'stitch' },
       ],
-      transforms: [{ meshId: 'p2', rotation: [0, 0, 0, 1], translation: [1, 2, 3] }],
+      transforms: [],
     });
   });
 
-  it('uses the project case mesh as the base (order[0] = __case__)', async () => {
+  it('uses the project case mesh as the base (order[0] = __case__), unmoved', async () => {
     vi.mocked(projectsApi.getCaseFiles).mockResolvedValue(caseTree);
     renderWorkspace();
 

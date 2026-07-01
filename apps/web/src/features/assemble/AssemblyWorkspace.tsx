@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueries } from '@tanstack/react-query';
-import { AlertTriangle, Loader2, PackagePlus, Workflow } from 'lucide-react';
+import { AlertTriangle, History, Loader2, PackagePlus, Workflow } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { getMeshSourceGeometry } from '@/lib/api/meshes';
 import { getMeshGeometry } from '@/lib/api/projects';
@@ -13,40 +13,68 @@ import {
   meshSourceGeometryQueryKey,
   useCaseMeshManifestQuery,
 } from './useAssembly';
-import { AssemblyViewer, AssemblyViewerError, type PlacedViewerPart } from './AssemblyViewer';
+import {
+  AssemblyViewer,
+  AssemblyViewerError,
+  type GizmoMode,
+  type PlacedViewerPart,
+} from './AssemblyViewer';
 import { PartsRail, type BaseSource } from './PartsRail';
 import { PlacementPanel } from './PlacementPanel';
 import { AssemblyMergeDialog, type InterfaceDraft } from './AssemblyMergeDialog';
-import type { HitTarget } from './placement';
+import { eulerDegFromQuat, quatFromEulerDeg, type HitTarget } from './placement';
 
 /**
  * AssemblyWorkspace - the full-height "Assemble" tab: a three-pane workspace that
  * generalises single-part import/visualise/merge into a multi-part assembly.
  *
  *   Parts rail (left)  - the library as a roster: import / auto-patch / rename,
- *                        base first, the rest selectable to position. The base can
- *                        be the project's EXISTING case mesh or the first library
- *                        part (a segmented picker at the top of the rail).
- *   Live canvas (center) - the base + placed parts + the active orange ghost,
- *                        updated in real time as the user places a part.
- *   Placement panel (right) - pick a base face + a mating patch, roll, offset,
- *                        confirm. One orange "Merge" CTA finishes the assembly.
+ *                        base first, the rest selectable. The base can be the
+ *                        project's EXISTING case mesh or the first library part.
+ *   Live canvas (center) - the base + every added part at its imported position +
+ *                        the active orange ghost, with an optional 6-DOF gizmo.
+ *   Placement panel (right) - couple the active part's mating patch to a base
+ *                        patch (this does NOT move it), and, only if it is
+ *                        misaligned, opt in to reposition it.
  *
- * All placement math is raw-coordinate and lives in the viewer/placement.ts; this
- * component owns the workspace STATE (base source, order, per-part draft,
- * committed transforms) and the geometry loading for every body on screen.
+ * PLACEMENT IS OPTIONAL. Parts carry real world coordinates from their import, so
+ * they stay where they were imported by default; coupling + merging never require
+ * moving a part. The couple pair (an interface) is tracked independently of any
+ * transform, and a transform is only committed when the user explicitly
+ * repositions a part. All placement math is raw-coordinate (see placement.ts).
  */
 
 const FIVE_MINUTES = 5 * 60 * 1000;
 
-/** A per-part placement draft (the in-progress inputs before Confirm). */
+/** The identity transform: a part left at its imported position. */
+function identityTransform(meshId: string): PartTransform {
+  return { meshId, translation: [0, 0, 0], rotation: [0, 0, 0, 1] };
+}
+
+/** True when a transform leaves the part at its imported position (no move). */
+function isIdentityTransform(transform: PartTransform): boolean {
+  const [tx, ty, tz] = transform.translation;
+  const [rx, ry, rz, rw] = transform.rotation;
+  return tx === 0 && ty === 0 && tz === 0 && rx === 0 && ry === 0 && rz === 0 && rw === 1;
+}
+
+/**
+ * A per-part draft. `matingPatch` + `target` define the couple (an interface) and
+ * never move the part. `reposition` is the explicit opt-in to move it; `transform`
+ * is the 6-DOF placement, kept at identity until the user repositions.
+ */
 interface Draft {
   matingPatch: string | null;
   target: HitTarget | null;
-  rollDeg: number;
-  offset: number;
+  reposition: boolean;
+  transform: PartTransform;
 }
-const EMPTY_DRAFT: Draft = { matingPatch: null, target: null, rollDeg: 0, offset: 0 };
+const defaultDraft = (meshId: string): Draft => ({
+  matingPatch: null,
+  target: null,
+  reposition: false,
+  transform: identityTransform(meshId),
+});
 
 /** The base body's geometry + load state, unified across case / library bases. */
 interface BaseStatus {
@@ -148,46 +176,46 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
   // ---- placement state ----
   const [activePartId, setActivePartId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
-  const [committed, setCommitted] = useState<Record<string, PartTransform>>({});
-  const [pending, setPending] = useState<PartTransform | null>(null);
-  const [lastSeed, setLastSeed] = useState<InterfaceDraft | null>(null);
+  const [gizmoMode, setGizmoMode] = useState<GizmoMode>('translate');
+  const [alignSuggestion, setAlignSuggestion] = useState<PartTransform | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [viewerError, setViewerError] = useState(false);
 
-  // Drop state for parts that were removed, and never keep the base active.
+  // Drop drafts for parts that were removed, and never keep the base active.
   useEffect(() => {
     const ids = new Set(orderedMeshes.map((m) => m.id));
     if (activePartId && (!ids.has(activePartId) || activePartId === base?.id)) {
       setActivePartId(null);
     }
-    setCommitted((prev) => {
-      const next: Record<string, PartTransform> = {};
+    setDrafts((prev) => {
+      const next: Record<string, Draft> = {};
       let changed = false;
-      for (const [id, transform] of Object.entries(prev)) {
-        if (ids.has(id) && id !== base?.id) next[id] = transform;
+      for (const [id, draft] of Object.entries(prev)) {
+        if (ids.has(id) && id !== base?.id) next[id] = draft;
         else changed = true;
       }
       return changed ? next : prev;
     });
   }, [orderedMeshes, activePartId, base?.id]);
 
-  // Reset the pending (live) transform whenever the active part changes, so a
-  // stale placement from the previous part can never be committed.
+  // A stale align suggestion from the previous part can never be applied.
   useEffect(() => {
-    setPending(null);
+    setAlignSuggestion(null);
   }, [activePartId]);
 
   const activePart = activePartId ? (meshById.get(activePartId) ?? null) : null;
-  const activeDraft = (activePartId && drafts[activePartId]) || EMPTY_DRAFT;
+  const activeDraft = activePartId ? (drafts[activePartId] ?? defaultDraft(activePartId)) : null;
+  const activeReposition = activeDraft?.reposition ?? false;
+  const activeTransform = activeDraft ? activeDraft.transform : identityTransform(activePartId ?? '');
+  const activePosition = activeTransform.translation;
+  const activeRotationDeg = useMemo(
+    () => eulerDegFromQuat(activeTransform.rotation),
+    [activeTransform.rotation],
+  );
+  const isActiveRepositioned = activeReposition && !isIdentityTransform(activeTransform);
 
-  // ---- geometry: load every body currently on screen ----
-  const neededIds = useMemo(() => {
-    const ids = new Set<string>();
-    if (base) ids.add(base.id);
-    if (activePartId) ids.add(activePartId);
-    for (const id of Object.keys(committed)) ids.add(id);
-    return [...ids];
-  }, [base, activePartId, committed]);
+  // ---- geometry: load every body on screen (base + all parts at their position) ----
+  const neededIds = useMemo(() => orderedMeshes.map((m) => m.id), [orderedMeshes]);
 
   const geomResults = useQueries({
     queries: neededIds.map((id) => {
@@ -239,17 +267,23 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
     };
   }, [base, basePinned, rawBaseGeom, caseManifest]);
 
-  // Placed parts to render opaque (committed, excluding the one being re-placed).
+  // Every added part except the one being worked on, at its transform (identity =
+  // imported position). This shows the whole pre-aligned assembly.
   const placedParts = useMemo<PlacedViewerPart[]>(() => {
     const list: PlacedViewerPart[] = [];
-    for (const [meshId, transform] of Object.entries(committed)) {
-      if (meshId === activePartId) continue;
-      const mesh = meshById.get(meshId);
-      const geometry = geomByMesh.get(meshId)?.data;
-      if (mesh && geometry) list.push({ meshId, name: mesh.name, geometry, transform });
+    for (const mesh of orderedMeshes) {
+      if (!base || mesh.id === base.id || mesh.id === activePartId) continue;
+      const geometry = geomByMesh.get(mesh.id)?.data;
+      if (!geometry) continue;
+      const draft = drafts[mesh.id];
+      const transform =
+        draft?.reposition && !isIdentityTransform(draft.transform)
+          ? draft.transform
+          : identityTransform(mesh.id);
+      list.push({ meshId: mesh.id, name: mesh.name, geometry, transform });
     }
     return list;
-  }, [committed, activePartId, meshById, geomByMesh]);
+  }, [orderedMeshes, base, activePartId, geomByMesh, drafts]);
 
   const activeGeom = activePartId ? geomByMesh.get(activePartId) : undefined;
   const activeViewerPart =
@@ -260,7 +294,10 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
   // ---- interactions ----
   const patchDraft = (patch: Partial<Draft>) => {
     if (!activePartId) return;
-    setDrafts((prev) => ({ ...prev, [activePartId]: { ...(prev[activePartId] ?? EMPTY_DRAFT), ...patch } }));
+    setDrafts((prev) => ({
+      ...prev,
+      [activePartId]: { ...(prev[activePartId] ?? defaultDraft(activePartId)), ...patch },
+    }));
   };
 
   const handleSelectPart = (meshId: string) => {
@@ -268,35 +305,54 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
     setActivePartId(meshId);
   };
 
+  // Picking a base face sets the coupling's base patch; it never moves the part.
   const handlePickBaseFace = (target: HitTarget) => patchDraft({ target });
+  const handleMatingPatch = (patch: string) => patchDraft({ matingPatch: patch || null });
+  const handleClearCouple = () => patchDraft({ matingPatch: null, target: null });
 
-  const canConfirm = !!pending && pending.meshId === activePartId && !!activeDraft.target && !!activeDraft.matingPatch;
-
-  const handleConfirm = () => {
-    if (!activePartId || !pending || pending.meshId !== activePartId) return;
-    setCommitted((prev) => ({ ...prev, [activePartId]: { ...pending, meshId: activePartId } }));
-    if (base && activeDraft.matingPatch && activeDraft.target) {
-      setLastSeed({
-        aMeshId: activePartId,
-        aPatch: activeDraft.matingPatch,
-        bMeshId: base.id,
-        bPatch: activeDraft.target.patchName,
-        coupling: 'nonConformal',
-      });
-    }
-    setActivePartId(null); // commit -> the ghost becomes a placed (neutral) part
+  const handleRepositionChange = (on: boolean) => {
+    if (!activePartId) return;
+    // Turning it off returns the part to its imported position (identity).
+    patchDraft(on ? { reposition: true } : { reposition: false, transform: identityTransform(activePartId) });
   };
 
-  const handleClearPlacement = () => {
-    if (!activePartId) return;
-    setDrafts((prev) => ({ ...prev, [activePartId]: EMPTY_DRAFT }));
-    setCommitted((prev) => {
-      if (!(activePartId in prev)) return prev;
-      const next = { ...prev };
-      delete next[activePartId];
-      return next;
+  // The gizmo moved the ghost: adopt its transform (repositioning is now on).
+  const handleTransformChange = (transform: PartTransform) =>
+    patchDraft({ reposition: true, transform });
+
+  const handlePositionChange = (axis: 0 | 1 | 2, value: number) => {
+    if (!activeDraft || !activePartId) return;
+    const translation = [...activeDraft.transform.translation] as [number, number, number];
+    translation[axis] = Number.isFinite(value) ? value : 0;
+    patchDraft({
+      reposition: true,
+      transform: { meshId: activePartId, translation, rotation: activeDraft.transform.rotation },
     });
-    setPending(null);
+  };
+
+  const handleRotationChange = (axis: 0 | 1 | 2, value: number) => {
+    if (!activeDraft || !activePartId) return;
+    const deg = eulerDegFromQuat(activeDraft.transform.rotation);
+    deg[axis] = Number.isFinite(value) ? value : 0;
+    patchDraft({
+      reposition: true,
+      transform: {
+        meshId: activePartId,
+        translation: activeDraft.transform.translation,
+        rotation: quatFromEulerDeg(deg),
+      },
+    });
+  };
+
+  const handleAlignToFace = () => {
+    if (!alignSuggestion || !activePartId) return;
+    patchDraft({ reposition: true, transform: { ...alignSuggestion, meshId: activePartId } });
+  };
+
+  // Reset the position but keep the reposition editor open for another attempt.
+  const handleResetPosition = () => {
+    if (!activePartId) return;
+    patchDraft({ transform: identityTransform(activePartId) });
   };
 
   // Reorder within the LIBRARY order. `index` is the display index; when the case
@@ -313,52 +369,87 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
     });
   };
 
-  const placedIds = useMemo(() => new Set(Object.keys(committed)), [committed]);
-  const positionedCount = placedIds.size;
-  const additionalCount = Math.max(0, orderedMeshes.length - 1);
-  const unplacedCount = Math.max(0, additionalCount - positionedCount);
-  const canMerge = orderedMeshes.length >= 2;
+  // Every complete couple pair, as a seeded interface for the merge dialog. These
+  // are defined WITHOUT any transform: a part can be coupled and merged unmoved.
+  const seedInterfaces = useMemo<InterfaceDraft[]>(() => {
+    if (!base) return [];
+    const out: InterfaceDraft[] = [];
+    for (const mesh of orderedMeshes) {
+      if (mesh.id === base.id) continue;
+      const draft = drafts[mesh.id];
+      if (draft?.matingPatch && draft.target?.patchName) {
+        out.push({
+          aMeshId: mesh.id,
+          aPatch: draft.matingPatch,
+          bMeshId: base.id,
+          bPatch: draft.target.patchName,
+          coupling: 'nonConformal',
+        });
+      }
+    }
+    return out;
+  }, [orderedMeshes, base, drafts]);
 
-  const transforms = useMemo<PartTransform[]>(
-    () =>
-      orderedMeshes
-        .map((m) => committed[m.id])
-        .filter((t): t is PartTransform => !!t),
-    [orderedMeshes, committed],
-  );
+  // A transform is sent ONLY for a part the user explicitly repositioned; an
+  // unmoved part has no entry and stays at its imported position.
+  const transforms = useMemo<PartTransform[]>(() => {
+    const out: PartTransform[] = [];
+    for (const mesh of orderedMeshes) {
+      if (!base || mesh.id === base.id) continue;
+      const draft = drafts[mesh.id];
+      if (draft?.reposition && !isIdentityTransform(draft.transform)) {
+        out.push({
+          meshId: mesh.id,
+          translation: draft.transform.translation,
+          rotation: draft.transform.rotation,
+        });
+      }
+    }
+    return out;
+  }, [orderedMeshes, base, drafts]);
+
+  const placedIds = useMemo(() => new Set(transforms.map((t) => t.meshId)), [transforms]);
+  const coupledCount = seedInterfaces.length;
+  const canMerge = orderedMeshes.length >= 2;
 
   return (
     <section
       aria-label="3D assembly workspace"
       className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border bg-surface shadow-sm"
     >
-      {/* Toolbar: title + the single orange Merge CTA. */}
-      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <h2 className="text-sm font-semibold text-text">Assembly</h2>
-          {orderedMeshes.length > 0 && (
-            <span className="text-xs text-text-secondary tabular-nums">
-              {orderedMeshes.length} part{orderedMeshes.length === 1 ? '' : 's'} &middot;{' '}
-              {positionedCount} positioned
-            </span>
-          )}
+      {/* Toolbar: title + counts + the single orange Merge CTA, then the note. */}
+      <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <h2 className="text-sm font-semibold text-text">Assembly</h2>
+            {orderedMeshes.length > 0 && (
+              <span className="text-xs text-text-secondary tabular-nums">
+                {orderedMeshes.length} part{orderedMeshes.length === 1 ? '' : 's'} &middot;{' '}
+                {coupledCount} coupled
+              </span>
+            )}
+          </div>
+          <div className="ml-auto flex items-center gap-3">
+            <Button
+              type="button"
+              onClick={() => setMergeOpen(true)}
+              disabled={!canMerge}
+              title={canMerge ? undefined : 'Add at least one part beyond the base to merge.'}
+            >
+              <Workflow strokeWidth={1.75} aria-hidden="true" />
+              Merge
+            </Button>
+          </div>
         </div>
-        <div className="ml-auto flex items-center gap-3">
-          {canMerge && unplacedCount > 0 && (
-            <span className="hidden text-xs text-text-secondary sm:inline">
-              {unplacedCount} not positioned
+        {base && (
+          <p className="flex items-start gap-1.5 text-xs text-text-secondary">
+            <History className="mt-px size-3.5 shrink-0 text-primary" strokeWidth={1.75} aria-hidden="true" />
+            <span>
+              Merging replaces the case mesh; the previous mesh is backed up and restorable from the
+              Visualize tab. Parts stay separate (cyclicAMI).
             </span>
-          )}
-          <Button
-            type="button"
-            onClick={() => setMergeOpen(true)}
-            disabled={!canMerge}
-            title={canMerge ? undefined : 'Add at least one part beyond the base to merge.'}
-          >
-            <Workflow strokeWidth={1.75} aria-hidden="true" />
-            Merge
-          </Button>
-        </div>
+          </p>
+        )}
       </div>
 
       {/* Three panes. Stacks on small screens; a strict grid at lg+. */}
@@ -385,13 +476,15 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
             baseGeometry={baseStatus}
             placed={placedParts}
             active={activeViewerPart}
-            matingPatch={activeDraft.matingPatch}
-            target={activeDraft.target}
-            rollRad={(activeDraft.rollDeg * Math.PI) / 180}
-            offset={activeDraft.offset}
+            activeTransform={activeTransform}
+            matingPatch={activeDraft?.matingPatch ?? null}
+            target={activeDraft?.target ?? null}
+            reposition={activeReposition}
+            gizmoMode={gizmoMode}
             viewerError={viewerError}
             onPickBaseFace={handlePickBaseFace}
-            onPreviewTransform={setPending}
+            onTransformChange={handleTransformChange}
+            onAlignTransform={setAlignSuggestion}
             onViewerError={() => setViewerError(true)}
             onRetry={() => {
               setViewerError(false);
@@ -403,17 +496,23 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
         <aside className="flex min-h-0 flex-col p-4 lg:border-l lg:border-border">
           <PlacementPanel
             activePart={activePart}
-            matingPatch={activeDraft.matingPatch}
-            onMatingPatchChange={(matingPatch) => patchDraft({ matingPatch: matingPatch || null })}
-            target={activeDraft.target}
-            rollDeg={activeDraft.rollDeg}
-            onRollDegChange={(rollDeg) => patchDraft({ rollDeg })}
-            offset={activeDraft.offset}
-            onOffsetChange={(offset) => patchDraft({ offset })}
-            canConfirm={canConfirm}
-            onConfirm={handleConfirm}
-            onClear={handleClearPlacement}
-            isPlaced={!!activePartId && activePartId in committed}
+            baseName={base?.name ?? null}
+            matingPatch={activeDraft?.matingPatch ?? null}
+            onMatingPatchChange={handleMatingPatch}
+            target={activeDraft?.target ?? null}
+            onClearCouple={handleClearCouple}
+            reposition={activeReposition}
+            onRepositionChange={handleRepositionChange}
+            gizmoMode={gizmoMode}
+            onGizmoModeChange={setGizmoMode}
+            position={activePosition}
+            rotationDeg={activeRotationDeg}
+            onPositionChange={handlePositionChange}
+            onRotationChange={handleRotationChange}
+            alignAvailable={!!alignSuggestion}
+            onAlignToFace={handleAlignToFace}
+            onResetPosition={handleResetPosition}
+            isRepositioned={isActiveRepositioned}
           />
           {activePartId && activeGeom?.isPending && (
             <p className="mt-3 flex items-center gap-2 text-xs text-text-secondary" role="status">
@@ -429,7 +528,7 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
           projectId={projectId}
           orderedMeshes={orderedMeshes}
           transforms={transforms}
-          seedInterface={lastSeed}
+          seedInterfaces={seedInterfaces}
           onClose={() => setMergeOpen(false)}
         />
       )}
@@ -446,13 +545,15 @@ function CanvasArea({
   baseGeometry,
   placed,
   active,
+  activeTransform,
   matingPatch,
   target,
-  rollRad,
-  offset,
+  reposition,
+  gizmoMode,
   viewerError,
   onPickBaseFace,
-  onPreviewTransform,
+  onTransformChange,
+  onAlignTransform,
   onViewerError,
   onRetry,
 }: {
@@ -460,13 +561,15 @@ function CanvasArea({
   baseGeometry: { data?: ArrayBuffer; isPending: boolean; isError: boolean } | undefined;
   placed: PlacedViewerPart[];
   active: { meshId: string; name: string; geometry: ArrayBuffer } | null;
+  activeTransform: PartTransform;
   matingPatch: string | null;
   target: HitTarget | null;
-  rollRad: number;
-  offset: number;
+  reposition: boolean;
+  gizmoMode: GizmoMode;
   viewerError: boolean;
   onPickBaseFace: (target: HitTarget) => void;
-  onPreviewTransform: (transform: PartTransform | null) => void;
+  onTransformChange: (transform: PartTransform) => void;
+  onAlignTransform: (transform: PartTransform | null) => void;
   onViewerError: () => void;
   onRetry: () => void;
 }) {
@@ -475,7 +578,7 @@ function CanvasArea({
       <StageMessage
         icon={<PackagePlus className="size-6 text-primary" strokeWidth={1.5} aria-hidden="true" />}
         title="Choose the assembly base"
-        body="Pick your project mesh or add the first part on the left. It becomes the base that the others mount onto."
+        body="Pick your project mesh or add the first part on the left. It becomes the base that the others couple onto."
       />
     );
   }
@@ -516,12 +619,14 @@ function CanvasArea({
       base={{ meshId: base.id, name: base.name, geometry: baseGeometry.data }}
       placed={placed}
       active={active}
+      activeTransform={activeTransform}
       matingPatch={matingPatch}
       target={target}
-      rollRad={rollRad}
-      offset={offset}
+      reposition={reposition}
+      gizmoMode={gizmoMode}
       onPickBaseFace={onPickBaseFace}
-      onPreviewTransform={onPreviewTransform}
+      onTransformChange={onTransformChange}
+      onAlignTransform={onAlignTransform}
       onError={onViewerError}
     />
   );

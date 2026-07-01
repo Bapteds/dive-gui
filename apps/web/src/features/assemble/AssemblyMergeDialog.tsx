@@ -106,10 +106,10 @@ export interface AssemblyMergeDialogProps {
   projectId: string;
   /** Sources in assembly order (index 0 = base; may be the project case mesh). */
   orderedMeshes: MeshSource[];
-  /** The committed placement of each positioned added part. */
+  /** The committed transform of each part the user explicitly repositioned. */
   transforms: PartTransform[];
-  /** A pre-seeded interface (the last placed part's mating patch <-> base face). */
-  seedInterface?: InterfaceDraft | null;
+  /** Pre-seeded interfaces (each coupled part's mating patch <-> base patch). */
+  seedInterfaces?: InterfaceDraft[] | null;
   onClose: () => void;
 }
 
@@ -117,7 +117,7 @@ export function AssemblyMergeDialog({
   projectId,
   orderedMeshes,
   transforms,
-  seedInterface,
+  seedInterfaces,
   onClose,
 }: AssemblyMergeDialogProps) {
   const meshById = useMemo(
@@ -128,7 +128,7 @@ export function AssemblyMergeDialog({
   const caseBase = orderedMeshes[0]?.id === MERGE_BASE_CASE;
   const [step, setStep] = useState<Step>('connections');
   const [interfaces, setInterfaces] = useState<InterfaceDraft[]>(() =>
-    seedInterface && isComplete(seedInterface) ? [seedInterface] : [],
+    (seedInterfaces ?? []).filter(isComplete),
   );
   const [result, setResult] = useState<MergeRunResult | null>(null);
 

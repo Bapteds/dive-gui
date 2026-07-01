@@ -206,6 +206,35 @@ export function targetFromHit(
   };
 }
 
+/** Radians <-> degrees, for the 6-DOF numeric rotation fields. */
+const RAD_TO_DEG = 180 / Math.PI;
+const DEG_TO_RAD = Math.PI / 180;
+
+/**
+ * eulerDegFromQuat - the numeric-panel readout of a placement quaternion as
+ * intrinsic Euler angles (degrees, XYZ order). Used only to fill the rotation
+ * X/Y/Z fields; the quaternion in {@link Placement}/`PartTransform` stays the
+ * single source of truth POSTed to the server (Euler is display-only, so gimbal
+ * ambiguity never leaks into the parity path).
+ */
+export function eulerDegFromQuat(q: Quat): Vec3 {
+  const e = new THREE.Euler().setFromQuaternion(new THREE.Quaternion(q[0], q[1], q[2], q[3]), 'XYZ');
+  return [e.x * RAD_TO_DEG, e.y * RAD_TO_DEG, e.z * RAD_TO_DEG];
+}
+
+/**
+ * quatFromEulerDeg - the inverse of {@link eulerDegFromQuat}: build a unit
+ * quaternion from the rotation X/Y/Z fields (degrees, XYZ order) when the user
+ * types into them. Mirrors three.js so the gizmo, the fields, and the previewed
+ * ghost all resolve to the SAME quaternion.
+ */
+export function quatFromEulerDeg(deg: Vec3): Quat {
+  const q = new THREE.Quaternion().setFromEuler(
+    new THREE.Euler(deg[0] * DEG_TO_RAD, deg[1] * DEG_TO_RAD, deg[2] * DEG_TO_RAD, 'XYZ'),
+  );
+  return [q.x, q.y, q.z, q.w];
+}
+
 /**
  * bakedRootTransform - the raw -> viewer-world matrix baked into a freshly loaded
  * GLB (the trimesh Z-up->Y-up flip). Every patch mesh in one export shares it

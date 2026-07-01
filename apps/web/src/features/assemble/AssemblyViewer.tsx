@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { AlertTriangle, Crosshair, Maximize, MonitorX, MousePointerClick } from 'lucide-react';
+import { AlertTriangle, Crosshair, Link2, Maximize, MonitorX, Move3d } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { PartTransform } from '@/lib/api/types';
@@ -18,17 +19,25 @@ import {
  * AssemblyViewer - the live three.js canvas for the "Assemble" tab.
  *
  * It renders the whole assembly in ONE scene: the base part (opaque neutral, the
- * only pickable body), every already-placed part (opaque neutral, at its committed
- * transform), and the part currently being placed (semi-transparent ORANGE ghost,
- * DoubleSide) whose position/orientation updates live as the user picks a base
- * face, chooses a mating patch, and drags the roll/offset controls.
+ * only pickable body), every other added part (opaque blue tint, at its
+ * transform - identity = its imported position by default), and the part being
+ * worked on (semi-transparent ORANGE ghost, DoubleSide).
+ *
+ * PLACEMENT IS OPTIONAL. A part stays at its imported world coordinates unless
+ * the user opts to reposition it. When they do, a TransformControls gizmo drives
+ * the active ghost (translate / rotate), OrbitControls is suspended while a
+ * handle is dragged, and every drag emits the ghost's `(position, quaternion)`
+ * back out as the SAME `PartTransform` the numeric fields edit and the server
+ * receives. Picking a base face never moves the part; it only marks the base
+ * patch of the coupling and offers an optional "align to face" starting point.
  *
  * PARITY (the whole point): all placement math runs in RAW polyMesh coordinates.
- * The trimesh/GLTF export bakes a Z-up->Y-up flip on each GLB; we neutralise it by
- * wrapping every loaded part in a group whose matrix is the inverse of that baked
- * transform, so each part's frame == its raw polyMesh frame. The base's baked flip
- * is re-applied ONCE on the shared content root purely for a natural view. The
- * result: the `(q, t)` we preview is exactly the `(q, t)` we POST to the server.
+ * The trimesh/GLTF export bakes a Z-up->Y-up flip on each GLB; we neutralise it
+ * by wrapping every loaded part in a group whose matrix is the inverse of that
+ * baked transform, so each part's frame == its raw polyMesh frame, and the
+ * placement group's LOCAL position/quaternion IS the raw `(t, q)`. The base's
+ * baked flip is re-applied ONCE on the shared content root purely for a natural
+ * view. The result: the `(q, t)` we preview is exactly the `(q, t)` we POST.
  *
  * Scene scaffolding (renderer / OrbitControls / on-demand render / dispose) is
  * borrowed from MeshViewer.tsx; that file is intentionally left untouched.
@@ -67,37 +76,44 @@ export interface ViewerPart {
   geometry: ArrayBuffer;
 }
 
-/** An already-placed part: a part plus its committed rigid transform. */
+/** An already-placed part: a part plus its rigid transform (identity = imported). */
 export interface PlacedViewerPart extends ViewerPart {
   transform: PartTransform;
 }
 
+/** The gizmo interaction mode (a small toggle in the placement panel). */
+export type GizmoMode = 'translate' | 'rotate';
+
 export interface AssemblyViewerProps {
   /** The base part (never moved); the only body the user can pick a face on. */
   base: ViewerPart;
-  /** Parts already confirmed, rendered opaque at their transform. */
+  /** Every other added part, rendered opaque at its transform (identity = imported). */
   placed: PlacedViewerPart[];
-  /** The part being placed now (orange ghost), or null when none is active. */
+  /** The part being worked on now (orange ghost), or null when none is active. */
   active: ViewerPart | null;
-  /** The active part's chosen mating patch (its face that meets the base). */
+  /** Where the active ghost renders (and the gizmo attaches). Identity = imported. */
+  activeTransform: PartTransform;
+  /** The active part's chosen mating patch (its face that couples to the base). */
   matingPatch: string | null;
   /** The picked base face (raw point + normal + patch), or null. */
   target: HitTarget | null;
-  /** User roll about the base mount normal, in radians. */
-  rollRad: number;
-  /** Offset along the base mount normal, in metres. */
-  offset: number;
-  /** The user clicked a face on the base. */
+  /** Whether the user is repositioning the active part (shows + enables the gizmo). */
+  reposition: boolean;
+  /** Gizmo interaction mode when repositioning. */
+  gizmoMode: GizmoMode;
+  /** The user clicked a face on the base (sets the coupling's base patch; never moves the part). */
   onPickBaseFace: (target: HitTarget) => void;
-  /** The live-computed placement for the active part (null while incomplete). */
-  onPreviewTransform: (transform: PartTransform | null) => void;
+  /** The gizmo moved the active ghost: its new raw transform. */
+  onTransformChange: (transform: PartTransform) => void;
+  /** The one-shot "align to this face" transform for the active part, or null when unavailable. */
+  onAlignTransform: (transform: PartTransform | null) => void;
   /** A GLB failed to parse (so the workspace can show an error state). */
   onError?: () => void;
 }
 
 /** Per-part scene handles kept across renders for cheap live updates. */
 interface PartHandles {
-  /** The placement group (its matrix carries the rigid transform). */
+  /** The placement group (its local position/quaternion carry the rigid transform). */
   group: THREE.Group;
   /** The loaded GLB root (for `anchorFromPatch`, in raw/local space). */
   loaded: THREE.Object3D;
@@ -135,12 +151,14 @@ export function AssemblyViewer({
   base,
   placed,
   active,
+  activeTransform,
   matingPatch,
   target,
-  rollRad,
-  offset,
+  reposition,
+  gizmoMode,
   onPickBaseFace,
-  onPreviewTransform,
+  onTransformChange,
+  onAlignTransform,
   onError,
 }: AssemblyViewerProps) {
   const webglAvailable = useMemo(detectWebgl, []);
@@ -148,22 +166,44 @@ export function AssemblyViewer({
   const failedRef = useRef<HTMLDivElement>(null);
 
   // Latest inputs, read inside imperative handlers without re-binding the scene.
-  const inputsRef = useRef({ base, placed, active, matingPatch, target, rollRad, offset });
-  inputsRef.current = { base, placed, active, matingPatch, target, rollRad, offset };
+  const inputsRef = useRef({
+    base,
+    placed,
+    active,
+    activeTransform,
+    matingPatch,
+    target,
+    reposition,
+    gizmoMode,
+  });
+  inputsRef.current = {
+    base,
+    placed,
+    active,
+    activeTransform,
+    matingPatch,
+    target,
+    reposition,
+    gizmoMode,
+  };
   const onPickRef = useRef(onPickBaseFace);
   onPickRef.current = onPickBaseFace;
-  const onPreviewRef = useRef(onPreviewTransform);
-  onPreviewRef.current = onPreviewTransform;
+  const onTransformRef = useRef(onTransformChange);
+  onTransformRef.current = onTransformChange;
+  const onAlignRef = useRef(onAlignTransform);
+  onAlignRef.current = onAlignTransform;
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
-  // Imperative hooks wired up inside the scene effect and read by the input effect.
+  // Imperative hooks wired up inside the scene effect and read by the input effects.
   const requestRenderRef = useRef<() => void>(() => {});
   const resetViewRef = useRef<() => void>(() => {});
-  const applyPreviewRef = useRef<() => void>(() => {});
+  const applyActiveTransformRef = useRef<() => void>(() => {});
+  const applyGizmoRef = useRef<() => void>(() => {});
+  const applyHighlightAlignRef = useRef<() => void>(() => {});
 
-  // A signature that changes only when the SET of bodies (or a committed
-  // transform) changes - so roll/offset/target tweaks never rebuild the scene.
+  // A signature that changes only when the SET of bodies (or a placed transform)
+  // changes - so live active-transform / gizmo / highlight tweaks never rebuild.
   const sceneKey = useMemo(() => {
     const placedKey = placed
       .map(
@@ -173,6 +213,10 @@ export function AssemblyViewer({
       .join('|');
     return `${base.meshId}:${base.geometry.byteLength}|${placedKey}|${active ? `${active.meshId}:${active.geometry.byteLength}` : ''}`;
   }, [base, placed, active]);
+
+  // A value key for the active transform, so applying it does not fire on every
+  // unrelated parent render (only when the numbers actually change).
+  const activeTransformKey = `${activeTransform.translation.join(',')}|${activeTransform.rotation.join(',')}`;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -230,10 +274,21 @@ export function AssemblyViewer({
     requestRenderRef.current = requestRender;
     controls.addEventListener('change', requestRender);
 
+    // The 6-DOF gizmo. It edits the active ghost's placement group in place; its
+    // local position/quaternion IS the raw transform we emit. Attached only while
+    // the user is repositioning (see applyGizmo).
+    const gizmo = new TransformControls(camera, renderer.domElement);
+    gizmo.setSpace('world');
+    gizmo.setSize(0.9);
+    gizmo.visible = false;
+    gizmo.enabled = false;
+    scene.add(gizmo);
+
     // Handles kept for live updates / disposal.
     const basePatchMaterials = new Map<string, THREE.MeshLambertMaterial>();
     let baseRoot: THREE.Group | null = null;
     let activeHandles: PartHandles | null = null;
+    let gizmoDragging = false;
     const disposables: { geometry: THREE.BufferGeometry; material: THREE.Material }[] = [];
 
     /** Frame the base + placed parts (not the ghost, which may sit far off). */
@@ -299,33 +354,54 @@ export function AssemblyViewer({
       new THREE.MeshLambertMaterial({ color: color.clone(), side: THREE.DoubleSide });
 
     /**
-     * Recompute the ghost's placement from the latest inputs and drive the base
-     * highlight. Emits the transform (or null) so the panel can enable Confirm.
-     * Reads inputs via the ref, so the input effect can call it cheaply.
+     * Place the active ghost at the current transform. Skipped WHILE a gizmo
+     * handle is being dragged (the gizmo then owns the group), so the drag never
+     * fights the echoed React state.
      */
-    const applyPreview = () => {
-      const { matingPatch: patch, target: hit, rollRad: roll, offset: off } = inputsRef.current;
+    const applyActiveTransform = () => {
+      if (!activeHandles || gizmoDragging) return;
+      const t = inputsRef.current.activeTransform;
+      const g = activeHandles.group;
+      g.position.set(t.translation[0], t.translation[1], t.translation[2]);
+      g.quaternion.set(t.rotation[0], t.rotation[1], t.rotation[2], t.rotation[3]);
+      requestRender();
+    };
+    applyActiveTransformRef.current = applyActiveTransform;
 
-      // Highlight the picked base patch in PRIMARY blue (target), distinct from
-      // the orange ghost (the incoming part).
+    /** Attach / detach the gizmo and set its mode from the current inputs. */
+    const applyGizmo = () => {
+      const { reposition: on, gizmoMode: mode } = inputsRef.current;
+      if (on && activeHandles) {
+        gizmo.setMode(mode);
+        if (gizmo.object !== activeHandles.group) gizmo.attach(activeHandles.group);
+        gizmo.enabled = true;
+        gizmo.visible = true;
+      } else {
+        gizmo.detach();
+        gizmo.enabled = false;
+        gizmo.visible = false;
+      }
+      requestRender();
+    };
+    applyGizmoRef.current = applyGizmo;
+
+    /**
+     * Highlight the picked base patch in PRIMARY blue and (re)compute the
+     * optional "align to this face" transform for the active part, emitting it (or
+     * null) so the panel can offer / disable that helper.
+     */
+    const applyHighlightAlign = () => {
+      const { matingPatch: patch, target: hit } = inputsRef.current;
       basePatchMaterials.forEach((material, name) => {
         material.color.copy(name === hit?.patchName ? primary : neutral);
         material.needsUpdate = true;
       });
 
-      if (!activeHandles) {
-        onPreviewRef.current(null);
-        requestRender();
-        return;
-      }
-
-      if (patch && hit) {
+      if (activeHandles && patch && hit) {
         const anchor = anchorFromPatch(activeHandles.loaded, patch);
         if (anchor) {
-          const placement = computePlacement(anchor.point, anchor.normal, hit.point, hit.normal, roll, off);
-          setMatrix(activeHandles.group, composeMatrix({ ...placement, meshId: '' }));
-          activeHandles.group.visible = true;
-          onPreviewRef.current({
+          const placement = computePlacement(anchor.point, anchor.normal, hit.point, hit.normal, 0, 0);
+          onAlignRef.current({
             meshId: inputsRef.current.active?.meshId ?? '',
             rotation: placement.rotation,
             translation: placement.translation,
@@ -334,14 +410,10 @@ export function AssemblyViewer({
           return;
         }
       }
-
-      // Not ready: rest the ghost at its raw origin and report "no placement yet".
-      setMatrix(activeHandles.group, new THREE.Matrix4());
-      activeHandles.group.visible = true;
-      onPreviewRef.current(null);
+      onAlignRef.current(null);
       requestRender();
     };
-    applyPreviewRef.current = applyPreview;
+    applyHighlightAlignRef.current = applyHighlightAlign;
 
     const loader = new GLTFLoader();
 
@@ -365,7 +437,7 @@ export function AssemblyViewer({
         baseRoot = baseHandles.group;
         contentRoot.add(baseHandles.group);
 
-        // Placed parts, each at its committed transform.
+        // Other added parts, each at its transform (identity = imported position).
         for (const part of data.placed) {
           const loaded = await parseGlb(loader, part.geometry);
           if (disposed) return;
@@ -374,7 +446,8 @@ export function AssemblyViewer({
           contentRoot.add(handles.group);
         }
 
-        // The active ghost (semi-transparent orange), if any.
+        // The active ghost (semi-transparent orange). Its group keeps
+        // matrixAutoUpdate ON so the gizmo and the numeric fields can drive it.
         if (data.active) {
           const loaded = await parseGlb(loader, data.active.geometry);
           if (disposed) return;
@@ -395,26 +468,54 @@ export function AssemblyViewer({
         }
 
         fitView();
-        applyPreview();
+        applyActiveTransform();
+        applyGizmo();
+        applyHighlightAlign();
         requestRender();
       } catch {
         if (!disposed) onErrorRef.current?.();
       }
     })();
 
+    // --- gizmo events: echo the transform, suspend orbit while dragging ---
+    const onGizmoChange = () => requestRender();
+    const onGizmoDragging = (event: { value: boolean }) => {
+      gizmoDragging = event.value;
+      controls.enabled = !event.value;
+    };
+    const onGizmoObjectChange = () => {
+      if (!activeHandles) return;
+      const g = activeHandles.group;
+      onTransformRef.current({
+        meshId: inputsRef.current.active?.meshId ?? '',
+        translation: [g.position.x, g.position.y, g.position.z],
+        rotation: [g.quaternion.x, g.quaternion.y, g.quaternion.z, g.quaternion.w],
+      });
+    };
+    gizmo.addEventListener('change', onGizmoChange);
+    gizmo.addEventListener('dragging-changed', onGizmoDragging as (event: unknown) => void);
+    gizmo.addEventListener('objectChange', onGizmoObjectChange);
+
     // --- interaction: orbit + pick a base face on click only ---
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     let downX = 0;
     let downY = 0;
+    let downOnGizmo = false;
 
     const onPointerDown = (event: PointerEvent) => {
       downX = event.clientX;
       downY = event.clientY;
+      // If the press started on a gizmo handle, it is a reposition drag, not a pick.
+      downOnGizmo = inputsRef.current.reposition && !!gizmo.axis;
       renderer.domElement.style.cursor = 'grabbing';
     };
     const onPointerUp = (event: PointerEvent) => {
       renderer.domElement.style.cursor = 'grab';
+      if (downOnGizmo || gizmoDragging) {
+        downOnGizmo = false;
+        return; // the gizmo handled this pointer
+      }
       const dx = event.clientX - downX;
       const dy = event.clientY - downY;
       if (dx * dx + dy * dy > CLICK_DRAG_THRESHOLD_SQ) return; // it was an orbit drag
@@ -423,7 +524,7 @@ export function AssemblyViewer({
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
-      // Only the BASE is pickable: you choose a face ON the base to mount onto.
+      // Only the BASE is pickable: you choose a face ON the base to couple to.
       const hit = raycaster
         .intersectObjects(baseRoot.children, true)
         .find((intersection) => (intersection.object as THREE.Mesh).isMesh && intersection.face);
@@ -452,6 +553,12 @@ export function AssemblyViewer({
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
+      gizmo.removeEventListener('change', onGizmoChange);
+      gizmo.removeEventListener('dragging-changed', onGizmoDragging as (event: unknown) => void);
+      gizmo.removeEventListener('objectChange', onGizmoObjectChange);
+      gizmo.detach();
+      scene.remove(gizmo);
+      gizmo.dispose();
       controls.dispose();
       disposables.forEach(({ geometry, material }) => {
         geometry.dispose();
@@ -459,7 +566,9 @@ export function AssemblyViewer({
       });
       requestRenderRef.current = () => {};
       resetViewRef.current = () => {};
-      applyPreviewRef.current = () => {};
+      applyActiveTransformRef.current = () => {};
+      applyGizmoRef.current = () => {};
+      applyHighlightAlignRef.current = () => {};
       renderer.dispose();
       if (renderer.domElement.parentNode === container) {
         container.removeChild(renderer.domElement);
@@ -469,10 +578,20 @@ export function AssemblyViewer({
     // (every reactive value the effect uses is read through a ref).
   }, [sceneKey, webglAvailable]);
 
-  // Re-apply the ghost placement + highlight whenever a live input changes.
+  // Move the ghost when the transform changes (numeric fields / align / echo).
   useEffect(() => {
-    applyPreviewRef.current();
-  }, [matingPatch, target, rollRad, offset, active?.meshId]);
+    applyActiveTransformRef.current();
+  }, [activeTransformKey]);
+
+  // Attach / detach / re-mode the gizmo when repositioning toggles or mode flips.
+  useEffect(() => {
+    applyGizmoRef.current();
+  }, [reposition, gizmoMode, active?.meshId]);
+
+  // Re-highlight the base patch + recompute the align helper on couple changes.
+  useEffect(() => {
+    applyHighlightAlignRef.current();
+  }, [matingPatch, target, active?.meshId]);
 
   if (!webglAvailable) {
     return (
@@ -496,13 +615,18 @@ export function AssemblyViewer({
         }}
       />
 
-      {/* Pick hint (top-left) - guides the user to the first action. */}
-      <div className="pointer-events-none absolute left-3 top-3 flex max-w-[15rem] items-start gap-2 rounded-md border border-border bg-surface/90 px-2.5 py-1.5 text-xs text-text-secondary shadow-sm backdrop-blur-sm">
-        {target ? (
+      {/* Contextual hint (top-left): coupling by default, gizmo help while repositioning. */}
+      <div className="pointer-events-none absolute left-3 top-3 flex max-w-[16rem] items-start gap-2 rounded-md border border-border bg-surface/90 px-2.5 py-1.5 text-xs text-text-secondary shadow-sm backdrop-blur-sm">
+        {reposition ? (
+          <>
+            <Move3d className="mt-px size-3.5 shrink-0 text-accent" strokeWidth={1.75} aria-hidden="true" />
+            <span className="min-w-0">Drag the gizmo to {gizmoMode === 'rotate' ? 'rotate' : 'move'} the part.</span>
+          </>
+        ) : target ? (
           <>
             <Crosshair className="mt-px size-3.5 shrink-0 text-primary" strokeWidth={1.75} aria-hidden="true" />
             <span className="min-w-0">
-              Mount face:{' '}
+              Base patch:{' '}
               <code className="font-mono text-text" translate="no">
                 {target.patchName || 'face'}
               </code>
@@ -510,8 +634,8 @@ export function AssemblyViewer({
           </>
         ) : (
           <>
-            <MousePointerClick className="mt-px size-3.5 shrink-0 text-primary" strokeWidth={1.75} aria-hidden="true" />
-            <span className="min-w-0">Click a face on the base to set the mount point.</span>
+            <Link2 className="mt-px size-3.5 shrink-0 text-primary" strokeWidth={1.75} aria-hidden="true" />
+            <span className="min-w-0">Click a base face to set the patch it couples to.</span>
           </>
         )}
       </div>
