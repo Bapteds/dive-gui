@@ -28,6 +28,7 @@ import {
   BOUNDARY_FILE,
   MESH_FILES,
   SOLVER_FILE_PATHS,
+  mergeFieldBoundary,
   parseApplication,
   parseBoundaryPatches,
   parseBoundaryPatchesWithTypes,
@@ -382,19 +383,37 @@ export interface SyncBoundariesResult {
   entries: CaseEntry[];
 }
 
+/** How syncBoundaryFields reconciles each field's boundaryField with the mesh. */
+export interface SyncBoundaryOptions {
+  /**
+   * 'rebuild' (default): replace every field's boundaryField with a fresh block
+   * covering exactly the mesh patches (existing BCs discarded) — the right choice
+   * after a merge that renamed patches (m1_/m2_). 'merge': keep every existing BC
+   * whose patch still exists and only ADD entries for new patches — used when
+   * building onto the project case mesh (Assembly v2) so its physics is preserved.
+   */
+  mode?: 'rebuild' | 'merge';
+}
+
 /**
  * Apply the mesh boundary (patch names AND geometric types) to every field's
  * boundaryField, so the 0/ files cover exactly the mesh patches with a valid BC
  * per type. For a polyMesh imported then scaffolded or given a template, this is
  * what makes the case actually runnable (a template brings its own patch names;
- * the scaffold ignores the geometric type). The render is unaffected (only the
- * 0/ fields change). @throws 409 NO_MESH when there is no boundary file.
+ * the scaffold ignores the geometric type). In the default 'rebuild' mode every
+ * boundaryField is regenerated (existing BCs discarded); in 'merge' mode the
+ * existing BCs are preserved and only new patches get generic defaults (both modes
+ * now emit the nonConformalCyclic / nonConformalError couple entries too, since
+ * those are constraint types). The render is unaffected (only the 0/ fields
+ * change). @throws 409 NO_MESH when there is no boundary file.
  */
 export async function syncBoundaryFields(
   viewer: Viewer,
   projectId: string,
+  options?: SyncBoundaryOptions,
 ): Promise<SyncBoundariesResult> {
   await assertProjectVisible(viewer, projectId);
+  const mode = options?.mode ?? 'rebuild';
 
   const boundary = await readCaseFile(projectId, BOUNDARY_FILE);
   if (!boundary) {
@@ -418,7 +437,10 @@ export async function syncBoundaryFields(
     const text = buffer.toString('utf8');
     if (!text.includes('boundaryField')) continue;
     const fieldName = entry.path.split('/').pop() ?? entry.path;
-    const next = rebuildFieldBoundary(text, fieldName, patches);
+    const next =
+      mode === 'merge'
+        ? mergeFieldBoundary(text, fieldName, patches)
+        : rebuildFieldBoundary(text, fieldName, patches);
     if (next !== text) {
       await writeCaseFile(projectId, entry.path, next);
       updated.push(entry.path);

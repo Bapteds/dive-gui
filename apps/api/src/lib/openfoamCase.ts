@@ -634,6 +634,91 @@ export function rebuildFieldBoundary(
   return content.slice(0, keyword) + renderBoundaryFieldFor(fieldName, patches) + content.slice(span.close + 1);
 }
 
+/**
+ * One entry inside a field file's `boundaryField` block: its selector `name` (a
+ * plain patch name, or a quoted regex group like `".*"`), the exact source `text`
+ * of the `name { … }` block, and whether the selector is a plain patch name (vs a
+ * regex group that may match several patches and must never be dropped).
+ */
+interface FieldBoundaryEntry {
+  name: string;
+  text: string;
+  plain: boolean;
+}
+
+/** Split a boundaryField block's inner text into its `name { … }` entries. */
+function parseFieldBoundaryEntries(inner: string): FieldBoundaryEntry[] {
+  const entries: FieldBoundaryEntry[] = [];
+  // A selector is a quoted regex ("...") or a plain word (patch name); it is the
+  // token immediately before `{`. Values (e.g. `type X;`) carry no `{`, so are
+  // skipped. Patch names may contain hyphens (Fluent zones), matched here too.
+  const headerRe = /("(?:[^"\\]|\\.)*"|[A-Za-z_][A-Za-z0-9_-]*)\s*\{/g;
+  let match: RegExpExecArray | null;
+  while ((match = headerRe.exec(inner)) !== null) {
+    const name = match[1];
+    const open = inner.indexOf('{', match.index);
+    const close = matchBrace(inner, open);
+    if (close < 0) break;
+    entries.push({ name, text: inner.slice(match.index, close + 1), plain: !name.startsWith('"') });
+    headerRe.lastIndex = close + 1; // skip the entry body (its BC may hold braces)
+  }
+  return entries;
+}
+
+/**
+ * MERGE a field file's `boundaryField` against the mesh patches, PRESERVING the
+ * user's physics: every existing entry whose patch still exists is kept verbatim
+ * (so e.g. an `inlet { type fixedValue; … }` survives), a stale plain entry whose
+ * patch is gone is dropped, a quoted/regex group entry is always kept (it may
+ * match several patches), and a generic default entry is ADDED only for a mesh
+ * patch that has no matching entry yet — constraint types (incl. the
+ * nonConformalCyclic / nonConformalError couples that Assembly v2's
+ * createNonConformalCouples adds) resolved via defaultFieldBc. Returns the content
+ * unchanged when the file has no boundaryField. Counterpart to rebuildFieldBoundary
+ * (which DISCARDS the existing BCs): used when merging onto the project case mesh
+ * so the base's boundary conditions are not reset to generic defaults.
+ */
+export function mergeFieldBoundary(
+  content: string,
+  fieldName: string,
+  patches: BoundaryPatch[],
+): string {
+  const span = boundaryFieldSpan(content);
+  const keyword = content.search(/\bboundaryField\b/);
+  if (!span || keyword < 0) return content;
+
+  const inner = content.slice(span.open + 1, span.close);
+  const existing = parseFieldBoundaryEntries(inner);
+  const patchNames = new Set(patches.map((patch) => patch.name));
+
+  const kept: string[] = [];
+  const keptPlain = new Set<string>();
+  for (const entry of existing) {
+    if (!entry.plain) {
+      kept.push(entry.text); // a regex/group selector may match several patches
+      continue;
+    }
+    if (patchNames.has(entry.name)) {
+      kept.push(entry.text);
+      keptPlain.add(entry.name);
+    }
+    // else: a plain entry for a patch that no longer exists -> drop it.
+  }
+
+  // ADD a generic default only for a mesh patch that has no exact entry yet.
+  const added = patches
+    .filter((patch) => !keptPlain.has(patch.name))
+    .map(
+      (patch) => `${patch.name}
+    {
+        type            ${defaultFieldBc(fieldName, patch.type)};
+    }`,
+    );
+
+  const body = [...kept, ...added].map((entry) => `    ${entry}`).join('\n');
+  return content.slice(0, keyword) + `boundaryField\n{\n${body}\n}` + content.slice(span.close + 1);
+}
+
 /** A valid OpenFOAM patch name: a "word" token (letter/underscore start). */
 const PATCH_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 

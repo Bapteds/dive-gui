@@ -81,6 +81,15 @@ const envSchema = z
     // means "use stitchMesh's own default" (1e-4). Raise it for separately-built
     // parts whose interface faces only approximately coincide.
     STITCH_TOL: z.string().default(''),
+    // Assembly v2: the OpenFOAM.org v12 NON-conformal coupling utility. Replaces
+    // the deprecated cyclicAMI/createPatch path — it KEEPS both parts' cells +
+    // patches and adds a coupled `nonConformalCyclic_on_*` pair for the touching
+    // interface patches (flow interpolates, no node coincidence required). Invoked
+    // with the two patch names POSITIONAL: `createNonConformalCouples -overwrite
+    // <a> <b> -case <master>`. Same operational model as the other OpenFOAM tools
+    // (configurable, sourced via OPENFOAM_BASHRC, absent on a Windows dev box -> a
+    // clean per-step "not found" rather than a crash).
+    NCC_COUPLE_BIN: z.string().min(1).default('createNonConformalCouples'),
     // Per-step wall-clock timeout (ms) for a merge command (mergeMeshes /
     // stitchMesh / checkMesh on a large combined mesh). Generous, like conversion.
     MERGE_STEP_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),

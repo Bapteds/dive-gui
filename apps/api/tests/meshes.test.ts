@@ -141,6 +141,44 @@ const checkMeshIssuesRunner: CommandRunner = async (spec) =>
     : mergeRunner(spec);
 
 /**
+ * Append the four constraint patches OpenFOAM.org v12 createNonConformalCouples
+ * adds for a coupled pair: it KEEPS the two originals and ADDS a nonConformalCyclic
+ * pair (with faces) + a nonConformalError pair (nFaces 0 for a perfect overlap).
+ */
+function appendNccPatches(boundary: string, a: string, b: string): string {
+  return buildBoundary([
+    ...patchBlocks(boundary),
+    `nonConformalCyclic_on_${a} { type nonConformalCyclic; nFaces 10; startFace 900; }`,
+    `nonConformalCyclic_on_${b} { type nonConformalCyclic; nFaces 10; startFace 910; }`,
+    `nonConformalError_on_${a} { type nonConformalError; nFaces 0; startFace 920; }`,
+    `nonConformalError_on_${b} { type nonConformalError; nFaces 0; startFace 930; }`,
+  ]);
+}
+
+/** A runner that simulates createNonConformalCouples: keep the pair, ADD the 4 NCC patches. */
+const nccRunner: CommandRunner = async (spec) => {
+  if (spec.command === 'createNonConformalCouples') {
+    recordedCommands.push({ command: spec.command, args: [...spec.args] });
+    // v12 CLI: [<a>, <b>, '-overwrite', '-case', masterDir] — patch names POSITIONAL.
+    const caseDir = spec.args[spec.args.indexOf('-case') + 1];
+    const [a, b] = [spec.args[0], spec.args[1]];
+    const boundaryAbs = path.join(caseDir, 'constant', 'polyMesh', 'boundary');
+    await fs.writeFile(boundaryAbs, appendNccPatches(await fs.readFile(boundaryAbs, 'utf8'), a, b));
+    return ok(spec, `Created non-conformal couples for ${a} and ${b}`);
+  }
+  return mergeRunner(spec);
+};
+
+/** A runner where createNonConformalCouples exits 0 but creates NO coupled patches. */
+const nccNoOverlapRunner: CommandRunner = async (spec) => {
+  if (spec.command === 'createNonConformalCouples') {
+    recordedCommands.push({ command: spec.command, args: [...spec.args] });
+    return ok(spec, 'createNonConformalCouples: found 0 overlapping faces'); // boundary untouched
+  }
+  return mergeRunner(spec);
+};
+
+/**
  * A runner like mergeRunner, but its mergeMeshes ALSO folds the added part's
  * points into the master (concatenated) — the real tool combines points, the
  * default mergeRunner only combines boundaries. This lets a test read the
@@ -313,6 +351,18 @@ function importMesh(id: string, auth: string, files: Array<{ relativePath: strin
   );
   return request(app)
     .post(`/api/v1/projects/${id}/meshes/import`)
+    .set('Authorization', auth)
+    .set('Content-Type', contentType)
+    .send(body);
+}
+
+/** Import case files (a folder upload) into the project case tree via /files/import. */
+function importCaseFolder(id: string, auth: string, files: Array<{ relativePath: string; data: string }>) {
+  const { body, contentType } = buildMultipart(
+    files.map((f) => ({ field: 'files', filename: f.relativePath, data: f.data })),
+  );
+  return request(app)
+    .post(`/api/v1/projects/${id}/files/import`)
     .set('Authorization', auth)
     .set('Content-Type', contentType)
     .send(body);
@@ -576,6 +626,209 @@ describe('POST /projects/:id/meshes/merge', () => {
       .send({ order: [a, b], stitches: [] });
     expect(res.status).toBe(200);
     expect(res.body.result.success).toBe(true);
+  });
+});
+
+describe('POST /projects/:id/meshes/merge (Assembly v2 non-conformal coupling)', () => {
+  it('couples two meshes non-conformally, KEEPING both parts (not fused)', async () => {
+    setCommandRunner(nccRunner);
+    const { id, auth } = await makeProject('mg-ncc-ok@dive-turbinen.test');
+    const { a, b } = await importTwoParts(id, auth);
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/merge`)
+      .set('Authorization', auth)
+      .send({
+        order: [a, b],
+        interfaces: [{ aMeshId: a, aPatch: 'ifaceA', bMeshId: b, bPatch: 'ifaceB', coupling: 'nonConformalCyclic' }],
+      });
+
+    expect(res.status).toBe(200);
+    const result = res.body.result;
+    expect(result.success).toBe(true);
+    // The couple step replaces the stitch step; cleanup is present but SKIPPED.
+    expect(result.steps.map((s: { kind: string }) => s.kind)).toEqual([
+      'prepare', 'prepare', 'mergeMeshes', 'createNonConformalCouples', 'cleanup', 'checkMesh',
+    ]);
+    const cleanup = (result.steps as Array<{ kind: string; status: string; stdout: string }>).find((s) => s.kind === 'cleanup')!;
+    expect(cleanup.status).toBe('success');
+    expect(cleanup.stdout).toMatch(/Skipped/i);
+
+    // Regression pin: the v12 CLI passes the two patch names POSITIONALLY, then
+    // -overwrite + -case (no -fields, no transform arg).
+    const nccCall = recordedCommands.find((c) => c.command === 'createNonConformalCouples')!;
+    expect(nccCall.args).toEqual(['m1_ifaceA', 'm2_ifaceB', '-overwrite', '-case', expect.any(String)]);
+
+    // Parts stay SEPARATE: the two original interface patches survive (NOT fused
+    // away) AND the coupled nonConformalCyclic_on_* pair is added. Every other
+    // patch of both parts also survives.
+    const names = (result.boundaryPatches as Array<{ name: string }>).map((p) => p.name);
+    expect(names).toContain('m1_ifaceA');
+    expect(names).toContain('m2_ifaceB');
+    expect(names).toContain('nonConformalCyclic_on_m1_ifaceA');
+    expect(names).toContain('nonConformalCyclic_on_m2_ifaceB');
+    expect(names).toContain('m1_inlet');
+    expect(names).toContain('m2_outlet');
+
+    // The combined mesh was promoted into the case, keeping the coupled patches.
+    const boundary = (await caseBoundary(id, auth)).body.file.content as string;
+    expect(boundary).toContain('nonConformalCyclic_on_m1_ifaceA');
+    expect(boundary).toContain('m1_ifaceA');
+  });
+
+  it('defaults an interface with no explicit coupling to non-conformal', async () => {
+    setCommandRunner(nccRunner);
+    const { id, auth } = await makeProject('mg-ncc-default@dive-turbinen.test');
+    const { a, b } = await importTwoParts(id, auth);
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/merge`)
+      .set('Authorization', auth)
+      .send({ order: [a, b], interfaces: [{ aMeshId: a, aPatch: 'ifaceA', bMeshId: b, bPatch: 'ifaceB' }] });
+    expect(res.status).toBe(200);
+    expect(res.body.result.success).toBe(true);
+    expect((res.body.result.steps as Array<{ kind: string }>).some((s) => s.kind === 'createNonConformalCouples')).toBe(true);
+    expect(recordedCommands.some((c) => c.command === 'createNonConformalCouples')).toBe(true);
+    expect(recordedCommands.some((c) => c.command === 'stitchMesh')).toBe(false);
+  });
+
+  it('fails the couple when it creates no coupled faces (non-overlapping patches)', async () => {
+    setCommandRunner(nccNoOverlapRunner);
+    const { id, auth } = await makeProject('mg-ncc-nooverlap@dive-turbinen.test');
+    const { a, b } = await importTwoParts(id, auth);
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/merge`)
+      .set('Authorization', auth)
+      .send({
+        order: [a, b],
+        interfaces: [{ aMeshId: a, aPatch: 'ifaceA', bMeshId: b, bPatch: 'ifaceB', coupling: 'nonConformalCyclic' }],
+      });
+    expect(res.status).toBe(200);
+    const result = res.body.result;
+    expect(result.success).toBe(false);
+    const step = (result.steps as Array<{ kind: string; status: string; stderr: string }>).find(
+      (s) => s.kind === 'createNonConformalCouples',
+    )!;
+    expect(step.status).toBe('failed');
+    expect(step.stderr).toMatch(/no coupled faces|don't overlap/i);
+    // Aborted before checkMesh; nothing promoted into the case.
+    expect((result.steps as Array<{ kind: string }>).some((s) => s.kind === 'checkMesh')).toBe(false);
+    expect((result.entries as Array<{ path: string }>).some((e) => e.path === 'constant/polyMesh/boundary')).toBe(false);
+  });
+});
+
+describe('POST /projects/:id/meshes/merge (Assembly v2 base = project case mesh)', () => {
+  /** A 0/ field file whose boundaryField carries the given per-patch entries. */
+  function field0(object: string, className: string, dims: string, internal: string, entries: string): string {
+    return `FoamFile { class ${className}; object ${object}; }
+dimensions      ${dims};
+internalField   uniform ${internal};
+boundaryField
+{
+${entries}
+}
+`;
+  }
+
+  /** Seed the project case with a polyMesh (inlet/outlet) + a 0/U carrying an
+   * explicit inlet fixedValue BC and a 0/p, so a base=case merge has physics to
+   * preserve. */
+  async function seedCase(id: string, auth: string): Promise<void> {
+    const uEntries = `    inlet
+    {
+        type            fixedValue;
+        value           uniform (1 0 0);
+    }
+    outlet
+    {
+        type            zeroGradient;
+    }`;
+    const pEntries = `    inlet
+    {
+        type            zeroGradient;
+    }
+    outlet
+    {
+        type            fixedValue;
+        value           uniform 0;
+    }`;
+    const files: Array<{ relativePath: string; data: string }> = [
+      { relativePath: 'constant/polyMesh/points', data: 'points-data' },
+      { relativePath: 'constant/polyMesh/faces', data: 'faces-data' },
+      { relativePath: 'constant/polyMesh/owner', data: 'owner-data' },
+      { relativePath: 'constant/polyMesh/neighbour', data: 'neighbour-data' },
+      { relativePath: 'constant/polyMesh/boundary', data: makeBoundary([{ name: 'inlet' }, { name: 'outlet' }]) },
+      { relativePath: '0/U', data: field0('U', 'volVectorField', '[0 1 -1 0 0 0 0]', '(0 0 0)', uEntries) },
+      { relativePath: '0/p', data: field0('p', 'volScalarField', '[0 2 -2 0 0 0 0]', '0', pEntries) },
+    ];
+    const res = await importCaseFolder(id, auth, files);
+    expect(res.status).toBe(201);
+  }
+
+  it('stages the case as master, couples a part onto it, PRESERVES its 0/ physics', async () => {
+    setCommandRunner(nccRunner);
+    const { id, auth } = await makeProject('mg-base-case@dive-turbinen.test');
+    await seedCase(id, auth);
+
+    // An added library part with an interface patch to couple onto the case outlet.
+    const rotor = await importMesh(id, auth, meshFiles('rotor', makeBoundary([
+      { name: 'iface' }, { name: 'walls', type: 'wall' },
+    ])));
+    const rotorId = rotor.body.mesh.id;
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/merge`)
+      .set('Authorization', auth)
+      .send({
+        order: ['__case__', rotorId],
+        interfaces: [{ aMeshId: '__case__', aPatch: 'outlet', bMeshId: rotorId, bPatch: 'iface', coupling: 'nonConformalCyclic' }],
+      });
+
+    expect(res.status).toBe(200);
+    const result = res.body.result;
+    expect(result.success).toBe(true);
+
+    // The master was staged from the CASE (not a library source): the first prepare
+    // step names the project case mesh.
+    const firstPrepare = (result.steps as Array<{ kind: string; label: string; stdout: string }>).find(
+      (s) => s.kind === 'prepare',
+    )!;
+    expect(firstPrepare.label).toMatch(/project case mesh/i);
+    expect(firstPrepare.stdout).toMatch(/assembly base/i);
+    expect((result.steps as Array<{ kind: string }>).some((s) => s.kind === 'createNonConformalCouples')).toBe(true);
+
+    // Base patches are UNPREFIXED (inlet/outlet kept, no m1_); the added part is
+    // prefixed (m2_); the couple pair is added.
+    const names = (result.boundaryPatches as Array<{ name: string }>).map((p) => p.name);
+    expect(names).toContain('inlet');
+    expect(names).toContain('outlet');
+    expect(names).not.toContain('m1_inlet');
+    expect(names).toContain('m2_iface');
+    expect(names).toContain('nonConformalCyclic_on_outlet');
+    expect(names).toContain('nonConformalCyclic_on_m2_iface');
+
+    // The original case is backed up before the destructive promote (kind original).
+    const backup = await request(app).get(`/api/v1/projects/${id}/mesh/backup`).set('Authorization', auth);
+    expect(backup.status).toBe(200);
+    expect(backup.body.backup).not.toBeNull();
+    expect(backup.body.backup.kind).toBe('original');
+
+    // The case's existing physics is PRESERVED (merge mode): 0/U inlet stays
+    // fixedValue, and the coupled patch got the nonConformalCyclic field BC.
+    const u = (await caseFileContent(id, auth, '0/U')).body.file.content as string;
+    expect(u).toMatch(/inlet[\s\S]*?type\s+fixedValue/);
+    expect(u).toMatch(/nonConformalCyclic_on_outlet[\s\S]*?type\s+nonConformalCyclic/);
+  });
+
+  it('rejects the case sentinel when the project has no case mesh (422)', async () => {
+    setCommandRunner(nccRunner);
+    const { id, auth } = await makeProject('mg-base-nocase@dive-turbinen.test');
+    const rotor = await importMesh(id, auth, meshFiles('rotor', makeBoundary([{ name: 'iface' }])));
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/merge`)
+      .set('Authorization', auth)
+      .send({ order: ['__case__', rotor.body.mesh.id], interfaces: [] });
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe('INVALID_MERGE_PLAN');
   });
 });
 

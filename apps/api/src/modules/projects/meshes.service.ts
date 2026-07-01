@@ -1,4 +1,4 @@
-// Multi-mesh import & merge: business logic.
+// Multi-mesh import & merge (Assembly v2): business logic.
 //
 // A project holds a reusable LIBRARY of imported polyMesh sources (stored apart
 // from the case under meshes/, see meshStorage). The "merge" pipeline combines a
@@ -9,13 +9,22 @@
 //   1. prepare:     stage each source as a minimal case in a work dir and prefix
 //                   its patches (m1_, m2_, …) so mergeMeshes never fuses two
 //                   distinct same-named patches (e.g. each part's own "walls").
+//                   When order[0] is the MERGE_BASE_CASE sentinel the master is
+//                   staged from the project's OWN case mesh, UNPREFIXED (its
+//                   inlet/outlet/interface names are preserved as the base).
 //   2. mergeMeshes: combine every additional source into the master mesh.
-//   3. stitchMesh:  conformally fuse each chosen patch pair into an internal
-//                   interface (e.g. one part's outlet against the next's inlet).
-//   4. cleanup:     drop the zero-face patches stitchMesh leaves behind.
+//   3. per interface, branch on coupling:
+//        nonConformalCyclic: createNonConformalCouples couples a touching patch
+//                   pair, KEEPING both parts' cells + patches (v12-native, the
+//                   Assembly v2 default — flow interpolates, no node coincidence).
+//        stitch:    conformally FUSE the pair into an internal interface (legacy).
+//   4. cleanup:     drop the zero-face patches stitchMesh leaves behind — SKIPPED
+//                   when any non-conformal couple exists (its constraint patches
+//                   must be kept).
 //   5. checkMesh:   validate the combined mesh.
 //   6. promote:     replace the case's constant/polyMesh with the combined mesh
-//                   and re-align the 0/ boundary fields to the new patch set.
+//                   and re-align the 0/ boundary fields (mode 'merge' for a case
+//                   base — preserve its physics; 'rebuild' for a library base).
 //
 // This mirrors the CGNS conversion pipeline (conversion.service): the OpenFOAM
 // binaries are configurable (config/env) and every tool failure — including a
@@ -32,11 +41,13 @@ import type {
   MergeStep,
   MergeStepKind,
   MeshImportConversion,
+  MeshInterface,
   MeshManifest,
   MeshPatch,
   MeshSource,
   PartTransform,
 } from '@dive/shared';
+import { MERGE_BASE_CASE } from '@dive/shared';
 import { env } from '../../config/env';
 import { AppError } from '../../lib/AppError';
 import { runCommand, type CommandResult } from '../../lib/commandRunner';
@@ -63,6 +74,7 @@ import {
 } from '../../lib/openfoamCase';
 import {
   caseDirAbsolute,
+  caseFileExists,
   caseIsEmpty,
   listCaseTree,
   readCaseFile,
@@ -449,13 +461,34 @@ function failStep(kind: MergeStepKind, label: string, message: string): MergeSte
   return { kind, label, command: '', status: 'failed', exitCode: null, stdout: '', stderr: message, durationMs: 0 };
 }
 
+/**
+ * The interfaces a plan asks for, normalizing the legacy `stitches` field: when
+ * `interfaces` is present it wins (each entry carries its own coupling); otherwise
+ * a legacy draft's `stitches` are interpreted as interfaces with coupling
+ * 'stitch'. Preferring `interfaces` (rather than concatenating) keeps a re-run of
+ * a persisted plan — which carries BOTH the normalized interfaces and the verbatim
+ * legacy stitches — from double-counting the same pair.
+ */
+function planInterfaces(plan: MergePlan): MeshInterface[] {
+  if (plan.interfaces && plan.interfaces.length > 0) return plan.interfaces;
+  return (plan.stitches ?? []).map((stitch) => ({
+    aMeshId: stitch.aMeshId,
+    aPatch: stitch.aPatch,
+    bMeshId: stitch.bMeshId,
+    bPatch: stitch.bPatch,
+    coupling: 'stitch' as const,
+  }));
+}
+
 /** Normalize + persist a plan (dedupe the order, keep first occurrence). The
- * rigid part placements ride along verbatim so an assembly draft survives a
- * reload and a re-run reproduces the exact same geometry. */
+ * legacy `stitches` ride along verbatim (so an old draft round-trips) next to the
+ * normalized `interfaces`; the rigid part placements ride along too so an assembly
+ * draft survives a reload and a re-run reproduces the exact same geometry. */
 async function persistPlan(projectId: string, plan: MergePlan): Promise<MergePlan> {
   const normalized: MergePlan = {
     order: [...new Set(plan.order)],
-    stitches: plan.stitches,
+    interfaces: planInterfaces(plan),
+    stitches: plan.stitches ?? [],
     transforms: plan.transforms ?? [],
   };
   await writeMergePlan(projectId, normalized);
@@ -517,6 +550,31 @@ async function stageSource(
   }
 }
 
+/**
+ * Stage the project's OWN case mesh as the merge master (Assembly v2 base=case,
+ * sentinel order[0] === MERGE_BASE_CASE): copy the case's constant/polyMesh into
+ * the work master and write the minimal system/ trio the utilities need. The base
+ * is deliberately NOT prefixed — its inlet/outlet/interface patch names are
+ * preserved so its 0/ physics can be merged back onto the promoted mesh unchanged.
+ * The base is never moved, so no transform is applied. The source case mesh stays
+ * pristine (the pipeline only touches the transient .work/ copy until promote).
+ */
+async function stageCaseMaster(projectId: string, caseDir: string): Promise<void> {
+  const srcPolyMesh = path.join(caseDirAbsolute(projectId), 'constant', 'polyMesh');
+  const destPolyMesh = path.join(caseDir, 'constant', 'polyMesh');
+  await fs.mkdir(destPolyMesh, { recursive: true });
+  await fs.cp(srcPolyMesh, destPolyMesh, { recursive: true });
+
+  // Minimal system/ trio so mergeMeshes / createNonConformalCouples / checkMesh
+  // can load the staged case (the base's own system/ is left untouched on disk).
+  const systemFiles: BaseFilePath[] = ['system/controlDict', 'system/fvSchemes', 'system/fvSolution'];
+  for (const file of systemFiles) {
+    const abs = path.join(caseDir, file);
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, renderBaseFile(file, []), 'utf8');
+  }
+}
+
 /** Drop the zero-face patches stitchMesh leaves behind; return how many were removed. */
 async function cleanupMasterBoundary(masterDir: string): Promise<number> {
   const boundaryAbs = path.join(masterDir, 'constant', 'polyMesh', 'boundary');
@@ -574,9 +632,11 @@ async function finalizeMerge(
 
 /**
  * Run the merge pipeline for `plan` and, on success, promote the combined mesh
- * into the project's case. Validation errors (empty/invalid plan, unknown patch)
- * throw; an external tool failure resolves with `success: false` and the per-step
- * logs (mirrors the conversion flow), leaving the case mesh untouched.
+ * into the project's case. `order[0]` may be the `MERGE_BASE_CASE` sentinel to
+ * build the assembly onto the project's OWN case mesh (Assembly v2), preserving
+ * its `0/` physics. Validation errors (empty/invalid plan, unknown patch) throw;
+ * an external tool failure resolves with `success: false` and the per-step logs
+ * (mirrors the conversion flow), leaving the case mesh untouched.
  *
  * @throws 404 NOT_FOUND (project not visible), 409 NO_MESHES (empty plan),
  *         422 INVALID_MERGE_PLAN / STITCH_PATCH_NOT_FOUND (bad references).
@@ -588,41 +648,62 @@ export async function runMerge(
 ): Promise<MergeRunResult> {
   await assertProjectVisible(viewer, projectId);
 
-  // --- Validate the plan against the library -------------------------------
+  // --- Validate the plan against the library (+ the case for a base=case) --
   const order = [...new Set(plan.order)];
   if (order.length === 0) {
     throw new AppError(409, 'NO_MESHES', 'Add at least one mesh to the merge.');
   }
+  // Assembly v2: order[0] may be the sentinel = build onto the project case mesh.
+  const baseIsCase = order[0] === MERGE_BASE_CASE;
   const metas = await listMeshSources(projectId);
   const byId = new Map(metas.map((meta) => [meta.id, meta] as const));
-  for (const id of order) {
+  for (const [index, id] of order.entries()) {
+    if (id === MERGE_BASE_CASE) {
+      if (index !== 0) {
+        throw new AppError(422, 'INVALID_MERGE_PLAN', 'The project case can only be the first item in the merge.');
+      }
+      if (!(await caseFileExists(projectId, BOUNDARY_FILE))) {
+        throw new AppError(422, 'INVALID_MERGE_PLAN', 'This project has no case mesh to use as the assembly base.');
+      }
+      continue;
+    }
     if (!byId.has(id)) {
       throw new AppError(422, 'INVALID_MERGE_PLAN', 'The plan references a mesh that is not in the library.');
     }
   }
 
-  // Parse each source's patches; validate every stitch reference up front.
+  // Human phrase for a part in an error/note (the case base has no library meta).
+  const nameOf = (id: string): string =>
+    id === MERGE_BASE_CASE ? 'the project case mesh' : `mesh "${byId.get(id)!.name}"`;
+
+  // Parse each part's patches (the case boundary for the base=case), then validate
+  // every interface reference up front. Legacy `stitches` normalize to interfaces.
   const patchesOf = new Map<string, BoundaryPatchDetail[]>();
   for (const id of order) {
-    const boundary = await readMeshBoundary(projectId, id);
+    const boundary =
+      id === MERGE_BASE_CASE
+        ? await readCaseFile(projectId, BOUNDARY_FILE)
+        : await readMeshBoundary(projectId, id);
     if (!boundary) {
-      throw new AppError(422, 'INVALID_MERGE_PLAN', `Mesh "${byId.get(id)!.name}" has no polyMesh boundary.`);
+      const which = id === MERGE_BASE_CASE ? 'The project case mesh' : `Mesh "${byId.get(id)!.name}"`;
+      throw new AppError(422, 'INVALID_MERGE_PLAN', `${which} has no polyMesh boundary.`);
     }
     patchesOf.set(id, parseBoundaryPatchDetails(boundary.toString('utf8')));
   }
-  for (const stitch of plan.stitches) {
+  const interfaces = planInterfaces(plan);
+  for (const iface of interfaces) {
     for (const [meshId, patch] of [
-      [stitch.aMeshId, stitch.aPatch],
-      [stitch.bMeshId, stitch.bPatch],
+      [iface.aMeshId, iface.aPatch],
+      [iface.bMeshId, iface.bPatch],
     ] as const) {
       if (!order.includes(meshId)) {
-        throw new AppError(422, 'INVALID_MERGE_PLAN', 'A stitch references a mesh not included in the merge.');
+        throw new AppError(422, 'INVALID_MERGE_PLAN', 'An interface references a mesh not included in the merge.');
       }
       if (!patchesOf.get(meshId)!.some((candidate) => candidate.name === patch)) {
         throw new AppError(
           422,
           'STITCH_PATCH_NOT_FOUND',
-          `Patch "${patch}" was not found in mesh "${byId.get(meshId)!.name}".`,
+          `Patch "${patch}" was not found in ${nameOf(meshId)}.`,
         );
       }
     }
@@ -630,12 +711,16 @@ export async function runMerge(
 
   await persistPlan(projectId, plan);
 
-  // Prefix patches only when combining >1 mesh (a single source keeps its names).
-  const prefix = order.length > 1;
+  // Slugs (m1_, m2_, …) namespace each part's patches so mergeMeshes never fuses
+  // two same-named patches. Prefix the base only when it is a LIBRARY source: a
+  // base=case keeps its own patch names (inlet/outlet/interface) so its physics
+  // survives the promote. Added parts are always namespaced when combining >1 mesh.
+  const multi = order.length > 1;
   const slugOf = new Map<string, string>();
   order.forEach((id, index) => slugOf.set(id, `m${index + 1}`));
+  const prefixOf = (index: number): boolean => (index === 0 ? multi && !baseIsCase : multi);
   const resolvePatch = (meshId: string, patch: string): string =>
-    prefix ? `${slugOf.get(meshId)}_${patch}` : patch;
+    prefixOf(order.indexOf(meshId)) ? `${slugOf.get(meshId)}_${patch}` : patch;
 
   const notes: string[] = [];
   const steps: MergeStep[] = [];
@@ -646,23 +731,29 @@ export async function runMerge(
   // always staged at identity.
   const byMesh = new Map((plan.transforms ?? []).map((t) => [t.meshId, t] as const));
 
-  // --- 1) prepare: stage each source (+ placement) + prefix its patches -----
+  // --- 1) prepare: stage each part (+ placement) + prefix its patches -------
   const workRoot = await resetMeshWork(projectId);
   const caseDirOf = (id: string): string => path.join(workRoot, slugOf.get(id)!);
   for (const [index, id] of order.entries()) {
-    const meta = byId.get(id)!;
     const slug = slugOf.get(id)!;
+    const doPrefix = prefixOf(index);
+    const isBaseCaseMaster = index === 0 && baseIsCase;
+    const label = isBaseCaseMaster ? 'Prepare the project case mesh' : `Prepare ${byId.get(id)!.name}`;
     // The base part is never moved; every added part carries its optional placement.
     const transform = index === 0 ? undefined : byMesh.get(id);
     const placed = !!transform && !isIdentityTransform(transform);
-    const stagedNote = prefix ? `Patches prefixed with ${slug}_` : 'Staged source mesh';
     try {
-      await stageSource(projectId, id, caseDirOf(id), slug, patchesOf.get(id)!, prefix, transform);
-      steps.push(
-        okStep('prepare', `Prepare ${meta.name}`, placed ? `Transformed + staged; ${stagedNote}` : stagedNote),
-      );
+      if (isBaseCaseMaster) {
+        // Base=case: stage the project's own polyMesh as the master, UNPREFIXED.
+        await stageCaseMaster(projectId, caseDirOf(id));
+        steps.push(okStep('prepare', label, 'Staged the project case mesh as the assembly base (patches kept).'));
+      } else {
+        await stageSource(projectId, id, caseDirOf(id), slug, patchesOf.get(id)!, doPrefix, transform);
+        const stagedNote = doPrefix ? `Patches prefixed with ${slug}_` : 'Staged source mesh';
+        steps.push(okStep('prepare', label, placed ? `Transformed + staged; ${stagedNote}` : stagedNote));
+      }
     } catch (err) {
-      steps.push(failStep('prepare', `Prepare ${meta.name}`, err instanceof Error ? err.message : String(err)));
+      steps.push(failStep('prepare', label, err instanceof Error ? err.message : String(err)));
       return finalizeMerge(projectId, steps, notes, false);
     }
   }
@@ -687,61 +778,133 @@ export async function runMerge(
   }
   if (order.length > 1) notes.push(`Combined ${order.length} meshes with mergeMeshes.`);
 
-  // --- 3) stitchMesh: fuse each chosen patch pair (prefixed names) ---------
-  for (const stitch of plan.stitches) {
-    const masterPatch = resolvePatch(stitch.aMeshId, stitch.aPatch);
-    const slavePatch = resolvePatch(stitch.bMeshId, stitch.bPatch);
+  // --- 3) couple each interface (branch on coupling) -----------------------
+  // nonConformalCyclic -> createNonConformalCouples (v12-native, keeps both parts);
+  // stitch -> the legacy conformal stitchMesh fuse. Any NCC couple flips `hasNcc`,
+  // which makes the cleanup below SKIP empty-patch removal (the couple's constraint
+  // patches must be kept, and its nested-dict boundary must never be regex-rewritten).
+  const masterBoundaryAbs = path.join(masterDir, 'constant', 'polyMesh', 'boundary');
+  let hasNcc = false;
+  let stitchedCount = 0;
+  for (const iface of interfaces) {
+    const aPatch = resolvePatch(iface.aMeshId, iface.aPatch);
+    const bPatch = resolvePatch(iface.bMeshId, iface.bPatch);
+
+    if (iface.coupling === 'nonConformalCyclic') {
+      // OpenFOAM.org v12: createNonConformalCouples takes the two patch names as
+      // POSITIONAL args and writes into the master's polyMesh in place. It KEEPS
+      // both patches and ADDS the coupled nonConformalCyclic_on_* / nonConformalError_on_*
+      // constraint patches. No -fields (this is a mesh-only work case; the field
+      // BCs are realigned after promote). The rigid placement is already baked into
+      // the staged points, so `transform none` is implicit — no transform arg.
+      const planned = planOpenfoamCommand(
+        env.NCC_COUPLE_BIN,
+        [aPatch, bPatch, '-overwrite', '-case', masterDir],
+        masterDir,
+      );
+      const result = await runCommand({ ...planned, timeoutMs });
+      const step = toStep('createNonConformalCouples', `Couple ${aPatch} ↔ ${bPatch}`, planned.display, result);
+      steps.push(step);
+      if (step.status !== 'success') return finalizeMerge(projectId, steps, notes, false);
+
+      // Post-guard (analogue of the "stitch fused nothing" check): the couple only
+      // created faces if BOTH nonConformalCyclic_on_<a> and _on_<b> now exist. When
+      // the interface patches don't overlap, the tool exits 0 having created none.
+      const details = parseBoundaryPatchDetails(await fs.readFile(masterBoundaryAbs, 'utf8'));
+      const facesOf = new Map(details.map((d) => [d.name, d.nFaces] as const));
+      const onA = `nonConformalCyclic_on_${aPatch}`;
+      const onB = `nonConformalCyclic_on_${bPatch}`;
+      if (!facesOf.has(onA) || !facesOf.has(onB)) {
+        steps[steps.length - 1] = failStep(
+          'createNonConformalCouples',
+          `Couple ${aPatch} ↔ ${bPatch}`,
+          `createNonConformalCouples ran but created no coupled faces — the interface patches ${aPatch} and ${bPatch} almost certainly don't overlap; check both parts share a coordinate frame with the interface surfaces coincident.`,
+        );
+        return finalizeMerge(projectId, steps, notes, false);
+      }
+      hasNcc = true;
+
+      // Warn when a large share of the interface faces landed on nonConformalError
+      // (poor overlap): only the overlapping region transfers flow.
+      const errFaces =
+        (facesOf.get(`nonConformalError_on_${aPatch}`) ?? 0) + (facesOf.get(`nonConformalError_on_${bPatch}`) ?? 0);
+      const cplFaces = (facesOf.get(onA) ?? 0) + (facesOf.get(onB) ?? 0);
+      if (errFaces > 0 && errFaces >= 0.2 * (errFaces + cplFaces)) {
+        notes.push(
+          `Interface ${aPatch} ↔ ${bPatch}: ${Math.round((100 * errFaces) / (errFaces + cplFaces))}% of the interface faces did not overlap (they became nonConformalError faces) — review that the two surfaces are coincident in the same coordinate frame; only the overlapping region will transfer flow.`,
+        );
+      }
+      continue;
+    }
+
+    // coupling === 'stitch': the legacy CONFORMAL fuse (kept for back-compat).
     // Pre-stitch face counts (mergeMeshes preserves them) to later tell a real
     // fusion from a stitch that matched nothing.
     const origFaces = new Map<string, number>([
-      [masterPatch, patchesOf.get(stitch.aMeshId)!.find((p) => p.name === stitch.aPatch)?.nFaces ?? 0],
-      [slavePatch, patchesOf.get(stitch.bMeshId)!.find((p) => p.name === stitch.bPatch)?.nFaces ?? 0],
+      [aPatch, patchesOf.get(iface.aMeshId)!.find((p) => p.name === iface.aPatch)?.nFaces ?? 0],
+      [bPatch, patchesOf.get(iface.bMeshId)!.find((p) => p.name === iface.bPatch)?.nFaces ?? 0],
     ]);
     // OpenFOAM.org v11+ stitchMesh takes a single patchPairs list "((master slave))"
     // (not two positional names) and replaced -partial/-perfect with -tol. Pass the
     // tolerance only when configured so the tool's own default (1e-4) otherwise wins.
-    const stitchArgs = [`((${masterPatch} ${slavePatch}))`, '-overwrite', '-case', masterDir];
+    const stitchArgs = [`((${aPatch} ${bPatch}))`, '-overwrite', '-case', masterDir];
     const tol = env.STITCH_TOL.trim();
     if (tol) stitchArgs.push('-tol', tol);
     const planned = planOpenfoamCommand(env.STITCH_MESH_BIN, stitchArgs, masterDir);
     const result = await runCommand({ ...planned, timeoutMs });
-    const step = toStep('stitchMesh', `Stitch ${masterPatch} ↔ ${slavePatch}`, planned.display, result);
+    const step = toStep('stitchMesh', `Stitch ${aPatch} ↔ ${bPatch}`, planned.display, result);
     steps.push(step);
     if (step.status !== 'success') return finalizeMerge(projectId, steps, notes, false);
 
     // A stitch can exit 0 yet fuse 0 faces when the patches are not coincident,
     // leaving both at full nFaces — that promotes two disconnected domains as a
     // clean success. Fail when nothing fused; warn when only partially fused.
-    const after = await stitchedFaceCounts(masterDir, [masterPatch, slavePatch]);
-    const nothingFused = [masterPatch, slavePatch].every(
+    const after = await stitchedFaceCounts(masterDir, [aPatch, bPatch]);
+    const nothingFused = [aPatch, bPatch].every(
       (p) => (origFaces.get(p) ?? 0) > 0 && (after.get(p) ?? 0) >= (origFaces.get(p) ?? 0),
     );
     if (nothingFused) {
       steps[steps.length - 1] = failStep(
         'stitchMesh',
-        `Stitch ${masterPatch} ↔ ${slavePatch}`,
-        `stitchMesh ran but fused no faces (${masterPatch} and ${slavePatch} still carry every face). The two patches are almost certainly not coincident: check both parts are in the same coordinate frame with the interface surfaces touching, and raise STITCH_TOL if their meshes differ slightly.`,
+        `Stitch ${aPatch} ↔ ${bPatch}`,
+        `stitchMesh ran but fused no faces (${aPatch} and ${bPatch} still carry every face). The two patches are almost certainly not coincident: check both parts are in the same coordinate frame with the interface surfaces touching, and raise STITCH_TOL if their meshes differ slightly.`,
       );
       return finalizeMerge(projectId, steps, notes, false);
     }
-    const partial = [masterPatch, slavePatch].filter((p) => (after.get(p) ?? 0) > 0);
+    const partial = [aPatch, bPatch].filter((p) => (after.get(p) ?? 0) > 0);
     if (partial.length) {
       notes.push(
-        `Interface ${masterPatch} ↔ ${slavePatch}: ${partial.map((p) => `${p} still has ${after.get(p)} face(s)`).join(', ')} after stitching — only partially fused; review coincidence / STITCH_TOL.`,
+        `Interface ${aPatch} ↔ ${bPatch}: ${partial.map((p) => `${p} still has ${after.get(p)} face(s)`).join(', ')} after stitching — only partially fused; review coincidence / STITCH_TOL.`,
       );
     }
+    stitchedCount += 1;
   }
-  if (plan.stitches.length) notes.push(`Stitched ${plan.stitches.length} interface(s).`);
+  const nccCount = interfaces.filter((iface) => iface.coupling === 'nonConformalCyclic').length;
+  if (nccCount) notes.push(`Coupled ${nccCount} non-conformal interface(s) with createNonConformalCouples.`);
+  if (stitchedCount) notes.push(`Stitched ${stitchedCount} interface(s).`);
 
   // --- 4) cleanup: remove the zero-face patches stitchMesh leaves behind ---
-  try {
-    const removed = await cleanupMasterBoundary(masterDir);
+  // SKIP when any non-conformal couple exists: createNonConformalCouples's
+  // nonConformalError_on_* patches are legitimately nFaces 0, so removing them (or
+  // regex-rewriting the NCC boundary at all) would corrupt the coupling.
+  if (hasNcc) {
     steps.push(
-      okStep('cleanup', 'Clean up empty patches', removed > 0 ? `Removed ${removed} empty patch(es).` : 'No empty patches.'),
+      okStep(
+        'cleanup',
+        'Clean up empty patches',
+        'Skipped: non-conformal coupling keeps its constraint patches (nonConformalCyclic / nonConformalError), so empty-patch removal is not run.',
+      ),
     );
-  } catch (err) {
-    steps.push(failStep('cleanup', 'Clean up empty patches', err instanceof Error ? err.message : String(err)));
-    return finalizeMerge(projectId, steps, notes, false);
+  } else {
+    try {
+      const removed = await cleanupMasterBoundary(masterDir);
+      steps.push(
+        okStep('cleanup', 'Clean up empty patches', removed > 0 ? `Removed ${removed} empty patch(es).` : 'No empty patches.'),
+      );
+    } catch (err) {
+      steps.push(failStep('cleanup', 'Clean up empty patches', err instanceof Error ? err.message : String(err)));
+      return finalizeMerge(projectId, steps, notes, false);
+    }
   }
 
   // --- 5) checkMesh on the combined master ---------------------------------
@@ -767,10 +930,15 @@ export async function runMerge(
   }
   await promoteMasterMesh(projectId, masterDir);
   try {
-    const sync = await syncBoundaryFields(viewer, projectId);
+    // A case base preserves its physics (merge mode keeps existing BCs, only new
+    // patches get defaults); a library base rebuilds every field (patches renamed).
+    const mode = baseIsCase ? 'merge' : 'rebuild';
+    const sync = await syncBoundaryFields(viewer, projectId, { mode });
     if (sync.updated.length)
       notes.push(
-        `Re-aligned ${sync.updated.length} field(s) to the merged patch set — their boundary conditions were reset to generic defaults because the patches were renamed (m1_*, m2_*, …). Re-specify your inlet / outlet / physical BCs before solving.`,
+        mode === 'merge'
+          ? `Re-aligned ${sync.updated.length} field(s): kept the existing boundary conditions of the case's patches and added generic defaults for the newly coupled / added patches. Set the physics for the added part's patches before solving.`
+          : `Re-aligned ${sync.updated.length} field(s) to the merged patch set — their boundary conditions were reset to generic defaults because the patches were renamed (m1_*, m2_*, …). Re-specify your inlet / outlet / physical BCs before solving.`,
       );
   } catch {
     // No 0/ fields to align yet (a mesh-only project): the user makes the case

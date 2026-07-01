@@ -143,6 +143,11 @@ export type MeshPatchType = (typeof MESH_PATCH_TYPES)[number];
  * (the solver errors otherwise). When a patch is set to one of these, the app
  * rewrites its 0/ boundaryField entries to the same type; when set away from one
  * (to patch/wall), a leftover constraint BC is reset to a valid generic default.
+ *
+ * `nonConformalCyclic` / `nonConformalError` are the two constraint types the
+ * OpenFOAM.org v12 `createNonConformalCouples` utility adds when it couples two
+ * touching interface patches (Assembly v2): a field's boundaryField entry for one
+ * of these patches must carry that exact type, so they belong here.
  */
 export const CONSTRAINT_PATCH_TYPES = [
   'empty',
@@ -151,6 +156,8 @@ export const CONSTRAINT_PATCH_TYPES = [
   'wedge',
   'cyclic',
   'cyclicAMI',
+  'nonConformalCyclic',
+  'nonConformalError',
   'processor',
 ] as const;
 
@@ -178,18 +185,21 @@ export const MESHES_DIRNAME = 'meshes';
 /**
  * Ordered kinds of step the merge pipeline emits. Unlike the fixed-length
  * conversion/export pipelines, a merge runs a VARIABLE number of steps (one
- * `prepare` per source, one `mergeMeshes` per added source, one `stitchMesh` per
- * pair), so each step carries a `kind` (not a unique id) plus a human label.
- *   - prepare:     stage a source as a case + prefix its patches (collision-free)
- *   - mergeMeshes: combine an additional mesh into the master (OpenFOAM mergeMeshes)
- *   - stitchMesh:  conformally fuse a chosen patch pair into an internal interface
- *   - cleanup:     drop the zero-face patches stitchMesh leaves behind
- *   - checkMesh:   validate the combined mesh
+ * `prepare` per source, one `mergeMeshes` per added source, one coupling step per
+ * interface), so each step carries a `kind` (not a unique id) plus a human label.
+ *   - prepare:                  stage a source as a case + prefix its patches (collision-free)
+ *   - mergeMeshes:              combine an additional mesh into the master (OpenFOAM mergeMeshes)
+ *   - stitchMesh:               conformally FUSE a chosen patch pair into an internal interface
+ *   - createNonConformalCouples: NON-conformally COUPLE a chosen patch pair, keeping both parts'
+ *                               cells + patches (v12-native; Assembly v2 default)
+ *   - cleanup:                  drop the zero-face patches stitchMesh leaves behind (skipped for NCC)
+ *   - checkMesh:                validate the combined mesh
  */
 export const MERGE_STEP_KINDS = [
   'prepare',
   'mergeMeshes',
   'stitchMesh',
+  'createNonConformalCouples',
   'cleanup',
   'checkMesh',
 ] as const;
@@ -221,6 +231,41 @@ export interface StitchPair {
 }
 
 /**
+ * Sentinel `order[0]` value meaning "start the assembly from the project's own
+ * existing case mesh" (the `constant/polyMesh` the Visualize tab shows) instead
+ * of a first library source. Added library parts are then positioned + coupled
+ * onto it, preserving the case's `0/` physics. No real library source can take
+ * this id (a slug is never `__case__`).
+ */
+export const MERGE_BASE_CASE = '__case__';
+
+/**
+ * How a pair of touching interface patches is connected in the merged mesh:
+ *   - 'nonConformalCyclic': the OpenFOAM.org v12-native NON-conformal coupling
+ *     (`createNonConformalCouples`). KEEPS both parts' cells + patches and adds a
+ *     coupled `nonConformalCyclic_on_*` pair; flow interpolates across the
+ *     interface with no node coincidence required — only geometric overlap.
+ *   - 'stitch': the legacy CONFORMAL fuse (`stitchMesh`) — turns two coincident
+ *     patches into one internal interface (node coincidence required).
+ */
+export type InterfaceCoupling = 'nonConformalCyclic' | 'stitch';
+
+/**
+ * One interface to make between two parts in a merge: connect patch `aPatch` of
+ * mesh `aMeshId` to patch `bPatch` of mesh `bMeshId` with the chosen `coupling`.
+ * Supersedes `StitchPair` (which is `coupling: 'stitch'`); a mesh id may be
+ * `MERGE_BASE_CASE` to reference a base-side patch of the project case mesh.
+ */
+export interface MeshInterface {
+  aMeshId: string;
+  aPatch: string;
+  bMeshId: string;
+  bPatch: string;
+  /** Coupling mechanism; the Assembly v2 default is 'nonConformalCyclic'. */
+  coupling: InterfaceCoupling;
+}
+
+/**
  * Rigid placement of an added part in a multi-part assembly:
  *   p' = R(rotation)·p + translation
  * expressed in the part's own polyMesh units (metres, SI). There is NO scaling —
@@ -240,12 +285,17 @@ export interface PartTransform {
 
 /**
  * A merge plan: the ordered list of source mesh ids to combine (the first is the
- * master) plus the patch pairs to stitch afterwards. An empty `stitches` just
- * combines the meshes side by side without connecting them.
+ * master; it may be `MERGE_BASE_CASE` to build onto the project's own case mesh)
+ * plus the `interfaces` to couple afterwards. An empty `interfaces` just combines
+ * the meshes side by side without connecting them.
  */
 export interface MergePlan {
   order: string[];
-  stitches: StitchPair[];
+  /**
+   * The interfaces to make after combining (NON-conformal couple or conformal
+   * stitch per entry). Supersedes `stitches`.
+   */
+  interfaces: MeshInterface[];
   /**
    * Optional rigid placements for the added parts (see PartTransform), applied to
    * the transient staged copy before the meshes are combined. Absent, empty, or
@@ -253,6 +303,12 @@ export interface MergePlan {
    * always left at identity regardless of what this carries.
    */
   transforms?: PartTransform[];
+  /**
+   * @deprecated Legacy drafts only carried conformal stitch pairs. Interpreted as
+   * `interfaces` with `coupling: 'stitch'` when `interfaces` is empty. New clients
+   * send `interfaces` instead.
+   */
+  stitches?: StitchPair[];
 }
 
 /** One executed (or skipped) step of the merge pipeline. */
