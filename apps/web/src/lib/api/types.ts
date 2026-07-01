@@ -15,7 +15,6 @@ import type {
   ExportStepId,
   ExportValidation,
   ImportStep,
-  MergePlan,
   MergeResult,
   MergeStep,
   MergeStepKind,
@@ -373,13 +372,40 @@ export interface ConvertCgnsInput {
 export type {
   MeshSource,
   StitchPair,
-  MergePlan,
   MergeStep,
   MergeStepKind,
   MergeResult,
   ImportStep,
   MeshImportConversion,
 };
+
+/**
+ * Rigid placement of an added part in a multi-part assembly: p' = R(rotation)*p +
+ * translation, in the part's polyMesh units (metres, SI). No scaling. `rotation`
+ * is a unit quaternion in three.js (x, y, z, w) order; identity = [0, 0, 0, 1].
+ *
+ * Local mirror of the `@dive/shared` type. The backend is adding it to the shared
+ * package in parallel; the web contract lives here, so a mirror keeps the two dev
+ * tracks unblocked and matches spec 2a exactly.
+ */
+export interface PartTransform {
+  meshId: string;
+  translation: [number, number, number];
+  rotation: [number, number, number, number];
+}
+
+/**
+ * A merge plan: the ordered source ids to combine (the first is the master/base,
+ * never moved), the patch pairs to stitch, and - for the Assemble workspace - the
+ * rigid transform applied to each added part before it is merged. `transforms`
+ * absent or identity reproduces the existing side-by-side behaviour (backward
+ * compatible: this extends the shared `MergePlan` with an optional field).
+ */
+export interface MergePlan {
+  order: string[];
+  stitches: StitchPair[];
+  transforms?: PartTransform[];
+}
 
 /** `GET /projects/:id/meshes` response. */
 export interface MeshesResponse {

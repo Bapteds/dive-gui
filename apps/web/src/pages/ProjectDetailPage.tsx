@@ -6,6 +6,7 @@ import { z } from 'zod';
 import {
   ArrowLeft,
   Box,
+  Boxes,
   Info,
   Loader2,
   Play,
@@ -58,6 +59,7 @@ import {
 } from '@/features/projects/useProjects';
 import { CaseFilesSection } from '@/features/projects/CaseFilesSection';
 import { useCaseFilesQuery } from '@/features/projects/useCaseFiles';
+import { useMeshesQuery } from '@/features/projects/useMeshes';
 
 /**
  * The 3D viewer pulls in three.js, so it is code-split and only loaded when the
@@ -81,6 +83,16 @@ const SolverTab = lazy(() =>
  */
 const ExportTab = lazy(() =>
   import('@/features/export/ExportTab').then((module) => ({ default: module.ExportTab })),
+);
+
+/**
+ * The Assemble tab pulls in three.js (a live multi-part canvas), so it is
+ * code-split and only loaded when the user opens it (never on the initial render).
+ */
+const AssemblyWorkspace = lazy(() =>
+  import('@/features/assemble/AssemblyWorkspace').then((module) => ({
+    default: module.AssemblyWorkspace,
+  })),
 );
 
 /**
@@ -160,12 +172,16 @@ export function ProjectDetailPage() {
  * tooltip explaining how to enable it. Opening it swaps the whole detail body for
  * the lazy-loaded 3D viewer, which fills the pinned region at lg+.
  */
-type ProjectView = 'detail' | 'visualize' | 'solver' | 'export';
+type ProjectView = 'detail' | 'visualize' | 'assemble' | 'solver' | 'export';
 
 function ProjectTabs({ project }: { project: Project }) {
   const [view, setView] = useState<ProjectView>('detail');
   const { data: entries } = useCaseFilesQuery(project.id);
   const hasPolyMesh = !!entries?.some((entry) => entry.path.startsWith('constant/polyMesh/'));
+  // The Assemble tab works on the mesh LIBRARY (imported parts), not the case
+  // mesh, so it is gated on the library having at least one source.
+  const { data: sources } = useMeshesQuery(project.id);
+  const hasSources = (sources?.length ?? 0) > 0;
 
   return (
     <Tabs
@@ -179,6 +195,7 @@ function ProjectTabs({ project }: { project: Project }) {
           Detail
         </TabsTrigger>
         <VisualizeTab disabled={!hasPolyMesh} />
+        <AssembleTab disabled={!hasSources} />
         <SolverTabTrigger disabled={!hasPolyMesh} />
         <ExportTabTrigger disabled={!hasPolyMesh} />
       </TabsList>
@@ -201,6 +218,19 @@ function ProjectTabs({ project }: { project: Project }) {
         {view === 'visualize' && (
           <Suspense fallback={<ViewerLoading />}>
             <MeshViewer projectId={project.id} />
+          </Suspense>
+        )}
+      </TabsContent>
+
+      <TabsContent
+        value="assemble"
+        className="mt-0 data-[state=active]:flex lg:min-h-0 lg:flex-1"
+      >
+        {/* Mount only when open: the workspace loads three.js and builds each
+            source's preview on the server, so it must not run on other tabs. */}
+        {view === 'assemble' && (
+          <Suspense fallback={<ViewerLoading />}>
+            <AssemblyWorkspace projectId={project.id} />
           </Suspense>
         )}
       </TabsContent>
@@ -259,6 +289,37 @@ function VisualizeTab({ disabled }: { disabled: boolean }) {
         </span>
       </TooltipTrigger>
       <TooltipContent>Import a polyMesh to enable 3D</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * The Assemble trigger. Gated on the mesh LIBRARY having at least one imported
+ * source (parts to compose), not on the case mesh; when disabled, a tooltip
+ * explains how to enable it. Opening it swaps the detail body for the lazy-loaded
+ * multi-part assembly workspace.
+ */
+function AssembleTab({ disabled }: { disabled: boolean }) {
+  const trigger = (
+    <TabsTrigger value="assemble" disabled={disabled}>
+      <Boxes strokeWidth={1.75} aria-hidden="true" />
+      Assemble
+    </TabsTrigger>
+  );
+
+  if (!disabled) return trigger;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          className="inline-flex rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
+        >
+          {trigger}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>Import a mesh part to enable assembly</TooltipContent>
     </Tooltip>
   );
 }

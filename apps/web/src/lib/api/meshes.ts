@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { ApiError, apiClient } from './client';
 import type {
   AutoPatchMeshSourceResponse,
   DeleteMeshResponse,
@@ -7,6 +7,8 @@ import type {
   MergePlanResponse,
   MergeResponse,
   MergeRunResult,
+  MeshManifest,
+  MeshManifestResponse,
   MeshPatch,
   MeshPatchesResponse,
   MeshSource,
@@ -141,4 +143,48 @@ export async function getMergePlan(projectId: string): Promise<MergePlan | null>
 export async function saveMergePlan(projectId: string, plan: MergePlan): Promise<MergePlan> {
   const data = await apiClient.put<MergePlanResponse>(`/projects/${projectId}/meshes/plan`, plan);
   return (data.plan ?? plan) as MergePlan;
+}
+
+// ---- Per-source viz (the "Assemble" tab: preview a library source in 3D) ----
+//
+// These mirror the project-mesh viewer endpoints (projects.ts:189-207) but point
+// at a single LIBRARY source (`/meshes/:meshId/...`); the server builds the viz
+// on demand from meshes/<id>/constant/polyMesh and caches it. Used to preview the
+// base part and each added part before a merge.
+
+/**
+ * Fetch a library source's patch manifest. The first call builds the render on
+ * the server (so its pending state is the "building preview" state).
+ */
+export async function getMeshSourceManifest(
+  projectId: string,
+  meshId: string,
+): Promise<MeshManifest> {
+  const data = await apiClient.get<MeshManifestResponse>(
+    `/projects/${projectId}/meshes/${meshId}/manifest`,
+  );
+  return data.manifest;
+}
+
+/** Fetch a library source's rendered geometry (a GLB) as a Blob for three.js. */
+export async function getMeshSourceGeometry(projectId: string, meshId: string): Promise<Blob> {
+  return apiClient.getBlob(`/projects/${projectId}/meshes/${meshId}/geometry`);
+}
+
+/**
+ * Fetch a library source's cell-edge buffer (raw float32 line-segment endpoints),
+ * or null when this render has none (an older build / 404) - the viewer then
+ * falls back to a client-side edge overlay.
+ */
+export async function getMeshSourceEdges(
+  projectId: string,
+  meshId: string,
+): Promise<ArrayBuffer | null> {
+  try {
+    const blob = await apiClient.getBlob(`/projects/${projectId}/meshes/${meshId}/edges`);
+    return await blob.arrayBuffer();
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
 }
