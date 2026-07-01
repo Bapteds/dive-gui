@@ -1,5 +1,6 @@
 // Zod schemas for the multi-mesh import & merge endpoints.
 import { z } from 'zod';
+import { MESH_PATCH_TYPES } from '@dive/shared';
 
 /** One conformal connection in a merge plan: fuse aMesh.aPatch to bMesh.bPatch. */
 const stitchPairSchema = z.object({
@@ -83,3 +84,22 @@ export const meshSourceAutoPatchSchema = z.object({
 });
 
 export type MeshSourceAutoPatchInput = z.infer<typeof meshSourceAutoPatchSchema>;
+
+/**
+ * Body for PUT /meshes/:meshId/patches — a batch of boundary edits (rename +
+ * retype) applied to a LIBRARY source's boundary only (a source has no 0/ fields).
+ * Each `type` is one of the single-patch-settable geometric types (MESH_PATCH_TYPES).
+ * Cross-edit checks (existence, duplicate `from`, final-name collisions) and the
+ * `to` word validity are done by the service against the live source boundary.
+ */
+export const meshSourceEditPatchesSchema = z.object({
+  edits: z.array(
+    z.object({
+      from: z.string().trim().min(1, 'A patch is required'),
+      to: z.string().trim().min(1, 'A patch name is required'),
+      type: z.enum(MESH_PATCH_TYPES),
+    }),
+  ),
+});
+
+export type MeshSourceEditPatchesInput = z.infer<typeof meshSourceEditPatchesSchema>;

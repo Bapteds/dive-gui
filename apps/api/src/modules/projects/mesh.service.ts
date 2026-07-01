@@ -65,6 +65,7 @@ import {
   restoreBackup,
   writeBackup,
 } from '../../lib/meshBackupStorage';
+import { clearAppliedAssembly } from '../../lib/meshStorage';
 import { assertProjectVisible, type Viewer } from './projects.service';
 import { scaffoldCase, syncBoundaryFields } from './files.service';
 
@@ -532,6 +533,9 @@ export async function restoreMeshBackup(viewer: Viewer, projectId: string): Prom
     throw new AppError(404, 'NOT_FOUND', 'No mesh backup to restore.');
   }
   await restoreBackup(projectId);
+  // Restoring reverts the case to its pre-merge original, so no assembly is applied
+  // any more (undo-all): drop the record that gates the merge's restore-first guard.
+  await clearAppliedAssembly(projectId);
   await buildViz(projectId);
   const stored = await readVizManifest(projectId);
   if (!stored) {

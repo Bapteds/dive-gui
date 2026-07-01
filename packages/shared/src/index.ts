@@ -319,6 +319,24 @@ export interface MergePlan {
   stitches?: StitchPair[];
 }
 
+/**
+ * On-disk record that an assembly is currently applied to a project's case mesh,
+ * written ONLY on a successful merge promote (stored as meshes/assembly.json).
+ * Drives the Disassemble feature: the UI lists the applied added parts (from
+ * `plan.order`) so the user can REMOVE one (re-run a reduced plan) or UNDO the
+ * whole assembly, and it is the key the merge's restore-first guard checks to keep
+ * a re-merge from STACKING onto an already-merged case. Cleared when the mesh
+ * backup is restored (undo-all reverts to the pre-merge original).
+ */
+export interface AppliedAssembly {
+  /** The plan that was applied (order + coupled interfaces + rigid transforms). */
+  plan: MergePlan;
+  /** True when the assembly was built onto the project's own case mesh (base=case). */
+  baseIsCase: boolean;
+  /** ISO 8601 timestamp of the successful promote that recorded this assembly. */
+  appliedAt: string;
+}
+
 /** One executed (or skipped) step of the merge pipeline. */
 export interface MergeStep {
   /** Which kind of step this is (see MERGE_STEP_KINDS). */

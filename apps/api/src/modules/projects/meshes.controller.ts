@@ -8,6 +8,8 @@ import { AppError } from '../../lib/AppError';
 import type { Viewer } from './projects.service';
 import {
   autoPatchMeshSource,
+  editMeshSourcePatches,
+  getAppliedAssembly,
   getMergePlan,
   getMeshPatches,
   getMeshSourceEdges,
@@ -24,6 +26,7 @@ import {
 import type {
   MergePlanInput,
   MeshSourceAutoPatchInput,
+  MeshSourceEditPatchesInput,
   MeshSourceRenamePatchInput,
 } from './meshes.schemas';
 
@@ -153,6 +156,18 @@ export async function renameMeshSourcePatchController(req: Request, res: Respons
   res.status(200).json(result);
 }
 
+/** PUT /projects/:id/meshes/:meshId/patches — batch rename+retype a source's boundary. */
+export async function editMeshSourcePatchesController(req: Request, res: Response): Promise<void> {
+  const { edits } = req.body as MeshSourceEditPatchesInput;
+  const result = await editMeshSourcePatches(
+    requireViewer(req),
+    req.params.id,
+    req.params.meshId,
+    edits,
+  );
+  res.status(200).json(result);
+}
+
 /** POST /projects/:id/meshes/merge — run the merge pipeline. */
 export async function mergeMeshesController(req: Request, res: Response): Promise<void> {
   const result = await runMerge(requireViewer(req), req.params.id, req.body as MergePlanInput);
@@ -163,6 +178,12 @@ export async function mergeMeshesController(req: Request, res: Response): Promis
 export async function getMergePlanController(req: Request, res: Response): Promise<void> {
   const plan = await getMergePlan(requireViewer(req), req.params.id);
   res.status(200).json({ plan });
+}
+
+/** GET /projects/:id/meshes/assembly — the applied-assembly record (or null). */
+export async function getAssemblyController(req: Request, res: Response): Promise<void> {
+  const assembly = await getAppliedAssembly(requireViewer(req), req.params.id);
+  res.status(200).json({ assembly });
 }
 
 /** PUT /projects/:id/meshes/plan — save a merge-plan draft (no run). */

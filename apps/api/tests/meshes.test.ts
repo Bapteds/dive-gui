@@ -1088,3 +1088,290 @@ describe('POST /meshes/:meshId/auto-patch + /patches/rename (re-patch a library 
     expect(res.status).toBe(404);
   });
 });
+
+// --- Disassemble (assembly record + restore-first) + source retype ----------
+
+/** A 0/ field whose boundaryField carries a generic entry per given patch. */
+function seedField(object: string, className: string, dims: string, patches: string[]): string {
+  const entries = patches
+    .map((p) => `    ${p}\n    {\n        type            zeroGradient;\n    }`)
+    .join('\n');
+  return `FoamFile { class ${className}; object ${object}; }\ndimensions ${dims};\ninternalField uniform 0;\nboundaryField\n{\n${entries}\n}\n`;
+}
+
+/** Seed the project case with a polyMesh (inlet/outlet) + 0/{U,p}: a base=case fixture. */
+async function seedCaseMesh(id: string, auth: string): Promise<void> {
+  const files: Array<{ relativePath: string; data: string }> = [
+    { relativePath: 'constant/polyMesh/points', data: 'points-data' },
+    { relativePath: 'constant/polyMesh/faces', data: 'faces-data' },
+    { relativePath: 'constant/polyMesh/owner', data: 'owner-data' },
+    { relativePath: 'constant/polyMesh/neighbour', data: 'neighbour-data' },
+    { relativePath: 'constant/polyMesh/boundary', data: makeBoundary([{ name: 'inlet' }, { name: 'outlet' }]) },
+    { relativePath: '0/U', data: seedField('U', 'volVectorField', '[0 1 -1 0 0 0 0]', ['inlet', 'outlet']) },
+    { relativePath: '0/p', data: seedField('p', 'volScalarField', '[0 2 -2 0 0 0 0]', ['inlet', 'outlet']) },
+  ];
+  const res = await importCaseFolder(id, auth, files);
+  expect(res.status).toBe(201);
+}
+
+/** GET the applied-assembly record (Disassemble). */
+function getAssembly(id: string, auth: string) {
+  return request(app).get(`/api/v1/projects/${id}/meshes/assembly`).set('Authorization', auth);
+}
+
+/** Run a merge with the given plan body. */
+function runMergePlan(id: string, auth: string, plan: Record<string, unknown>) {
+  return request(app).post(`/api/v1/projects/${id}/meshes/merge`).set('Authorization', auth).send(plan);
+}
+
+/** Batch-edit the CASE mesh patches (the Visualize overlay: creates the backup + edits). */
+function editCasePatches(id: string, auth: string, edits: Array<{ from: string; to: string; type: string }>) {
+  return request(app).put(`/api/v1/projects/${id}/mesh/patches`).set('Authorization', auth).send({ edits });
+}
+
+/** Restore the case from the single mesh-backup slot (undo-all). */
+function restoreCaseBackup(id: string, auth: string) {
+  return request(app).post(`/api/v1/projects/${id}/mesh/backup/restore`).set('Authorization', auth);
+}
+
+/**
+ * mergeRunner for the merge toolchain + the source-viz extractor (writes GLB +
+ * manifest + edges) for the post-restore viz build — so a base=case merge AND the
+ * subsequent restore both work under a single runner.
+ */
+const mergeAndVizRunner: CommandRunner = async (spec) => {
+  if (spec.command === 'mergeMeshes' || spec.command === 'stitchMesh' || spec.command === 'checkMesh') {
+    return mergeRunner(spec);
+  }
+  return sourceVizRunner(spec);
+};
+
+describe('GET /projects/:id/meshes/assembly + POST /meshes/merge (Disassemble)', () => {
+  it('records the applied assembly on success (null before, record after)', async () => {
+    setCommandRunner(mergeRunner);
+    const { id, auth } = await makeProject('dis-record@dive-turbinen.test');
+    await seedCaseMesh(id, auth);
+    const alpha = await importMesh(id, auth, meshFiles('alpha', makeBoundary([
+      { name: 'aface' }, { name: 'awall', type: 'wall' },
+    ])));
+    const alphaId = alpha.body.mesh.id;
+
+    // No assembly applied yet.
+    const before = await getAssembly(id, auth);
+    expect(before.status).toBe(200);
+    expect(before.body.assembly).toBeNull();
+
+    const res = await runMergePlan(id, auth, { order: ['__case__', alphaId], interfaces: [] });
+    expect(res.status).toBe(200);
+    expect(res.body.result.success).toBe(true);
+
+    const after = await getAssembly(id, auth);
+    expect(after.status).toBe(200);
+    expect(after.body.assembly).not.toBeNull();
+    expect(after.body.assembly.baseIsCase).toBe(true);
+    expect(after.body.assembly.plan.order).toEqual(['__case__', alphaId]);
+    expect(typeof after.body.assembly.appliedAt).toBe('string');
+  });
+
+  it('remove-part re-merge restores the original first (no stacking) and updates the record', async () => {
+    setCommandRunner(mergeRunner);
+    const { id, auth } = await makeProject('dis-remove@dive-turbinen.test');
+    await seedCaseMesh(id, auth);
+    const alpha = await importMesh(id, auth, meshFiles('alpha', makeBoundary([
+      { name: 'aface' }, { name: 'awall', type: 'wall' },
+    ])));
+    const beta = await importMesh(id, auth, meshFiles('beta', makeBoundary([
+      { name: 'bface' }, { name: 'bwall', type: 'wall' },
+    ])));
+    const alphaId = alpha.body.mesh.id;
+    const betaId = beta.body.mesh.id;
+
+    // Assemble BOTH parts onto the case.
+    const full = await runMergePlan(id, auth, { order: ['__case__', alphaId, betaId], interfaces: [] });
+    expect(full.body.result.success).toBe(true);
+    expect((await getAssembly(id, auth)).body.assembly.plan.order).toEqual(['__case__', alphaId, betaId]);
+
+    const combined = (await caseBoundary(id, auth)).body.file.content as string;
+    expect(combined).toContain('aface'); // alpha present
+    expect(combined).toContain('bface'); // beta present
+
+    // Remove beta: re-merge the REDUCED plan [case, alpha]. The restore-first guard
+    // must revert to the pristine original before staging, so beta's patches do NOT
+    // survive (no stacking) and only alpha is rebuilt onto the original base.
+    const reduced = await runMergePlan(id, auth, { order: ['__case__', alphaId], interfaces: [] });
+    expect(reduced.body.result.success).toBe(true);
+
+    const rebuilt = (await caseBoundary(id, auth)).body.file.content as string;
+    expect(rebuilt).toContain('aface');     // alpha kept
+    expect(rebuilt).not.toContain('bface'); // beta gone — proves restore-first
+    expect(rebuilt).toContain('inlet');     // original base patches restored
+    expect(rebuilt).toContain('outlet');
+
+    // The record now lists only the remaining part.
+    expect((await getAssembly(id, auth)).body.assembly.plan.order).toEqual(['__case__', alphaId]);
+  });
+
+  it('does NOT restore on the FIRST merge (no record) — respects a prior Visualize edit', async () => {
+    setCommandRunner(mergeRunner);
+    const { id, auth } = await makeProject('dis-firstnorestore@dive-turbinen.test');
+    await seedCaseMesh(id, auth);
+
+    // A Visualize edit BEFORE any assembly renames inlet->intake and captures the
+    // backup (kind original = inlet/outlet). There is NO assembly record yet.
+    const edit = await editCasePatches(id, auth, [{ from: 'inlet', to: 'intake', type: 'patch' }]);
+    expect(edit.status).toBe(200);
+
+    const alpha = await importMesh(id, auth, meshFiles('alpha', makeBoundary([
+      { name: 'aface' }, { name: 'awall', type: 'wall' },
+    ])));
+
+    // First merge: the guard must NOT restore (no record), so it stages the EDITED
+    // case (intake), not the pre-edit original (inlet).
+    const res = await runMergePlan(id, auth, { order: ['__case__', alpha.body.mesh.id], interfaces: [] });
+    expect(res.body.result.success).toBe(true);
+
+    const boundary = (await caseBoundary(id, auth)).body.file.content as string;
+    expect(boundary).toContain('intake');    // the Visualize edit was respected
+    expect(boundary).not.toContain('inlet'); // NOT reverted to the pre-edit original
+  });
+
+  it('clears the assembly record when the mesh backup is restored (undo-all)', async () => {
+    setCommandRunner(mergeAndVizRunner);
+    const { id, auth } = await makeProject('dis-undo@dive-turbinen.test');
+    await seedCaseMesh(id, auth);
+    const alpha = await importMesh(id, auth, meshFiles('alpha', makeBoundary([
+      { name: 'aface' }, { name: 'awall', type: 'wall' },
+    ])));
+
+    const res = await runMergePlan(id, auth, { order: ['__case__', alpha.body.mesh.id], interfaces: [] });
+    expect(res.body.result.success).toBe(true);
+    expect((await getAssembly(id, auth)).body.assembly).not.toBeNull();
+
+    // Undo-all: restore the pre-merge original — this clears the assembly record.
+    const restore = await restoreCaseBackup(id, auth);
+    expect(restore.status).toBe(200);
+
+    const after = await getAssembly(id, auth);
+    expect(after.status).toBe(200);
+    expect(after.body.assembly).toBeNull();
+  });
+
+  it('returns 404 for the assembly of a project the viewer cannot see', async () => {
+    const { id } = await makeProject('dis-owner@dive-turbinen.test');
+    const stranger = await createTestUser({ email: 'dis-stranger@dive-turbinen.test' });
+    const res = await getAssembly(id, authHeader(stranger));
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('PUT /projects/:id/meshes/:meshId/patches (source boundary retype)', () => {
+  it('renames + retypes a source boundary (boundary-only, no fields)', async () => {
+    const { id, auth } = await makeProject('sp-edit@dive-turbinen.test');
+    const imported = await importMesh(id, auth, meshFiles('part', makeBoundary([
+      { name: 'inlet' }, { name: 'walls', type: 'wall' },
+    ])));
+    const meshId = imported.body.mesh.id;
+
+    const res = await request(app)
+      .put(`/api/v1/projects/${id}/meshes/${meshId}/patches`)
+      .set('Authorization', auth)
+      .send({
+        edits: [
+          { from: 'inlet', to: 'intake', type: 'wall' }, // rename + retype
+          { from: 'walls', to: 'walls', type: 'empty' }, // retype only
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    const patches = res.body.mesh.patches as Array<{ name: string; type: string }>;
+    const names = patches.map((p) => p.name);
+    expect(names).toEqual(['intake', 'walls']);
+    expect(names).not.toContain('inlet');
+    expect(patches.find((p) => p.name === 'intake')!.type).toBe('wall');
+    expect(patches.find((p) => p.name === 'walls')!.type).toBe('empty');
+    // The refreshed library list carries the same edited source.
+    expect(res.body.meshes.find((m: { id: string }) => m.id === meshId).patches.map((p: { name: string }) => p.name))
+      .toEqual(['intake', 'walls']);
+  });
+
+  it('rejects an edit to a patch that does not exist (404)', async () => {
+    const { id, auth } = await makeProject('sp-404patch@dive-turbinen.test');
+    const { a } = await importTwoParts(id, auth);
+    const res = await request(app)
+      .put(`/api/v1/projects/${id}/meshes/${a}/patches`)
+      .set('Authorization', auth)
+      .send({ edits: [{ from: 'ghostpatch', to: 'x', type: 'patch' }] });
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects renaming onto an existing final name (409 PATCH_EXISTS)', async () => {
+    const { id, auth } = await makeProject('sp-dup@dive-turbinen.test');
+    const { a } = await importTwoParts(id, auth); // patches: inlet, ifaceA, wallsA
+    const res = await request(app)
+      .put(`/api/v1/projects/${id}/meshes/${a}/patches`)
+      .set('Authorization', auth)
+      .send({ edits: [{ from: 'inlet', to: 'ifaceA', type: 'patch' }] });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('PATCH_EXISTS');
+  });
+
+  it('rejects an invalid patch name (422)', async () => {
+    const { id, auth } = await makeProject('sp-badname@dive-turbinen.test');
+    const { a } = await importTwoParts(id, auth);
+    const res = await request(app)
+      .put(`/api/v1/projects/${id}/meshes/${a}/patches`)
+      .set('Authorization', auth)
+      .send({ edits: [{ from: 'inlet', to: 'bad name', type: 'patch' }] });
+    expect(res.status).toBe(422);
+  });
+
+  it('rejects an unsupported patch type (422)', async () => {
+    const { id, auth } = await makeProject('sp-badtype@dive-turbinen.test');
+    const { a } = await importTwoParts(id, auth);
+    const res = await request(app)
+      .put(`/api/v1/projects/${id}/meshes/${a}/patches`)
+      .set('Authorization', auth)
+      .send({ edits: [{ from: 'inlet', to: 'inlet', type: 'banana' }] });
+    expect(res.status).toBe(422);
+  });
+
+  it('returns 404 for an unknown mesh source', async () => {
+    const { id, auth } = await makeProject('sp-404mesh@dive-turbinen.test');
+    const res = await request(app)
+      .put(`/api/v1/projects/${id}/meshes/ghost/patches`)
+      .set('Authorization', auth)
+      .send({ edits: [{ from: 'inlet', to: 'intake', type: 'patch' }] });
+    expect(res.status).toBe(404);
+  });
+
+  it('marks the source render stale after an edit so it rebuilds on next fetch', async () => {
+    let runs = 0;
+    const countingRunner: CommandRunner = async (spec) => {
+      runs += 1;
+      return sourceVizRunner(spec);
+    };
+    setCommandRunner(countingRunner);
+    const { id, auth } = await makeProject('sp-vizstale@dive-turbinen.test');
+    const imported = await importMesh(id, auth, meshFiles('part', makeBoundary([
+      { name: 'inlet' }, { name: 'walls', type: 'wall' },
+    ])));
+    const meshId = imported.body.mesh.id;
+
+    // First manifest fetch builds the render.
+    const first = await request(app).get(`/api/v1/projects/${id}/meshes/${meshId}/manifest`).set('Authorization', auth);
+    expect(first.status).toBe(200);
+    expect(runs).toBe(1);
+
+    // Editing the boundary bumps its mtime -> the cached render is stale.
+    const edit = await request(app)
+      .put(`/api/v1/projects/${id}/meshes/${meshId}/patches`)
+      .set('Authorization', auth)
+      .send({ edits: [{ from: 'inlet', to: 'intake', type: 'wall' }] });
+    expect(edit.status).toBe(200);
+
+    // Next manifest fetch rebuilds (does not serve the stale cache).
+    const second = await request(app).get(`/api/v1/projects/${id}/meshes/${meshId}/manifest`).set('Authorization', auth);
+    expect(second.status).toBe(200);
+    expect(runs).toBe(2);
+  });
+});

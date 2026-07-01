@@ -16,7 +16,7 @@
 // meshes root. Mirrors cgnsStorage.ts (the single-CGNS-source equivalent).
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { MergePlan } from '@dive/shared';
+import type { AppliedAssembly, MergePlan } from '@dive/shared';
 import {
   assertSafeId,
   confineJoin,
@@ -47,6 +47,8 @@ export interface MeshMeta {
 const WORK_DIRNAME = '.work';
 /** The merge-plan file name (sibling of the mesh dirs). */
 const MERGE_PLAN_FILE = 'merge.json';
+/** The applied-assembly record file name (sibling of the mesh dirs + merge.json). */
+const ASSEMBLY_FILE = 'assembly.json';
 
 /** Absolute path to a project's meshes root. */
 function meshesRootFor(projectId: string): string {
@@ -234,6 +236,46 @@ export async function writeMergePlan(projectId: string, plan: MergePlan): Promis
   const file = path.join(meshesRootFor(projectId), MERGE_PLAN_FILE);
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, JSON.stringify(plan), 'utf8');
+}
+
+/**
+ * Read the applied-assembly record (meshes/assembly.json), or null when no
+ * assembly is currently applied. Lives at the meshes/ root beside merge.json (never
+ * a source directory: listMeshSources only walks directories, so this file is not
+ * mistaken for a library source). Mirrors readMergePlan.
+ */
+export async function readAppliedAssembly(projectId: string): Promise<AppliedAssembly | null> {
+  try {
+    const file = path.join(meshesRootFor(projectId), ASSEMBLY_FILE);
+    return JSON.parse(await fs.readFile(file, 'utf8')) as AppliedAssembly;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Record that an assembly was successfully applied (written ONLY on a successful
+ * merge promote): marks "an assembly is applied" and captures the plan so the
+ * Disassemble UI can list the added parts and build a reduced re-merge. Mirrors
+ * writeMergePlan.
+ */
+export async function writeAppliedAssembly(
+  projectId: string,
+  assembly: AppliedAssembly,
+): Promise<void> {
+  const file = path.join(meshesRootFor(projectId), ASSEMBLY_FILE);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify(assembly), 'utf8');
+}
+
+/**
+ * Clear the applied-assembly record (a no-op when none exists): restoring the mesh
+ * backup reverts the case to its pre-merge original, so no assembly is applied any
+ * more (undo-all). Best-effort removal, never throws on a missing file.
+ */
+export async function clearAppliedAssembly(projectId: string): Promise<void> {
+  const file = path.join(meshesRootFor(projectId), ASSEMBLY_FILE);
+  await fs.rm(file, { force: true }).catch(() => undefined);
 }
 
 /** Purge and recreate the transient merge workspace, returning its absolute path. */

@@ -41,6 +41,8 @@ import {
 import {
   autoPatchMeshSourceController,
   deleteMeshController,
+  editMeshSourcePatchesController,
+  getAssemblyController,
   getMergePlanController,
   getMeshPatchesController,
   getMeshSourceEdgesController,
@@ -90,6 +92,7 @@ import { cgnsNameQuerySchema, convertCgnsSchema } from './conversion.schemas';
 import {
   meshIdParamSchema,
   meshSourceAutoPatchSchema,
+  meshSourceEditPatchesSchema,
   meshSourceRenamePatchSchema,
   mergePlanSchema,
 } from './meshes.schemas';
@@ -287,6 +290,13 @@ export function createProjectsRouter(): Router {
     validate({ params: projectIdParamSchema, body: mergePlanSchema }),
     asyncHandler(mergeMeshesController),
   );
+  // Disassemble: the applied-assembly record (or null). A static sub-path, so it is
+  // registered BEFORE the dynamic ":meshId" routes below (never captured as a mesh id).
+  router.get(
+    '/:id/meshes/assembly',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(getAssemblyController),
+  );
   router.get(
     '/:id/meshes/:meshId/patches',
     validate({ params: meshIdParamSchema }),
@@ -321,6 +331,13 @@ export function createProjectsRouter(): Router {
     '/:id/meshes/:meshId/patches/rename',
     validate({ params: meshIdParamSchema, body: meshSourceRenamePatchSchema }),
     asyncHandler(renameMeshSourcePatchController),
+  );
+  // Visualize library: batch rename + retype a source's boundary patches (source
+  // has no 0/ fields, so this is boundary-only; the render rebuilds on the mtime bump).
+  router.put(
+    '/:id/meshes/:meshId/patches',
+    validate({ params: meshIdParamSchema, body: meshSourceEditPatchesSchema }),
+    asyncHandler(editMeshSourcePatchesController),
   );
   router.delete(
     '/:id/meshes/:meshId',

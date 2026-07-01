@@ -36,6 +36,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type {
+  AppliedAssembly,
   InterfaceCoupling,
   MergePlan,
   MergeResult,
@@ -45,10 +46,11 @@ import type {
   MeshInterface,
   MeshManifest,
   MeshPatch,
+  MeshPatchEdit,
   MeshSource,
   PartTransform,
 } from '@dive/shared';
-import { MERGE_BASE_CASE } from '@dive/shared';
+import { MERGE_BASE_CASE, MESH_PATCH_TYPES } from '@dive/shared';
 import { env } from '../../config/env';
 import { AppError } from '../../lib/AppError';
 import { runCommand, type CommandResult } from '../../lib/commandRunner';
@@ -70,6 +72,7 @@ import {
   removeEmptyBoundaryPatches,
   renameBoundaryPatch,
   renderBaseFile,
+  setBoundaryPatchType,
   setCyclicAmiPair,
   type BaseFilePath,
   type BoundaryPatchDetail,
@@ -82,7 +85,7 @@ import {
   readCaseFile,
   type CaseEntry,
 } from '../../lib/caseStorage';
-import { ensureOriginalBackup } from '../../lib/meshBackupStorage';
+import { backupExists, ensureOriginalBackup, restoreBackup } from '../../lib/meshBackupStorage';
 import { convertMeshFileToCase, meshFileFormat } from '../../lib/meshImport';
 import {
   deleteMeshSource,
@@ -93,11 +96,13 @@ import {
   meshPolyMeshDir,
   meshSourceExists,
   meshSrcDir,
+  readAppliedAssembly,
   readMeshBoundary,
   readMeshMeta,
   readMergePlan,
   resetMeshWork,
   uniqueMeshId,
+  writeAppliedAssembly,
   writeMergePlan,
   writeMeshMeta,
   type MeshMeta,
@@ -302,6 +307,110 @@ export async function renameMeshSourcePatch(
     const boundaryAbs = path.join(meshPolyMeshDir(projectId, meshId), 'boundary');
     await fs.writeFile(boundaryAbs, renameBoundaryPatch(content, from, to), 'utf8');
   }
+  const [mesh, meshes] = await Promise.all([toMeshSource(projectId, meta), publicMeshes(projectId)]);
+  return { mesh, meshes };
+}
+
+/**
+ * Apply a set of patch renames to one boundary text without intermediate
+ * collisions: each `from` is first renamed to a unique placeholder, then every
+ * placeholder to its final `to` — so swaps (A<->B) and chains (A->B, B->C) are
+ * handled correctly. Mirrors the case-mesh applyRenames (mesh.service.ts); kept
+ * local so the two boundary editors own their code independently.
+ */
+function applyRenames(text: string, renames: Map<string, string>): string {
+  if (renames.size === 0) return text;
+  let out = text;
+  const placeholders: Array<[string, string]> = [];
+  let index = 0;
+  for (const [from, to] of renames) {
+    const placeholder = `__DIVE_TMP_${index}__`;
+    out = renameBoundaryPatch(out, from, placeholder);
+    placeholders.push([placeholder, to]);
+    index += 1;
+  }
+  for (const [placeholder, to] of placeholders) {
+    out = renameBoundaryPatch(out, placeholder, to);
+  }
+  return out;
+}
+
+/**
+ * Batch-edit a LIBRARY source's boundary patches (rename + retype) for the
+ * Visualize library. A library source carries NO `0/` fields (only a polyMesh), so
+ * this rewrites the source's constant/polyMesh/boundary ONLY — no field scan, no
+ * backup — unlike the case-mesh `editMeshPatches`. Validation is all-or-nothing up
+ * front: each `from` exists in the source boundary, each `to` is a valid OpenFOAM
+ * word, each `type` is one of MESH_PATCH_TYPES, no patch is edited twice, and the
+ * resulting full set of names is unique (catches clashes with unchanged patches and
+ * between edits). Renames are then applied collision-free (placeholder technique),
+ * then the geometric types set on the final names. Writing the boundary bumps its
+ * mtime, so `meshSourceVizIsStale` returns true and the per-source render rebuilds
+ * on the next manifest/geometry fetch — nothing else is needed. Returns the
+ * refreshed source + list.
+ *
+ * @throws 404 NOT_FOUND (project/source not found, or an unknown `from`),
+ *         409 NO_MESH / PATCH_EXISTS (no boundary / a final-name clash),
+ *         422 VALIDATION_ERROR (invalid name/type or a duplicated `from`).
+ */
+export async function editMeshSourcePatches(
+  viewer: Viewer,
+  projectId: string,
+  meshId: string,
+  edits: MeshPatchEdit[],
+): Promise<{ mesh: MeshSource; meshes: MeshSource[] }> {
+  await assertProjectVisible(viewer, projectId);
+  const meta = await readMeshMeta(projectId, meshId);
+  if (!meta) throw new AppError(404, 'NOT_FOUND', 'Mesh source not found');
+  const boundary = await readMeshBoundary(projectId, meshId);
+  if (!boundary) throw new AppError(409, 'NO_MESH', 'This mesh has no polyMesh boundary.');
+  const content = boundary.toString('utf8');
+  const current = parseBoundaryPatchDetails(content).map((patch) => patch.name);
+
+  // Validate every edit before touching disk (all-or-nothing).
+  const editByFrom = new Map<string, MeshPatchEdit>();
+  for (const edit of edits) {
+    if (editByFrom.has(edit.from)) {
+      throw new AppError(422, 'VALIDATION_ERROR', `Patch "${edit.from}" is edited more than once.`);
+    }
+    editByFrom.set(edit.from, edit);
+    if (!current.includes(edit.from)) {
+      throw new AppError(404, 'NOT_FOUND', `Patch "${edit.from}" was not found in this mesh.`);
+    }
+    if (!isValidPatchName(edit.to)) {
+      throw new AppError(
+        422,
+        'VALIDATION_ERROR',
+        `"${edit.to}" is not a valid patch name (a single word: letters, digits, underscore).`,
+      );
+    }
+    if (!(MESH_PATCH_TYPES as readonly string[]).includes(edit.type)) {
+      throw new AppError(422, 'VALIDATION_ERROR', `Unsupported patch type "${edit.type}".`);
+    }
+  }
+
+  // Final name of every current patch (edited -> to, else unchanged); the full set
+  // must be unique. Collect the real renames (to !== from).
+  const renames = new Map<string, string>();
+  const finalNames = new Set<string>();
+  for (const name of current) {
+    const edit = editByFrom.get(name);
+    const finalName = edit ? edit.to : name;
+    if (finalNames.has(finalName)) {
+      throw new AppError(409, 'PATCH_EXISTS', `A patch named "${finalName}" already exists.`);
+    }
+    finalNames.add(finalName);
+    if (edit && edit.to !== edit.from) renames.set(edit.from, edit.to);
+  }
+
+  // Boundary only: renames first (collision-free), then types on the final names.
+  let newBoundary = applyRenames(content, renames);
+  for (const edit of edits) {
+    newBoundary = setBoundaryPatchType(newBoundary, edit.to, edit.type);
+  }
+  const boundaryAbs = path.join(meshPolyMeshDir(projectId, meshId), 'boundary');
+  await fs.writeFile(boundaryAbs, newBoundary, 'utf8');
+
   const [mesh, meshes] = await Promise.all([toMeshSource(projectId, meta), publicMeshes(projectId)]);
   return { mesh, meshes };
 }
@@ -692,6 +801,19 @@ export async function runMerge(
   }
   // Assembly v2: order[0] may be the sentinel = build onto the project case mesh.
   const baseIsCase = order[0] === MERGE_BASE_CASE;
+
+  // Re-merge safety (Disassemble): when a previous assembly is on record AND there
+  // is a backup of the pre-merge original, revert the case to that original BEFORE
+  // staging, so a re-merge (undo-all leaves no record; remove-one-part sends a
+  // reduced plan) rebuilds from the pristine base instead of STACKING onto the
+  // already-merged case. The FIRST merge has no record, so nothing is restored — it
+  // stages the current case, respecting any Visualize edits. Only meaningful for a
+  // base=case merge (a library-base merge never uses the case as its base, so it
+  // can never stack). This also closes the latent double-merge bug on a plain re-run.
+  if (baseIsCase && (await readAppliedAssembly(projectId)) && (await backupExists(projectId))) {
+    await restoreBackup(projectId);
+  }
+
   const metas = await listMeshSources(projectId);
   const byId = new Map(metas.map((meta) => [meta.id, meta] as const));
   for (const [index, id] of order.entries()) {
@@ -1006,7 +1128,32 @@ export async function runMerge(
     // runnable next, which scaffolds them. Not a merge failure.
   }
 
+  // Record the applied assembly — SUCCESS ONLY, just before the promote is reported.
+  // This both marks "an assembly is applied" (so the restore-first guard above fires
+  // on the next re-merge but never on the first) and captures the exact plan so the
+  // Disassemble UI can list the added parts and rebuild a reduced re-merge.
+  await writeAppliedAssembly(projectId, {
+    plan: { order, interfaces: planInterfaces(plan), transforms: plan.transforms ?? [] },
+    baseIsCase,
+    appliedAt: new Date().toISOString(),
+  });
+
   return finalizeMerge(projectId, steps, notes, true);
+}
+
+/**
+ * The applied-assembly record for a project, or null when no assembly is currently
+ * applied (drives the Disassemble UI: the applied added parts, remove-one-part,
+ * undo-all). Gated by project visibility.
+ *
+ * @throws 404 NOT_FOUND if the project is not visible (no existence leak).
+ */
+export async function getAppliedAssembly(
+  viewer: Viewer,
+  projectId: string,
+): Promise<AppliedAssembly | null> {
+  await assertProjectVisible(viewer, projectId);
+  return readAppliedAssembly(projectId);
 }
 
 // --------------------------------------------------------------------------
