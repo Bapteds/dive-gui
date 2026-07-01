@@ -459,9 +459,31 @@ export interface MergePlan {
   stitches?: StitchPair[];
 }
 
+/**
+ * The applied-assembly record: an assembly is currently promoted into the case.
+ * Written on a successful merge (for a case base: restore-first, then recorded),
+ * and cleared on a backup restore. `plan` is the reduced plan (order + interfaces
+ * + transforms) that reproduces the merge; `baseIsCase` is true when order[0] was
+ * the project case mesh (so a pre-merge backup exists and undo-all is offered).
+ *
+ * Local mirror of the additive `@dive/shared` type: the backend owns the shared
+ * definition and the web contract mirrors it here (like PartTransform / MeshInterface).
+ */
+export interface AppliedAssembly {
+  plan: MergePlan;
+  baseIsCase: boolean;
+  /** ISO 8601 timestamp of when the assembly was promoted. */
+  appliedAt: string;
+}
+
 /** `GET /projects/:id/meshes` response. */
 export interface MeshesResponse {
   meshes: MeshSource[];
+}
+
+/** `GET /projects/:id/meshes/assembly` response (C1). */
+export interface AssemblyResponse {
+  assembly: AppliedAssembly | null;
 }
 
 /** `POST /projects/:id/meshes/import` response. */
@@ -503,6 +525,15 @@ export interface AutoPatchMeshSourceResponse {
 
 /** `POST /projects/:id/meshes/:meshId/patches/rename` response. */
 export interface RenameMeshSourcePatchResponse {
+  mesh: MeshSource;
+  meshes: MeshSource[];
+}
+
+/**
+ * `PUT /projects/:id/meshes/:meshId/patches` response (C4): a batch rename+retype
+ * of a library source's boundary patches (boundary-only; sources have no 0/ fields).
+ */
+export interface EditMeshSourcePatchesResponse {
   mesh: MeshSource;
   meshes: MeshSource[];
 }

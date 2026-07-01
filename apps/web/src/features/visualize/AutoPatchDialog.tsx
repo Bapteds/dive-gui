@@ -15,8 +15,9 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/sonner';
 import { ApiError } from '@/lib/api/client';
-import type { AutoPatchResult } from '@/lib/api/types';
+import { useAutoPatchMeshSource } from '@/features/projects/useMeshes';
 import { useAutoPatch } from './useMesh';
+import type { MeshTarget } from './MeshViewer';
 
 /**
  * AutoPatchDialog - run OpenFOAM `autoPatch <featureAngle> -overwrite` from the
@@ -43,21 +44,35 @@ const schema = z.object({
 });
 type Values = z.infer<typeof schema>;
 
+/** The captured fields shown when an autoPatch run fails (case or source share these). */
+type AutoPatchRunFailure = {
+  command: string;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+};
+
 export function AutoPatchDialog({
   projectId,
+  target,
   open,
   onClose,
   onPatched,
 }: {
   projectId: string;
+  /** Which mesh to auto-patch: the project case mesh or a library source. */
+  target: MeshTarget;
   open: boolean;
   onClose: () => void;
   /** Called after a successful run (the boundary changed), before closing. */
   onPatched?: () => void;
 }) {
-  const autoPatch = useAutoPatch(projectId);
+  // Both mutations exist every render (stable hook order); the active target runs.
+  // The case path rewrites the boundary in place; a source re-patches its own copy.
+  const caseAuto = useAutoPatch(projectId);
+  const sourceAuto = useAutoPatchMeshSource(projectId);
   // The failed-run report shown inline (command + exit code + logs), or null.
-  const [failure, setFailure] = useState<AutoPatchResult | null>(null);
+  const [failure, setFailure] = useState<AutoPatchRunFailure | null>(null);
 
   const {
     register,
@@ -78,17 +93,30 @@ export function AutoPatchDialog({
     }
   }, [open, reset]);
 
-  const running = autoPatch.isPending;
+  const running = target.kind === 'source' ? sourceAuto.isPending : caseAuto.isPending;
 
   const onSubmit = handleSubmit(async (values) => {
     setFailure(null);
     try {
-      const result = await autoPatch.mutateAsync(values.featureAngle);
-      if (!result.success) {
-        setFailure(result);
-        return;
+      let count: number;
+      if (target.kind === 'source') {
+        const res = await sourceAuto.mutateAsync({
+          meshId: target.meshId,
+          featureAngle: values.featureAngle,
+        });
+        if (!res.result.success) {
+          setFailure(res.result);
+          return;
+        }
+        count = res.mesh?.patches.length ?? 0;
+      } else {
+        const result = await caseAuto.mutateAsync(values.featureAngle);
+        if (!result.success) {
+          setFailure(result);
+          return;
+        }
+        count = result.patches.length;
       }
-      const count = result.patches.length;
       toast.success(
         `Boundaries patched at ${values.featureAngle}°. ${count} patch${count === 1 ? '' : 'es'} now in the mesh.`,
       );
@@ -175,7 +203,7 @@ export function AutoPatchDialog({
  * Only the concise headline carries `role="alert"`, so a screen reader announces
  * "autoPatch failed" rather than reading the entire (possibly long) stderr.
  */
-function AutoPatchFailure({ result }: { result: AutoPatchResult }) {
+function AutoPatchFailure({ result }: { result: AutoPatchRunFailure }) {
   const log = (result.stderr || result.stdout || '').trim();
   return (
     <div className="flex flex-col gap-2 rounded-sm border border-danger/40 bg-danger-tint px-3 py-3">

@@ -22,6 +22,7 @@ import {
 import { PartsRail, type BaseSource } from './PartsRail';
 import { PlacementPanel } from './PlacementPanel';
 import { AssemblyMergeDialog, type InterfaceDraft } from './AssemblyMergeDialog';
+import { AssemblyManagePanel } from './AssemblyManagePanel';
 import { eulerDegFromQuat, quatFromEulerDeg, type HitTarget } from './placement';
 
 /**
@@ -32,7 +33,7 @@ import { eulerDegFromQuat, quatFromEulerDeg, type HitTarget } from './placement'
  *                        base first, the rest selectable. The base can be the
  *                        project's EXISTING case mesh or the first library part.
  *   Live canvas (center) - the base + every added part at its imported position +
- *                        the active orange ghost, with an optional 6-DOF gizmo.
+ *                        the active blue ghost, with an optional 6-DOF gizmo.
  *   Placement panel (right) - couple the active part's mating patch to a base
  *                        patch (this does NOT move it), and, only if it is
  *                        misaligned, opt in to reposition it.
@@ -450,6 +451,10 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
             </span>
           </p>
         )}
+
+        {/* Disassemble: manage / take apart the currently-applied assembly (only
+            rendered once an assembly with at least one added part is applied). */}
+        <AssemblyManagePanel projectId={projectId} />
       </div>
 
       {/* Three panes. Stacks on small screens; a strict grid at lg+. */}

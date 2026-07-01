@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -43,6 +44,14 @@ import {
   useRestoreBackup,
   useSaveBackup,
 } from './useMesh';
+import {
+  meshSourceEdgesQueryKey,
+  meshSourceGeometryQueryKey,
+  meshSourceManifestQueryKey,
+  useMeshSourceEdgesQuery,
+  useMeshSourceGeometryQuery,
+  useMeshSourceManifestQuery,
+} from '@/features/assemble/useAssembly';
 
 /**
  * MeshViewer - the "Visualize" tab body: a patch table (left) and an interactive
@@ -81,7 +90,20 @@ function detectWebgl(): boolean {
   }
 }
 
-export function MeshViewer({ projectId }: { projectId: string }) {
+/**
+ * Which mesh the viewer shows: the project CASE mesh (constant/polyMesh) or a
+ * single LIBRARY source (an imported part). The Visualize picker owns this state
+ * and the viewer wires its data to the matching hook set.
+ */
+export type MeshTarget = { kind: 'case' } | { kind: 'source'; meshId: string; name: string };
+
+export function MeshViewer({
+  projectId,
+  target = { kind: 'case' },
+}: {
+  projectId: string;
+  target?: MeshTarget;
+}) {
   const webglAvailable = useMemo(detectWebgl, []);
   const [selected, setSelected] = useState<string | null>(null);
   // Whether the "edit names & types" overlay is open.
@@ -91,24 +113,53 @@ export function MeshViewer({ projectId }: { projectId: string }) {
   // Whether the destructive "restore backup" confirmation is open.
   const [restoreOpen, setRestoreOpen] = useState(false);
 
-  const manifest = useMeshManifestQuery(projectId);
+  const queryClient = useQueryClient();
+  const isCase = target.kind === 'case';
+  const meshId = target.kind === 'source' ? target.meshId : null;
+
+  // Both hook sets are called EVERY render (React Query needs a stable hook order)
+  // and gated with `enabled` so only the active target actually fetches: the case
+  // target reads the Visualize hooks; a source reads the per-source Assemble hooks
+  // (keyed by meshId). The selected result is then used interchangeably below.
+  const caseManifest = useMeshManifestQuery(projectId, isCase);
+  const sourceManifest = useMeshSourceManifestQuery(projectId, meshId, !isCase);
+  const manifest = isCase ? caseManifest : sourceManifest;
+
   const patches = manifest.data?.patches ?? [];
   const hasPatches = patches.length > 0;
 
   // Geometry + edges are fetched only once the build succeeded, there are patches
   // to show, and the browser can actually render them.
   const viewerEnabled = manifest.isSuccess && hasPatches && webglAvailable;
-  const geometry = useMeshGeometryQuery(projectId, viewerEnabled);
-  const edges = useMeshEdgesQuery(projectId, viewerEnabled);
+  const caseGeometry = useMeshGeometryQuery(projectId, isCase && viewerEnabled);
+  const sourceGeometry = useMeshSourceGeometryQuery(projectId, meshId, !isCase && viewerEnabled);
+  const geometry = isCase ? caseGeometry : sourceGeometry;
+
+  const caseEdges = useMeshEdgesQuery(projectId, isCase && viewerEnabled);
+  const sourceEdges = useMeshSourceEdgesQuery(projectId, meshId, !isCase && viewerEnabled);
+  const edges = isCase ? caseEdges : sourceEdges;
+
+  // Rebuild + backup are CASE-only: the case has a rebuild endpoint + a backup
+  // slot; a source has neither and rebuilds by dropping its cached render.
   const rebuild = useRebuildMesh(projectId);
-  // The backup slot exists only for a real mesh; gate its query on a built manifest.
-  const backup = useMeshBackupQuery(projectId, manifest.isSuccess);
+  const backup = useMeshBackupQuery(projectId, isCase && caseManifest.isSuccess);
   const saveBackup = useSaveBackup(projectId);
   const restore = useRestoreBackup(projectId);
+  const rebuilding = isCase ? rebuild.isPending : false;
 
   const handleRebuild = () => {
     setSelected(null);
-    rebuild.mutate();
+    if (isCase) {
+      rebuild.mutate();
+      return;
+    }
+    if (meshId) {
+      // A source has no rebuild endpoint: drop its cached render so the enabled
+      // queries refetch and the server rebuilds the viz on staleness.
+      queryClient.removeQueries({ queryKey: meshSourceManifestQueryKey(projectId, meshId) });
+      queryClient.removeQueries({ queryKey: meshSourceGeometryQueryKey(projectId, meshId) });
+      queryClient.removeQueries({ queryKey: meshSourceEdgesQueryKey(projectId, meshId) });
+    }
   };
 
   const handleSaveBackup = () => {
@@ -196,7 +247,8 @@ export function MeshViewer({ projectId }: { projectId: string }) {
             )}
           </div>
 
-          {manifest.isSuccess && (
+          {/* Backup/restore is case-only: a library source has no backup slot. */}
+          {isCase && manifest.isSuccess && (
             <BackupBar
               info={backup.data ?? null}
               loading={backup.isPending}
@@ -220,13 +272,14 @@ export function MeshViewer({ projectId }: { projectId: string }) {
             selected={selected}
             onSelect={setSelected}
             onRebuild={handleRebuild}
-            rebuilding={rebuild.isPending}
+            rebuilding={rebuilding}
           />
         </div>
       </section>
 
       <EditPatchesDialog
         projectId={projectId}
+        target={target}
         open={editOpen}
         patches={patches}
         onClose={() => setEditOpen(false)}
@@ -241,6 +294,7 @@ export function MeshViewer({ projectId }: { projectId: string }) {
 
       <AutoPatchDialog
         projectId={projectId}
+        target={target}
         open={autoPatchOpen}
         onClose={() => setAutoPatchOpen(false)}
         // autoPatch replaced the patches with auto-generated ones, so the old
@@ -310,7 +364,7 @@ function BackupBar({
 }) {
   const status = (() => {
     if (loading) return 'Checking backup…';
-    if (!info) return 'No backup yet — created automatically on your first edit.';
+    if (!info) return 'No backup yet. Created automatically on your first edit.';
     const when = backupTimeFormatter.format(new Date(info.updatedAt));
     return info.kind === 'original' ? `Original saved ${when}` : `Backup saved ${when}`;
   })();

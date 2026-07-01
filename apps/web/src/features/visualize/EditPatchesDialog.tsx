@@ -13,7 +13,9 @@ import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/sonner';
 import { ApiError } from '@/lib/api/client';
 import type { MeshPatch, MeshPatchEdit, MeshPatchType } from '@/lib/api/types';
+import { useEditMeshSourcePatches } from '@/features/projects/useMeshes';
 import { useEditPatches } from './useMesh';
+import type { MeshTarget } from './MeshViewer';
 
 /**
  * EditPatchesDialog - edit ALL boundary patch names and types in one overlay,
@@ -41,12 +43,15 @@ interface Row {
 
 export function EditPatchesDialog({
   projectId,
+  target,
   open,
   patches,
   onClose,
   onSaved,
 }: {
   projectId: string;
+  /** Which mesh is being edited: the project case mesh or a library source. */
+  target: MeshTarget;
   open: boolean;
   /** Current patches (from the manifest) to seed the editable rows. */
   patches: MeshPatch[];
@@ -54,7 +59,12 @@ export function EditPatchesDialog({
   /** Called after a successful save with the (oldName -> newName) renames. */
   onSaved: (renames: Array<{ from: string; to: string }>) => void;
 }) {
-  const edit = useEditPatches(projectId);
+  // Both mutations are created every render (stable hook order); the active target
+  // picks which one actually runs. The case path also rewrites the 0/ fields; a
+  // source is boundary-only (C4).
+  const caseEdit = useEditPatches(projectId);
+  const sourceEdit = useEditMeshSourcePatches(projectId);
+  const pending = target.kind === 'source' ? sourceEdit.isPending : caseEdit.isPending;
   const [rows, setRows] = useState<Row[]>([]);
 
   // Re-seed the rows from the live patches each time the overlay opens.
@@ -113,7 +123,11 @@ export function EditPatchesDialog({
     }
 
     try {
-      await edit.mutateAsync(edits);
+      if (target.kind === 'source') {
+        await sourceEdit.mutateAsync({ meshId: target.meshId, edits });
+      } else {
+        await caseEdit.mutateAsync(edits);
+      }
       const renames = edits
         .filter((e) => e.to !== e.from)
         .map((e) => ({ from: e.from, to: e.to }));
@@ -137,7 +151,7 @@ export function EditPatchesDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next && !edit.isPending) onClose();
+        if (!next && !pending) onClose();
       }}
     >
       <DialogContent className="max-w-[44rem] overscroll-contain">
@@ -176,7 +190,7 @@ export function EditPatchesDialog({
                         name={`patch-name-${index}`}
                         value={row.name}
                         onChange={(event) => setName(index, event.target.value)}
-                        disabled={edit.isPending}
+                        disabled={pending}
                         spellCheck={false}
                         autoComplete="off"
                         translate="no"
@@ -187,7 +201,7 @@ export function EditPatchesDialog({
                       <TypeSelect
                         value={row.type}
                         from={row.from}
-                        disabled={edit.isPending}
+                        disabled={pending}
                         onChange={(type) => setType(index, type)}
                       />
                     </div>
@@ -203,10 +217,10 @@ export function EditPatchesDialog({
           </div>
 
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose} disabled={edit.isPending}>
+            <Button type="button" variant="secondary" onClick={onClose} disabled={pending}>
               Cancel
             </Button>
-            <Button type="submit" loading={edit.isPending}>
+            <Button type="submit" loading={pending}>
               Save changes
             </Button>
           </DialogFooter>

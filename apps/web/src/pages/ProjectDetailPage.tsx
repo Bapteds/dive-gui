@@ -62,11 +62,13 @@ import { useCaseFilesQuery } from '@/features/projects/useCaseFiles';
 import { useMeshesQuery } from '@/features/projects/useMeshes';
 
 /**
- * The 3D viewer pulls in three.js, so it is code-split and only loaded when the
- * user opens the Visualize tab (never on the initial detail render).
+ * The Visualize panel (mesh picker + the three.js viewer) is code-split and only
+ * loaded when the user opens the Visualize tab (never on the initial detail render).
  */
-const MeshViewer = lazy(() =>
-  import('@/features/visualize/MeshViewer').then((module) => ({ default: module.MeshViewer })),
+const VisualizePanel = lazy(() =>
+  import('@/features/visualize/VisualizePanel').then((module) => ({
+    default: module.VisualizePanel,
+  })),
 );
 
 /**
@@ -167,10 +169,11 @@ export function ProjectDetailPage() {
 }
 
 /**
- * The Detail / Visualize tab strip and bodies. "Visualize" is gated on the case
- * having an imported mesh (constant/polyMesh/): until then it is disabled, with a
- * tooltip explaining how to enable it. Opening it swaps the whole detail body for
- * the lazy-loaded 3D viewer, which fills the pinned region at lg+.
+ * The Detail / Visualize tab strip and bodies. "Visualize" is enabled once the
+ * case has an imported mesh (constant/polyMesh/) OR the library has at least one
+ * part: until then it is disabled, with a tooltip explaining how to enable it.
+ * Opening it swaps the whole detail body for the lazy-loaded Visualize panel
+ * (mesh picker + 3D viewer), which fills the pinned region at lg+.
  */
 type ProjectView = 'detail' | 'visualize' | 'assemble' | 'solver' | 'export';
 
@@ -194,7 +197,7 @@ function ProjectTabs({ project }: { project: Project }) {
           <Info strokeWidth={1.75} aria-hidden="true" />
           Detail
         </TabsTrigger>
-        <VisualizeTab disabled={!hasPolyMesh} />
+        <VisualizeTab disabled={!(hasPolyMesh || hasSources)} />
         <AssembleTab disabled={!hasSources} />
         <SolverTabTrigger disabled={!hasPolyMesh} />
         <ExportTabTrigger disabled={!hasPolyMesh} />
@@ -213,11 +216,11 @@ function ProjectTabs({ project }: { project: Project }) {
         value="visualize"
         className="mt-0 data-[state=active]:flex lg:min-h-0 lg:flex-1"
       >
-        {/* Mount the viewer only when the tab is open: it triggers the server
+        {/* Mount the panel only when the tab is open: it triggers the server
             build, so it must not run while the user is on Detail. */}
         {view === 'visualize' && (
           <Suspense fallback={<ViewerLoading />}>
-            <MeshViewer projectId={project.id} />
+            <VisualizePanel projectId={project.id} />
           </Suspense>
         )}
       </TabsContent>
@@ -288,7 +291,7 @@ function VisualizeTab({ disabled }: { disabled: boolean }) {
           {trigger}
         </span>
       </TooltipTrigger>
-      <TooltipContent>Import a polyMesh to enable 3D</TooltipContent>
+      <TooltipContent>Import a polyMesh or a mesh part to enable 3D</TooltipContent>
     </Tooltip>
   );
 }

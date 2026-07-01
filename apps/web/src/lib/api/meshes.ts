@@ -1,7 +1,10 @@
 import { ApiError, apiClient } from './client';
 import type {
+  AppliedAssembly,
+  AssemblyResponse,
   AutoPatchMeshSourceResponse,
   DeleteMeshResponse,
+  EditMeshSourcePatchesResponse,
   ImportMeshResponse,
   MergePlan,
   MergePlanResponse,
@@ -10,6 +13,7 @@ import type {
   MeshManifest,
   MeshManifestResponse,
   MeshPatch,
+  MeshPatchEdit,
   MeshPatchesResponse,
   MeshSource,
   MeshesResponse,
@@ -61,6 +65,22 @@ export async function renameMeshSourcePatch(
   return apiClient.post<RenameMeshSourcePatchResponse>(
     `/projects/${projectId}/meshes/${meshId}/patches/rename`,
     { from, to },
+  );
+}
+
+/**
+ * Batch-edit a library source's boundary patches (rename + retype) in one pass
+ * (C4). Sources have no 0/ fields, so this is boundary-only: no field scan, no
+ * backup. Returns the refreshed source and the whole library.
+ */
+export async function editMeshSourcePatches(
+  projectId: string,
+  meshId: string,
+  edits: MeshPatchEdit[],
+): Promise<EditMeshSourcePatchesResponse> {
+  return apiClient.put<EditMeshSourcePatchesResponse>(
+    `/projects/${projectId}/meshes/${meshId}/patches`,
+    { edits },
   );
 }
 
@@ -137,6 +157,15 @@ export async function runMerge(projectId: string, plan: MergePlan): Promise<Merg
 export async function getMergePlan(projectId: string): Promise<MergePlan | null> {
   const data = await apiClient.get<MergePlanResponse>(`/projects/${projectId}/meshes/plan`);
   return data.plan;
+}
+
+/**
+ * Read the currently-applied assembly record (C1), or null when no assembly is
+ * promoted into the case. Drives the Disassemble panel (remove-part / undo-all).
+ */
+export async function getAssembly(projectId: string): Promise<AppliedAssembly | null> {
+  const data = await apiClient.get<AssemblyResponse>(`/projects/${projectId}/meshes/assembly`);
+  return data.assembly;
 }
 
 /** Persist a merge-plan draft (without running it). */

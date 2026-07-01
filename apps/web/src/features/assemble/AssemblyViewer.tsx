@@ -21,7 +21,8 @@ import {
  * It renders the whole assembly in ONE scene: the base part (opaque neutral, the
  * only pickable body), every other added part (opaque blue tint, at its
  * transform - identity = its imported position by default), and the part being
- * worked on (semi-transparent ORANGE ghost, DoubleSide).
+ * worked on (semi-transparent BLUE ghost, DoubleSide). Colours: orange selection
+ * (the picked base patch), blue ghost (the part being placed).
  *
  * PLACEMENT IS OPTIONAL. A part stays at its imported world coordinates unless
  * the user opts to reposition it. When they do, a TransformControls gizmo drives
@@ -66,7 +67,7 @@ function detectWebgl(): boolean {
 
 /** Squared pointer-move threshold (px^2) below which a drag still counts as a click. */
 const CLICK_DRAG_THRESHOLD_SQ = 36;
-/** Opacity of the semi-transparent orange preview ghost. */
+/** Opacity of the semi-transparent blue preview ghost. */
 const PREVIEW_OPACITY = 0.35;
 
 /** A part with its loaded geometry, as handed to the viewer. */
@@ -386,14 +387,14 @@ export function AssemblyViewer({
     applyGizmoRef.current = applyGizmo;
 
     /**
-     * Highlight the picked base patch in PRIMARY blue and (re)compute the
+     * Highlight the picked base patch in ACCENT orange and (re)compute the
      * optional "align to this face" transform for the active part, emitting it (or
      * null) so the panel can offer / disable that helper.
      */
     const applyHighlightAlign = () => {
       const { matingPatch: patch, target: hit } = inputsRef.current;
       basePatchMaterials.forEach((material, name) => {
-        material.color.copy(name === hit?.patchName ? primary : neutral);
+        material.color.copy(name === hit?.patchName ? accent : neutral);
         material.needsUpdate = true;
       });
 
@@ -446,7 +447,7 @@ export function AssemblyViewer({
           contentRoot.add(handles.group);
         }
 
-        // The active ghost (semi-transparent orange). Its group keeps
+        // The active ghost (semi-transparent blue). Its group keeps
         // matrixAutoUpdate ON so the gizmo and the numeric fields can drive it.
         if (data.active) {
           const loaded = await parseGlb(loader, data.active.geometry);
@@ -455,7 +456,7 @@ export function AssemblyViewer({
             loaded,
             () =>
               new THREE.MeshLambertMaterial({
-                color: accent.clone(),
+                color: primary.clone(),
                 side: THREE.DoubleSide,
                 transparent: true,
                 opacity: PREVIEW_OPACITY,
@@ -619,12 +620,12 @@ export function AssemblyViewer({
       <div className="pointer-events-none absolute left-3 top-3 flex max-w-[16rem] items-start gap-2 rounded-md border border-border bg-surface/90 px-2.5 py-1.5 text-xs text-text-secondary shadow-sm backdrop-blur-sm">
         {reposition ? (
           <>
-            <Move3d className="mt-px size-3.5 shrink-0 text-accent" strokeWidth={1.75} aria-hidden="true" />
+            <Move3d className="mt-px size-3.5 shrink-0 text-primary" strokeWidth={1.75} aria-hidden="true" />
             <span className="min-w-0">Drag the gizmo to {gizmoMode === 'rotate' ? 'rotate' : 'move'} the part.</span>
           </>
         ) : target ? (
           <>
-            <Crosshair className="mt-px size-3.5 shrink-0 text-primary" strokeWidth={1.75} aria-hidden="true" />
+            <Crosshair className="mt-px size-3.5 shrink-0 text-accent" strokeWidth={1.75} aria-hidden="true" />
             <span className="min-w-0">
               Base patch:{' '}
               <code className="font-mono text-text" translate="no">
@@ -634,7 +635,7 @@ export function AssemblyViewer({
           </>
         ) : (
           <>
-            <Link2 className="mt-px size-3.5 shrink-0 text-primary" strokeWidth={1.75} aria-hidden="true" />
+            <Link2 className="mt-px size-3.5 shrink-0 text-accent" strokeWidth={1.75} aria-hidden="true" />
             <span className="min-w-0">Click a base face to set the patch it couples to.</span>
           </>
         )}

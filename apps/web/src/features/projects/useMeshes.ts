@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   autoPatchMeshSource,
   deleteMesh,
+  editMeshSourcePatches,
+  getAssembly,
   getMergePlan,
   importMeshFile,
   importMeshFolder,
@@ -10,16 +12,32 @@ import {
   renameMeshSourcePatch,
   runMerge,
 } from '@/lib/api/meshes';
+import { restoreMeshBackup } from '@/lib/api/projects';
 import type {
+  AppliedAssembly,
   AutoPatchMeshSourceResponse,
   DeleteMeshResponse,
+  EditMeshSourcePatchesResponse,
   ImportMeshResponse,
   MergePlan,
   MergeRunResult,
+  MeshManifest,
+  MeshPatchEdit,
   MeshSource,
   RenameMeshSourcePatchResponse,
 } from '@/lib/api/types';
 import { caseFilesQueryKey } from '@/features/projects/useCaseFiles';
+import {
+  meshBackupQueryKey,
+  meshEdgesQueryKey,
+  meshGeometryQueryKey,
+  meshManifestQueryKey,
+} from '@/features/visualize/useMesh';
+import {
+  meshSourceEdgesQueryKey,
+  meshSourceGeometryQueryKey,
+  meshSourceManifestQueryKey,
+} from '@/features/assemble/useAssembly';
 
 /**
  * useMeshes - React Query hooks for a project's mesh library and the merge
@@ -37,6 +55,10 @@ export const meshesQueryKey = (projectId: string) => ['projects', projectId, 'me
 /** Query key for a project's last-saved merge plan. */
 export const mergePlanQueryKey = (projectId: string) =>
   ['projects', projectId, 'mergePlan'] as const;
+
+/** Query key for a project's currently-applied assembly record (or null). */
+export const assemblyQueryKey = (projectId: string) =>
+  ['projects', projectId, 'assembly'] as const;
 
 /** Load the project's mesh library (sources + their patches). */
 export function useMeshesQuery(projectId: string) {
@@ -128,6 +150,96 @@ export function useRunMerge(projectId: string) {
         queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
         queryClient.removeQueries({ queryKey: [...caseFilesQueryKey(projectId), 'content'] });
       }
+    },
+  });
+}
+
+/**
+ * Batch-edit a library source's boundary patches (rename + retype) in one pass
+ * (C4). The source boundary changed, so write the refreshed library into the
+ * cache and drop that source's cached render (manifest/glb/edges) so the Visualize
+ * viewer rebuilds it on the next fetch.
+ */
+export function useEditMeshSourcePatches(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<EditMeshSourcePatchesResponse, Error, { meshId: string; edits: MeshPatchEdit[] }>({
+    mutationFn: ({ meshId, edits }) => editMeshSourcePatches(projectId, meshId, edits),
+    onSuccess: (result, { meshId }) => {
+      queryClient.setQueryData(meshesQueryKey(projectId), result.meshes);
+      queryClient.removeQueries({ queryKey: meshSourceManifestQueryKey(projectId, meshId) });
+      queryClient.removeQueries({ queryKey: meshSourceGeometryQueryKey(projectId, meshId) });
+      queryClient.removeQueries({ queryKey: meshSourceEdgesQueryKey(projectId, meshId) });
+    },
+  });
+}
+
+/**
+ * Read the currently-applied assembly record (C1), or null. Drives the
+ * Disassemble panel: which added parts are applied, whether the base is the case
+ * (so a pre-merge backup exists and undo-all is offered).
+ */
+export function useAssemblyQuery(projectId: string) {
+  return useQuery<AppliedAssembly | null>({
+    queryKey: assemblyQueryKey(projectId),
+    queryFn: () => getAssembly(projectId),
+  });
+}
+
+/**
+ * Refresh the outputs common to a re-apply and an undo (everything except the
+ * case manifest + case tree, which each caller owns): drop the cached case
+ * geometry/edges + stale file-content, and invalidate the library, saved plan,
+ * and assembly record so the Disassemble panel and viewers rebuild.
+ */
+function invalidateAssemblyOutputs(
+  queryClient: ReturnType<typeof useQueryClient>,
+  projectId: string,
+): void {
+  queryClient.removeQueries({ queryKey: meshGeometryQueryKey(projectId) });
+  queryClient.removeQueries({ queryKey: meshEdgesQueryKey(projectId) });
+  queryClient.removeQueries({ queryKey: [...caseFilesQueryKey(projectId), 'content'] });
+  void queryClient.invalidateQueries({ queryKey: meshesQueryKey(projectId) });
+  void queryClient.invalidateQueries({ queryKey: mergePlanQueryKey(projectId) });
+  void queryClient.invalidateQueries({ queryKey: assemblyQueryKey(projectId) });
+}
+
+/**
+ * Re-apply a REDUCED assembly plan to remove a part: runMerge restores the
+ * pre-merge case first (guarded on the assembly record), then rebuilds the case
+ * minus the dropped part. Resolves with the report even when the pipeline fails
+ * (result.success === false); on success, refresh the case files, the Visualize
+ * render, the library, the saved plan, and the assembly record.
+ */
+export function useReapplyAssembly(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<MergeRunResult, Error, MergePlan>({
+    mutationFn: (plan) => runMerge(projectId, plan),
+    onSuccess: (result) => {
+      if (!result.success) return;
+      // The combined mesh changed: take the fresh tree, drop the case render so
+      // the Visualize viewer rebuilds it on the next fetch.
+      queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
+      queryClient.removeQueries({ queryKey: meshManifestQueryKey(projectId) });
+      invalidateAssemblyOutputs(queryClient, projectId);
+    },
+  });
+}
+
+/**
+ * Undo the whole assembly: restore the case (mesh + 0/ fields) from the pre-merge
+ * backup, which the API also uses to clear the assembly record (C3). The restore
+ * returns the fresh manifest (kept in cache); refresh the same outputs as a
+ * re-apply, plus the case tree and the backup-slot status.
+ */
+export function useUndoAssembly(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<MeshManifest>({
+    mutationFn: () => restoreMeshBackup(projectId),
+    onSuccess: (manifest) => {
+      queryClient.setQueryData(meshManifestQueryKey(projectId), manifest);
+      void queryClient.invalidateQueries({ queryKey: caseFilesQueryKey(projectId) });
+      invalidateAssemblyOutputs(queryClient, projectId);
+      void queryClient.invalidateQueries({ queryKey: meshBackupQueryKey(projectId) });
     },
   });
 }
