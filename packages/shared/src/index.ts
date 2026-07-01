@@ -144,10 +144,12 @@ export type MeshPatchType = (typeof MESH_PATCH_TYPES)[number];
  * rewrites its 0/ boundaryField entries to the same type; when set away from one
  * (to patch/wall), a leftover constraint BC is reset to a valid generic default.
  *
- * `nonConformalCyclic` / `nonConformalError` are the two constraint types the
- * OpenFOAM.org v12 `createNonConformalCouples` utility adds when it couples two
- * touching interface patches (Assembly v2): a field's boundaryField entry for one
- * of these patches must carry that exact type, so they belong here.
+ * `cyclicAMI` is the constraint type the Assembly non-conformal couple assigns
+ * when it retypes two touching interface patches IN PLACE (Assembly v3, ESI
+ * OpenFOAM v2406): a field's boundaryField entry for such a patch must carry that
+ * exact type, so it belongs here. (The org-only `nonConformalCyclic` /
+ * `nonConformalError` types are gone — that utility does not exist in ESI and the
+ * pipeline no longer produces them.)
  */
 export const CONSTRAINT_PATCH_TYPES = [
   'empty',
@@ -156,8 +158,6 @@ export const CONSTRAINT_PATCH_TYPES = [
   'wedge',
   'cyclic',
   'cyclicAMI',
-  'nonConformalCyclic',
-  'nonConformalError',
   'processor',
 ] as const;
 
@@ -190,16 +190,17 @@ export const MESHES_DIRNAME = 'meshes';
  *   - prepare:                  stage a source as a case + prefix its patches (collision-free)
  *   - mergeMeshes:              combine an additional mesh into the master (OpenFOAM mergeMeshes)
  *   - stitchMesh:               conformally FUSE a chosen patch pair into an internal interface
- *   - createNonConformalCouples: NON-conformally COUPLE a chosen patch pair, keeping both parts'
- *                               cells + patches (v12-native; Assembly v2 default)
- *   - cleanup:                  drop the zero-face patches stitchMesh leaves behind (skipped for NCC)
+ *   - nonConformalCouple:       NON-conformally COUPLE a chosen patch pair by retyping both
+ *                               interface patches to cyclicAMI in place (keeps both parts'
+ *                               cells + patch names; Assembly default, ESI-compatible)
+ *   - cleanup:                  drop the zero-face patches stitchMesh leaves behind (skipped for a couple)
  *   - checkMesh:                validate the combined mesh
  */
 export const MERGE_STEP_KINDS = [
   'prepare',
   'mergeMeshes',
   'stitchMesh',
-  'createNonConformalCouples',
+  'nonConformalCouple',
   'cleanup',
   'checkMesh',
 ] as const;
@@ -241,14 +242,21 @@ export const MERGE_BASE_CASE = '__case__';
 
 /**
  * How a pair of touching interface patches is connected in the merged mesh:
- *   - 'nonConformalCyclic': the OpenFOAM.org v12-native NON-conformal coupling
- *     (`createNonConformalCouples`). KEEPS both parts' cells + patches and adds a
- *     coupled `nonConformalCyclic_on_*` pair; flow interpolates across the
- *     interface with no node coincidence required — only geometric overlap.
+ *   - 'nonConformal': a NON-conformal cyclicAMI coupling. After the meshes are
+ *     combined, the two interface patches are retyped IN PLACE to `cyclicAMI`
+ *     (cross-linked via `neighbourPatch`, `transform noOrdering`), KEEPING both
+ *     parts' cells + patch names; the AMI weights are computed by the solver at
+ *     runtime, so only geometric overlap (not node coincidence) is required. This
+ *     is a pure textual boundary edit — no OpenFOAM CLI — so it works on any
+ *     flavour (the deploy target is ESI OpenFOAM v2406).
  *   - 'stitch': the legacy CONFORMAL fuse (`stitchMesh`) — turns two coincident
  *     patches into one internal interface (node coincidence required).
+ *
+ * The Assembly default is 'nonConformal'. The pre-v3 literal 'nonConformalCyclic'
+ * is still accepted on input and normalized to 'nonConformal' (back-compat for
+ * saved plans).
  */
-export type InterfaceCoupling = 'nonConformalCyclic' | 'stitch';
+export type InterfaceCoupling = 'nonConformal' | 'stitch';
 
 /**
  * One interface to make between two parts in a merge: connect patch `aPatch` of
@@ -261,7 +269,7 @@ export interface MeshInterface {
   aPatch: string;
   bMeshId: string;
   bPatch: string;
-  /** Coupling mechanism; the Assembly v2 default is 'nonConformalCyclic'. */
+  /** Coupling mechanism; the Assembly default is 'nonConformal'. */
   coupling: InterfaceCoupling;
 }
 

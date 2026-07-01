@@ -671,9 +671,12 @@ function parseFieldBoundaryEntries(inner: string): FieldBoundaryEntry[] {
  * (so e.g. an `inlet { type fixedValue; … }` survives), a stale plain entry whose
  * patch is gone is dropped, a quoted/regex group entry is always kept (it may
  * match several patches), and a generic default entry is ADDED only for a mesh
- * patch that has no matching entry yet — constraint types (incl. the
- * nonConformalCyclic / nonConformalError couples that Assembly v2's
- * createNonConformalCouples adds) resolved via defaultFieldBc. Returns the content
+ * patch that has no matching entry yet — constraint types resolved via
+ * defaultFieldBc. A kept entry whose patch is now a CONSTRAINT type (e.g. a base
+ * `outlet` the Assembly non-conformal couple retyped in place to cyclicAMI) has
+ * its field BC RESET to that exact type, because the solver requires a constraint
+ * patch's field BC to match its geometric type — a stale non-matching BC (like a
+ * leftover zeroGradient) would otherwise error at runtime. Returns the content
  * unchanged when the file has no boundaryField. Counterpart to rebuildFieldBoundary
  * (which DISCARDS the existing BCs): used when merging onto the project case mesh
  * so the base's boundary conditions are not reset to generic defaults.
@@ -690,6 +693,7 @@ export function mergeFieldBoundary(
   const inner = content.slice(span.open + 1, span.close);
   const existing = parseFieldBoundaryEntries(inner);
   const patchNames = new Set(patches.map((patch) => patch.name));
+  const typeByName = new Map(patches.map((patch) => [patch.name, patch.type] as const));
 
   const kept: string[] = [];
   const keptPlain = new Set<string>();
@@ -699,7 +703,17 @@ export function mergeFieldBoundary(
       continue;
     }
     if (patchNames.has(entry.name)) {
-      kept.push(entry.text);
+      const geometricType = typeByName.get(entry.name)!;
+      if ((CONSTRAINT_PATCH_TYPES as readonly string[]).includes(geometricType)) {
+        // The patch was (re)typed to a constraint type (e.g. cyclicAMI): the field
+        // BC must match it exactly, so reset the kept entry to the constraint type.
+        kept.push(`${entry.name}
+    {
+        type            ${defaultFieldBc(fieldName, geometricType)};
+    }`);
+      } else {
+        kept.push(entry.text);
+      }
       keptPlain.add(entry.name);
     }
     // else: a plain entry for a patch that no longer exists -> drop it.
@@ -899,6 +913,52 @@ export function setBoundaryPatchType(content: string, patch: string, type: strin
   const retyped = block.replace(/(\btype\s+)[A-Za-z_][A-Za-z0-9_]*(\s*;)/, `$1${type}$2`);
   const next = retyped !== block ? retyped : block.replace('{', `{\n        type            ${type};`);
   return content.slice(0, open) + next + content.slice(close + 1);
+}
+
+/**
+ * Retype ONE boundary patch to `cyclicAMI`, coupled to `neighbour`, in a
+ * constant/polyMesh/boundary file. The patch KEEPS its name, `nFaces` and
+ * `startFace` (its faces are untouched); its dictionary body is rewritten to a
+ * clean cyclicAMI block: `type cyclicAMI;` + `neighbourPatch <neighbour>;` +
+ * `transform noOrdering;`. Any prior `type` / `neighbourPatch` / `transform` /
+ * `matchTolerance` keys are replaced (the block is rebuilt from its face slice),
+ * so re-coupling an already-coupled patch is idempotent. Returns the content
+ * unchanged when the patch is absent. Pure text — no I/O.
+ */
+function setBoundaryPatchCyclicAmi(content: string, patch: string, neighbour: string): string {
+  const header = new RegExp(`(?:^|[\\s(])${escapeRegExp(patch)}\\s*\\{`, 'm');
+  const match = header.exec(content);
+  if (!match) return content;
+  const open = content.indexOf('{', match.index);
+  const close = matchBrace(content, open);
+  if (close < 0) return content;
+
+  const inner = content.slice(open + 1, close);
+  const nFaces = inner.match(/\bnFaces\s+(\d+)/);
+  const startFace = inner.match(/\bstartFace\s+(\d+)/);
+  const body =
+    `\n        type            cyclicAMI;` +
+    (nFaces ? `\n        nFaces          ${nFaces[1]};` : '') +
+    (startFace ? `\n        startFace       ${startFace[1]};` : '') +
+    `\n        neighbourPatch  ${neighbour};` +
+    `\n        transform       noOrdering;\n    `;
+  return content.slice(0, open + 1) + body + content.slice(close);
+}
+
+/**
+ * Couple two touching interface patches NON-conformally by retyping BOTH to
+ * `cyclicAMI` in a constant/polyMesh/boundary file, cross-linked via
+ * `neighbourPatch` (`aPatch` -> `bPatch` and back) with `transform noOrdering`.
+ * Both patches keep their names, `nFaces` and `startFace`; the AMI weights are
+ * computed by the solver at runtime, so only geometric overlap is required. This
+ * is the ESI-compatible, in-process replacement for the org-only
+ * `createNonConformalCouples` utility (Assembly v3). Pure text — no I/O, no CLI —
+ * so it is fully unit-testable and flavour-independent. Returns the content
+ * unchanged for any patch that is absent.
+ */
+export function setCyclicAmiPair(content: string, aPatch: string, bPatch: string): string {
+  const withA = setBoundaryPatchCyclicAmi(content, aPatch, bPatch);
+  return setBoundaryPatchCyclicAmi(withA, bPatch, aPatch);
 }
 
 /** Read the BC `type` of a patch entry inside a field's boundaryField, or null. */

@@ -83,23 +83,12 @@ function ok(spec: { command: string; args: string[] }, stdout: string): CommandR
  */
 const recordedCommands: Array<{ command: string; args: string[] }> = [];
 
-/** Pull the single path out of a -addCases list literal, e.g. ("/a/b") -> /a/b. */
-function addCasePath(addCasesArg: string): string {
-  return addCasesArg.match(/"([^"]+)"/)?.[1] ?? '';
-}
-
-/** Pull the two patch names out of a stitchMesh patchPairs literal "((a b))". */
-function patchPair(pairsArg: string): string[] {
-  return pairsArg.replace(/[()]/g, ' ').trim().split(/\s+/);
-}
-
-/** A runner that simulates the whole merge toolchain succeeding. */
+/** A runner that simulates the whole merge toolchain succeeding (ESI v2406 argv). */
 const mergeRunner: CommandRunner = async (spec) => {
   recordedCommands.push({ command: spec.command, args: [...spec.args] });
   if (spec.command === 'mergeMeshes') {
-    // v11+: ['-case', masterDir, '-addCases', '("<addDir>")', '-overwrite']
-    const masterDir = spec.args[spec.args.indexOf('-case') + 1];
-    const addDir = addCasePath(spec.args[spec.args.indexOf('-addCases') + 1]);
+    // ESI v2406: positional [masterDir, addDir, '-overwrite'] (no -addCases).
+    const [masterDir, addDir] = [spec.args[0], spec.args[1]];
     const masterB = path.join(masterDir, 'constant', 'polyMesh', 'boundary');
     const addB = path.join(addDir, 'constant', 'polyMesh', 'boundary');
     const merged = mergeBoundaries(await fs.readFile(masterB, 'utf8'), await fs.readFile(addB, 'utf8'));
@@ -107,10 +96,10 @@ const mergeRunner: CommandRunner = async (spec) => {
     return ok(spec, 'Merged meshes');
   }
   if (spec.command === 'stitchMesh') {
-    // v11+: ['((master slave))', '-overwrite', '-case', masterDir]
+    // ESI v2406: positional [a, b, '-partial', '-overwrite', '-case', masterDir].
     const caseDir = spec.args[spec.args.indexOf('-case') + 1];
     const boundaryAbs = path.join(caseDir, 'constant', 'polyMesh', 'boundary');
-    const stitched = zeroOutPatches(await fs.readFile(boundaryAbs, 'utf8'), patchPair(spec.args[0]));
+    const stitched = zeroOutPatches(await fs.readFile(boundaryAbs, 'utf8'), [spec.args[0], spec.args[1]]);
     await fs.writeFile(boundaryAbs, stitched);
     return ok(spec, 'Stitched patches');
   }
@@ -141,42 +130,16 @@ const checkMeshIssuesRunner: CommandRunner = async (spec) =>
     : mergeRunner(spec);
 
 /**
- * Append the four constraint patches OpenFOAM.org v12 createNonConformalCouples
- * adds for a coupled pair: it KEEPS the two originals and ADDS a nonConformalCyclic
- * pair (with faces) + a nonConformalError pair (nFaces 0 for a perfect overlap).
+ * ESI v2406 makes a non-conformal couple by an IN-PROCESS cyclicAMI retype of the
+ * two interface patches (openfoamCase.setCyclicAmiPair) — there is no external
+ * couple command, so no fake runner is needed for it; mergeRunner drives the rest.
+ * A poor-overlap interface is surfaced later by checkMesh's AMI sum(weights), which
+ * a test injects via `lowAmiCheckRunner`.
  */
-function appendNccPatches(boundary: string, a: string, b: string): string {
-  return buildBoundary([
-    ...patchBlocks(boundary),
-    `nonConformalCyclic_on_${a} { type nonConformalCyclic; nFaces 10; startFace 900; }`,
-    `nonConformalCyclic_on_${b} { type nonConformalCyclic; nFaces 10; startFace 910; }`,
-    `nonConformalError_on_${a} { type nonConformalError; nFaces 0; startFace 920; }`,
-    `nonConformalError_on_${b} { type nonConformalError; nFaces 0; startFace 930; }`,
-  ]);
-}
-
-/** A runner that simulates createNonConformalCouples: keep the pair, ADD the 4 NCC patches. */
-const nccRunner: CommandRunner = async (spec) => {
-  if (spec.command === 'createNonConformalCouples') {
-    recordedCommands.push({ command: spec.command, args: [...spec.args] });
-    // v12 CLI: [<a>, <b>, '-overwrite', '-case', masterDir] — patch names POSITIONAL.
-    const caseDir = spec.args[spec.args.indexOf('-case') + 1];
-    const [a, b] = [spec.args[0], spec.args[1]];
-    const boundaryAbs = path.join(caseDir, 'constant', 'polyMesh', 'boundary');
-    await fs.writeFile(boundaryAbs, appendNccPatches(await fs.readFile(boundaryAbs, 'utf8'), a, b));
-    return ok(spec, `Created non-conformal couples for ${a} and ${b}`);
-  }
-  return mergeRunner(spec);
-};
-
-/** A runner where createNonConformalCouples exits 0 but creates NO coupled patches. */
-const nccNoOverlapRunner: CommandRunner = async (spec) => {
-  if (spec.command === 'createNonConformalCouples') {
-    recordedCommands.push({ command: spec.command, args: [...spec.args] });
-    return ok(spec, 'createNonConformalCouples: found 0 overlapping faces'); // boundary untouched
-  }
-  return mergeRunner(spec);
-};
+const lowAmiCheckRunner: CommandRunner = async (spec) =>
+  spec.command === 'checkMesh'
+    ? ok(spec, 'Checking geometry...\nAMI: Patch source sum(weights) min:0.08 max:1.001 average:0.4\nMesh OK.\n')
+    : mergeRunner(spec);
 
 /**
  * A runner like mergeRunner, but its mergeMeshes ALSO folds the added part's
@@ -188,8 +151,7 @@ const nccNoOverlapRunner: CommandRunner = async (spec) => {
 const transformMergeRunner: CommandRunner = async (spec) => {
   if (spec.command === 'mergeMeshes') {
     recordedCommands.push({ command: spec.command, args: [...spec.args] });
-    const masterDir = spec.args[spec.args.indexOf('-case') + 1];
-    const addDir = addCasePath(spec.args[spec.args.indexOf('-addCases') + 1]);
+    const [masterDir, addDir] = [spec.args[0], spec.args[1]];
     // Boundaries: same as mergeRunner.
     const masterB = path.join(masterDir, 'constant', 'polyMesh', 'boundary');
     const addB = path.join(addDir, 'constant', 'polyMesh', 'boundary');
@@ -498,17 +460,15 @@ describe('POST /projects/:id/meshes/merge', () => {
     const names = result.boundaryPatches.map((p: { name: string }) => p.name).sort();
     expect(names).toEqual(['m1_inlet', 'm1_wallsA', 'm2_outlet', 'm2_wallsB']);
 
-    // The merge invoked the OpenFOAM.org v11+ CLI, not the old positional signature
-    // (mergeMeshes uses -addCases; stitchMesh a single patchPairs list, no -partial).
+    // The merge invoked the ESI v2406 CLI: mergeMeshes positional [master, add, -overwrite],
+    // stitchMesh positional [a, b] + -partial (not the .org -addCases / ((a b)) patchPairs).
     const mergeCall = recordedCommands.find((c) => c.command === 'mergeMeshes')!;
-    expect(mergeCall.args).toEqual([
-      '-case', expect.any(String), '-addCases', expect.stringMatching(/^\("[^"]+"\)$/), '-overwrite',
-    ]);
+    expect(mergeCall.args).toEqual([expect.any(String), expect.any(String), '-overwrite']);
     const stitchCall = recordedCommands.find((c) => c.command === 'stitchMesh')!;
-    expect(stitchCall.args[0]).toBe('((m1_ifaceA m2_ifaceB))');
+    expect(stitchCall.args[0]).toBe('m1_ifaceA');
+    expect(stitchCall.args[1]).toBe('m2_ifaceB');
+    expect(stitchCall.args).toContain('-partial');
     expect(stitchCall.args).toContain('-overwrite');
-    expect(stitchCall.args).not.toContain('-partial');
-    expect(stitchCall.args).not.toContain('-perfect');
 
     // The combined mesh was promoted into the case.
     const paths = (result.entries as Array<{ path: string }>).map((e) => e.path);
@@ -631,7 +591,7 @@ describe('POST /projects/:id/meshes/merge', () => {
 
 describe('POST /projects/:id/meshes/merge (Assembly v2 non-conformal coupling)', () => {
   it('couples two meshes non-conformally, KEEPING both parts (not fused)', async () => {
-    setCommandRunner(nccRunner);
+    setCommandRunner(mergeRunner);
     const { id, auth } = await makeProject('mg-ncc-ok@dive-turbinen.test');
     const { a, b } = await importTwoParts(id, auth);
 
@@ -640,7 +600,7 @@ describe('POST /projects/:id/meshes/merge (Assembly v2 non-conformal coupling)',
       .set('Authorization', auth)
       .send({
         order: [a, b],
-        interfaces: [{ aMeshId: a, aPatch: 'ifaceA', bMeshId: b, bPatch: 'ifaceB', coupling: 'nonConformalCyclic' }],
+        interfaces: [{ aMeshId: a, aPatch: 'ifaceA', bMeshId: b, bPatch: 'ifaceB', coupling: 'nonConformal' }],
       });
 
     expect(res.status).toBe(200);
@@ -648,36 +608,36 @@ describe('POST /projects/:id/meshes/merge (Assembly v2 non-conformal coupling)',
     expect(result.success).toBe(true);
     // The couple step replaces the stitch step; cleanup is present but SKIPPED.
     expect(result.steps.map((s: { kind: string }) => s.kind)).toEqual([
-      'prepare', 'prepare', 'mergeMeshes', 'createNonConformalCouples', 'cleanup', 'checkMesh',
+      'prepare', 'prepare', 'mergeMeshes', 'nonConformalCouple', 'cleanup', 'checkMesh',
     ]);
     const cleanup = (result.steps as Array<{ kind: string; status: string; stdout: string }>).find((s) => s.kind === 'cleanup')!;
     expect(cleanup.status).toBe('success');
     expect(cleanup.stdout).toMatch(/Skipped/i);
 
-    // Regression pin: the v12 CLI passes the two patch names POSITIONALLY, then
-    // -overwrite + -case (no -fields, no transform arg).
-    const nccCall = recordedCommands.find((c) => c.command === 'createNonConformalCouples')!;
-    expect(nccCall.args).toEqual(['m1_ifaceA', 'm2_ifaceB', '-overwrite', '-case', expect.any(String)]);
+    // ESI v2406: the couple is an IN-PROCESS cyclicAMI retype — no external couple
+    // command runs (no createNonConformalCouples, no createPatch).
+    expect(recordedCommands.some((c) => c.command === 'createNonConformalCouples')).toBe(false);
+    expect(recordedCommands.some((c) => c.command === 'createPatch')).toBe(false);
 
-    // Parts stay SEPARATE: the two original interface patches survive (NOT fused
-    // away) AND the coupled nonConformalCyclic_on_* pair is added. Every other
-    // patch of both parts also survives.
-    const names = (result.boundaryPatches as Array<{ name: string }>).map((p) => p.name);
+    // Parts stay SEPARATE: the two interface patches KEEP their names (not fused
+    // away, not renamed) and are retyped to cyclicAMI. Every other patch survives.
+    const patches = result.boundaryPatches as Array<{ name: string; type: string }>;
+    const names = patches.map((p) => p.name);
     expect(names).toContain('m1_ifaceA');
     expect(names).toContain('m2_ifaceB');
-    expect(names).toContain('nonConformalCyclic_on_m1_ifaceA');
-    expect(names).toContain('nonConformalCyclic_on_m2_ifaceB');
+    expect(patches.find((p) => p.name === 'm1_ifaceA')!.type).toBe('cyclicAMI');
+    expect(patches.find((p) => p.name === 'm2_ifaceB')!.type).toBe('cyclicAMI');
     expect(names).toContain('m1_inlet');
     expect(names).toContain('m2_outlet');
 
     // The combined mesh was promoted into the case, keeping the coupled patches.
     const boundary = (await caseBoundary(id, auth)).body.file.content as string;
-    expect(boundary).toContain('nonConformalCyclic_on_m1_ifaceA');
     expect(boundary).toContain('m1_ifaceA');
+    expect(boundary).toMatch(/m1_ifaceA[\s\S]*?type\s+cyclicAMI/);
   });
 
   it('defaults an interface with no explicit coupling to non-conformal', async () => {
-    setCommandRunner(nccRunner);
+    setCommandRunner(mergeRunner);
     const { id, auth } = await makeProject('mg-ncc-default@dive-turbinen.test');
     const { a, b } = await importTwoParts(id, auth);
     const res = await request(app)
@@ -686,33 +646,29 @@ describe('POST /projects/:id/meshes/merge (Assembly v2 non-conformal coupling)',
       .send({ order: [a, b], interfaces: [{ aMeshId: a, aPatch: 'ifaceA', bMeshId: b, bPatch: 'ifaceB' }] });
     expect(res.status).toBe(200);
     expect(res.body.result.success).toBe(true);
-    expect((res.body.result.steps as Array<{ kind: string }>).some((s) => s.kind === 'createNonConformalCouples')).toBe(true);
-    expect(recordedCommands.some((c) => c.command === 'createNonConformalCouples')).toBe(true);
+    // Default coupling is non-conformal: the in-process couple step runs, no stitch.
+    expect((res.body.result.steps as Array<{ kind: string }>).some((s) => s.kind === 'nonConformalCouple')).toBe(true);
+    expect(recordedCommands.some((c) => c.command === 'createNonConformalCouples')).toBe(false);
     expect(recordedCommands.some((c) => c.command === 'stitchMesh')).toBe(false);
   });
 
-  it('fails the couple when it creates no coupled faces (non-overlapping patches)', async () => {
-    setCommandRunner(nccNoOverlapRunner);
-    const { id, auth } = await makeProject('mg-ncc-nooverlap@dive-turbinen.test');
+  it('warns (does not fail) when the cyclicAMI interface overlap is poor', async () => {
+    // ESI: the couple is an in-process retype that always succeeds; poor overlap is
+    // surfaced by checkMesh's low AMI sum(weights) as a WARNING note, not a failure.
+    setCommandRunner(lowAmiCheckRunner);
+    const { id, auth } = await makeProject('mg-ami-poor@dive-turbinen.test');
     const { a, b } = await importTwoParts(id, auth);
     const res = await request(app)
       .post(`/api/v1/projects/${id}/meshes/merge`)
       .set('Authorization', auth)
       .send({
         order: [a, b],
-        interfaces: [{ aMeshId: a, aPatch: 'ifaceA', bMeshId: b, bPatch: 'ifaceB', coupling: 'nonConformalCyclic' }],
+        interfaces: [{ aMeshId: a, aPatch: 'ifaceA', bMeshId: b, bPatch: 'ifaceB', coupling: 'nonConformal' }],
       });
     expect(res.status).toBe(200);
     const result = res.body.result;
-    expect(result.success).toBe(false);
-    const step = (result.steps as Array<{ kind: string; status: string; stderr: string }>).find(
-      (s) => s.kind === 'createNonConformalCouples',
-    )!;
-    expect(step.status).toBe('failed');
-    expect(step.stderr).toMatch(/no coupled faces|don't overlap/i);
-    // Aborted before checkMesh; nothing promoted into the case.
-    expect((result.steps as Array<{ kind: string }>).some((s) => s.kind === 'checkMesh')).toBe(false);
-    expect((result.entries as Array<{ path: string }>).some((e) => e.path === 'constant/polyMesh/boundary')).toBe(false);
+    expect(result.success).toBe(true);
+    expect((result.notes as string[]).some((n) => /overlap|sum\(weights\)|AMI/i.test(n))).toBe(true);
   });
 });
 
@@ -765,7 +721,7 @@ ${entries}
   }
 
   it('stages the case as master, couples a part onto it, PRESERVES its 0/ physics', async () => {
-    setCommandRunner(nccRunner);
+    setCommandRunner(mergeRunner);
     const { id, auth } = await makeProject('mg-base-case@dive-turbinen.test');
     await seedCase(id, auth);
 
@@ -780,7 +736,7 @@ ${entries}
       .set('Authorization', auth)
       .send({
         order: ['__case__', rotorId],
-        interfaces: [{ aMeshId: '__case__', aPatch: 'outlet', bMeshId: rotorId, bPatch: 'iface', coupling: 'nonConformalCyclic' }],
+        interfaces: [{ aMeshId: '__case__', aPatch: 'outlet', bMeshId: rotorId, bPatch: 'iface', coupling: 'nonConformal' }],
       });
 
     expect(res.status).toBe(200);
@@ -794,17 +750,18 @@ ${entries}
     )!;
     expect(firstPrepare.label).toMatch(/project case mesh/i);
     expect(firstPrepare.stdout).toMatch(/assembly base/i);
-    expect((result.steps as Array<{ kind: string }>).some((s) => s.kind === 'createNonConformalCouples')).toBe(true);
+    expect((result.steps as Array<{ kind: string }>).some((s) => s.kind === 'nonConformalCouple')).toBe(true);
 
     // Base patches are UNPREFIXED (inlet/outlet kept, no m1_); the added part is
-    // prefixed (m2_); the couple pair is added.
-    const names = (result.boundaryPatches as Array<{ name: string }>).map((p) => p.name);
+    // prefixed (m2_); the coupled pair keeps its names (outlet, m2_iface) retyped cyclicAMI.
+    const patches = result.boundaryPatches as Array<{ name: string; type: string }>;
+    const names = patches.map((p) => p.name);
     expect(names).toContain('inlet');
     expect(names).toContain('outlet');
     expect(names).not.toContain('m1_inlet');
     expect(names).toContain('m2_iface');
-    expect(names).toContain('nonConformalCyclic_on_outlet');
-    expect(names).toContain('nonConformalCyclic_on_m2_iface');
+    expect(patches.find((p) => p.name === 'outlet')!.type).toBe('cyclicAMI');
+    expect(patches.find((p) => p.name === 'm2_iface')!.type).toBe('cyclicAMI');
 
     // The original case is backed up before the destructive promote (kind original).
     const backup = await request(app).get(`/api/v1/projects/${id}/mesh/backup`).set('Authorization', auth);
@@ -816,11 +773,11 @@ ${entries}
     // fixedValue, and the coupled patch got the nonConformalCyclic field BC.
     const u = (await caseFileContent(id, auth, '0/U')).body.file.content as string;
     expect(u).toMatch(/inlet[\s\S]*?type\s+fixedValue/);
-    expect(u).toMatch(/nonConformalCyclic_on_outlet[\s\S]*?type\s+nonConformalCyclic/);
+    expect(u).toMatch(/m2_iface[\s\S]*?type\s+cyclicAMI/);
   });
 
   it('rejects the case sentinel when the project has no case mesh (422)', async () => {
-    setCommandRunner(nccRunner);
+    setCommandRunner(mergeRunner);
     const { id, auth } = await makeProject('mg-base-nocase@dive-turbinen.test');
     const rotor = await importMesh(id, auth, meshFiles('rotor', makeBoundary([{ name: 'iface' }])));
     const res = await request(app)

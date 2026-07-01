@@ -10,17 +10,22 @@ const stitchPairSchema = z.object({
 });
 
 /**
- * One interface to make between two parts (Assembly v2): a patch pair plus the
- * `coupling` mechanism. `coupling` defaults to the v12-native non-conformal
- * couple ('nonConformalCyclic'); 'stitch' is the legacy conformal fuse. A mesh id
- * may be the `MERGE_BASE_CASE` sentinel to reference a base-side case patch.
+ * One interface to make between two parts (Assembly): a patch pair plus the
+ * `coupling` mechanism. `coupling` defaults to the non-conformal cyclicAMI couple
+ * ('nonConformal'); 'stitch' is the legacy conformal fuse. The pre-v3 literal
+ * 'nonConformalCyclic' is still accepted and normalized to 'nonConformal' so a
+ * saved plan round-trips. A mesh id may be the `MERGE_BASE_CASE` sentinel to
+ * reference a base-side case patch.
  */
 const interfaceSchema = z.object({
   aMeshId: z.string().trim().min(1, 'A mesh is required'),
   aPatch: z.string().trim().min(1, 'A patch is required'),
   bMeshId: z.string().trim().min(1, 'A mesh is required'),
   bPatch: z.string().trim().min(1, 'A patch is required'),
-  coupling: z.enum(['nonConformalCyclic', 'stitch']).default('nonConformalCyclic'),
+  coupling: z
+    .enum(['nonConformal', 'nonConformalCyclic', 'stitch'])
+    .default('nonConformal')
+    .transform((coupling) => (coupling === 'nonConformalCyclic' ? 'nonConformal' : coupling)),
 });
 
 /**

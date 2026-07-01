@@ -36,6 +36,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type {
+  InterfaceCoupling,
   MergePlan,
   MergeResult,
   MergeStep,
@@ -69,6 +70,7 @@ import {
   removeEmptyBoundaryPatches,
   renameBoundaryPatch,
   renderBaseFile,
+  setCyclicAmiPair,
   type BaseFilePath,
   type BoundaryPatchDetail,
 } from '../../lib/openfoamCase';
@@ -462,15 +464,28 @@ function failStep(kind: MergeStepKind, label: string, message: string): MergeSte
 }
 
 /**
+ * Normalize a possibly-legacy coupling literal to the current contract. A plan
+ * persisted before Assembly v3 (read straight off disk, bypassing the zod schema)
+ * may still carry the old `'nonConformalCyclic'` value; map it to `'nonConformal'`
+ * so an old draft re-runs unchanged.
+ */
+function normalizeCoupling(coupling: string): InterfaceCoupling {
+  return coupling === 'nonConformalCyclic' ? 'nonConformal' : (coupling as InterfaceCoupling);
+}
+
+/**
  * The interfaces a plan asks for, normalizing the legacy `stitches` field: when
- * `interfaces` is present it wins (each entry carries its own coupling); otherwise
- * a legacy draft's `stitches` are interpreted as interfaces with coupling
- * 'stitch'. Preferring `interfaces` (rather than concatenating) keeps a re-run of
- * a persisted plan — which carries BOTH the normalized interfaces and the verbatim
- * legacy stitches — from double-counting the same pair.
+ * `interfaces` is present it wins (each entry carries its own coupling, itself
+ * normalized for back-compat); otherwise a legacy draft's `stitches` are
+ * interpreted as interfaces with coupling 'stitch'. Preferring `interfaces`
+ * (rather than concatenating) keeps a re-run of a persisted plan — which carries
+ * BOTH the normalized interfaces and the verbatim legacy stitches — from
+ * double-counting the same pair.
  */
 function planInterfaces(plan: MergePlan): MeshInterface[] {
-  if (plan.interfaces && plan.interfaces.length > 0) return plan.interfaces;
+  if (plan.interfaces && plan.interfaces.length > 0) {
+    return plan.interfaces.map((iface) => ({ ...iface, coupling: normalizeCoupling(iface.coupling) }));
+  }
   return (plan.stitches ?? []).map((stitch) => ({
     aMeshId: stitch.aMeshId,
     aPatch: stitch.aPatch,
@@ -591,6 +606,28 @@ async function cleanupMasterBoundary(masterDir: string): Promise<number> {
 function countCheckMeshFailures(stdout: string): number {
   const match = stdout.match(/Failed\s+(\d+)\s+mesh checks/i);
   return match ? Number(match[1]) : 0;
+}
+
+/** A cyclicAMI `sum(weights)` min below this => warn about a poor interface overlap. */
+const AMI_MIN_WEIGHT_WARN = 0.5;
+
+/**
+ * The lowest cyclicAMI `sum(weights)` checkMesh reports for a coupled mesh, or
+ * null when the log carries no AMI line (no coupling, or an older checkMesh).
+ * checkMesh prints one line per AMI patch, e.g.
+ *   "AMI: Patch source sum(weights) min:0.0123 max:1.0007 average:0.87"
+ * A `min` well below 1 means part of the interface has little/no overlapping
+ * neighbour area — only that covered fraction transfers flow.
+ */
+function lowestAmiWeight(stdout: string): number | null {
+  const re = /sum\(weights\)[^\n]*?\bmin\s*[:=]?\s*([0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)/gi;
+  let match: RegExpExecArray | null;
+  let lowest: number | null = null;
+  while ((match = re.exec(stdout)) !== null) {
+    const value = Number(match[1]);
+    if (Number.isFinite(value)) lowest = lowest === null ? value : Math.min(lowest, value);
+  }
+  return lowest;
 }
 
 /**
@@ -761,14 +798,16 @@ export async function runMerge(
   const masterDir = caseDirOf(order[0]);
 
   // --- 2) mergeMeshes: combine every additional source into the master -----
-  // OpenFOAM.org v11+ dropped mergeMeshes' positional case arguments: the master
-  // is the -case (here masterDir) and every mesh to fold in is named via the
-  // -addCases list option. One case per step keeps each its own row in the report.
+  // ESI OpenFOAM v2406 takes POSITIONAL args: `mergeMeshes <masterDir> <addDir>
+  // -overwrite`, run with cwd = masterDir. NO -case / -addCases and NO ("…") list
+  // literal — those are the org-v11 form and error out under the ESI bashrc. It
+  // writes the master's constant/polyMesh in place, keeping both regions. One add
+  // per step keeps each its own row in the report.
   for (let i = 1; i < order.length; i += 1) {
     const id = order[i];
     const planned = planOpenfoamCommand(
       env.MERGE_MESHES_BIN,
-      ['-case', masterDir, '-addCases', `("${caseDirOf(id)}")`, '-overwrite'],
+      [masterDir, caseDirOf(id), '-overwrite'],
       masterDir,
     );
     const result = await runCommand({ ...planned, timeoutMs });
@@ -779,60 +818,67 @@ export async function runMerge(
   if (order.length > 1) notes.push(`Combined ${order.length} meshes with mergeMeshes.`);
 
   // --- 3) couple each interface (branch on coupling) -----------------------
-  // nonConformalCyclic -> createNonConformalCouples (v12-native, keeps both parts);
-  // stitch -> the legacy conformal stitchMesh fuse. Any NCC couple flips `hasNcc`,
-  // which makes the cleanup below SKIP empty-patch removal (the couple's constraint
-  // patches must be kept, and its nested-dict boundary must never be regex-rewritten).
+  // nonConformal -> an in-process TEXTUAL cyclicAMI retype of the two interface
+  // patches (keeps both parts + names, no CLI — ESI has no createNonConformalCouples);
+  // stitch -> the legacy conformal stitchMesh fuse. Any non-conformal couple flips
+  // `hasNonConformal`, which makes the cleanup below SKIP empty-patch removal (the
+  // cyclicAMI interface patches must be kept, and the coupled boundary must never be
+  // regex-rewritten).
   const masterBoundaryAbs = path.join(masterDir, 'constant', 'polyMesh', 'boundary');
-  let hasNcc = false;
+  let hasNonConformal = false;
   let stitchedCount = 0;
   for (const iface of interfaces) {
     const aPatch = resolvePatch(iface.aMeshId, iface.aPatch);
     const bPatch = resolvePatch(iface.bMeshId, iface.bPatch);
 
-    if (iface.coupling === 'nonConformalCyclic') {
-      // OpenFOAM.org v12: createNonConformalCouples takes the two patch names as
-      // POSITIONAL args and writes into the master's polyMesh in place. It KEEPS
-      // both patches and ADDS the coupled nonConformalCyclic_on_* / nonConformalError_on_*
-      // constraint patches. No -fields (this is a mesh-only work case; the field
-      // BCs are realigned after promote). The rigid placement is already baked into
-      // the staged points, so `transform none` is implicit — no transform arg.
-      const planned = planOpenfoamCommand(
-        env.NCC_COUPLE_BIN,
-        [aPatch, bPatch, '-overwrite', '-case', masterDir],
-        masterDir,
-      );
-      const result = await runCommand({ ...planned, timeoutMs });
-      const step = toStep('createNonConformalCouples', `Couple ${aPatch} ↔ ${bPatch}`, planned.display, result);
-      steps.push(step);
-      if (step.status !== 'success') return finalizeMerge(projectId, steps, notes, false);
+    if (iface.coupling === 'nonConformal') {
+      // ESI-compatible non-conformal coupling: retype BOTH interface patches to
+      // cyclicAMI IN PLACE in the master boundary (cross-linked neighbourPatch,
+      // transform noOrdering). Pure text — no OpenFOAM CLI (createNonConformalCouples
+      // does not exist in ESI) — so it can't "fail" beyond an I/O error; the patch
+      // names were validated up front and mergeMeshes preserves them. Overlap
+      // quality is deferred to the checkMesh AMI-weight note below. The parts stay
+      // SEPARATE coupled regions (names + faces kept), which keeps the assembly
+      // non-destructive / re-separable.
+      try {
+        const before = await fs.readFile(masterBoundaryAbs, 'utf8');
+        const after = setCyclicAmiPair(before, aPatch, bPatch);
+        await fs.writeFile(masterBoundaryAbs, after, 'utf8');
 
-      // Post-guard (analogue of the "stitch fused nothing" check): the couple only
-      // created faces if BOTH nonConformalCyclic_on_<a> and _on_<b> now exist. When
-      // the interface patches don't overlap, the tool exits 0 having created none.
-      const details = parseBoundaryPatchDetails(await fs.readFile(masterBoundaryAbs, 'utf8'));
-      const facesOf = new Map(details.map((d) => [d.name, d.nFaces] as const));
-      const onA = `nonConformalCyclic_on_${aPatch}`;
-      const onB = `nonConformalCyclic_on_${bPatch}`;
-      if (!facesOf.has(onA) || !facesOf.has(onB)) {
-        steps[steps.length - 1] = failStep(
-          'createNonConformalCouples',
-          `Couple ${aPatch} ↔ ${bPatch}`,
-          `createNonConformalCouples ran but created no coupled faces — the interface patches ${aPatch} and ${bPatch} almost certainly don't overlap; check both parts share a coordinate frame with the interface surfaces coincident.`,
+        // Defensive: confirm both patches were actually retyped. A no-op (a patch
+        // absent from the combined master — a prefixing bug) would otherwise
+        // silently promote an uncoupled mesh, so fail loudly with a clear message.
+        const typeOf = new Map(parseBoundaryPatchDetails(after).map((d) => [d.name, d.type] as const));
+        if (typeOf.get(aPatch) !== 'cyclicAMI' || typeOf.get(bPatch) !== 'cyclicAMI') {
+          steps.push(
+            failStep(
+              'nonConformalCouple',
+              `Couple ${aPatch} ↔ ${bPatch}`,
+              `Could not retype ${aPatch} / ${bPatch} to cyclicAMI in the combined boundary — a patch was not found after mergeMeshes (unexpected). Review the merge log.`,
+            ),
+          );
+          return finalizeMerge(projectId, steps, notes, false);
+        }
+        steps.push({
+          kind: 'nonConformalCouple',
+          label: `Couple ${aPatch} ↔ ${bPatch}`,
+          command: `cyclicAMI retype: ${aPatch} ↔ ${bPatch} (in place)`,
+          status: 'success',
+          exitCode: null,
+          stdout: `Retyped ${aPatch} and ${bPatch} to cyclicAMI (neighbourPatch cross-linked, transform noOrdering). AMI weights are computed by the solver at runtime.`,
+          stderr: '',
+          durationMs: 0,
+        });
+        hasNonConformal = true;
+      } catch (err) {
+        steps.push(
+          failStep(
+            'nonConformalCouple',
+            `Couple ${aPatch} ↔ ${bPatch}`,
+            err instanceof Error ? err.message : String(err),
+          ),
         );
         return finalizeMerge(projectId, steps, notes, false);
-      }
-      hasNcc = true;
-
-      // Warn when a large share of the interface faces landed on nonConformalError
-      // (poor overlap): only the overlapping region transfers flow.
-      const errFaces =
-        (facesOf.get(`nonConformalError_on_${aPatch}`) ?? 0) + (facesOf.get(`nonConformalError_on_${bPatch}`) ?? 0);
-      const cplFaces = (facesOf.get(onA) ?? 0) + (facesOf.get(onB) ?? 0);
-      if (errFaces > 0 && errFaces >= 0.2 * (errFaces + cplFaces)) {
-        notes.push(
-          `Interface ${aPatch} ↔ ${bPatch}: ${Math.round((100 * errFaces) / (errFaces + cplFaces))}% of the interface faces did not overlap (they became nonConformalError faces) — review that the two surfaces are coincident in the same coordinate frame; only the overlapping region will transfer flow.`,
-        );
       }
       continue;
     }
@@ -844,13 +890,15 @@ export async function runMerge(
       [aPatch, patchesOf.get(iface.aMeshId)!.find((p) => p.name === iface.aPatch)?.nFaces ?? 0],
       [bPatch, patchesOf.get(iface.bMeshId)!.find((p) => p.name === iface.bPatch)?.nFaces ?? 0],
     ]);
-    // OpenFOAM.org v11+ stitchMesh takes a single patchPairs list "((master slave))"
-    // (not two positional names) and replaced -partial/-perfect with -tol. Pass the
-    // tolerance only when configured so the tool's own default (1e-4) otherwise wins.
-    const stitchArgs = [`((${aPatch} ${bPatch}))`, '-overwrite', '-case', masterDir];
-    const tol = env.STITCH_TOL.trim();
-    if (tol) stitchArgs.push('-tol', tol);
-    const planned = planOpenfoamCommand(env.STITCH_MESH_BIN, stitchArgs, masterDir);
+    // ESI OpenFOAM v2406 stitchMesh takes the two patch names POSITIONALLY with a
+    // -partial match, writing into the -case master: `stitchMesh <a> <b> -partial
+    // -overwrite -case <master>`. ESI has no -tol option, so STITCH_TOL is not used
+    // on this path.
+    const planned = planOpenfoamCommand(
+      env.STITCH_MESH_BIN,
+      [aPatch, bPatch, '-partial', '-overwrite', '-case', masterDir],
+      masterDir,
+    );
     const result = await runCommand({ ...planned, timeoutMs });
     const step = toStep('stitchMesh', `Stitch ${aPatch} ↔ ${bPatch}`, planned.display, result);
     steps.push(step);
@@ -867,32 +915,34 @@ export async function runMerge(
       steps[steps.length - 1] = failStep(
         'stitchMesh',
         `Stitch ${aPatch} ↔ ${bPatch}`,
-        `stitchMesh ran but fused no faces (${aPatch} and ${bPatch} still carry every face). The two patches are almost certainly not coincident: check both parts are in the same coordinate frame with the interface surfaces touching, and raise STITCH_TOL if their meshes differ slightly.`,
+        `stitchMesh ran but fused no faces (${aPatch} and ${bPatch} still carry every face). The two patches are almost certainly not coincident: check both parts are in the same coordinate frame with the interface surfaces touching.`,
       );
       return finalizeMerge(projectId, steps, notes, false);
     }
     const partial = [aPatch, bPatch].filter((p) => (after.get(p) ?? 0) > 0);
     if (partial.length) {
       notes.push(
-        `Interface ${aPatch} ↔ ${bPatch}: ${partial.map((p) => `${p} still has ${after.get(p)} face(s)`).join(', ')} after stitching — only partially fused; review coincidence / STITCH_TOL.`,
+        `Interface ${aPatch} ↔ ${bPatch}: ${partial.map((p) => `${p} still has ${after.get(p)} face(s)`).join(', ')} after stitching — only partially fused; review coincidence.`,
       );
     }
     stitchedCount += 1;
   }
-  const nccCount = interfaces.filter((iface) => iface.coupling === 'nonConformalCyclic').length;
-  if (nccCount) notes.push(`Coupled ${nccCount} non-conformal interface(s) with createNonConformalCouples.`);
+  const nonConformalCount = interfaces.filter((iface) => iface.coupling === 'nonConformal').length;
+  if (nonConformalCount)
+    notes.push(`Coupled ${nonConformalCount} non-conformal interface(s) via in-place cyclicAMI retype.`);
   if (stitchedCount) notes.push(`Stitched ${stitchedCount} interface(s).`);
 
   // --- 4) cleanup: remove the zero-face patches stitchMesh leaves behind ---
-  // SKIP when any non-conformal couple exists: createNonConformalCouples's
-  // nonConformalError_on_* patches are legitimately nFaces 0, so removing them (or
-  // regex-rewriting the NCC boundary at all) would corrupt the coupling.
-  if (hasNcc) {
+  // SKIP when any non-conformal couple exists: the retype leaves the cyclicAMI
+  // interface patches carrying their faces, and the coupled boundary must not be
+  // regex-rewritten (its nested cyclicAMI keys). The retype creates no empties, so
+  // there is nothing to remove anyway.
+  if (hasNonConformal) {
     steps.push(
       okStep(
         'cleanup',
         'Clean up empty patches',
-        'Skipped: non-conformal coupling keeps its constraint patches (nonConformalCyclic / nonConformalError), so empty-patch removal is not run.',
+        'Skipped: non-conformal coupling retyped the interface patches to cyclicAMI (which keep their faces), so empty-patch removal is not run.',
       ),
     );
   } else {
@@ -920,6 +970,17 @@ export async function runMerge(
     notes.push(
       `checkMesh reported ${meshIssues} failed mesh check(s) (e.g. non-orthogonality, skewness): the meshes were combined but the result may be low quality — open the checkMesh log and review before running the solver.`,
     );
+  }
+  // A non-conformal (cyclicAMI) couple only transfers flow where the two interface
+  // surfaces overlap. checkMesh reports each AMI patch's sum(weights); a low min
+  // means poor overlap — warn (the merge still succeeds; the user judges).
+  if (hasNonConformal) {
+    const lowest = lowestAmiWeight(checkResult.stdout);
+    if (lowest !== null && lowest < AMI_MIN_WEIGHT_WARN) {
+      notes.push(
+        `A non-conformal interface has a low AMI overlap (sum(weights) min ≈ ${lowest.toFixed(3)}, ideal ≈ 1): only the overlapping region transfers flow — check the two coupled surfaces are coincident in the same coordinate frame.`,
+      );
+    }
   }
 
   // --- 6) promote: back up, replace the case mesh, realign 0/ fields -------
