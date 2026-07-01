@@ -10,13 +10,32 @@ const stitchPairSchema = z.object({
 });
 
 /**
+ * One rigid placement of an added part (multi-part assembly): a mesh id, a
+ * translation (tx, ty, tz) and a unit quaternion (x, y, z, w). Every component is
+ * finite; the transform is applied to the added part's staged points before the
+ * merge (see PartTransform / meshTransform). No scaling — a rigid transform only.
+ */
+const partTransformSchema = z.object({
+  meshId: z.string().trim().min(1),
+  translation: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]),
+  rotation: z.tuple([
+    z.number().finite(),
+    z.number().finite(),
+    z.number().finite(),
+    z.number().finite(),
+  ]),
+});
+
+/**
  * Body for POST /meshes/merge and PUT /meshes/plan: the ordered mesh ids to
  * combine (the first is the master) plus the patch pairs to stitch. `stitches`
- * defaults to [] — combining without connecting is valid.
+ * and `transforms` default to [] — combining without connecting or without
+ * placing anything is valid (an absent/empty `transforms` == today's behaviour).
  */
 export const mergePlanSchema = z.object({
   order: z.array(z.string().trim().min(1)).min(1, 'Add at least one mesh to merge'),
   stitches: z.array(stitchPairSchema).default([]),
+  transforms: z.array(partTransformSchema).default([]),
 });
 
 export type MergePlanInput = z.infer<typeof mergePlanSchema>;

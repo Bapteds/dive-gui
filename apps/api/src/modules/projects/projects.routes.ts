@@ -43,6 +43,9 @@ import {
   deleteMeshController,
   getMergePlanController,
   getMeshPatchesController,
+  getMeshSourceEdgesController,
+  getMeshSourceGeometryController,
+  getMeshSourceManifestController,
   importMeshController,
   listMeshesController,
   mergeMeshesController,
@@ -288,6 +291,24 @@ export function createProjectsRouter(): Router {
     '/:id/meshes/:meshId/patches',
     validate({ params: meshIdParamSchema }),
     asyncHandler(getMeshPatchesController),
+  );
+  // Per-source 3D render for the "Assemble" tab: the manifest call builds the
+  // render on demand (extract boundary patches -> GLB + manifest, cached under
+  // meshes/<id>/.viz/); geometry streams the cached GLB; edges the cell grid.
+  router.get(
+    '/:id/meshes/:meshId/manifest',
+    validate({ params: meshIdParamSchema }),
+    asyncHandler(getMeshSourceManifestController),
+  );
+  router.get(
+    '/:id/meshes/:meshId/geometry',
+    validate({ params: meshIdParamSchema }),
+    asyncHandler(getMeshSourceGeometryController),
+  );
+  router.get(
+    '/:id/meshes/:meshId/edges',
+    validate({ params: meshIdParamSchema }),
+    asyncHandler(getMeshSourceEdgesController),
   );
   // Re-patch a LIBRARY mesh before merging: split its boundary by feature angle
   // (so a single-patch .cgns import gets stitchable patches), then name them.

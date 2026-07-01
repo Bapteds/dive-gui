@@ -10,6 +10,9 @@ import {
   autoPatchMeshSource,
   getMergePlan,
   getMeshPatches,
+  getMeshSourceEdges,
+  getMeshSourceGeometry,
+  getMeshSourceManifest,
   importMesh,
   listMeshes,
   removeMesh,
@@ -92,6 +95,37 @@ export async function deleteMeshController(req: Request, res: Response): Promise
 export async function getMeshPatchesController(req: Request, res: Response): Promise<void> {
   const patches = await getMeshPatches(requireViewer(req), req.params.id, req.params.meshId);
   res.status(200).json({ patches });
+}
+
+/** GET /projects/:id/meshes/:meshId/manifest — build-on-demand, return the source's patch manifest. */
+export async function getMeshSourceManifestController(req: Request, res: Response): Promise<void> {
+  const manifest = await getMeshSourceManifest(requireViewer(req), req.params.id, req.params.meshId);
+  res.status(200).json({ manifest });
+}
+
+/** GET /projects/:id/meshes/:meshId/geometry — stream the source's rendered GLB. */
+export async function getMeshSourceGeometryController(req: Request, res: Response): Promise<void> {
+  const glb = await getMeshSourceGeometry(requireViewer(req), req.params.id, req.params.meshId);
+  // Served from project storage as a Buffer (no express.static, no path exposure),
+  // same posture as the case-mesh geometry. Private + must-revalidate so the client
+  // re-validates rather than trusting a long-lived copy if the source changes.
+  res.setHeader('Content-Type', 'model/gltf-binary');
+  res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate');
+  res.status(200).send(glb);
+}
+
+/** GET /projects/:id/meshes/:meshId/edges — stream the source's cell-edge buffer (204 if none). */
+export async function getMeshSourceEdgesController(req: Request, res: Response): Promise<void> {
+  const edges = await getMeshSourceEdges(requireViewer(req), req.params.id, req.params.meshId);
+  if (!edges) {
+    // No precise grid for this render — the viewer falls back to a client-side
+    // overlay, so an empty overlay is "no content", not an error.
+    res.status(204).end();
+    return;
+  }
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate');
+  res.status(200).send(edges);
 }
 
 /** POST /projects/:id/meshes/:meshId/auto-patch — split a library mesh by feature angle. */

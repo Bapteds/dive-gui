@@ -32,13 +32,24 @@ import type {
   MergeStep,
   MergeStepKind,
   MeshImportConversion,
+  MeshManifest,
   MeshPatch,
   MeshSource,
+  PartTransform,
 } from '@dive/shared';
 import { env } from '../../config/env';
 import { AppError } from '../../lib/AppError';
 import { runCommand, type CommandResult } from '../../lib/commandRunner';
 import { commandFailed, planOpenfoamCommand } from '../../lib/openfoamCommand';
+import { isIdentityTransform, transformMeshPoints } from '../../lib/meshTransform';
+import {
+  meshSourceVizDir,
+  meshSourceVizIsStale,
+  meshSourceVizPaths,
+  readMeshSourceVizEdges,
+  readMeshSourceVizGlb,
+  readMeshSourceVizManifest,
+} from '../../lib/meshSourceVizStorage';
 import {
   BOUNDARY_FILE,
   collapseBoundaryToSinglePatch,
@@ -438,18 +449,32 @@ function failStep(kind: MergeStepKind, label: string, message: string): MergeSte
   return { kind, label, command: '', status: 'failed', exitCode: null, stdout: '', stderr: message, durationMs: 0 };
 }
 
-/** Normalize + persist a plan (dedupe the order, keep first occurrence). */
+/** Normalize + persist a plan (dedupe the order, keep first occurrence). The
+ * rigid part placements ride along verbatim so an assembly draft survives a
+ * reload and a re-run reproduces the exact same geometry. */
 async function persistPlan(projectId: string, plan: MergePlan): Promise<MergePlan> {
-  const normalized: MergePlan = { order: [...new Set(plan.order)], stitches: plan.stitches };
+  const normalized: MergePlan = {
+    order: [...new Set(plan.order)],
+    stitches: plan.stitches,
+    transforms: plan.transforms ?? [],
+  };
   await writeMergePlan(projectId, normalized);
   return normalized;
 }
 
 /**
  * Stage one source as a minimal OpenFOAM case in `caseDir`: copy its polyMesh,
- * write the minimal system/ dictionaries the utilities need, and (when merging
- * more than one mesh) prefix every patch with the mesh's slug so names are
- * globally unique before mergeMeshes combines them.
+ * (optionally) bake a rigid placement into the staged points, write the minimal
+ * system/ dictionaries the utilities need, and (when merging more than one mesh)
+ * prefix every patch with the mesh's slug so names are globally unique before
+ * mergeMeshes combines them.
+ *
+ * When `transform` is a non-identity placement, its rotation+translation is
+ * applied to THIS staged copy's constant/polyMesh/points only (the library source
+ * stays pristine) so the merged geometry matches the browser assembly preview
+ * exactly. points and boundary are independent, so this never disturbs the patch
+ * names the prefix step below rewrites. The master (order[0]) is passed no
+ * transform, so it is never moved.
  */
 async function stageSource(
   projectId: string,
@@ -458,11 +483,21 @@ async function stageSource(
   slug: string,
   patches: BoundaryPatchDetail[],
   prefix: boolean,
+  transform?: PartTransform,
 ): Promise<void> {
   const srcPolyMesh = meshPolyMeshDir(projectId, meshId);
   const destPolyMesh = path.join(caseDir, 'constant', 'polyMesh');
   await fs.mkdir(destPolyMesh, { recursive: true });
   await fs.cp(srcPolyMesh, destPolyMesh, { recursive: true });
+
+  // Bake the assembly placement into the staged points (never the source). Done
+  // in-process (V8 float64) with three.js's exact quaternion→matrix formula so
+  // preview == result; an identity/absent transform is a no-op (today's path).
+  if (transform && !isIdentityTransform(transform)) {
+    const pointsAbs = path.join(destPolyMesh, 'points');
+    const points = await fs.readFile(pointsAbs);
+    await fs.writeFile(pointsAbs, transformMeshPoints(points, transform.rotation, transform.translation));
+  }
 
   // Minimal system/ trio so mergeMeshes / stitchMesh / checkMesh can load the case.
   const systemFiles: BaseFilePath[] = ['system/controlDict', 'system/fvSchemes', 'system/fvSolution'];
@@ -606,16 +641,25 @@ export async function runMerge(
   const steps: MergeStep[] = [];
   const timeoutMs = env.MERGE_STEP_TIMEOUT_MS;
 
-  // --- 1) prepare: stage each source + prefix its patches ------------------
+  // Rigid placements from the assembly preview, keyed by mesh id. The master
+  // (order[0]) is deliberately never looked up here — it is the fixed base and is
+  // always staged at identity.
+  const byMesh = new Map((plan.transforms ?? []).map((t) => [t.meshId, t] as const));
+
+  // --- 1) prepare: stage each source (+ placement) + prefix its patches -----
   const workRoot = await resetMeshWork(projectId);
   const caseDirOf = (id: string): string => path.join(workRoot, slugOf.get(id)!);
-  for (const id of order) {
+  for (const [index, id] of order.entries()) {
     const meta = byId.get(id)!;
     const slug = slugOf.get(id)!;
+    // The base part is never moved; every added part carries its optional placement.
+    const transform = index === 0 ? undefined : byMesh.get(id);
+    const placed = !!transform && !isIdentityTransform(transform);
+    const stagedNote = prefix ? `Patches prefixed with ${slug}_` : 'Staged source mesh';
     try {
-      await stageSource(projectId, id, caseDirOf(id), slug, patchesOf.get(id)!, prefix);
+      await stageSource(projectId, id, caseDirOf(id), slug, patchesOf.get(id)!, prefix, transform);
       steps.push(
-        okStep('prepare', `Prepare ${meta.name}`, prefix ? `Patches prefixed with ${slug}_` : 'Staged source mesh'),
+        okStep('prepare', `Prepare ${meta.name}`, placed ? `Transformed + staged; ${stagedNote}` : stagedNote),
       );
     } catch (err) {
       steps.push(failStep('prepare', `Prepare ${meta.name}`, err instanceof Error ? err.message : String(err)));
@@ -734,4 +778,157 @@ export async function runMerge(
   }
 
   return finalizeMerge(projectId, steps, notes, true);
+}
+
+// --------------------------------------------------------------------------
+// Per-source render (the "Assemble" tab preview).
+//
+// The assembly workspace needs to draw each library source on its own so the
+// user can pick a mounting face on the base and place the added parts. This
+// mirrors the case-mesh viewer (mesh.service.ts) exactly — the same offline
+// extractPatches.py → GLB + manifest (+ edges) pipeline, the same build-on-demand
+// staleness, the same injectable command runner — but points the extractor at a
+// LIBRARY source directory and caches the artifacts under meshes/<id>/.viz/. The
+// small resolver/probe/summary helpers are duplicated here (rather than imported
+// from mesh.service) so the two viewers own their code independently.
+// --------------------------------------------------------------------------
+
+/** Does an absolute path exist on disk? */
+async function pathExists(absPath: string): Promise<boolean> {
+  try {
+    await fs.stat(absPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Resolve the boundary-patch extractor script (configured, else bundled default). */
+function extractPatchesScript(): string {
+  const configured = env.EXTRACT_PATCHES_SCRIPT.trim();
+  if (configured) return configured;
+  // Default: the script bundled with the API at apps/api/scripts/extractPatches.py,
+  // resolved relative to THIS module (not process.cwd()), so it works from source
+  // (tsx, src/) or the compiled output (dist/). scripts/ is not compiled, so it is
+  // three levels up to apps/api from src/modules/projects (and from dist/…).
+  return path.resolve(__dirname, '../../../scripts/extractPatches.py');
+}
+
+/** Build a concise, actionable failure message from an extractor command result. */
+function summarizeVizFailure(result: CommandResult): string {
+  if (result.spawnError) return `Could not start the extractor: ${result.spawnError}`;
+  if (result.timedOut) return 'The mesh extractor timed out.';
+  const detail = tail(result.stderr || result.stdout || '');
+  return `The mesh extractor exited with code ${result.exitCode ?? 'null'}.${detail ? `\n${detail}` : ''}`;
+}
+
+/**
+ * Build (or rebuild) a library source's cached render: run extractPatches.py
+ * against the source's own directory (it writes its own case.foam and reads
+ * constant/polyMesh, so no system/ is needed) to produce the GLB + manifest
+ * (+ edges.bin) under meshes/<id>/.viz/. Synchronous in-request and bounded by
+ * MESH_BUILD_TIMEOUT_MS, exactly like the case-mesh build.
+ *
+ * @throws 500 SCRIPT_MISSING if the extractor is not on disk (fail fast, clear).
+ * @throws 502 MESH_BUILD_FAILED if the run errors or produces no GLB.
+ */
+async function buildMeshSourceViz(projectId: string, meshId: string): Promise<void> {
+  const script = extractPatchesScript();
+  if (!(await pathExists(script))) {
+    throw new AppError(
+      500,
+      'SCRIPT_MISSING',
+      `Mesh extractor not found at ${script}. Set EXTRACT_PATCHES_SCRIPT to its absolute path.`,
+    );
+  }
+
+  const caseDir = meshDirAbsolute(projectId, meshId);
+  const { glb, manifest } = meshSourceVizPaths(projectId, meshId);
+  await fs.mkdir(meshSourceVizDir(projectId, meshId), { recursive: true });
+
+  const result = await runCommand({
+    command: env.MESH_PYTHON_BIN,
+    args: [script, caseDir, glb, manifest],
+    cwd: caseDir,
+    env: process.env,
+    timeoutMs: env.MESH_BUILD_TIMEOUT_MS,
+  });
+
+  // The script may exit 0 yet not write the GLB; treat a missing output as a
+  // failure so we never serve a stale/absent render as success.
+  if (result.spawnError || result.timedOut || result.exitCode !== 0 || !(await pathExists(glb))) {
+    throw new AppError(502, 'MESH_BUILD_FAILED', summarizeVizFailure(result));
+  }
+}
+
+/**
+ * Return a library source's patch manifest, building its render on demand when
+ * missing or stale. The client calls this first; it may trigger the (bounded)
+ * synchronous build.
+ *
+ * @throws 404 NOT_FOUND if the project is not visible or the source is unknown.
+ * @throws 500/502 if the build fails (see buildMeshSourceViz).
+ */
+export async function getMeshSourceManifest(
+  viewer: Viewer,
+  projectId: string,
+  meshId: string,
+): Promise<MeshManifest> {
+  await assertProjectVisible(viewer, projectId);
+  if (!(await meshSourceExists(projectId, meshId))) {
+    throw new AppError(404, 'NOT_FOUND', 'Mesh source not found');
+  }
+
+  if (await meshSourceVizIsStale(projectId, meshId)) {
+    await buildMeshSourceViz(projectId, meshId);
+  }
+
+  const stored = await readMeshSourceVizManifest(projectId, meshId);
+  if (!stored) {
+    throw new AppError(502, 'MESH_BUILD_FAILED', 'The mesh manifest could not be read after build.');
+  }
+  return { patches: stored.patches, generatedAt: stored.generatedAt };
+}
+
+/**
+ * Return a library source's rendered GLB geometry bytes. The manifest call builds
+ * the render, so by the time the client fetches geometry the artifact normally
+ * exists; a missing GLB means the client asked out of order.
+ *
+ * @throws 404 NOT_FOUND if the project is not visible or the source is unknown.
+ * @throws 409 MESH_NOT_BUILT if the geometry has not been built yet.
+ */
+export async function getMeshSourceGeometry(
+  viewer: Viewer,
+  projectId: string,
+  meshId: string,
+): Promise<Buffer> {
+  await assertProjectVisible(viewer, projectId);
+  if (!(await meshSourceExists(projectId, meshId))) {
+    throw new AppError(404, 'NOT_FOUND', 'Mesh source not found');
+  }
+  const glb = await readMeshSourceVizGlb(projectId, meshId);
+  if (!glb) {
+    throw new AppError(409, 'MESH_NOT_BUILT', 'The 3D preview has not been built yet.');
+  }
+  return glb;
+}
+
+/**
+ * Return a library source's cell-edge buffer, or null when this render has none
+ * (an older build, or edge extraction was skipped). The viewer falls back to a
+ * client-side overlay when null.
+ *
+ * @throws 404 NOT_FOUND if the project is not visible or the source is unknown.
+ */
+export async function getMeshSourceEdges(
+  viewer: Viewer,
+  projectId: string,
+  meshId: string,
+): Promise<Buffer | null> {
+  await assertProjectVisible(viewer, projectId);
+  if (!(await meshSourceExists(projectId, meshId))) {
+    throw new AppError(404, 'NOT_FOUND', 'Mesh source not found');
+  }
+  return readMeshSourceVizEdges(projectId, meshId);
 }

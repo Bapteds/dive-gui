@@ -51,6 +51,24 @@ function zeroOutPatches(boundary: string, names: string[]): string {
   return buildBoundary(blocks);
 }
 
+// --- ASCII points helpers (real FoamFile points, for the transform tests) ----
+
+/** Build a minimal ASCII FoamFile points file with the given vertices. */
+function makePoints(points: Array<[number, number, number]>): string {
+  const body = points.map(([x, y, z]) => `(${x} ${y} ${z})`).join('\n');
+  return `FoamFile { class vectorField; object points; }\n${points.length}\n(\n${body}\n)\n`;
+}
+
+/** Extract the (x y z) vectors out of an ASCII points file. */
+function readPoints(content: string): Array<[number, number, number]> {
+  const num = '[-+]?(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)(?:[eE][-+]?[0-9]+)?';
+  const re = new RegExp(`\\(\\s*(${num})\\s+(${num})\\s+(${num})\\s*\\)`, 'g');
+  const out: Array<[number, number, number]> = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) out.push([Number(m[1]), Number(m[2]), Number(m[3])]);
+  return out;
+}
+
 // --- Fake command runners ---------------------------------------------------
 
 function ok(spec: { command: string; args: string[] }, stdout: string): CommandResult {
@@ -121,6 +139,64 @@ const checkMeshIssuesRunner: CommandRunner = async (spec) =>
   spec.command === 'checkMesh'
     ? ok(spec, 'Checking geometry...\n***High non-orthogonality...\nFailed 2 mesh checks.\n')
     : mergeRunner(spec);
+
+/**
+ * A runner like mergeRunner, but its mergeMeshes ALSO folds the added part's
+ * points into the master (concatenated) — the real tool combines points, the
+ * default mergeRunner only combines boundaries. This lets a test read the
+ * promoted case points back and see the added part's *staged* (transformed)
+ * coordinates that stageSource wrote before this mergeMeshes ran.
+ */
+const transformMergeRunner: CommandRunner = async (spec) => {
+  if (spec.command === 'mergeMeshes') {
+    recordedCommands.push({ command: spec.command, args: [...spec.args] });
+    const masterDir = spec.args[spec.args.indexOf('-case') + 1];
+    const addDir = addCasePath(spec.args[spec.args.indexOf('-addCases') + 1]);
+    // Boundaries: same as mergeRunner.
+    const masterB = path.join(masterDir, 'constant', 'polyMesh', 'boundary');
+    const addB = path.join(addDir, 'constant', 'polyMesh', 'boundary');
+    await fs.writeFile(masterB, mergeBoundaries(await fs.readFile(masterB, 'utf8'), await fs.readFile(addB, 'utf8')));
+    // Points: master ++ add, so the added (already-transformed) points are promoted.
+    const masterP = path.join(masterDir, 'constant', 'polyMesh', 'points');
+    const addP = path.join(addDir, 'constant', 'polyMesh', 'points');
+    const combined = [
+      ...readPoints(await fs.readFile(masterP, 'utf8')),
+      ...readPoints(await fs.readFile(addP, 'utf8')),
+    ];
+    await fs.writeFile(masterP, makePoints(combined));
+    return ok(spec, 'Merged meshes + points');
+  }
+  return mergeRunner(spec);
+};
+
+/** Minimal stand-in for a GLB — just enough header for the byte assertions. */
+const FAKE_GLB = Buffer.from('glTF\x02\x00\x00\x00fake-binary-gltf', 'binary');
+/** Stand-in cell-edge buffer (12 vertices x 3 float32). */
+const FAKE_EDGES = Buffer.from(new Float32Array(12 * 3).buffer);
+/** The manifest the real extractor would write for a source. */
+const SOURCE_MANIFEST = [{ name: 'inlet', type: 'patch', nFaces: 10, edgeOffset: 0, edgeCount: 12 }];
+
+/**
+ * A fake extractor runner for the per-source render: writes the GLB, manifest and
+ * edges.bin to the paths the service passes (argv[2] = glb, argv[3] = manifest),
+ * exactly like the Visualize-tab test's successRunner, so the real PyVista script
+ * never runs.
+ */
+const sourceVizRunner: CommandRunner = async (spec) => {
+  const [, , glbPath, manifestPath] = spec.args;
+  await fs.mkdir(path.dirname(glbPath), { recursive: true });
+  await fs.writeFile(glbPath, FAKE_GLB);
+  await fs.writeFile(manifestPath, JSON.stringify(SOURCE_MANIFEST));
+  await fs.writeFile(path.join(path.dirname(glbPath), 'edges.bin'), FAKE_EDGES);
+  return ok(spec, `OK: ${SOURCE_MANIFEST.length} patches -> ${glbPath}`);
+};
+
+/** Collect a binary response body into a Buffer (supertest does not by default). */
+const binaryParser = (res: request.Response, cb: (err: Error | null, body: Buffer) => void) => {
+  const chunks: Buffer[] = [];
+  res.on('data', (chunk: Buffer) => chunks.push(chunk));
+  res.on('end', () => cb(null, Buffer.concat(chunks)));
+};
 
 /** Write a fake constant/polyMesh (points + boundary) into a case dir. */
 async function writePolyMesh(caseDir: string): Promise<void> {
@@ -216,6 +292,20 @@ function meshFiles(wrapper: string, boundary: string): Array<{ relativePath: str
   })).concat([{ relativePath: `${wrapper}/polyMesh/boundary`, data: boundary }]);
 }
 
+/** Like meshFiles but with a REAL ASCII points file (for the transform tests). */
+function meshFilesP(
+  wrapper: string,
+  boundary: string,
+  points: Array<[number, number, number]>,
+): Array<{ relativePath: string; data: string }> {
+  return ['faces', 'owner', 'neighbour']
+    .map((leaf) => ({ relativePath: `${wrapper}/polyMesh/${leaf}`, data: `${leaf}-data` }))
+    .concat([
+      { relativePath: `${wrapper}/polyMesh/points`, data: makePoints(points) },
+      { relativePath: `${wrapper}/polyMesh/boundary`, data: boundary },
+    ]);
+}
+
 /** Import a polyMesh folder into the library. */
 function importMesh(id: string, auth: string, files: Array<{ relativePath: string; data: string }>) {
   const { body, contentType } = buildMultipart(
@@ -252,6 +342,13 @@ async function importTwoParts(id: string, auth: string): Promise<{ a: string; b:
 function caseBoundary(id: string, auth: string) {
   return request(app)
     .get(`/api/v1/projects/${id}/files/content?path=${encodeURIComponent('constant/polyMesh/boundary')}`)
+    .set('Authorization', auth);
+}
+
+/** Read the text content of any case file via the editor content endpoint. */
+function caseFileContent(id: string, auth: string, relPath: string) {
+  return request(app)
+    .get(`/api/v1/projects/${id}/files/content?path=${encodeURIComponent(relPath)}`)
     .set('Authorization', auth);
 }
 
@@ -482,6 +579,165 @@ describe('POST /projects/:id/meshes/merge', () => {
   });
 });
 
+describe('POST /projects/:id/meshes/merge (rigid part transforms)', () => {
+  // Canonical parity fixture, shared with meshTransform.test.ts and the web
+  // placement.test.ts: 90° about +Z, then translate by (1,2,3). R·[1,0,0]=[0,1,0].
+  const Q90Z = [0, 0, 0.7071067811865476, 0.7071067811865476] as [number, number, number, number];
+  const T123 = [1, 2, 3] as [number, number, number];
+
+  /** Import a base (A) + an added (B) part, each with a single real vertex. */
+  async function importTwoPlaced(
+    id: string,
+    auth: string,
+    aPoint: [number, number, number],
+    bPoint: [number, number, number],
+  ): Promise<{ a: string; b: string }> {
+    const a = await importMesh(
+      id,
+      auth,
+      meshFilesP('base-part', makeBoundary([{ name: 'inlet' }, { name: 'ifaceA' }]), [aPoint]),
+    );
+    const b = await importMesh(
+      id,
+      auth,
+      meshFilesP('added-part', makeBoundary([{ name: 'ifaceB' }, { name: 'outlet' }]), [bPoint]),
+    );
+    return { a: a.body.mesh.id, b: b.body.mesh.id };
+  }
+
+  it('bakes an added part’s placement into its points during staging (preview parity)', async () => {
+    setCommandRunner(transformMergeRunner);
+    const { id, auth } = await makeProject('mg-transform@dive-turbinen.test');
+    const { a, b } = await importTwoPlaced(id, auth, [0, 0, 0], [1, 0, 0]);
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/merge`)
+      .set('Authorization', auth)
+      .send({ order: [a, b], stitches: [], transforms: [{ meshId: b, translation: T123, rotation: Q90Z }] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.result.success).toBe(true);
+    // The prepare step for the added part records that it was transformed.
+    const bPrepare = (res.body.result.steps as Array<{ kind: string; label: string; stdout: string }>).filter(
+      (s) => s.kind === 'prepare',
+    )[1];
+    expect(bPrepare.stdout).toContain('Transformed');
+
+    // The promoted case points = base (unmoved) ++ added (R·p + t).
+    const pts = readPoints((await caseFileContent(id, auth, 'constant/polyMesh/points')).body.file.content);
+    expect(pts).toHaveLength(2);
+    expect(pts[0]).toEqual([0, 0, 0]); // base master never moved
+    expect(pts[1][0]).toBeCloseTo(1, 9); // 90°Z: [1,0,0] -> [0,1,0], +t -> [1,3,3]
+    expect(pts[1][1]).toBeCloseTo(3, 9);
+    expect(pts[1][2]).toBeCloseTo(3, 9);
+  });
+
+  it('leaves every part’s points untouched when transforms is omitted (backward compatible)', async () => {
+    setCommandRunner(transformMergeRunner);
+    const { id, auth } = await makeProject('mg-notransform@dive-turbinen.test');
+    const { a, b } = await importTwoPlaced(id, auth, [5, 6, 7], [1, 2, 3]);
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/merge`)
+      .set('Authorization', auth)
+      .send({ order: [a, b], stitches: [] }); // no transforms => today's behaviour
+
+    expect(res.status).toBe(200);
+    expect(res.body.result.success).toBe(true);
+    const pts = readPoints((await caseFileContent(id, auth, 'constant/polyMesh/points')).body.file.content);
+    expect(pts).toEqual([[5, 6, 7], [1, 2, 3]]); // both parts verbatim, nothing moved
+  });
+
+  it('never moves the base master even if a transform targets it', async () => {
+    setCommandRunner(transformMergeRunner);
+    const { id, auth } = await makeProject('mg-masterfixed@dive-turbinen.test');
+    const { a, b } = await importTwoPlaced(id, auth, [1, 0, 0], [9, 9, 9]);
+
+    // A transform on the master (order[0]) must be ignored — the base is fixed.
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/merge`)
+      .set('Authorization', auth)
+      .send({ order: [a, b], stitches: [], transforms: [{ meshId: a, translation: T123, rotation: Q90Z }] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.result.success).toBe(true);
+    const pts = readPoints((await caseFileContent(id, auth, 'constant/polyMesh/points')).body.file.content);
+    expect(pts[0]).toEqual([1, 0, 0]); // master untouched despite the transform
+  });
+
+  it('rejects a transform with a non-finite component (422 validation)', async () => {
+    const { id, auth } = await makeProject('mg-badtransform@dive-turbinen.test');
+    const { a, b } = await importTwoPlaced(id, auth, [0, 0, 0], [1, 0, 0]);
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/merge`)
+      .set('Authorization', auth)
+      .send({ order: [a, b], stitches: [], transforms: [{ meshId: b, translation: [1, 2, null], rotation: Q90Z }] });
+    expect(res.status).toBe(422);
+  });
+});
+
+describe('GET /projects/:id/meshes/:meshId/{manifest,geometry,edges} (source render)', () => {
+  it('builds a source render on demand and streams its GLB as model/gltf-binary', async () => {
+    setCommandRunner(sourceVizRunner);
+    const { id, auth } = await makeProject('ms-geo@dive-turbinen.test');
+    const imported = await importMesh(id, auth, meshFiles('part', makeBoundary([{ name: 'inlet' }, { name: 'outlet' }])));
+    const meshId = imported.body.mesh.id;
+
+    // The manifest call builds the render (GLB + manifest + edges) on demand.
+    const manifest = await request(app)
+      .get(`/api/v1/projects/${id}/meshes/${meshId}/manifest`)
+      .set('Authorization', auth);
+    expect(manifest.status).toBe(200);
+    expect(manifest.body.manifest.patches).toEqual(SOURCE_MANIFEST);
+
+    const geo = await request(app)
+      .get(`/api/v1/projects/${id}/meshes/${meshId}/geometry`)
+      .set('Authorization', auth)
+      .buffer()
+      .parse(binaryParser);
+    expect(geo.status).toBe(200);
+    expect(geo.headers['content-type']).toContain('model/gltf-binary');
+    expect(Buffer.isBuffer(geo.body)).toBe(true);
+    expect(geo.body.equals(FAKE_GLB)).toBe(true);
+  });
+
+  it('returns 409 MESH_NOT_BUILT for geometry before the manifest build', async () => {
+    const { id, auth } = await makeProject('ms-geo-missing@dive-turbinen.test');
+    const imported = await importMesh(id, auth, meshFiles('part', makeBoundary([{ name: 'inlet' }])));
+    const res = await request(app)
+      .get(`/api/v1/projects/${id}/meshes/${imported.body.mesh.id}/geometry`)
+      .set('Authorization', auth);
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('MESH_NOT_BUILT');
+  });
+
+  it('serves 204 for source edges before a build, then the buffer after', async () => {
+    setCommandRunner(sourceVizRunner);
+    const { id, auth } = await makeProject('ms-edges@dive-turbinen.test');
+    const imported = await importMesh(id, auth, meshFiles('part', makeBoundary([{ name: 'inlet' }])));
+    const meshId = imported.body.mesh.id;
+
+    const before = await request(app).get(`/api/v1/projects/${id}/meshes/${meshId}/edges`).set('Authorization', auth);
+    expect(before.status).toBe(204);
+
+    await request(app).get(`/api/v1/projects/${id}/meshes/${meshId}/manifest`).set('Authorization', auth);
+    const after = await request(app)
+      .get(`/api/v1/projects/${id}/meshes/${meshId}/edges`)
+      .set('Authorization', auth)
+      .buffer()
+      .parse(binaryParser);
+    expect(after.status).toBe(200);
+    expect(after.headers['content-type']).toContain('application/octet-stream');
+    expect(after.body.equals(FAKE_EDGES)).toBe(true);
+  });
+
+  it('returns 404 for the manifest of an unknown source', async () => {
+    const { id, auth } = await makeProject('ms-404@dive-turbinen.test');
+    const res = await request(app).get(`/api/v1/projects/${id}/meshes/ghost/manifest`).set('Authorization', auth);
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('GET/PUT /projects/:id/meshes/plan', () => {
   it('persists and reads back a merge plan draft', async () => {
     const { id, auth } = await makeProject('mp-plan@dive-turbinen.test');
@@ -494,6 +750,24 @@ describe('GET/PUT /projects/:id/meshes/plan', () => {
     const get = await request(app).get(`/api/v1/projects/${id}/meshes/plan`).set('Authorization', auth);
     expect(get.status).toBe(200);
     expect(get.body.plan).toMatchObject(plan);
+  });
+
+  it('persists and reads back the rigid part transforms in a draft', async () => {
+    const { id, auth } = await makeProject('mp-transforms@dive-turbinen.test');
+    const { a, b } = await importTwoParts(id, auth);
+    const plan = {
+      order: [a, b],
+      stitches: [],
+      transforms: [{ meshId: b, translation: [1, 2, 3], rotation: [0, 0, 0.7071067811865476, 0.7071067811865476] }],
+    };
+
+    const put = await request(app).put(`/api/v1/projects/${id}/meshes/plan`).set('Authorization', auth).send(plan);
+    expect(put.status).toBe(200);
+    expect(put.body.plan.transforms).toEqual(plan.transforms);
+
+    const get = await request(app).get(`/api/v1/projects/${id}/meshes/plan`).set('Authorization', auth);
+    expect(get.status).toBe(200);
+    expect(get.body.plan.transforms).toEqual(plan.transforms);
   });
 
   it('returns a null plan when none was saved', async () => {

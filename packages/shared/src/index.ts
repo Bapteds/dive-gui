@@ -221,6 +221,24 @@ export interface StitchPair {
 }
 
 /**
+ * Rigid placement of an added part in a multi-part assembly:
+ *   p' = R(rotation)·p + translation
+ * expressed in the part's own polyMesh units (metres, SI). There is NO scaling —
+ * a rigid transform cannot rescale, so every part must already share the same
+ * units. `rotation` is a unit quaternion in three.js (x, y, z, w) order, and the
+ * server mirrors three.js's exact `Matrix4.compose` formula, so the browser live
+ * preview and the merged-on-disk result are bit-for-bit identical.
+ */
+export interface PartTransform {
+  /** Id of the library source this transform places (the master is never moved). */
+  meshId: string;
+  /** Translation (tx, ty, tz) applied after the rotation, in raw polyMesh coords. */
+  translation: [number, number, number];
+  /** Unit quaternion (x, y, z, w), normalized; identity = [0, 0, 0, 1]. */
+  rotation: [number, number, number, number];
+}
+
+/**
  * A merge plan: the ordered list of source mesh ids to combine (the first is the
  * master) plus the patch pairs to stitch afterwards. An empty `stitches` just
  * combines the meshes side by side without connecting them.
@@ -228,6 +246,13 @@ export interface StitchPair {
 export interface MergePlan {
   order: string[];
   stitches: StitchPair[];
+  /**
+   * Optional rigid placements for the added parts (see PartTransform), applied to
+   * the transient staged copy before the meshes are combined. Absent, empty, or
+   * identity => today's behaviour (nothing is moved). The master — `order[0]` — is
+   * always left at identity regardless of what this carries.
+   */
+  transforms?: PartTransform[];
 }
 
 /** One executed (or skipped) step of the merge pipeline. */
