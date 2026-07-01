@@ -281,7 +281,7 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
         aPatch: activeDraft.matingPatch,
         bMeshId: base.id,
         bPatch: activeDraft.target.patchName,
-        coupling: 'nonConformalCyclic',
+        coupling: 'nonConformal',
       });
     }
     setActivePartId(null); // commit -> the ghost becomes a placed (neutral) part

@@ -111,7 +111,7 @@ const successResult: MergeRunResult = {
     { kind: 'prepare', label: 'Prepare housing', command: '', status: 'success', exitCode: null, stdout: 'staged', stderr: '', durationMs: 0 },
     { kind: 'prepare', label: 'Prepare rotor', command: '', status: 'success', exitCode: null, stdout: 'Transformed + staged', stderr: '', durationMs: 0 },
     { kind: 'mergeMeshes', label: 'Combine rotor', command: 'mergeMeshes . rotor -addCases', status: 'success', exitCode: 0, stdout: 'Merged', stderr: '', durationMs: 40 },
-    { kind: 'createNonConformalCouples', label: 'Couple rotor.mount ↔ housing.baseTop', command: 'createNonConformalCouples ...', status: 'success', exitCode: 0, stdout: 'Coupled', stderr: '', durationMs: 30 },
+    { kind: 'nonConformalCouple', label: 'Couple rotor.mount ↔ housing.baseTop', command: 'nonConformalCouple ...', status: 'success', exitCode: 0, stdout: 'Coupled', stderr: '', durationMs: 30 },
     { kind: 'cleanup', label: 'Clean up empty patches', command: '', status: 'skipped', exitCode: null, stdout: 'Skipped', stderr: '', durationMs: 0 },
     { kind: 'checkMesh', label: 'Check combined mesh', command: 'checkMesh -case .', status: 'success', exitCode: 0, stdout: 'Mesh OK.', stderr: '', durationMs: 20 },
   ],
@@ -201,7 +201,7 @@ describe('AssemblyWorkspace', () => {
     expect(meshesApi.runMerge).toHaveBeenCalledWith('p1', {
       order: ['base', 'p2'],
       interfaces: [
-        { aMeshId: 'p2', aPatch: 'mount', bMeshId: 'base', bPatch: 'baseTop', coupling: 'nonConformalCyclic' },
+        { aMeshId: 'p2', aPatch: 'mount', bMeshId: 'base', bPatch: 'baseTop', coupling: 'nonConformal' },
       ],
       transforms: [{ meshId: 'p2', rotation: [0, 0, 0, 1], translation: [1, 2, 3] }],
     });

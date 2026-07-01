@@ -135,7 +135,7 @@ describe('MergeMeshesFlow', () => {
     expect(meshesApi.runMerge).toHaveBeenCalledWith('p1', {
       order: ['m1', 'm2'],
       interfaces: [
-        { aMeshId: 'm1', aPatch: 'ifaceA', bMeshId: 'm2', bPatch: 'ifaceB', coupling: 'nonConformalCyclic' },
+        { aMeshId: 'm1', aPatch: 'ifaceA', bMeshId: 'm2', bPatch: 'ifaceB', coupling: 'nonConformal' },
       ],
     });
     // The checkMesh log is expanded by default, so its output is visible.

@@ -379,7 +379,7 @@ export type {
 
 /**
  * Ordered kinds of step the merge pipeline emits. Local mirror of the shared
- * `MergeStepKind`, WIDENED with `createNonConformalCouples` (the v12-native
+ * `MergeStepKind`, WIDENED with `nonConformalCouple` (the v12-native
  * non-conformal coupling step). The backend adds this kind to `@dive/shared` in
  * parallel; mirroring here keeps the web contract ahead of the shared rebuild,
  * exactly like the `PartTransform` mirror below. A `MergeStep.kind` off the wire
@@ -389,20 +389,20 @@ export type MergeStepKind =
   | 'prepare'
   | 'mergeMeshes'
   | 'stitchMesh'
-  | 'createNonConformalCouples'
+  | 'nonConformalCouple'
   | 'cleanup'
   | 'checkMesh';
 
 /**
  * How two coincident interface patches are connected when the assembly is
  * merged. Local mirror of the shared `InterfaceCoupling` (added in parallel).
- *   - 'nonConformalCyclic': v12-native Non-Conformal Coupling
- *     (`createNonConformalCouples`). KEEPS both parts as separate meshes and
+ *   - 'nonConformal': v12-native Non-Conformal Coupling
+ *     (`nonConformalCouple`). KEEPS both parts as separate meshes and
  *     interpolates the flow across the interface. The default.
  *   - 'stitch': conformal `stitchMesh` fuse. The two patches become one internal
  *     interface and the parts become a single combined mesh.
  */
-export type InterfaceCoupling = 'nonConformalCyclic' | 'stitch';
+export type InterfaceCoupling = 'nonConformal' | 'stitch';
 
 /**
  * One interface to make between two parts: connect patch `aPatch` of `aMeshId`

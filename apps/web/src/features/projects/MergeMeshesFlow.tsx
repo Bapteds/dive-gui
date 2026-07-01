@@ -94,7 +94,7 @@ interface InterfaceDraft {
 }
 
 /** The default coupling for a new interface: v12-native non-conformal. */
-const DEFAULT_COUPLING: InterfaceCoupling = 'nonConformalCyclic';
+const DEFAULT_COUPLING: InterfaceCoupling = 'nonConformal';
 
 const EMPTY_DRAFT: InterfaceDraft = {
   aMeshId: '',
@@ -116,21 +116,21 @@ function isBlank(draft: InterfaceDraft): boolean {
 
 /** The two coupling options, with copy + icon, shared by every interface row. */
 const COUPLING_OPTIONS: SegmentedOption<InterfaceCoupling>[] = [
-  { value: 'nonConformalCyclic', label: 'Non-conformal', icon: Link2 },
+  { value: 'nonConformal', label: 'Non-conformal', icon: Link2 },
   { value: 'stitch', label: 'Conformal stitch', icon: Combine },
 ];
 
 /** One-line consequence of each coupling, shown under the selector. */
 const COUPLING_HELP: Record<InterfaceCoupling, string> = {
-  nonConformalCyclic:
-    'Keeps both meshes separate. Flow interpolates across the interface (createNonConformalCouples).',
+  nonConformal:
+    'Keeps both meshes separate. Flow interpolates across the interface (nonConformalCouple).',
   stitch:
     'Fuses the two patches into one internal interface (stitchMesh). The meshes become a single combined mesh.',
 };
 
 /** Short chip label for a coupling, used in the confirm summary. */
 const COUPLING_CHIP: Record<InterfaceCoupling, string> = {
-  nonConformalCyclic: 'Non-conformal',
+  nonConformal: 'Non-conformal',
   stitch: 'Stitch',
 };
 
@@ -1439,7 +1439,7 @@ function CouplingChip({ coupling }: { coupling: InterfaceCoupling }) {
     <span
       className={cn(
         'shrink-0 rounded-sm px-1.5 py-0.5 text-[0.6875rem] font-medium',
-        coupling === 'nonConformalCyclic'
+        coupling === 'nonConformal'
           ? 'bg-primary-tint text-primary'
           : 'border border-border text-text-secondary',
       )}
@@ -1466,7 +1466,7 @@ function buildPipelinePreview(
     if (iface.coupling === 'stitch') {
       steps.push({ label: `Stitch ${a} ↔ ${b}`, tool: 'stitchMesh' });
     } else {
-      steps.push({ label: `Couple ${a} ↔ ${b}`, tool: 'createNonConformalCouples' });
+      steps.push({ label: `Couple ${a} ↔ ${b}`, tool: 'nonConformalCouple' });
     }
   }
   steps.push({ label: 'Clean up empty patches' });
@@ -1478,7 +1478,7 @@ function buildPipelinePreview(
 const KIND_TOOL: Partial<Record<MergeStepKind, string>> = {
   mergeMeshes: 'mergeMeshes',
   stitchMesh: 'stitchMesh',
-  createNonConformalCouples: 'createNonConformalCouples',
+  nonConformalCouple: 'nonConformalCouple',
   checkMesh: 'checkMesh',
 };
 
