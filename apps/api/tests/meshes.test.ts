@@ -456,17 +456,19 @@ describe('POST /projects/:id/meshes/merge', () => {
     expect(result.steps.map((s: { kind: string }) => s.kind)).toEqual([
       'prepare', 'prepare', 'mergeMeshes', 'stitchMesh', 'cleanup', 'checkMesh',
     ]);
-    // The stitched interface patches are fused away; the rest survive, prefixed.
+    // The stitched interface patches are fused away; the rest survive with their
+    // ORIGINAL names (every name is unique across the two parts — no collision, no prefix).
     const names = result.boundaryPatches.map((p: { name: string }) => p.name).sort();
-    expect(names).toEqual(['m1_inlet', 'm1_wallsA', 'm2_outlet', 'm2_wallsB']);
+    expect(names).toEqual(['inlet', 'outlet', 'wallsA', 'wallsB']);
 
     // The merge invoked the ESI v2406 CLI: mergeMeshes positional [master, add, -overwrite],
     // stitchMesh positional [a, b] + -partial (not the .org -addCases / ((a b)) patchPairs).
+    // The stitch runs on the RAW patch names (unique -> unprefixed).
     const mergeCall = recordedCommands.find((c) => c.command === 'mergeMeshes')!;
     expect(mergeCall.args).toEqual([expect.any(String), expect.any(String), '-overwrite']);
     const stitchCall = recordedCommands.find((c) => c.command === 'stitchMesh')!;
-    expect(stitchCall.args[0]).toBe('m1_ifaceA');
-    expect(stitchCall.args[1]).toBe('m2_ifaceB');
+    expect(stitchCall.args[0]).toBe('ifaceA');
+    expect(stitchCall.args[1]).toBe('ifaceB');
     expect(stitchCall.args).toContain('-partial');
     expect(stitchCall.args).toContain('-overwrite');
 
@@ -477,7 +479,7 @@ describe('POST /projects/:id/meshes/merge', () => {
 
     const boundary = await caseBoundary(id, auth);
     expect(boundary.body.file.content).not.toContain('ifaceA');
-    expect(boundary.body.file.content).toContain('m1_inlet');
+    expect(boundary.body.file.content).toContain('inlet');
   });
 
   it('imports and promotes a single mesh without prefixing (no merge/stitch steps)', async () => {
@@ -495,6 +497,59 @@ describe('POST /projects/:id/meshes/merge', () => {
     expect(res.body.result.steps.map((s: { kind: string }) => s.kind)).toEqual(['prepare', 'cleanup', 'checkMesh']);
     // Single mesh keeps its original patch names (no m1_ prefix).
     expect(res.body.result.boundaryPatches.map((p: { name: string }) => p.name).sort()).toEqual(['inlet', 'outlet']);
+  });
+
+  it('prefixes ONLY a colliding patch with the part id slug (not m2_), keeps unique names', async () => {
+    setCommandRunner(mergeRunner);
+    const { id, auth } = await makeProject('mg-collide@dive-turbinen.test');
+    // Two library parts that BOTH carry an "iface" AND a "walls" patch (real
+    // collisions), each with its own unique patch too. Couple the two ifaces.
+    const rotor = await importMesh(id, auth, meshFiles('rotor', makeBoundary([
+      { name: 'inlet' }, { name: 'iface' }, { name: 'walls', type: 'wall' },
+    ])));
+    const stator = await importMesh(id, auth, meshFiles('stator', makeBoundary([
+      { name: 'iface' }, { name: 'outlet' }, { name: 'walls', type: 'wall' },
+    ])));
+    const rotorId = rotor.body.mesh.id;   // 'rotor' (base, order[0])
+    const statorId = stator.body.mesh.id; // 'stator' (added)
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/merge`)
+      .set('Authorization', auth)
+      .send({
+        order: [rotorId, statorId],
+        interfaces: [{ aMeshId: rotorId, aPatch: 'iface', bMeshId: statorId, bPatch: 'iface', coupling: 'nonConformal' }],
+      });
+
+    expect(res.status).toBe(200);
+    const result = res.body.result;
+    expect(result.success).toBe(true);
+
+    const patches = result.boundaryPatches as Array<{ name: string; type: string }>;
+    const names = patches.map((p) => p.name);
+    // Base (rotor) keeps ALL its names; stator's colliding iface/walls take stator's
+    // READABLE id prefix; stator's unique outlet is kept. NEVER the cryptic m1_/m2_.
+    expect(names).toContain('inlet');        // rotor, base -> kept
+    expect(names).toContain('iface');        // rotor, base -> kept
+    expect(names).toContain('walls');        // rotor, base -> kept
+    expect(names).toContain('outlet');       // stator, unique -> kept
+    expect(names).toContain('stator_iface'); // stator, collided -> id slug
+    expect(names).toContain('stator_walls'); // stator, collided -> id slug
+    expect(names).not.toContain('m1_iface');
+    expect(names).not.toContain('m2_iface');
+    expect(names).not.toContain('m2_walls');
+    expect(names).not.toContain('m1_inlet');
+
+    // The couple used the RESOLVED names: rotor's iface stays 'iface', stator's iface
+    // is 'stator_iface'; both are retyped to cyclicAMI in the combined boundary.
+    expect(patches.find((p) => p.name === 'iface')!.type).toBe('cyclicAMI');
+    expect(patches.find((p) => p.name === 'stator_iface')!.type).toBe('cyclicAMI');
+
+    // Each collision is reported as a readable rename note (never m1_/m2_).
+    const notes = result.notes as string[];
+    expect(notes.some((n) => /Renamed stator\.iface -> stator_iface to avoid a clash with an existing "iface" patch\./.test(n))).toBe(true);
+    expect(notes.some((n) => /Renamed stator\.walls -> stator_walls/.test(n))).toBe(true);
+    expect(notes.some((n) => /m1_|m2_/.test(n))).toBe(false);
   });
 
   it('short-circuits and leaves the case untouched when mergeMeshes fails', async () => {
@@ -619,21 +674,23 @@ describe('POST /projects/:id/meshes/merge (Assembly v2 non-conformal coupling)',
     expect(recordedCommands.some((c) => c.command === 'createNonConformalCouples')).toBe(false);
     expect(recordedCommands.some((c) => c.command === 'createPatch')).toBe(false);
 
-    // Parts stay SEPARATE: the two interface patches KEEP their names (not fused
-    // away, not renamed) and are retyped to cyclicAMI. Every other patch survives.
+    // Parts stay SEPARATE: the two interface patches KEEP their names (unique across
+    // the parts -> unprefixed) and are retyped to cyclicAMI. Every other patch survives.
     const patches = result.boundaryPatches as Array<{ name: string; type: string }>;
     const names = patches.map((p) => p.name);
-    expect(names).toContain('m1_ifaceA');
-    expect(names).toContain('m2_ifaceB');
-    expect(patches.find((p) => p.name === 'm1_ifaceA')!.type).toBe('cyclicAMI');
-    expect(patches.find((p) => p.name === 'm2_ifaceB')!.type).toBe('cyclicAMI');
-    expect(names).toContain('m1_inlet');
-    expect(names).toContain('m2_outlet');
+    expect(names).toContain('ifaceA');
+    expect(names).toContain('ifaceB');
+    expect(patches.find((p) => p.name === 'ifaceA')!.type).toBe('cyclicAMI');
+    expect(patches.find((p) => p.name === 'ifaceB')!.type).toBe('cyclicAMI');
+    expect(names).toContain('inlet');
+    expect(names).toContain('outlet');
+    // No cryptic m1_/m2_ prefixes anywhere (unique names are preserved).
+    expect(names.some((n) => /^m\d+_/.test(n))).toBe(false);
 
     // The combined mesh was promoted into the case, keeping the coupled patches.
     const boundary = (await caseBoundary(id, auth)).body.file.content as string;
-    expect(boundary).toContain('m1_ifaceA');
-    expect(boundary).toMatch(/m1_ifaceA[\s\S]*?type\s+cyclicAMI/);
+    expect(boundary).toContain('ifaceA');
+    expect(boundary).toMatch(/ifaceA[\s\S]*?type\s+cyclicAMI/);
   });
 
   it('defaults an interface with no explicit coupling to non-conformal', async () => {
@@ -752,16 +809,19 @@ ${entries}
     expect(firstPrepare.stdout).toMatch(/assembly base/i);
     expect((result.steps as Array<{ kind: string }>).some((s) => s.kind === 'nonConformalCouple')).toBe(true);
 
-    // Base patches are UNPREFIXED (inlet/outlet kept, no m1_); the added part is
-    // prefixed (m2_); the coupled pair keeps its names (outlet, m2_iface) retyped cyclicAMI.
+    // Base patches are kept (inlet/outlet, no m1_); the added part's UNIQUE patches
+    // are ALSO kept unprefixed (iface/walls); the coupled pair keeps its names
+    // (outlet <-> iface) retyped to cyclicAMI.
     const patches = result.boundaryPatches as Array<{ name: string; type: string }>;
     const names = patches.map((p) => p.name);
     expect(names).toContain('inlet');
     expect(names).toContain('outlet');
     expect(names).not.toContain('m1_inlet');
-    expect(names).toContain('m2_iface');
+    expect(names).toContain('iface');
+    expect(names).toContain('walls');
+    expect(names).not.toContain('m2_iface');
     expect(patches.find((p) => p.name === 'outlet')!.type).toBe('cyclicAMI');
-    expect(patches.find((p) => p.name === 'm2_iface')!.type).toBe('cyclicAMI');
+    expect(patches.find((p) => p.name === 'iface')!.type).toBe('cyclicAMI');
 
     // The original case is backed up before the destructive promote (kind original).
     const backup = await request(app).get(`/api/v1/projects/${id}/mesh/backup`).set('Authorization', auth);
@@ -773,7 +833,45 @@ ${entries}
     // fixedValue, and the coupled patch got the nonConformalCyclic field BC.
     const u = (await caseFileContent(id, auth, '0/U')).body.file.content as string;
     expect(u).toMatch(/inlet[\s\S]*?type\s+fixedValue/);
-    expect(u).toMatch(/m2_iface[\s\S]*?type\s+cyclicAMI/);
+    expect(u).toMatch(/iface[\s\S]*?type\s+cyclicAMI/);
+  });
+
+  it('prefixes ONLY an added patch that collides with a base patch name (id slug, not m2_)', async () => {
+    setCommandRunner(mergeRunner);
+    const { id, auth } = await makeProject('mg-base-collide@dive-turbinen.test');
+    await seedCase(id, auth); // case (base): inlet, outlet (+ 0/U, 0/p)
+
+    // The added part shares the case's "outlet" name (a real collision) and adds a
+    // unique "iface" to couple onto the case outlet.
+    const rotor = await importMesh(id, auth, meshFiles('rotor', makeBoundary([
+      { name: 'iface' }, { name: 'outlet' },
+    ])));
+    const rotorId = rotor.body.mesh.id; // 'rotor'
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/merge`)
+      .set('Authorization', auth)
+      .send({
+        order: ['__case__', rotorId],
+        interfaces: [{ aMeshId: '__case__', aPatch: 'outlet', bMeshId: rotorId, bPatch: 'iface', coupling: 'nonConformal' }],
+      });
+
+    expect(res.status).toBe(200);
+    const result = res.body.result;
+    expect(result.success).toBe(true);
+
+    const names = (result.boundaryPatches as Array<{ name: string }>).map((p) => p.name);
+    // Base keeps inlet/outlet; the added UNIQUE iface is kept; only the added
+    // colliding "outlet" is prefixed with the part id (rotor_outlet), NOT m2_.
+    expect(names).toContain('inlet');
+    expect(names).toContain('outlet');
+    expect(names).toContain('iface');
+    expect(names).toContain('rotor_outlet');
+    expect(names).not.toContain('m2_outlet');
+    expect(names).not.toContain('m2_iface');
+
+    // The collision is reported as a readable rename note.
+    expect((result.notes as string[]).some((n) => /Renamed rotor\.outlet -> rotor_outlet/.test(n))).toBe(true);
   });
 
   it('rejects the case sentinel when the project has no case mesh (422)', async () => {

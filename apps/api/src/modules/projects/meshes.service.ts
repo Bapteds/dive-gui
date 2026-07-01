@@ -6,12 +6,16 @@
 // the artifact every other feature (Visualize, Solver, Export) already consumes
 // — by:
 //
-//   1. prepare:     stage each source as a minimal case in a work dir and prefix
-//                   its patches (m1_, m2_, …) so mergeMeshes never fuses two
-//                   distinct same-named patches (e.g. each part's own "walls").
+//   1. prepare:     stage each source as a minimal case in a work dir. The base
+//                   (order[0]) keeps ALL its patch names; each added part keeps its
+//                   names too, EXCEPT any that collide with a name already taken by
+//                   an earlier part — a colliding name is prefixed with the part's
+//                   READABLE id slug (e.g. rotor.walls -> rotor_walls) so mergeMeshes
+//                   never fuses two distinct same-named patches (e.g. each part's own
+//                   "walls"), WITHOUT mangling the meaningful names the user imported.
 //                   When order[0] is the MERGE_BASE_CASE sentinel the master is
-//                   staged from the project's OWN case mesh, UNPREFIXED (its
-//                   inlet/outlet/interface names are preserved as the base).
+//                   staged from the project's OWN case mesh, so its inlet/outlet/
+//                   interface names (and their 0/ BCs) are preserved as the base.
 //   2. mergeMeshes: combine every additional source into the master mesh.
 //   3. per interface, branch on coupling:
 //        nonConformalCyclic: createNonConformalCouples couples a touching patch
@@ -622,24 +626,23 @@ async function persistPlan(projectId: string, plan: MergePlan): Promise<MergePla
 /**
  * Stage one source as a minimal OpenFOAM case in `caseDir`: copy its polyMesh,
  * (optionally) bake a rigid placement into the staged points, write the minimal
- * system/ dictionaries the utilities need, and (when merging more than one mesh)
- * prefix every patch with the mesh's slug so names are globally unique before
- * mergeMeshes combines them.
+ * system/ dictionaries the utilities need, and rename ONLY the patches that would
+ * collide with an earlier part's names (given by `renames`, originalName ->
+ * resolvedName) so the meaningful names the user imported are preserved wherever
+ * they are already unique.
  *
  * When `transform` is a non-identity placement, its rotation+translation is
  * applied to THIS staged copy's constant/polyMesh/points only (the library source
  * stays pristine) so the merged geometry matches the browser assembly preview
  * exactly. points and boundary are independent, so this never disturbs the patch
- * names the prefix step below rewrites. The master (order[0]) is passed no
- * transform, so it is never moved.
+ * names the rename step below rewrites. The master (order[0]) is passed no
+ * transform (never moved) and an empty `renames` (never renamed).
  */
 async function stageSource(
   projectId: string,
   meshId: string,
   caseDir: string,
-  slug: string,
-  patches: BoundaryPatchDetail[],
-  prefix: boolean,
+  renames: Map<string, string>,
   transform?: PartTransform,
 ): Promise<void> {
   const srcPolyMesh = meshPolyMeshDir(projectId, meshId);
@@ -664,13 +667,13 @@ async function stageSource(
     await fs.writeFile(abs, renderBaseFile(file, []), 'utf8');
   }
 
-  if (prefix) {
+  // Rename ONLY the colliding patches; a part with all-unique names is left
+  // verbatim. Applied collision-free (placeholder technique) so a target name that
+  // still exists in this boundary can't clobber another patch during the rewrite.
+  if (renames.size > 0) {
     const boundaryAbs = path.join(destPolyMesh, 'boundary');
-    let content = await fs.readFile(boundaryAbs, 'utf8');
-    for (const patch of patches) {
-      content = renameBoundaryPatch(content, patch.name, `${slug}_${patch.name}`);
-    }
-    await fs.writeFile(boundaryAbs, content, 'utf8');
+    const content = await fs.readFile(boundaryAbs, 'utf8');
+    await fs.writeFile(boundaryAbs, applyRenames(content, renames), 'utf8');
   }
 }
 
@@ -870,32 +873,65 @@ export async function runMerge(
 
   await persistPlan(projectId, plan);
 
-  // Slugs (m1_, m2_, …) namespace each part's patches so mergeMeshes never fuses
-  // two same-named patches. Prefix the base only when it is a LIBRARY source: a
-  // base=case keeps its own patch names (inlet/outlet/interface) so its physics
-  // survives the promote. Added parts are always namespaced when combining >1 mesh.
-  const multi = order.length > 1;
-  const slugOf = new Map<string, string>();
-  order.forEach((id, index) => slugOf.set(id, `m${index + 1}`));
-  const prefixOf = (index: number): boolean => (index === 0 ? multi && !baseIsCase : multi);
-  const resolvePatch = (meshId: string, patch: string): string =>
-    prefixOf(order.indexOf(meshId)) ? `${slugOf.get(meshId)}_${patch}` : patch;
-
   const notes: string[] = [];
   const steps: MergeStep[] = [];
   const timeoutMs = env.MERGE_STEP_TIMEOUT_MS;
+
+  // --- Patch-name resolution: prefix ONLY on a real collision ---------------
+  // Two patches cannot share a name in one polyMesh, so mergeMeshes would fuse an
+  // added part's "walls" into the base's "walls". To stop that WITHOUT mangling the
+  // meaningful names the user imported (and the 0/ BCs that reference them), the
+  // base (order[0]) keeps EVERY name, and each added part keeps a name UNLESS it is
+  // already taken by an earlier part (base first, then earlier added parts). Only a
+  // colliding name is prefixed with the part's READABLE id slug (e.g. rotor.walls ->
+  // rotor_walls) — never the cryptic m1_/m2_. `resolvedNames` (originalName ->
+  // resolvedName, per mesh) drives BOTH the staged-boundary rename and the interface
+  // coupling below; `usedNames` tracks the taken names; every rename is reported.
+  const resolvedNames = new Map<string, Map<string, string>>();
+  const usedNames = new Set<string>();
+  for (const [index, id] of order.entries()) {
+    const map = new Map<string, string>();
+    for (const patch of patchesOf.get(id)!) {
+      let resolved = patch.name;
+      if (index > 0 && usedNames.has(resolved)) {
+        // Collision with an earlier part: prefix with THIS part's readable id.
+        resolved = `${id}_${patch.name}`;
+        // Defensive: if even the slug-prefixed name is taken (an earlier part
+        // literally carried it), append a counter — never silently fuse two patches.
+        for (let n = 2; usedNames.has(resolved); n += 1) resolved = `${id}_${patch.name}_${n}`;
+        notes.push(
+          `Renamed ${id}.${patch.name} -> ${resolved} to avoid a clash with an existing "${patch.name}" patch.`,
+        );
+      }
+      map.set(patch.name, resolved);
+      usedNames.add(resolved);
+    }
+    resolvedNames.set(id, map);
+  }
+  // The resolved name of a patch (identity for anything that did not collide).
+  const resolvePatch = (meshId: string, patch: string): string =>
+    resolvedNames.get(meshId)?.get(patch) ?? patch;
+  // The renames (resolved !== original) a part must apply to its staged boundary.
+  const renamesFor = (id: string): Map<string, string> => {
+    const out = new Map<string, string>();
+    for (const [from, to] of resolvedNames.get(id) ?? []) if (from !== to) out.set(from, to);
+    return out;
+  };
+
+  // Internal, collision-free work-DIR names (m1/m2/…); patch names follow the rule
+  // above, but the per-part staging directory just needs to be unique on disk.
+  const slugOf = new Map<string, string>();
+  order.forEach((id, index) => slugOf.set(id, `m${index + 1}`));
 
   // Rigid placements from the assembly preview, keyed by mesh id. The master
   // (order[0]) is deliberately never looked up here — it is the fixed base and is
   // always staged at identity.
   const byMesh = new Map((plan.transforms ?? []).map((t) => [t.meshId, t] as const));
 
-  // --- 1) prepare: stage each part (+ placement) + prefix its patches -------
+  // --- 1) prepare: stage each part (+ placement) + rename colliding patches -
   const workRoot = await resetMeshWork(projectId);
   const caseDirOf = (id: string): string => path.join(workRoot, slugOf.get(id)!);
   for (const [index, id] of order.entries()) {
-    const slug = slugOf.get(id)!;
-    const doPrefix = prefixOf(index);
     const isBaseCaseMaster = index === 0 && baseIsCase;
     const label = isBaseCaseMaster ? 'Prepare the project case mesh' : `Prepare ${byId.get(id)!.name}`;
     // The base part is never moved; every added part carries its optional placement.
@@ -903,12 +939,20 @@ export async function runMerge(
     const placed = !!transform && !isIdentityTransform(transform);
     try {
       if (isBaseCaseMaster) {
-        // Base=case: stage the project's own polyMesh as the master, UNPREFIXED.
+        // Base=case: stage the project's own polyMesh as the master, patches kept.
         await stageCaseMaster(projectId, caseDirOf(id));
         steps.push(okStep('prepare', label, 'Staged the project case mesh as the assembly base (patches kept).'));
       } else {
-        await stageSource(projectId, id, caseDirOf(id), slug, patchesOf.get(id)!, doPrefix, transform);
-        const stagedNote = doPrefix ? `Patches prefixed with ${slug}_` : 'Staged source mesh';
+        // Base (index 0) has an empty rename map (all names kept); an added part
+        // renames only the patches that collided with an earlier part.
+        const renames = renamesFor(id);
+        await stageSource(projectId, id, caseDirOf(id), renames, transform);
+        const stagedNote =
+          index === 0
+            ? 'Staged source mesh as the assembly base (patches kept).'
+            : renames.size > 0
+              ? `Staged source mesh; renamed ${renames.size} colliding patch(es) with the ${id}_ prefix.`
+              : 'Staged source mesh (patch names kept).';
         steps.push(okStep('prepare', label, placed ? `Transformed + staged; ${stagedNote}` : stagedNote));
       }
     } catch (err) {
@@ -968,7 +1012,7 @@ export async function runMerge(
         await fs.writeFile(masterBoundaryAbs, after, 'utf8');
 
         // Defensive: confirm both patches were actually retyped. A no-op (a patch
-        // absent from the combined master — a prefixing bug) would otherwise
+        // absent from the combined master — a name-resolution bug) would otherwise
         // silently promote an uncoupled mesh, so fail loudly with a clear message.
         const typeOf = new Map(parseBoundaryPatchDetails(after).map((d) => [d.name, d.type] as const));
         if (typeOf.get(aPatch) !== 'cyclicAMI' || typeOf.get(bPatch) !== 'cyclicAMI') {
@@ -1121,7 +1165,7 @@ export async function runMerge(
       notes.push(
         mode === 'merge'
           ? `Re-aligned ${sync.updated.length} field(s): kept the existing boundary conditions of the case's patches and added generic defaults for the newly coupled / added patches. Set the physics for the added part's patches before solving.`
-          : `Re-aligned ${sync.updated.length} field(s) to the merged patch set — their boundary conditions were reset to generic defaults because the patches were renamed (m1_*, m2_*, …). Re-specify your inlet / outlet / physical BCs before solving.`,
+          : `Re-aligned ${sync.updated.length} field(s) to the merged patch set with generic default boundary conditions (a library-base assembly carries no 0/ physics to preserve). Re-specify your inlet / outlet / physical BCs before solving.`,
       );
   } catch {
     // No 0/ fields to align yet (a mesh-only project): the user makes the case
