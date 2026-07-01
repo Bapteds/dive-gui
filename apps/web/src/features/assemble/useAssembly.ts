@@ -4,6 +4,7 @@ import {
   getMeshSourceGeometry,
   getMeshSourceManifest,
 } from '@/lib/api/meshes';
+import { getMeshManifest } from '@/lib/api/projects';
 import type { MeshManifest } from '@/lib/api/types';
 
 /**
@@ -15,10 +16,42 @@ import type { MeshManifest } from '@/lib/api/types';
  *
  * The library + merge hooks themselves (list, import, auto-patch, rename, run
  * merge, plan) are reused verbatim from `useMeshes.ts` - this module only adds
- * the source-viz queries the canvas needs.
+ * the source-viz queries the canvas needs, plus the project CASE-mesh queries
+ * used when the case is the assembly base (the Visualize body reused verbatim).
  */
 
 const FIVE_MINUTES = 5 * 60 * 1000;
+
+/**
+ * Query key for the project CASE mesh manifest. Deliberately identical to the
+ * Visualize tab's key so the two share one server build + cache (the case body
+ * is the same artifact whether shown in Visualize or as the assembly base).
+ */
+export const caseMeshManifestQueryKey = (projectId: string) =>
+  ['projects', projectId, 'mesh', 'manifest'] as const;
+
+/** Query key for the project CASE mesh geometry (GLB), shared with Visualize. */
+export const caseMeshGeometryQueryKey = (projectId: string) =>
+  ['projects', projectId, 'mesh', 'glb'] as const;
+
+/**
+ * Load the project CASE mesh manifest (its boundary patches), used to populate
+ * the base-face picker and the interface editor when the case mesh is the
+ * assembly base. The first call builds the render server-side, so `isPending` is
+ * the "building the base preview" state; the case geometry fetch is gated on this
+ * having succeeded (the geometry endpoint expects the build to exist). Enabled
+ * only when the case is actually chosen as the base.
+ */
+export function useCaseMeshManifestQuery(projectId: string, enabled: boolean) {
+  return useQuery<MeshManifest>({
+    queryKey: caseMeshManifestQueryKey(projectId),
+    queryFn: () => getMeshManifest(projectId),
+    enabled,
+    retry: false,
+    staleTime: FIVE_MINUTES,
+    gcTime: FIVE_MINUTES,
+  });
+}
 
 /** Query key for a single library source's patch manifest. */
 export const meshSourceManifestQueryKey = (projectId: string, meshId: string) =>

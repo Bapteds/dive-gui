@@ -9,6 +9,7 @@ import {
   FileArchive,
   FileCog,
   FolderUp,
+  Layers,
   MapPin,
   Scissors,
   Trash2,
@@ -17,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Diamond } from '@/components/brand/Diamond';
+import { SegmentedRadioGroup, type SegmentedOption } from '@/components/ui/segmented';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/components/ui/sonner';
@@ -42,15 +44,31 @@ import { ImportReport } from '@/features/projects/ImportReport';
  * dialog step so the whole thing lives beside the live canvas.
  */
 
+/** Which mesh is the assembly base: the project case mesh, or the first library part. */
+export type BaseSource = 'case' | 'library';
+
+/** The two base-source options for the top-of-rail picker. */
+const BASE_SOURCE_OPTIONS: SegmentedOption<BaseSource>[] = [
+  { value: 'case', label: 'Project mesh', icon: Layers },
+  { value: 'library', label: 'First part', icon: Boxes },
+];
+
 export interface PartsRailProps {
   projectId: string;
   query: UseQueryResult<MeshSource[], Error>;
-  /** Sources in assembly order (index 0 = base). */
+  /** Sources in assembly order (index 0 = base; may be the project case mesh). */
   orderedMeshes: MeshSource[];
   /** The added part currently selected for placement, or null. */
   activePartId: string | null;
   /** Ids of added parts that already have a committed placement. */
   placedIds: Set<string>;
+  /** True when the base (index 0) is the pinned project case mesh (never moved). */
+  basePinned: boolean;
+  /** The chosen base source (drives the top-of-rail picker). */
+  baseSource: BaseSource;
+  onBaseSourceChange: (source: BaseSource) => void;
+  /** Whether the project has a case mesh to offer as the base. */
+  caseBaseAvailable: boolean;
   onSelectPart: (meshId: string) => void;
   onMove: (index: number, direction: -1 | 1) => void;
 }
@@ -70,6 +88,10 @@ export function PartsRail({
   orderedMeshes,
   activePartId,
   placedIds,
+  basePinned,
+  baseSource,
+  onBaseSourceChange,
+  caseBaseAvailable,
   onSelectPart,
   onMove,
 }: PartsRailProps) {
@@ -129,6 +151,26 @@ export function PartsRail({
         )}
       </h2>
 
+      {/* Base source: the project's existing case mesh, or the first library part. */}
+      {caseBaseAvailable && (
+        <div className="flex shrink-0 flex-col gap-1.5">
+          <span className="text-xs font-medium text-text-secondary">Assembly base</span>
+          <SegmentedRadioGroup
+            name="assembly-base"
+            ariaLabel="Assembly base source"
+            value={baseSource}
+            onChange={onBaseSourceChange}
+            options={BASE_SOURCE_OPTIONS}
+            stretch
+          />
+          <p className="text-xs text-text-secondary">
+            {baseSource === 'case'
+              ? 'Parts mount onto your project mesh; its 0/ physics is preserved.'
+              : 'The first imported part is the base; the others mount onto it.'}
+          </p>
+        </div>
+      )}
+
       <input
         ref={folderInputRef}
         type="file"
@@ -172,22 +214,28 @@ export function PartsRail({
           </div>
         ) : hasMeshes ? (
           <ol className="flex flex-col gap-2">
-            {orderedMeshes.map((mesh, index) => (
-              <PartRow
-                key={mesh.id}
-                projectId={projectId}
-                mesh={mesh}
-                index={index}
-                isBase={index === 0}
-                isFirst={index === 0}
-                isLast={index === orderedMeshes.length - 1}
-                isActive={mesh.id === activePartId}
-                isPlaced={placedIds.has(mesh.id)}
-                onSelect={() => onSelectPart(mesh.id)}
-                onMoveUp={() => onMove(index, -1)}
-                onMoveDown={() => onMove(index, 1)}
-              />
-            ))}
+            {orderedMeshes.map((mesh, index) => {
+              // The pinned case base occupies display index 0; parts cannot move
+              // above it. A library base (not pinned) can still be reordered.
+              const baseOffset = basePinned ? 1 : 0;
+              return (
+                <PartRow
+                  key={mesh.id}
+                  projectId={projectId}
+                  mesh={mesh}
+                  index={index}
+                  isBase={index === 0}
+                  isCaseBase={basePinned && index === 0}
+                  canMoveUp={index > baseOffset}
+                  canMoveDown={index < orderedMeshes.length - 1 && !(basePinned && index === 0)}
+                  isActive={mesh.id === activePartId}
+                  isPlaced={placedIds.has(mesh.id)}
+                  onSelect={() => onSelectPart(mesh.id)}
+                  onMoveUp={() => onMove(index, -1)}
+                  onMoveDown={() => onMove(index, 1)}
+                />
+              );
+            })}
           </ol>
         ) : (
           <EmptyHint />
@@ -267,8 +315,9 @@ function PartRow({
   mesh,
   index,
   isBase,
-  isFirst,
-  isLast,
+  isCaseBase,
+  canMoveUp,
+  canMoveDown,
   isActive,
   isPlaced,
   onSelect,
@@ -279,8 +328,10 @@ function PartRow({
   mesh: MeshSource;
   index: number;
   isBase: boolean;
-  isFirst: boolean;
-  isLast: boolean;
+  /** The base is the pinned project case mesh: read-only, no remove / re-patch. */
+  isCaseBase: boolean;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
   isActive: boolean;
   isPlaced: boolean;
   onSelect: () => void;
@@ -317,7 +368,11 @@ function PartRow({
 
         {isBase ? (
           <span className="flex min-w-0 flex-1 items-center gap-2">
-            <Boxes className="size-4 shrink-0 text-primary" strokeWidth={1.75} aria-hidden="true" />
+            {isCaseBase ? (
+              <Layers className="size-4 shrink-0 text-primary" strokeWidth={1.75} aria-hidden="true" />
+            ) : (
+              <Boxes className="size-4 shrink-0 text-primary" strokeWidth={1.75} aria-hidden="true" />
+            )}
             <span className="min-w-0 truncate text-sm font-medium text-text" title={mesh.name}>
               {mesh.name}
             </span>
@@ -366,7 +421,7 @@ function PartRow({
             size="icon"
             className="size-7 text-text-secondary"
             aria-label={`Move ${mesh.name} up`}
-            disabled={isFirst}
+            disabled={!canMoveUp}
             onClick={onMoveUp}
           >
             <ArrowUp strokeWidth={1.75} aria-hidden="true" />
@@ -377,51 +432,68 @@ function PartRow({
             size="icon"
             className="size-7 text-text-secondary"
             aria-label={`Move ${mesh.name} down`}
-            disabled={isLast}
+            disabled={!canMoveDown}
             onClick={onMoveDown}
           >
             <ArrowDown strokeWidth={1.75} aria-hidden="true" />
           </Button>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-7 text-text-secondary hover:bg-danger-tint hover:text-danger"
-                aria-label={`Remove ${mesh.name}`}
-                loading={remove.isPending}
-                onClick={() => void handleRemove()}
-              >
-                <Trash2 strokeWidth={1.75} aria-hidden="true" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Remove from library</TooltipContent>
-          </Tooltip>
+          {/* The project case mesh is not a library source, so it cannot be removed here. */}
+          {!isCaseBase && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 text-text-secondary hover:bg-danger-tint hover:text-danger"
+                  aria-label={`Remove ${mesh.name}`}
+                  loading={remove.isPending}
+                  onClick={() => void handleRemove()}
+                >
+                  <Trash2 strokeWidth={1.75} aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Remove from library</TooltipContent>
+            </Tooltip>
+          )}
         </div>
       </div>
 
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-        aria-controls={panelId}
-        className="-mt-0.5 mb-1 ml-2.5 flex w-fit items-center gap-1.5 rounded-sm px-0.5 text-xs font-medium text-text-secondary transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
-      >
-        <Scissors className="size-3 shrink-0" strokeWidth={1.75} aria-hidden="true" />
-        <span>Split / rename patches</span>
-        <span className="tabular-nums text-text-secondary">({mesh.patches.length})</span>
-        <ChevronDown
-          className={cn('size-3 transition-transform', open && 'rotate-180')}
-          strokeWidth={1.75}
-          aria-hidden="true"
-        />
-      </button>
+      {isCaseBase ? (
+        // The case mesh is re-patched in the Visualize tab, not here: show a
+        // read-only patch count so the base's boundary is still legible.
+        <p className="-mt-0.5 mb-1.5 ml-2.5 text-xs text-text-secondary">
+          <span className="tabular-nums">{mesh.patches.length}</span> patch
+          {mesh.patches.length === 1 ? '' : 'es'} from{' '}
+          <code className="font-mono text-[0.6875rem] text-text" translate="no">
+            constant/polyMesh
+          </code>
+        </p>
+      ) : (
+        <>
+          <button
+            type="button"
+            onClick={() => setOpen((value) => !value)}
+            aria-expanded={open}
+            aria-controls={panelId}
+            className="-mt-0.5 mb-1 ml-2.5 flex w-fit items-center gap-1.5 rounded-sm px-0.5 text-xs font-medium text-text-secondary transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
+          >
+            <Scissors className="size-3 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+            <span>Split / rename patches</span>
+            <span className="tabular-nums text-text-secondary">({mesh.patches.length})</span>
+            <ChevronDown
+              className={cn('size-3 transition-transform', open && 'rotate-180')}
+              strokeWidth={1.75}
+              aria-hidden="true"
+            />
+          </button>
 
-      {open && (
-        <div id={panelId} className="border-t border-border bg-bg px-2.5 py-2.5">
-          <PatchEditor projectId={projectId} mesh={mesh} />
-        </div>
+          {open && (
+            <div id={panelId} className="border-t border-border bg-bg px-2.5 py-2.5">
+              <PatchEditor projectId={projectId} mesh={mesh} />
+            </div>
+          )}
+        </>
       )}
     </li>
   );

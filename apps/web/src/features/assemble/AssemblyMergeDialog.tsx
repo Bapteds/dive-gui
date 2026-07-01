@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   CircleDashed,
+  Combine,
+  Link2,
   Loader2,
   MinusCircle,
   Plus,
@@ -22,44 +24,78 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Diamond } from '@/components/brand/Diamond';
+import { SegmentedRadioGroup, type SegmentedOption } from '@/components/ui/segmented';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
 import { ApiError } from '@/lib/api/client';
 import type {
+  InterfaceCoupling,
   MergeRunResult,
   MergeStep,
   MergeStepKind,
+  MeshInterface,
   MeshSource,
   PartTransform,
-  StitchPair,
 } from '@/lib/api/types';
+import { MERGE_BASE_CASE } from '@/lib/api/types';
 import { useRunMerge } from '@/features/projects/useMeshes';
 
 /**
- * AssemblyMergeDialog - the final "merge into one geometry" flow for the Assemble
+ * AssemblyMergeDialog - the final "merge into the case" flow for the Assemble
  * tab. It opens from the single orange Merge CTA once at least one part has been
- * positioned, walks the (optional) connections, confirms, then runs the same
+ * positioned, walks the (optional) interfaces, confirms, then runs the same
  * server pipeline as the "Merge meshes" flow - but carrying `transforms`, so each
  * positioned part is staged at its placement before mergeMeshes runs.
  *
- * The connections / confirm / per-step report follow the "Merge meshes" flow's
- * patterns (ConnectionsStep / RunStep), reused here rather than shared to keep the
- * two flows independently owned.
+ * Interfaces default to a NON-CONFORMAL coupling (createNonConformalCouples),
+ * which KEEPS both parts as separate meshes and interpolates the flow across the
+ * touching patches. A per-interface selector switches an interface to a conformal
+ * stitch (stitchMesh), which fuses the two patches into one internal interface.
  */
 
-/** A stitch pair under construction (fields fill in as the user picks). */
-interface StitchDraft {
+/** A per-interface draft (fields fill in as the user picks). */
+interface InterfaceDraft {
   aMeshId: string;
   aPatch: string;
   bMeshId: string;
   bPatch: string;
+  coupling: InterfaceCoupling;
 }
 
-const EMPTY_DRAFT: StitchDraft = { aMeshId: '', aPatch: '', bMeshId: '', bPatch: '' };
+/** The default coupling for a new interface: v12-native non-conformal. */
+const DEFAULT_COUPLING: InterfaceCoupling = 'nonConformalCyclic';
 
-const isComplete = (d: StitchDraft) => !!(d.aMeshId && d.aPatch && d.bMeshId && d.bPatch);
-const isBlank = (d: StitchDraft) => !d.aMeshId && !d.aPatch && !d.bMeshId && !d.bPatch;
+const EMPTY_DRAFT: InterfaceDraft = {
+  aMeshId: '',
+  aPatch: '',
+  bMeshId: '',
+  bPatch: '',
+  coupling: DEFAULT_COUPLING,
+};
+
+const isComplete = (d: InterfaceDraft) => !!(d.aMeshId && d.aPatch && d.bMeshId && d.bPatch);
+const isBlank = (d: InterfaceDraft) => !d.aMeshId && !d.aPatch && !d.bMeshId && !d.bPatch;
+
+/** The two coupling options, with copy + icon, shared by every interface row. */
+const COUPLING_OPTIONS: SegmentedOption<InterfaceCoupling>[] = [
+  { value: 'nonConformalCyclic', label: 'Non-conformal', icon: Link2 },
+  { value: 'stitch', label: 'Conformal stitch', icon: Combine },
+];
+
+/** One-line consequence of each coupling, shown under the selector. */
+const COUPLING_HELP: Record<InterfaceCoupling, string> = {
+  nonConformalCyclic:
+    'Keeps both parts as separate meshes. Flow interpolates across the interface (createNonConformalCouples).',
+  stitch:
+    'Fuses the two patches into one internal interface (stitchMesh). The parts become a single combined mesh.',
+};
+
+/** Short chip label for a coupling, used in the confirm summary. */
+const COUPLING_CHIP: Record<InterfaceCoupling, string> = {
+  nonConformalCyclic: 'Non-conformal',
+  stitch: 'Stitch',
+};
 
 const SELECT_CLASS =
   'w-full rounded-sm border border-border-strong bg-surface px-3 py-2 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring';
@@ -68,12 +104,12 @@ type Step = 'connections' | 'confirm' | 'run';
 
 export interface AssemblyMergeDialogProps {
   projectId: string;
-  /** Sources in assembly order (index 0 = base). */
+  /** Sources in assembly order (index 0 = base; may be the project case mesh). */
   orderedMeshes: MeshSource[];
   /** The committed placement of each positioned added part. */
   transforms: PartTransform[];
-  /** A pre-seeded connection (the last placed part's mating patch <-> base face). */
-  seedStitch?: StitchDraft | null;
+  /** A pre-seeded interface (the last placed part's mating patch <-> base face). */
+  seedInterface?: InterfaceDraft | null;
   onClose: () => void;
 }
 
@@ -81,36 +117,39 @@ export function AssemblyMergeDialog({
   projectId,
   orderedMeshes,
   transforms,
-  seedStitch,
+  seedInterface,
   onClose,
 }: AssemblyMergeDialogProps) {
   const meshById = useMemo(
     () => new Map(orderedMeshes.map((m) => [m.id, m] as const)),
     [orderedMeshes],
   );
+  // The base is the project case mesh when order[0] is the sentinel.
+  const caseBase = orderedMeshes[0]?.id === MERGE_BASE_CASE;
   const [step, setStep] = useState<Step>('connections');
-  const [stitches, setStitches] = useState<StitchDraft[]>(() =>
-    seedStitch && isComplete(seedStitch) ? [seedStitch] : [],
+  const [interfaces, setInterfaces] = useState<InterfaceDraft[]>(() =>
+    seedInterface && isComplete(seedInterface) ? [seedInterface] : [],
   );
   const [result, setResult] = useState<MergeRunResult | null>(null);
 
   const merge = useRunMerge(projectId);
   const running = merge.isPending;
 
-  const completeStitches = useMemo<StitchPair[]>(
+  const completeInterfaces = useMemo<MeshInterface[]>(
     () =>
-      stitches.filter(isComplete).map((s) => ({
+      interfaces.filter(isComplete).map((s) => ({
         aMeshId: s.aMeshId,
         aPatch: s.aPatch,
         bMeshId: s.bMeshId,
         bPatch: s.bPatch,
+        coupling: s.coupling,
       })),
-    [stitches],
+    [interfaces],
   );
 
   const plannedSteps = useMemo(
-    () => buildPipelinePreview(orderedMeshes, completeStitches, meshById),
-    [orderedMeshes, completeStitches, meshById],
+    () => buildPipelinePreview(orderedMeshes, completeInterfaces, meshById),
+    [orderedMeshes, completeInterfaces, meshById],
   );
 
   const handleRun = async () => {
@@ -119,7 +158,7 @@ export function AssemblyMergeDialog({
     try {
       const res = await merge.mutateAsync({
         order: orderedMeshes.map((m) => m.id),
-        stitches: completeStitches,
+        interfaces: completeInterfaces,
         transforms,
       });
       setResult(res);
@@ -142,8 +181,8 @@ export function AssemblyMergeDialog({
         <ConnectionsStep
           orderedMeshes={orderedMeshes}
           meshById={meshById}
-          stitches={stitches}
-          onChange={setStitches}
+          interfaces={interfaces}
+          onChange={setInterfaces}
           onCancel={onClose}
           onContinue={() => setStep('confirm')}
         />
@@ -151,8 +190,9 @@ export function AssemblyMergeDialog({
       {step === 'confirm' && (
         <ConfirmStep
           orderedMeshes={orderedMeshes}
-          stitches={completeStitches}
+          interfaces={completeInterfaces}
           transformCount={transforms.length}
+          caseBase={caseBase}
           meshById={meshById}
           plannedSteps={plannedSteps}
           onBack={() => setStep('connections')}
@@ -172,56 +212,57 @@ export function AssemblyMergeDialog({
   );
 }
 
-/** Step 1 - the (optional) stitch-pair editor, pre-seeded with the obvious pair. */
+/** Step 1 - the (optional) interface editor, pre-seeded with the obvious pair. */
 function ConnectionsStep({
   orderedMeshes,
   meshById,
-  stitches,
+  interfaces,
   onChange,
   onCancel,
   onContinue,
 }: {
   orderedMeshes: MeshSource[];
   meshById: Map<string, MeshSource>;
-  stitches: StitchDraft[];
-  onChange: (next: StitchDraft[]) => void;
+  interfaces: InterfaceDraft[];
+  onChange: (next: InterfaceDraft[]) => void;
   onCancel: () => void;
   onContinue: () => void;
 }) {
-  const update = (index: number, patch: Partial<StitchDraft>) =>
-    onChange(stitches.map((s, i) => (i === index ? { ...s, ...patch } : s)));
-  const add = () => onChange([...stitches, { ...EMPTY_DRAFT }]);
-  const remove = (index: number) => onChange(stitches.filter((_, i) => i !== index));
-  const hasPartial = stitches.some((s) => !isBlank(s) && !isComplete(s));
+  const update = (index: number, patch: Partial<InterfaceDraft>) =>
+    onChange(interfaces.map((s, i) => (i === index ? { ...s, ...patch } : s)));
+  const add = () => onChange([...interfaces, { ...EMPTY_DRAFT }]);
+  const remove = (index: number) => onChange(interfaces.filter((_, i) => i !== index));
+  const hasPartial = interfaces.some((s) => !isBlank(s) && !isComplete(s));
 
   return (
     <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto overscroll-contain">
       <DialogHeader>
-        <DialogTitle>Connect the parts</DialogTitle>
+        <DialogTitle>Couple the parts</DialogTitle>
         <DialogDescription>
-          Fuse a patch of one part to a coincident patch of another (e.g. the part you positioned
-          against the base face it mounts on). Each pair becomes one internal interface. Leave this
-          empty to combine the parts without connecting them.
+          Connect a patch of one part to a coincident patch of another (for example the part you
+          positioned against the base face it mounts on). Non-conformal keeps the parts as separate
+          meshes and interpolates the flow across the interface; conformal stitch fuses them into
+          one. Leave this empty to combine the parts without coupling them.
         </DialogDescription>
       </DialogHeader>
 
-      {stitches.length === 0 ? (
+      {interfaces.length === 0 ? (
         <div className="flex items-center gap-3 rounded-md border border-dashed border-border-strong px-4 py-4">
           <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary-tint">
             <Diamond size={14} className="text-primary" />
           </span>
           <p className="text-sm text-text-secondary">
-            No connections yet. The parts will be combined side by side. Add one to fuse a shared
-            interface.
+            No interfaces yet. The parts will be combined side by side. Add one to couple a shared
+            boundary.
           </p>
         </div>
       ) : (
         <ul className="flex flex-col gap-3">
-          {stitches.map((stitch, index) => (
-            <StitchRow
+          {interfaces.map((draft, index) => (
+            <InterfaceRow
               key={index}
               index={index}
-              stitch={stitch}
+              draft={draft}
               orderedMeshes={orderedMeshes}
               meshById={meshById}
               onUpdate={(patch) => update(index, patch)}
@@ -233,12 +274,12 @@ function ConnectionsStep({
 
       <Button type="button" variant="secondary" size="sm" className="w-fit" onClick={add}>
         <Plus strokeWidth={1.75} aria-hidden="true" />
-        Add a connection
+        Add an interface
       </Button>
 
       <DialogFooter className="mt-2 sm:items-center">
         {hasPartial && (
-          <p className="mr-auto text-xs text-danger">Finish or remove the incomplete connection.</p>
+          <p className="mr-auto text-xs text-danger">Finish or remove the incomplete interface.</p>
         )}
         <Button type="button" variant="ghost" onClick={onCancel}>
           Cancel
@@ -252,31 +293,32 @@ function ConnectionsStep({
   );
 }
 
-/** One row of the stitch editor: part A.patch <diamond> part B.patch. */
-function StitchRow({
+/** One row of the interface editor: part A.patch <diamond> part B.patch + coupling. */
+function InterfaceRow({
   index,
-  stitch,
+  draft,
   orderedMeshes,
   meshById,
   onUpdate,
   onRemove,
 }: {
   index: number;
-  stitch: StitchDraft;
+  draft: InterfaceDraft;
   orderedMeshes: MeshSource[];
   meshById: Map<string, MeshSource>;
-  onUpdate: (patch: Partial<StitchDraft>) => void;
+  onUpdate: (patch: Partial<InterfaceDraft>) => void;
   onRemove: () => void;
 }) {
-  const partial = !isBlank(stitch) && !isComplete(stitch);
+  const partial = !isBlank(draft) && !isComplete(draft);
+  const helpId = useId();
   return (
     <li className="rounded-md border border-border p-3">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
         <SidePicker
           rowIndex={index}
           side="a"
-          meshId={stitch.aMeshId}
-          patch={stitch.aPatch}
+          meshId={draft.aMeshId}
+          patch={draft.aPatch}
           orderedMeshes={orderedMeshes}
           meshById={meshById}
           onMeshChange={(aMeshId) => onUpdate({ aMeshId, aPatch: '' })}
@@ -288,8 +330,8 @@ function StitchRow({
         <SidePicker
           rowIndex={index}
           side="b"
-          meshId={stitch.bMeshId}
-          patch={stitch.bPatch}
+          meshId={draft.bMeshId}
+          patch={draft.bPatch}
           orderedMeshes={orderedMeshes}
           meshById={meshById}
           onMeshChange={(bMeshId) => onUpdate({ bMeshId, bPatch: '' })}
@@ -302,21 +344,38 @@ function StitchRow({
               variant="ghost"
               size="icon"
               className="size-9 shrink-0 self-end text-text-secondary hover:bg-danger-tint hover:text-danger"
-              aria-label={`Remove connection ${index + 1}`}
+              aria-label={`Remove interface ${index + 1}`}
               onClick={onRemove}
             >
               <Trash2 strokeWidth={1.75} aria-hidden="true" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Remove connection</TooltipContent>
+          <TooltipContent>Remove interface</TooltipContent>
         </Tooltip>
       </div>
       {partial && <p className="mt-2 text-xs text-danger">Pick a part and a patch on both sides.</p>}
+
+      {/* Coupling: how the two patches are connected (default non-conformal). */}
+      <div className="mt-3 flex flex-col gap-2 border-t border-border pt-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <span className="text-xs font-medium text-text-secondary">Coupling</span>
+          <SegmentedRadioGroup
+            name={`coupling-${index}`}
+            ariaLabel={`Coupling for interface ${index + 1}`}
+            value={draft.coupling}
+            onChange={(coupling) => onUpdate({ coupling })}
+            options={COUPLING_OPTIONS}
+          />
+        </div>
+        <p id={helpId} className="text-xs text-text-secondary">
+          {COUPLING_HELP[draft.coupling]}
+        </p>
+      </div>
     </li>
   );
 }
 
-/** One side of a stitch pair: a part select and a patch select. */
+/** One side of an interface: a part select and a patch select. */
 function SidePicker({
   rowIndex,
   side,
@@ -337,8 +396,8 @@ function SidePicker({
   onPatchChange: (patch: string) => void;
 }) {
   const label = side === 'a' ? 'A' : 'B';
-  const meshFieldId = `astitch-${rowIndex}-${side}-mesh`;
-  const patchFieldId = `astitch-${rowIndex}-${side}-patch`;
+  const meshFieldId = `aiface-${rowIndex}-${side}-mesh`;
+  const patchFieldId = `aiface-${rowIndex}-${side}-patch`;
   const patches = meshId ? (meshById.get(meshId)?.patches ?? []) : [];
 
   return (
@@ -387,16 +446,18 @@ function SidePicker({
 /** Step 2 - confirm the (mesh-overwriting) merge and preview the pipeline. */
 function ConfirmStep({
   orderedMeshes,
-  stitches,
+  interfaces,
   transformCount,
+  caseBase,
   meshById,
   plannedSteps,
   onBack,
   onConfirm,
 }: {
   orderedMeshes: MeshSource[];
-  stitches: StitchPair[];
+  interfaces: MeshInterface[];
   transformCount: number;
+  caseBase: boolean;
   meshById: Map<string, MeshSource>;
   plannedSteps: PlannedStep[];
   onBack: () => void;
@@ -407,11 +468,27 @@ function ConfirmStep({
       <DialogHeader>
         <DialogTitle>Merge the assembly?</DialogTitle>
         <DialogDescription>
-          This positions each part, combines them, and overwrites any existing{' '}
-          <code className="font-mono text-[0.8125rem]" translate="no">
-            constant/polyMesh
-          </code>
-          . It cannot be undone.
+          {caseBase ? (
+            <>
+              This positions each added part and couples them onto your project mesh (
+              <code className="font-mono text-[0.8125rem]" translate="no">
+                constant/polyMesh
+              </code>
+              ), which is backed up first. Its existing{' '}
+              <code className="font-mono text-[0.8125rem]" translate="no">
+                0/
+              </code>{' '}
+              physics is preserved.
+            </>
+          ) : (
+            <>
+              This positions each part, combines them, and overwrites any existing{' '}
+              <code className="font-mono text-[0.8125rem]" translate="no">
+                constant/polyMesh
+              </code>
+              . It cannot be undone.
+            </>
+          )}
         </DialogDescription>
       </DialogHeader>
 
@@ -426,7 +503,11 @@ function ConfirmStep({
                     {index + 1}
                   </span>
                   <span className="min-w-0 truncate">{mesh.name}</span>
-                  {index === 0 && <span className="shrink-0 text-xs text-text-secondary">(base)</span>}
+                  {index === 0 && (
+                    <span className="shrink-0 text-xs text-text-secondary">
+                      ({caseBase ? 'project mesh' : 'base'})
+                    </span>
+                  )}
                 </li>
               ))}
             </ol>
@@ -441,23 +522,24 @@ function ConfirmStep({
           </dd>
         </div>
         <div className="flex flex-col gap-1.5">
-          <dt className="text-xs font-medium text-text-secondary">Connections ({stitches.length})</dt>
+          <dt className="text-xs font-medium text-text-secondary">Interfaces ({interfaces.length})</dt>
           <dd>
-            {stitches.length === 0 ? (
+            {interfaces.length === 0 ? (
               <p className="text-sm text-text-secondary">
-                None - the parts are combined without being connected.
+                None - the parts are combined without coupling.
               </p>
             ) : (
-              <ul className="flex flex-col gap-1">
-                {stitches.map((stitch, index) => (
-                  <li key={index} className="flex items-center gap-1.5 text-sm text-text">
+              <ul className="flex flex-col gap-1.5">
+                {interfaces.map((iface, index) => (
+                  <li key={index} className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-text">
                     <code className="font-mono text-xs" translate="no">
-                      {meshById.get(stitch.aMeshId)?.name}.{stitch.aPatch}
+                      {meshById.get(iface.aMeshId)?.name}.{iface.aPatch}
                     </code>
                     <Diamond size={9} className="text-primary" />
                     <code className="font-mono text-xs" translate="no">
-                      {meshById.get(stitch.bMeshId)?.name}.{stitch.bPatch}
+                      {meshById.get(iface.bMeshId)?.name}.{iface.bPatch}
                     </code>
+                    <CouplingChip coupling={iface.coupling} />
                   </li>
                 ))}
               </ul>
@@ -496,6 +578,22 @@ function ConfirmStep({
         </Button>
       </DialogFooter>
     </DialogContent>
+  );
+}
+
+/** A small chip naming an interface's coupling (never colour alone). */
+function CouplingChip({ coupling }: { coupling: InterfaceCoupling }) {
+  return (
+    <span
+      className={cn(
+        'shrink-0 rounded-sm px-1.5 py-0.5 text-[0.6875rem] font-medium',
+        coupling === 'nonConformalCyclic'
+          ? 'bg-primary-tint text-primary'
+          : 'border border-border text-text-secondary',
+      )}
+    >
+      {COUPLING_CHIP[coupling]}
+    </span>
   );
 }
 
@@ -548,7 +646,7 @@ function RunStep({
         <DialogTitle>{result.success ? 'Assembly merged' : 'Merge failed'}</DialogTitle>
         <DialogDescription>
           {result.success
-            ? 'The parts were positioned, combined into the case, and checkMesh ran.'
+            ? 'The parts were positioned, coupled into the case, and checkMesh ran.'
             : 'A step in the pipeline failed. Expand its log for the details.'}
         </DialogDescription>
       </DialogHeader>
@@ -755,7 +853,7 @@ interface PlannedStep {
 /** Build the ordered pipeline preview from the plan (matches the server's steps). */
 function buildPipelinePreview(
   orderedMeshes: MeshSource[],
-  stitches: StitchPair[],
+  interfaces: MeshInterface[],
   meshById: Map<string, MeshSource>,
 ): PlannedStep[] {
   const steps: PlannedStep[] = [];
@@ -763,10 +861,14 @@ function buildPipelinePreview(
   for (let i = 1; i < orderedMeshes.length; i += 1) {
     steps.push({ label: `Combine ${orderedMeshes[i].name}`, tool: 'mergeMeshes' });
   }
-  for (const stitch of stitches) {
-    const a = `${meshById.get(stitch.aMeshId)?.name ?? '?'}.${stitch.aPatch}`;
-    const b = `${meshById.get(stitch.bMeshId)?.name ?? '?'}.${stitch.bPatch}`;
-    steps.push({ label: `Stitch ${a} ↔ ${b}`, tool: 'stitchMesh' });
+  for (const iface of interfaces) {
+    const a = `${meshById.get(iface.aMeshId)?.name ?? '?'}.${iface.aPatch}`;
+    const b = `${meshById.get(iface.bMeshId)?.name ?? '?'}.${iface.bPatch}`;
+    if (iface.coupling === 'stitch') {
+      steps.push({ label: `Stitch ${a} ↔ ${b}`, tool: 'stitchMesh' });
+    } else {
+      steps.push({ label: `Couple ${a} ↔ ${b}`, tool: 'createNonConformalCouples' });
+    }
   }
   steps.push({ label: 'Clean up empty patches' });
   steps.push({ label: 'Check combined mesh', tool: 'checkMesh' });
@@ -777,6 +879,7 @@ function buildPipelinePreview(
 const KIND_TOOL: Partial<Record<MergeStepKind, string>> = {
   mergeMeshes: 'mergeMeshes',
   stitchMesh: 'stitchMesh',
+  createNonConformalCouples: 'createNonConformalCouples',
   checkMesh: 'checkMesh',
 };
 
@@ -786,5 +889,5 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)} s`;
 }
 
-export type { StitchDraft };
+export type { InterfaceDraft };
 export default AssemblyMergeDialog;

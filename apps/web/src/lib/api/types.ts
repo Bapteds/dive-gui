@@ -17,7 +17,6 @@ import type {
   ImportStep,
   MergeResult,
   MergeStep,
-  MergeStepKind,
   MeshBackupInfo,
   MeshImportConversion,
   MeshManifest,
@@ -373,11 +372,59 @@ export type {
   MeshSource,
   StitchPair,
   MergeStep,
-  MergeStepKind,
   MergeResult,
   ImportStep,
   MeshImportConversion,
 };
+
+/**
+ * Ordered kinds of step the merge pipeline emits. Local mirror of the shared
+ * `MergeStepKind`, WIDENED with `createNonConformalCouples` (the v12-native
+ * non-conformal coupling step). The backend adds this kind to `@dive/shared` in
+ * parallel; mirroring here keeps the web contract ahead of the shared rebuild,
+ * exactly like the `PartTransform` mirror below. A `MergeStep.kind` off the wire
+ * is a subset of this union, so it indexes the pipeline's tool maps safely.
+ */
+export type MergeStepKind =
+  | 'prepare'
+  | 'mergeMeshes'
+  | 'stitchMesh'
+  | 'createNonConformalCouples'
+  | 'cleanup'
+  | 'checkMesh';
+
+/**
+ * How two coincident interface patches are connected when the assembly is
+ * merged. Local mirror of the shared `InterfaceCoupling` (added in parallel).
+ *   - 'nonConformalCyclic': v12-native Non-Conformal Coupling
+ *     (`createNonConformalCouples`). KEEPS both parts as separate meshes and
+ *     interpolates the flow across the interface. The default.
+ *   - 'stitch': conformal `stitchMesh` fuse. The two patches become one internal
+ *     interface and the parts become a single combined mesh.
+ */
+export type InterfaceCoupling = 'nonConformalCyclic' | 'stitch';
+
+/**
+ * One interface to make between two parts: connect patch `aPatch` of `aMeshId`
+ * to patch `bPatch` of `bMeshId` with the chosen `coupling`. Supersedes
+ * `StitchPair` (a StitchPair is this with `coupling: 'stitch'`), which stays for
+ * back-compat. Local mirror of the shared `MeshInterface`.
+ */
+export interface MeshInterface {
+  aMeshId: string;
+  aPatch: string;
+  bMeshId: string;
+  bPatch: string;
+  coupling: InterfaceCoupling;
+}
+
+/**
+ * Sentinel `order[0]` value meaning "the project's EXISTING case mesh
+ * (constant/polyMesh) is the assembly base". The added library parts are staged
+ * and coupled onto it, preserving its 0/ physics. Local mirror of the shared
+ * `MERGE_BASE_CASE`.
+ */
+export const MERGE_BASE_CASE = '__case__';
 
 /**
  * Rigid placement of an added part in a multi-part assembly: p' = R(rotation)*p +
@@ -396,15 +443,20 @@ export interface PartTransform {
 
 /**
  * A merge plan: the ordered source ids to combine (the first is the master/base,
- * never moved), the patch pairs to stitch, and - for the Assemble workspace - the
- * rigid transform applied to each added part before it is merged. `transforms`
- * absent or identity reproduces the existing side-by-side behaviour (backward
- * compatible: this extends the shared `MergePlan` with an optional field).
+ * never moved), the interfaces to couple between parts, and - for the Assemble
+ * workspace - the rigid transform applied to each added part before it is merged.
+ *
+ * `order[0]` may be the {@link MERGE_BASE_CASE} sentinel, meaning the project's
+ * existing case mesh is the base. `transforms` absent or identity reproduces the
+ * side-by-side behaviour. Local mirror of the shared `MergePlan`.
  */
 export interface MergePlan {
   order: string[];
-  stitches: StitchPair[];
+  /** The interfaces to make between parts, each with its coupling (default NCC). */
+  interfaces: MeshInterface[];
   transforms?: PartTransform[];
+  /** @deprecated legacy drafts; interpreted server-side as interfaces with coupling 'stitch'. */
+  stitches?: StitchPair[];
 }
 
 /** `GET /projects/:id/meshes` response. */

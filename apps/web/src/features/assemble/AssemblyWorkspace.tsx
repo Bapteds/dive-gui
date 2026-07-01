@@ -3,13 +3,20 @@ import { useQueries } from '@tanstack/react-query';
 import { AlertTriangle, Loader2, PackagePlus, Workflow } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { getMeshSourceGeometry } from '@/lib/api/meshes';
+import { getMeshGeometry } from '@/lib/api/projects';
 import type { MeshSource, PartTransform } from '@/lib/api/types';
+import { MERGE_BASE_CASE } from '@/lib/api/types';
 import { useMergePlanQuery, useMeshesQuery } from '@/features/projects/useMeshes';
-import { meshSourceGeometryQueryKey } from './useAssembly';
+import { useCaseFilesQuery } from '@/features/projects/useCaseFiles';
+import {
+  caseMeshGeometryQueryKey,
+  meshSourceGeometryQueryKey,
+  useCaseMeshManifestQuery,
+} from './useAssembly';
 import { AssemblyViewer, AssemblyViewerError, type PlacedViewerPart } from './AssemblyViewer';
-import { PartsRail } from './PartsRail';
+import { PartsRail, type BaseSource } from './PartsRail';
 import { PlacementPanel } from './PlacementPanel';
-import { AssemblyMergeDialog, type StitchDraft } from './AssemblyMergeDialog';
+import { AssemblyMergeDialog, type InterfaceDraft } from './AssemblyMergeDialog';
 import type { HitTarget } from './placement';
 
 /**
@@ -17,15 +24,17 @@ import type { HitTarget } from './placement';
  * generalises single-part import/visualise/merge into a multi-part assembly.
  *
  *   Parts rail (left)  - the library as a roster: import / auto-patch / rename,
- *                        base first, the rest selectable to position.
+ *                        base first, the rest selectable to position. The base can
+ *                        be the project's EXISTING case mesh or the first library
+ *                        part (a segmented picker at the top of the rail).
  *   Live canvas (center) - the base + placed parts + the active orange ghost,
  *                        updated in real time as the user places a part.
  *   Placement panel (right) - pick a base face + a mating patch, roll, offset,
- *                        confirm. One orange "Merge" CTA finishes into one mesh.
+ *                        confirm. One orange "Merge" CTA finishes the assembly.
  *
  * All placement math is raw-coordinate and lives in the viewer/placement.ts; this
- * component owns the workspace STATE (order, per-part draft, committed transforms)
- * and the geometry loading for every body on screen.
+ * component owns the workspace STATE (base source, order, per-part draft,
+ * committed transforms) and the geometry loading for every body on screen.
  */
 
 const FIVE_MINUTES = 5 * 60 * 1000;
@@ -39,13 +48,69 @@ interface Draft {
 }
 const EMPTY_DRAFT: Draft = { matingPatch: null, target: null, rollDeg: 0, offset: 0 };
 
+/** The base body's geometry + load state, unified across case / library bases. */
+interface BaseStatus {
+  data?: ArrayBuffer;
+  isPending: boolean;
+  isError: boolean;
+  refetch: () => void;
+}
+
 export function AssemblyWorkspace({ projectId }: { projectId: string }) {
   const meshesQuery = useMeshesQuery(projectId);
   const planQuery = useMergePlanQuery(projectId);
+  const caseFilesQuery = useCaseFilesQuery(projectId);
   const meshes = useMemo(() => meshesQuery.data ?? [], [meshesQuery.data]);
   const meshById = useMemo(() => new Map(meshes.map((m) => [m.id, m] as const)), [meshes]);
 
-  // ---- assembly order (index 0 = base), seeded from the saved plan ----
+  // Whether the project already has a case mesh that could be the assembly base.
+  const hasCaseMesh = useMemo(
+    () => !!caseFilesQuery.data?.some((entry) => entry.path.startsWith('constant/polyMesh/')),
+    [caseFilesQuery.data],
+  );
+
+  // ---- base source: the project case mesh, or the first library part ----
+  const [baseSource, setBaseSource] = useState<BaseSource>('library');
+  const baseInitRef = useRef(false);
+  useEffect(() => {
+    if (baseInitRef.current) return;
+    if (meshesQuery.isPending || planQuery.isPending || caseFilesQuery.isPending) return;
+    baseInitRef.current = true;
+    const planOrder0 = planQuery.data?.order?.[0];
+    if (planOrder0 === MERGE_BASE_CASE && hasCaseMesh) setBaseSource('case');
+    else if (planOrder0) setBaseSource('library');
+    else setBaseSource(hasCaseMesh ? 'case' : 'library');
+  }, [
+    meshesQuery.isPending,
+    planQuery.isPending,
+    caseFilesQuery.isPending,
+    planQuery.data,
+    hasCaseMesh,
+  ]);
+  // If the case mesh is not (or no longer) available, the base is a library part.
+  useEffect(() => {
+    if (!hasCaseMesh && baseSource === 'case') setBaseSource('library');
+  }, [hasCaseMesh, baseSource]);
+
+  const caseBaseSelected = baseSource === 'case' && hasCaseMesh;
+  const caseManifest = useCaseMeshManifestQuery(projectId, caseBaseSelected);
+
+  // The synthetic base entry for the project case mesh: a MeshSource whose patches
+  // come from the case manifest, pinned at identity and never moved / committed.
+  const caseBase = useMemo<MeshSource | null>(
+    () =>
+      caseBaseSelected
+        ? {
+            id: MERGE_BASE_CASE,
+            name: 'Project case mesh',
+            patches: caseManifest.data?.patches ?? [],
+            createdAt: '',
+          }
+        : null,
+    [caseBaseSelected, caseManifest.data],
+  );
+
+  // ---- library order (index 0 = base only when there is no case base) ----
   const [order, setOrder] = useState<string[]>([]);
   const ready = !meshesQuery.isPending && !planQuery.isPending;
   const initRef = useRef(false);
@@ -54,6 +119,8 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
     const ids = meshes.map((m) => m.id);
     if (!initRef.current) {
       initRef.current = true;
+      // The saved plan may lead with the case sentinel; it is not a library id,
+      // so this filter drops it and keeps only the library order.
       const seed = (planQuery.data?.order ?? []).filter((id) => ids.includes(id));
       setOrder([...seed, ...ids.filter((id) => !seed.includes(id))]);
       return;
@@ -65,18 +132,25 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
     });
   }, [ready, meshes, planQuery.data]);
 
-  const orderedMeshes = useMemo(
+  const libraryOrdered = useMemo(
     () => order.map((id) => meshById.get(id)).filter((m): m is MeshSource => !!m),
     [order, meshById],
   );
+  // The full assembly order: the case base (when chosen) leads, then the library.
+  const orderedMeshes = useMemo(
+    () => (caseBase ? [caseBase, ...libraryOrdered] : libraryOrdered),
+    [caseBase, libraryOrdered],
+  );
   const base = orderedMeshes[0] ?? null;
+  // The base is the project case mesh (pinned at identity, never movable).
+  const basePinned = base?.id === MERGE_BASE_CASE;
 
   // ---- placement state ----
   const [activePartId, setActivePartId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [committed, setCommitted] = useState<Record<string, PartTransform>>({});
   const [pending, setPending] = useState<PartTransform | null>(null);
-  const [lastSeed, setLastSeed] = useState<StitchDraft | null>(null);
+  const [lastSeed, setLastSeed] = useState<InterfaceDraft | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [viewerError, setViewerError] = useState(false);
 
@@ -116,14 +190,24 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
   }, [base, activePartId, committed]);
 
   const geomResults = useQueries({
-    queries: neededIds.map((id) => ({
-      queryKey: meshSourceGeometryQueryKey(projectId, id),
-      queryFn: async () => (await getMeshSourceGeometry(projectId, id)).arrayBuffer(),
-      enabled: true,
-      retry: false,
-      staleTime: FIVE_MINUTES,
-      gcTime: FIVE_MINUTES,
-    })),
+    queries: neededIds.map((id) => {
+      const isCase = id === MERGE_BASE_CASE;
+      return {
+        queryKey: isCase
+          ? caseMeshGeometryQueryKey(projectId)
+          : meshSourceGeometryQueryKey(projectId, id),
+        // The case geometry endpoint expects the server build to exist, so gate it
+        // on the case manifest (which triggers that build) having succeeded.
+        queryFn: async () =>
+          isCase
+            ? (await getMeshGeometry(projectId)).arrayBuffer()
+            : (await getMeshSourceGeometry(projectId, id)).arrayBuffer(),
+        enabled: isCase ? caseManifest.isSuccess : true,
+        retry: false,
+        staleTime: FIVE_MINUTES,
+        gcTime: FIVE_MINUTES,
+      };
+    }),
   });
   const geomByMesh = useMemo(() => {
     const map = new Map<string, (typeof geomResults)[number]>();
@@ -131,7 +215,29 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
     return map;
   }, [neededIds, geomResults]);
 
-  const baseGeom = base ? geomByMesh.get(base.id) : undefined;
+  // The base body's status, unified: a library base is a plain source-geometry
+  // query; the case base folds in the manifest build that gates its geometry.
+  const rawBaseGeom = base ? geomByMesh.get(base.id) : undefined;
+  const baseStatus = useMemo<BaseStatus | undefined>(() => {
+    if (!base) return undefined;
+    if (basePinned) {
+      return {
+        data: rawBaseGeom?.data,
+        isPending: caseManifest.isPending || (caseManifest.isSuccess && (rawBaseGeom?.isPending ?? true)),
+        isError: caseManifest.isError || (rawBaseGeom?.isError ?? false),
+        refetch: () => {
+          void caseManifest.refetch();
+          void rawBaseGeom?.refetch();
+        },
+      };
+    }
+    return {
+      data: rawBaseGeom?.data,
+      isPending: rawBaseGeom?.isPending ?? true,
+      isError: rawBaseGeom?.isError ?? false,
+      refetch: () => void rawBaseGeom?.refetch(),
+    };
+  }, [base, basePinned, rawBaseGeom, caseManifest]);
 
   // Placed parts to render opaque (committed, excluding the one being re-placed).
   const placedParts = useMemo<PlacedViewerPart[]>(() => {
@@ -175,6 +281,7 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
         aPatch: activeDraft.matingPatch,
         bMeshId: base.id,
         bPatch: activeDraft.target.patchName,
+        coupling: 'nonConformalCyclic',
       });
     }
     setActivePartId(null); // commit -> the ghost becomes a placed (neutral) part
@@ -192,12 +299,16 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
     setPending(null);
   };
 
+  // Reorder within the LIBRARY order. `index` is the display index; when the case
+  // base is pinned at display index 0 it shifts the library index by one.
   const moveMesh = (index: number, direction: -1 | 1) => {
+    const offset = basePinned ? 1 : 0;
+    const from = index - offset;
+    const to = from + direction;
     setOrder((prev) => {
-      const target = index + direction;
-      if (target < 0 || target >= prev.length) return prev;
+      if (from < 0 || to < 0 || from >= prev.length || to >= prev.length) return prev;
       const next = [...prev];
-      [next[index], next[target]] = [next[target], next[index]];
+      [next[from], next[to]] = [next[to], next[from]];
       return next;
     });
   };
@@ -259,6 +370,10 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
             orderedMeshes={orderedMeshes}
             activePartId={activePartId}
             placedIds={placedIds}
+            basePinned={basePinned}
+            baseSource={baseSource}
+            onBaseSourceChange={setBaseSource}
+            caseBaseAvailable={hasCaseMesh}
             onSelectPart={handleSelectPart}
             onMove={moveMesh}
           />
@@ -267,7 +382,7 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
         <div className="relative min-h-[45vh] border-b border-border lg:min-h-0 lg:border-b-0">
           <CanvasArea
             base={base}
-            baseGeometry={baseGeom}
+            baseGeometry={baseStatus}
             placed={placedParts}
             active={activeViewerPart}
             matingPatch={activeDraft.matingPatch}
@@ -280,7 +395,7 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
             onViewerError={() => setViewerError(true)}
             onRetry={() => {
               setViewerError(false);
-              void baseGeom?.refetch();
+              baseStatus?.refetch();
             }}
           />
         </div>
@@ -314,7 +429,7 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
           projectId={projectId}
           orderedMeshes={orderedMeshes}
           transforms={transforms}
-          seedStitch={lastSeed}
+          seedInterface={lastSeed}
           onClose={() => setMergeOpen(false)}
         />
       )}
@@ -359,8 +474,8 @@ function CanvasArea({
     return (
       <StageMessage
         icon={<PackagePlus className="size-6 text-primary" strokeWidth={1.5} aria-hidden="true" />}
-        title="Import the base part"
-        body="Add the first part on the left. It becomes the base that the others mount onto."
+        title="Choose the assembly base"
+        body="Pick your project mesh or add the first part on the left. It becomes the base that the others mount onto."
       />
     );
   }

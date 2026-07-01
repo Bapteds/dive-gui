@@ -100,12 +100,12 @@ describe('MergeMeshesFlow', () => {
     expect(await screen.findByText('inlet-part')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
 
-    expect(await screen.findByText('Connect the meshes')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /add a connection/i }));
+    expect(await screen.findByText('Couple the meshes')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /add an interface/i }));
     fireEvent.change(screen.getByLabelText('Mesh A'), { target: { value: 'm1' } });
 
     expect(screen.getByRole('button', { name: /continue/i })).toBeDisabled();
-    expect(screen.getByText(/finish or remove the incomplete connection/i)).toBeInTheDocument();
+    expect(screen.getByText(/finish or remove the incomplete interface/i)).toBeInTheDocument();
   });
 
   it('runs sources -> connections -> confirm -> report with the stitch plan', async () => {
@@ -116,9 +116,9 @@ describe('MergeMeshesFlow', () => {
     expect(await screen.findByText('inlet-part')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
 
-    // Step 2: connections. Add a pair and fill both sides.
-    expect(await screen.findByText('Connect the meshes')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /add a connection/i }));
+    // Step 2: interfaces. Add one and fill both sides (coupling defaults to NCC).
+    expect(await screen.findByText('Couple the meshes')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /add an interface/i }));
     fireEvent.change(screen.getByLabelText('Mesh A'), { target: { value: 'm1' } });
     fireEvent.change(screen.getAllByLabelText('Patch')[0], { target: { value: 'ifaceA' } });
     fireEvent.change(screen.getByLabelText('Mesh B'), { target: { value: 'm2' } });
@@ -134,7 +134,9 @@ describe('MergeMeshesFlow', () => {
     expect(await screen.findByText('Merge complete')).toBeInTheDocument();
     expect(meshesApi.runMerge).toHaveBeenCalledWith('p1', {
       order: ['m1', 'm2'],
-      stitches: [{ aMeshId: 'm1', aPatch: 'ifaceA', bMeshId: 'm2', bPatch: 'ifaceB' }],
+      interfaces: [
+        { aMeshId: 'm1', aPatch: 'ifaceA', bMeshId: 'm2', bPatch: 'ifaceB', coupling: 'nonConformalCyclic' },
+      ],
     });
     // The checkMesh log is expanded by default, so its output is visible.
     await waitFor(() => expect(screen.getByText('Mesh OK.')).toBeInTheDocument());

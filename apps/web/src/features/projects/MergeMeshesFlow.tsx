@@ -9,9 +9,11 @@ import {
   ChevronDown,
   ChevronRight,
   CircleDashed,
+  Combine,
   FileArchive,
   FileCog,
   FolderUp,
+  Link2,
   Loader2,
   MinusCircle,
   Plus,
@@ -32,6 +34,7 @@ import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Diamond } from '@/components/brand/Diamond';
+import { SegmentedRadioGroup, type SegmentedOption } from '@/components/ui/segmented';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/components/ui/sonner';
@@ -39,12 +42,13 @@ import { cn } from '@/lib/utils';
 import { ApiError } from '@/lib/api/client';
 import type {
   ImportStep,
+  InterfaceCoupling,
   MergeRunResult,
   MergeStep,
   MergeStepKind,
+  MeshInterface,
   MeshPatch,
   MeshSource,
-  StitchPair,
 } from '@/lib/api/types';
 import {
   useAutoPatchMeshSource,
@@ -60,16 +64,17 @@ import { ImportReport } from '@/features/projects/ImportReport';
 /**
  * MergeMeshesFlow - the guided "Merge meshes" dialog, opened from the Case files
  * card. Combines several imported polyMesh sources into the case's single
- * constant/polyMesh, conformally fusing chosen patch pairs.
+ * constant/polyMesh, coupling chosen patch pairs (non-conformal by default, or a
+ * conformal stitch).
  *
  *  1. Sources:     the per-project mesh LIBRARY - import (folder / .zip), order
  *     (the first is the master), and remove sources. Continue unlocks with one.
- *  2. Connections: the stitch-pair editor - fuse mesh A's patch to mesh B's
- *     patch (e.g. one part's outlet against the next part's inlet). Optional:
- *     with no connections the meshes are combined side by side.
+ *  2. Interfaces:  the interface editor - connect mesh A's patch to mesh B's
+ *     patch (e.g. one part's outlet against the next part's inlet), each with a
+ *     coupling. Optional: with none, the meshes are combined side by side.
  *  3. Confirm:     restate that it overwrites the case mesh, and preview the
- *     pipeline that will run (prepare -> mergeMeshes -> stitchMesh -> cleanup ->
- *     checkMesh).
+ *     pipeline that will run (prepare -> mergeMeshes -> couple/stitch -> cleanup
+ *     -> checkMesh).
  *  4. Run:         while the server runs the pipeline, a running state; then a
  *     per-step report with a status rail and collapsible logs.
  *
@@ -79,25 +84,55 @@ import { ImportReport } from '@/features/projects/ImportReport';
 
 type Step = 'sources' | 'connections' | 'confirm' | 'run';
 
-/** A stitch pair under construction (fields fill in as the user picks). */
-interface StitchDraft {
+/** An interface under construction (fields fill in as the user picks). */
+interface InterfaceDraft {
   aMeshId: string;
   aPatch: string;
   bMeshId: string;
   bPatch: string;
+  coupling: InterfaceCoupling;
 }
 
-const EMPTY_DRAFT: StitchDraft = { aMeshId: '', aPatch: '', bMeshId: '', bPatch: '' };
+/** The default coupling for a new interface: v12-native non-conformal. */
+const DEFAULT_COUPLING: InterfaceCoupling = 'nonConformalCyclic';
 
-/** Every field chosen - the pair can be stitched. */
-function isComplete(draft: StitchDraft): boolean {
+const EMPTY_DRAFT: InterfaceDraft = {
+  aMeshId: '',
+  aPatch: '',
+  bMeshId: '',
+  bPatch: '',
+  coupling: DEFAULT_COUPLING,
+};
+
+/** Every side chosen - the interface can be coupled. */
+function isComplete(draft: InterfaceDraft): boolean {
   return !!(draft.aMeshId && draft.aPatch && draft.bMeshId && draft.bPatch);
 }
 
-/** No field chosen - an untouched row, ignored on run. */
-function isBlank(draft: StitchDraft): boolean {
+/** No side chosen - an untouched row, ignored on run. */
+function isBlank(draft: InterfaceDraft): boolean {
   return !draft.aMeshId && !draft.aPatch && !draft.bMeshId && !draft.bPatch;
 }
+
+/** The two coupling options, with copy + icon, shared by every interface row. */
+const COUPLING_OPTIONS: SegmentedOption<InterfaceCoupling>[] = [
+  { value: 'nonConformalCyclic', label: 'Non-conformal', icon: Link2 },
+  { value: 'stitch', label: 'Conformal stitch', icon: Combine },
+];
+
+/** One-line consequence of each coupling, shown under the selector. */
+const COUPLING_HELP: Record<InterfaceCoupling, string> = {
+  nonConformalCyclic:
+    'Keeps both meshes separate. Flow interpolates across the interface (createNonConformalCouples).',
+  stitch:
+    'Fuses the two patches into one internal interface (stitchMesh). The meshes become a single combined mesh.',
+};
+
+/** Short chip label for a coupling, used in the confirm summary. */
+const COUPLING_CHIP: Record<InterfaceCoupling, string> = {
+  nonConformalCyclic: 'Non-conformal',
+  stitch: 'Stitch',
+};
 
 /** Shared styling for the native selects (matches the token form vocabulary). */
 const SELECT_CLASS =
@@ -117,7 +152,7 @@ export function MergeMeshesFlow({ projectId, onClose }: MergeMeshesFlowProps) {
 
   const [step, setStep] = useState<Step>('sources');
   const [order, setOrder] = useState<string[]>([]);
-  const [stitches, setStitches] = useState<StitchDraft[]>([]);
+  const [interfaces, setInterfaces] = useState<InterfaceDraft[]>([]);
   const [result, setResult] = useState<MergeRunResult | null>(null);
 
   const merge = useRunMerge(projectId);
@@ -134,8 +169,13 @@ export function MergeMeshesFlow({ projectId, onClose }: MergeMeshesFlowProps) {
       initRef.current = true;
       const seed = (planQuery.data?.order ?? []).filter((id) => ids.includes(id));
       setOrder([...seed, ...ids.filter((id) => !seed.includes(id))]);
-      setStitches(
-        (planQuery.data?.stitches ?? [])
+      // Prefer the new `interfaces`; fall back to a legacy `stitches` plan
+      // (interpreted as conformal stitches) so old saved drafts still pre-fill.
+      const planInterfaces: MeshInterface[] =
+        planQuery.data?.interfaces ??
+        (planQuery.data?.stitches ?? []).map((s) => ({ ...s, coupling: 'stitch' as const }));
+      setInterfaces(
+        planInterfaces
           .filter((s) => {
             const a = meshById.get(s.aMeshId);
             const b = meshById.get(s.bMeshId);
@@ -146,7 +186,13 @@ export function MergeMeshesFlow({ projectId, onClose }: MergeMeshesFlowProps) {
               b.patches.some((p) => p.name === s.bPatch)
             );
           })
-          .map((s) => ({ aMeshId: s.aMeshId, aPatch: s.aPatch, bMeshId: s.bMeshId, bPatch: s.bPatch })),
+          .map((s) => ({
+            aMeshId: s.aMeshId,
+            aPatch: s.aPatch,
+            bMeshId: s.bMeshId,
+            bPatch: s.bPatch,
+            coupling: s.coupling,
+          })),
       );
       return;
     }
@@ -155,7 +201,7 @@ export function MergeMeshesFlow({ projectId, onClose }: MergeMeshesFlowProps) {
       const appended = ids.filter((id) => !kept.includes(id));
       return kept.length === prev.length && appended.length === 0 ? prev : [...kept, ...appended];
     });
-    setStitches((prev) => {
+    setInterfaces((prev) => {
       const next = prev.filter(
         (s) => (!s.aMeshId || ids.includes(s.aMeshId)) && (!s.bMeshId || ids.includes(s.bMeshId)),
       );
@@ -167,19 +213,20 @@ export function MergeMeshesFlow({ projectId, onClose }: MergeMeshesFlowProps) {
     () => order.map((id) => meshById.get(id)).filter((m): m is MeshSource => !!m),
     [order, meshById],
   );
-  const completeStitches = useMemo<StitchPair[]>(
+  const completeInterfaces = useMemo<MeshInterface[]>(
     () =>
-      stitches.filter(isComplete).map((s) => ({
+      interfaces.filter(isComplete).map((s) => ({
         aMeshId: s.aMeshId,
         aPatch: s.aPatch,
         bMeshId: s.bMeshId,
         bPatch: s.bPatch,
+        coupling: s.coupling,
       })),
-    [stitches],
+    [interfaces],
   );
   const plannedSteps = useMemo(
-    () => buildPipelinePreview(orderedMeshes, completeStitches, meshById),
-    [orderedMeshes, completeStitches, meshById],
+    () => buildPipelinePreview(orderedMeshes, completeInterfaces, meshById),
+    [orderedMeshes, completeInterfaces, meshById],
   );
 
   const moveMesh = (index: number, direction: -1 | 1) => {
@@ -198,7 +245,7 @@ export function MergeMeshesFlow({ projectId, onClose }: MergeMeshesFlowProps) {
     try {
       const res = await merge.mutateAsync({
         order: orderedMeshes.map((m) => m.id),
-        stitches: completeStitches,
+        interfaces: completeInterfaces,
       });
       setResult(res);
       if (res.success) {
@@ -235,8 +282,8 @@ export function MergeMeshesFlow({ projectId, onClose }: MergeMeshesFlowProps) {
         <ConnectionsStep
           orderedMeshes={orderedMeshes}
           meshById={meshById}
-          stitches={stitches}
-          onChange={setStitches}
+          interfaces={interfaces}
+          onChange={setInterfaces}
           onBack={() => setStep('sources')}
           onContinue={() => setStep('confirm')}
         />
@@ -245,7 +292,7 @@ export function MergeMeshesFlow({ projectId, onClose }: MergeMeshesFlowProps) {
       {step === 'confirm' && (
         <ConfirmStep
           orderedMeshes={orderedMeshes}
-          stitches={completeStitches}
+          interfaces={completeInterfaces}
           meshById={meshById}
           plannedSteps={plannedSteps}
           onBack={() => setStep('connections')}
@@ -780,59 +827,60 @@ function MeshSkeleton() {
   );
 }
 
-/** Step 2 - the stitch-pair editor (the "connect inlet to outlet" surface). */
+/** Step 2 - the interface editor (the "connect inlet to outlet" surface). */
 function ConnectionsStep({
   orderedMeshes,
   meshById,
-  stitches,
+  interfaces,
   onChange,
   onBack,
   onContinue,
 }: {
   orderedMeshes: MeshSource[];
   meshById: Map<string, MeshSource>;
-  stitches: StitchDraft[];
-  onChange: (next: StitchDraft[]) => void;
+  interfaces: InterfaceDraft[];
+  onChange: (next: InterfaceDraft[]) => void;
   onBack: () => void;
   onContinue: () => void;
 }) {
-  const update = (index: number, patch: Partial<StitchDraft>) => {
-    onChange(stitches.map((s, i) => (i === index ? { ...s, ...patch } : s)));
+  const update = (index: number, patch: Partial<InterfaceDraft>) => {
+    onChange(interfaces.map((s, i) => (i === index ? { ...s, ...patch } : s)));
   };
-  const add = () => onChange([...stitches, { ...EMPTY_DRAFT }]);
-  const remove = (index: number) => onChange(stitches.filter((_, i) => i !== index));
+  const add = () => onChange([...interfaces, { ...EMPTY_DRAFT }]);
+  const remove = (index: number) => onChange(interfaces.filter((_, i) => i !== index));
 
   // Block continue while a row is half-filled (a blank row is just ignored).
-  const hasPartial = stitches.some((s) => !isBlank(s) && !isComplete(s));
+  const hasPartial = interfaces.some((s) => !isBlank(s) && !isComplete(s));
 
   return (
     <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto overscroll-contain">
       <DialogHeader>
-        <DialogTitle>Connect the meshes</DialogTitle>
+        <DialogTitle>Couple the meshes</DialogTitle>
         <DialogDescription>
-          Fuse a patch of one mesh to a coincident patch of another (e.g. a part&rsquo;s outlet
-          against the next part&rsquo;s inlet). Each pair becomes one internal interface. Leave this
-          empty to combine the meshes without connecting them.
+          Connect a patch of one mesh to a coincident patch of another (e.g. a part&rsquo;s outlet
+          against the next part&rsquo;s inlet). Non-conformal keeps the meshes separate and
+          interpolates the flow across the interface; conformal stitch fuses them into one. Leave
+          this empty to combine the meshes without coupling them.
         </DialogDescription>
       </DialogHeader>
 
-      {stitches.length === 0 ? (
+      {interfaces.length === 0 ? (
         <div className="flex items-center gap-3 rounded-md border border-dashed border-border-strong px-4 py-4">
           <span className="grid size-9 shrink-0 place-items-center rounded-md bg-primary-tint">
             <Diamond size={14} className="text-primary" />
           </span>
           <p className="text-sm text-text-secondary">
-            No connections yet. The meshes will be combined side by side. Add one to fuse a shared
-            interface.
+            No interfaces yet. The meshes will be combined side by side. Add one to couple a shared
+            boundary.
           </p>
         </div>
       ) : (
         <ul className="flex flex-col gap-3">
-          {stitches.map((stitch, index) => (
-            <StitchRow
+          {interfaces.map((draft, index) => (
+            <InterfaceRow
               key={index}
               index={index}
-              stitch={stitch}
+              draft={draft}
               orderedMeshes={orderedMeshes}
               meshById={meshById}
               onUpdate={(patch) => update(index, patch)}
@@ -844,12 +892,12 @@ function ConnectionsStep({
 
       <Button type="button" variant="secondary" size="sm" className="w-fit" onClick={add}>
         <Plus strokeWidth={1.75} aria-hidden="true" />
-        Add a connection
+        Add an interface
       </Button>
 
       <DialogFooter className="mt-2 sm:items-center">
         {hasPartial && (
-          <p className="mr-auto text-xs text-danger">Finish or remove the incomplete connection.</p>
+          <p className="mr-auto text-xs text-danger">Finish or remove the incomplete interface.</p>
         )}
         <Button type="button" variant="ghost" onClick={onBack}>
           Back
@@ -863,23 +911,24 @@ function ConnectionsStep({
   );
 }
 
-/** One row of the stitch editor: mesh A.patch <diamond> mesh B.patch. */
-function StitchRow({
+/** One row of the interface editor: mesh A.patch <diamond> mesh B.patch + coupling. */
+function InterfaceRow({
   index,
-  stitch,
+  draft,
   orderedMeshes,
   meshById,
   onUpdate,
   onRemove,
 }: {
   index: number;
-  stitch: StitchDraft;
+  draft: InterfaceDraft;
   orderedMeshes: MeshSource[];
   meshById: Map<string, MeshSource>;
-  onUpdate: (patch: Partial<StitchDraft>) => void;
+  onUpdate: (patch: Partial<InterfaceDraft>) => void;
   onRemove: () => void;
 }) {
-  const partial = !isBlank(stitch) && !isComplete(stitch);
+  const partial = !isBlank(draft) && !isComplete(draft);
+  const helpId = useId();
 
   return (
     <li className="rounded-md border border-border p-3">
@@ -887,8 +936,8 @@ function StitchRow({
         <SidePicker
           rowIndex={index}
           side="a"
-          meshId={stitch.aMeshId}
-          patch={stitch.aPatch}
+          meshId={draft.aMeshId}
+          patch={draft.aPatch}
           orderedMeshes={orderedMeshes}
           meshById={meshById}
           onMeshChange={(aMeshId) => onUpdate({ aMeshId, aPatch: '' })}
@@ -900,8 +949,8 @@ function StitchRow({
         <SidePicker
           rowIndex={index}
           side="b"
-          meshId={stitch.bMeshId}
-          patch={stitch.bPatch}
+          meshId={draft.bMeshId}
+          patch={draft.bPatch}
           orderedMeshes={orderedMeshes}
           meshById={meshById}
           onMeshChange={(bMeshId) => onUpdate({ bMeshId, bPatch: '' })}
@@ -914,18 +963,35 @@ function StitchRow({
               variant="ghost"
               size="icon"
               className="size-9 shrink-0 self-end text-text-secondary hover:bg-danger-tint hover:text-danger"
-              aria-label={`Remove connection ${index + 1}`}
+              aria-label={`Remove interface ${index + 1}`}
               onClick={onRemove}
             >
               <Trash2 strokeWidth={1.75} aria-hidden="true" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Remove connection</TooltipContent>
+          <TooltipContent>Remove interface</TooltipContent>
         </Tooltip>
       </div>
       {partial && (
         <p className="mt-2 text-xs text-danger">Pick a mesh and a patch on both sides.</p>
       )}
+
+      {/* Coupling: how the two patches are connected (default non-conformal). */}
+      <div className="mt-3 flex flex-col gap-2 border-t border-border pt-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <span className="text-xs font-medium text-text-secondary">Coupling</span>
+          <SegmentedRadioGroup
+            name={`merge-coupling-${index}`}
+            ariaLabel={`Coupling for interface ${index + 1}`}
+            value={draft.coupling}
+            onChange={(coupling) => onUpdate({ coupling })}
+            options={COUPLING_OPTIONS}
+          />
+        </div>
+        <p id={helpId} className="text-xs text-text-secondary">
+          {COUPLING_HELP[draft.coupling]}
+        </p>
+      </div>
     </li>
   );
 }
@@ -1001,14 +1067,14 @@ function SidePicker({
 /** Step 3 - confirm the (mesh-overwriting) merge and preview the pipeline. */
 function ConfirmStep({
   orderedMeshes,
-  stitches,
+  interfaces,
   meshById,
   plannedSteps,
   onBack,
   onConfirm,
 }: {
   orderedMeshes: MeshSource[];
-  stitches: StitchPair[];
+  interfaces: MeshInterface[];
   meshById: Map<string, MeshSource>;
   plannedSteps: PlannedStep[];
   onBack: () => void;
@@ -1050,24 +1116,25 @@ function ConfirmStep({
         </div>
         <div className="flex flex-col gap-1.5">
           <dt className="text-xs font-medium text-text-secondary">
-            Connections ({stitches.length})
+            Interfaces ({interfaces.length})
           </dt>
           <dd>
-            {stitches.length === 0 ? (
+            {interfaces.length === 0 ? (
               <p className="text-sm text-text-secondary">
-                None - the meshes are combined without being connected.
+                None - the meshes are combined without coupling.
               </p>
             ) : (
-              <ul className="flex flex-col gap-1">
-                {stitches.map((stitch, index) => (
-                  <li key={index} className="flex items-center gap-1.5 text-sm text-text">
+              <ul className="flex flex-col gap-1.5">
+                {interfaces.map((iface, index) => (
+                  <li key={index} className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-text">
                     <code className="font-mono text-xs" translate="no">
-                      {meshById.get(stitch.aMeshId)?.name}.{stitch.aPatch}
+                      {meshById.get(iface.aMeshId)?.name}.{iface.aPatch}
                     </code>
                     <Diamond size={9} className="text-primary" />
                     <code className="font-mono text-xs" translate="no">
-                      {meshById.get(stitch.bMeshId)?.name}.{stitch.bPatch}
+                      {meshById.get(iface.bMeshId)?.name}.{iface.bPatch}
                     </code>
+                    <CouplingChip coupling={iface.coupling} />
                   </li>
                 ))}
               </ul>
@@ -1366,10 +1433,26 @@ interface PlannedStep {
   tool?: string;
 }
 
+/** A small chip naming an interface's coupling (never colour alone). */
+function CouplingChip({ coupling }: { coupling: InterfaceCoupling }) {
+  return (
+    <span
+      className={cn(
+        'shrink-0 rounded-sm px-1.5 py-0.5 text-[0.6875rem] font-medium',
+        coupling === 'nonConformalCyclic'
+          ? 'bg-primary-tint text-primary'
+          : 'border border-border text-text-secondary',
+      )}
+    >
+      {COUPLING_CHIP[coupling]}
+    </span>
+  );
+}
+
 /** Build the ordered pipeline preview from the plan (matches the server's steps). */
 function buildPipelinePreview(
   orderedMeshes: MeshSource[],
-  stitches: StitchPair[],
+  interfaces: MeshInterface[],
   meshById: Map<string, MeshSource>,
 ): PlannedStep[] {
   const steps: PlannedStep[] = [];
@@ -1377,10 +1460,14 @@ function buildPipelinePreview(
   for (let i = 1; i < orderedMeshes.length; i += 1) {
     steps.push({ label: `Combine ${orderedMeshes[i].name}`, tool: 'mergeMeshes' });
   }
-  for (const stitch of stitches) {
-    const a = `${meshById.get(stitch.aMeshId)?.name ?? '?'}.${stitch.aPatch}`;
-    const b = `${meshById.get(stitch.bMeshId)?.name ?? '?'}.${stitch.bPatch}`;
-    steps.push({ label: `Stitch ${a} ↔ ${b}`, tool: 'stitchMesh' });
+  for (const iface of interfaces) {
+    const a = `${meshById.get(iface.aMeshId)?.name ?? '?'}.${iface.aPatch}`;
+    const b = `${meshById.get(iface.bMeshId)?.name ?? '?'}.${iface.bPatch}`;
+    if (iface.coupling === 'stitch') {
+      steps.push({ label: `Stitch ${a} ↔ ${b}`, tool: 'stitchMesh' });
+    } else {
+      steps.push({ label: `Couple ${a} ↔ ${b}`, tool: 'createNonConformalCouples' });
+    }
   }
   steps.push({ label: 'Clean up empty patches' });
   steps.push({ label: 'Check combined mesh', tool: 'checkMesh' });
@@ -1391,6 +1478,7 @@ function buildPipelinePreview(
 const KIND_TOOL: Partial<Record<MergeStepKind, string>> = {
   mergeMeshes: 'mergeMeshes',
   stitchMesh: 'stitchMesh',
+  createNonConformalCouples: 'createNonConformalCouples',
   checkMesh: 'checkMesh',
 };
 
