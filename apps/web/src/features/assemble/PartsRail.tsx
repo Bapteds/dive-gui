@@ -288,7 +288,10 @@ function PartRow({
   onMoveDown: () => void;
 }) {
   const remove = useDeleteMesh(projectId);
-  const [open, setOpen] = useState(false);
+  // Auto-open the patch editor for a part that arrived as a single patch (a .cgns
+  // often lands as one `defaultFaces`): that is exactly the part that must be split
+  // before it can define an interface, so the tool is surfaced instead of hidden.
+  const [open, setOpen] = useState(mesh.patches.length <= 1);
   const panelId = useId();
 
   const handleRemove = async () => {
@@ -403,16 +406,16 @@ function PartRow({
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-controls={panelId}
-        className="-mt-0.5 mb-1 ml-2.5 flex w-fit items-center gap-1 rounded-sm px-0.5 text-xs text-text-secondary transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
+        className="-mt-0.5 mb-1 ml-2.5 flex w-fit items-center gap-1.5 rounded-sm px-0.5 text-xs font-medium text-text-secondary transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
       >
+        <Scissors className="size-3 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+        <span>Split / rename patches</span>
+        <span className="tabular-nums text-text-secondary">({mesh.patches.length})</span>
         <ChevronDown
           className={cn('size-3 transition-transform', open && 'rotate-180')}
           strokeWidth={1.75}
           aria-hidden="true"
         />
-        <span className="tabular-nums">
-          {mesh.patches.length} patch{mesh.patches.length === 1 ? '' : 'es'}
-        </span>
       </button>
 
       {open && (
