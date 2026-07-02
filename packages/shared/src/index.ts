@@ -585,7 +585,13 @@ export function isTerminalRunStatus(status: RunStatus): boolean {
  * Invocation is flavour-correct for ESI OpenFOAM.com v2406: classic binaries are
  * run directly (`simpleFoam -case …`, `pimpleFoam -case …`), never `foamRun -solver`.
  */
-export const SOLVER_IDS = ['simpleFoam', 'pimpleFoam', 'foamRun'] as const;
+export const SOLVER_IDS = [
+  'simpleFoam',
+  'pimpleFoam',
+  'rhoSimpleFoam',
+  'rhoPimpleFoam',
+  'foamRun',
+] as const;
 export type SolverId = (typeof SOLVER_IDS)[number];
 
 /**
@@ -594,7 +600,12 @@ export type SolverId = (typeof SOLVER_IDS)[number];
  * a non-runnable placeholder). Drives the runnable gate, the scaffold renderers,
  * and the frontend solver picker + easy-mode form.
  */
-export const CONFIGURABLE_SOLVER_IDS = ['simpleFoam', 'pimpleFoam'] as const;
+export const CONFIGURABLE_SOLVER_IDS = [
+  'simpleFoam',
+  'pimpleFoam',
+  'rhoSimpleFoam',
+  'rhoPimpleFoam',
+] as const;
 export type ConfigurableSolverId = (typeof CONFIGURABLE_SOLVER_IDS)[number];
 
 /** Is `id` a solver the app can scaffold and configure (vs a legacy placeholder)? */
@@ -727,11 +738,100 @@ const COMMON_INCOMPRESSIBLE_PARAMS: SolverParamDef[] = [
 ];
 
 /**
+ * Files a compressible RANS case needs beyond the mesh: like the incompressible
+ * set but with thermophysicalProperties instead of transportProperties, a
+ * temperature field 0/T, and 0/alphat (turbulent thermal diffusivity). Here 0/p is
+ * ABSOLUTE pressure in Pa (not the incompressible kinematic p, which is p/rho).
+ */
+export const COMPRESSIBLE_RANS_FILES = [
+  'system/controlDict',
+  'system/fvSchemes',
+  'system/fvSolution',
+  'constant/thermophysicalProperties',
+  'constant/turbulenceProperties',
+  '0/U',
+  '0/p',
+  '0/T',
+  '0/k',
+  '0/omega',
+  '0/nut',
+  '0/alphat',
+] as const;
+
+/** Parameters common to both compressible RANS solvers. */
+const COMMON_COMPRESSIBLE_PARAMS: SolverParamDef[] = [
+  {
+    key: 'rasModel',
+    label: 'Turbulence model',
+    help: 'RANS turbulence model. kOmegaSST is a robust all-rounder for wall-bounded flow.',
+    kind: 'enum',
+    options: RAS_MODEL_OPTIONS,
+    example: 'kOmegaSST',
+    file: 'constant/turbulenceProperties',
+    path: ['RAS', 'RASModel'],
+  },
+  {
+    key: 'mu',
+    label: 'Dynamic viscosity (mu)',
+    help: 'Fluid dynamic viscosity in Pa.s (air ~ 1.8e-05). Used by the const transport model.',
+    kind: 'scalar',
+    example: '1.8e-05',
+    file: 'constant/thermophysicalProperties',
+    path: ['mixture', 'transport', 'mu'],
+  },
+  {
+    key: 'initialU',
+    label: 'Initial velocity',
+    help: 'Internal field the run starts from, e.g. `uniform (0 0 0)` for fluid at rest.',
+    kind: 'text',
+    example: 'uniform (0 0 0)',
+    file: '0/U',
+    path: ['internalField'],
+  },
+  {
+    key: 'initialT',
+    label: 'Initial temperature',
+    help: 'Internal temperature field in kelvin, e.g. `uniform 300`.',
+    kind: 'text',
+    example: 'uniform 300',
+    file: '0/T',
+    path: ['internalField'],
+  },
+  {
+    key: 'initialP',
+    label: 'Initial pressure',
+    help: 'Internal ABSOLUTE pressure field in Pa, e.g. `uniform 100000` (1 atm).',
+    kind: 'text',
+    example: 'uniform 100000',
+    file: '0/p',
+    path: ['internalField'],
+  },
+  {
+    key: 'endTime',
+    label: 'End time / iterations',
+    help: 'Final iteration (steady) or simulated time in seconds (transient) the run targets.',
+    kind: 'scalar',
+    example: '1000',
+    file: 'system/controlDict',
+    path: ['endTime'],
+  },
+  {
+    key: 'writeInterval',
+    label: 'Write interval',
+    help: 'How often results are written, in the unit set by writeControl.',
+    kind: 'scalar',
+    example: '100',
+    file: 'system/controlDict',
+    path: ['writeInterval'],
+  },
+];
+
+/**
  * The solver catalog: the single source of truth both the backend (runnable gate,
  * scaffold renderers) and the frontend (solver picker, easy-mode form) consume.
- * Initial set is incompressible-first (DIVE builds submersible hydro turbines):
- * steady simpleFoam and transient pimpleFoam. Extend with compressible/multiphase
- * entries later (see SOLVER_PLAN v2.5) — each is one catalog entry + one renderer set.
+ * Covers a steady/transient x incompressible/compressible matrix: simpleFoam,
+ * pimpleFoam, rhoSimpleFoam, rhoPimpleFoam. Extend with multiphase / MRF entries
+ * later (see SOLVER_PLAN v2.5) — each is one catalog entry + one renderer set.
  */
 export const SOLVER_CATALOG: Record<ConfigurableSolverId, SolverSpec> = {
   simpleFoam: {
@@ -778,6 +878,74 @@ export const SOLVER_CATALOG: Record<ConfigurableSolverId, SolverSpec> = {
         help: 'Simulated seconds per step. Keep the Courant number near 1; lower if it diverges.',
         kind: 'scalar',
         example: '1e-4',
+        file: 'system/controlDict',
+        path: ['deltaT'],
+      },
+      {
+        key: 'adjustTimeStep',
+        label: 'Adjust time step',
+        help: 'Let the solver adapt deltaT each step to hold the max Courant number.',
+        kind: 'bool',
+        options: ['yes', 'no'],
+        example: 'yes',
+        file: 'system/controlDict',
+        path: ['adjustTimeStep'],
+      },
+      {
+        key: 'maxCo',
+        label: 'Max Courant number',
+        help: 'Upper bound on the Courant number when adjustTimeStep is on (1 is typical).',
+        kind: 'scalar',
+        example: '1',
+        file: 'system/controlDict',
+        path: ['maxCo'],
+      },
+    ],
+  },
+  rhoSimpleFoam: {
+    id: 'rhoSimpleFoam',
+    label: 'Steady-state, compressible (RANS)',
+    summary: 'Time-averaged compressible flow with heat. For gas or steam paths that settle to steady.',
+    regime: 'steady',
+    family: 'compressible',
+    requiredFiles: [...COMPRESSIBLE_RANS_FILES],
+    easyParams: [
+      ...COMMON_COMPRESSIBLE_PARAMS,
+      {
+        key: 'residualP',
+        label: 'Convergence residual (p)',
+        help: 'The run stops once the pressure residual falls below this (e.g. 1e-3).',
+        kind: 'scalar',
+        example: '1e-3',
+        file: 'system/fvSolution',
+        path: ['SIMPLE', 'residualControl', 'p'],
+      },
+      {
+        key: 'relaxP',
+        label: 'Pressure relaxation',
+        help: 'Under-relaxation for pressure (0.3 is safe for compressible SIMPLE).',
+        kind: 'scalar',
+        example: '0.3',
+        file: 'system/fvSolution',
+        path: ['relaxationFactors', 'fields', 'p'],
+      },
+    ],
+  },
+  rhoPimpleFoam: {
+    id: 'rhoPimpleFoam',
+    label: 'Transient, compressible (RANS)',
+    summary: 'Time-accurate compressible flow with heat, for unsteady gas or steam dynamics.',
+    regime: 'transient',
+    family: 'compressible',
+    requiredFiles: [...COMPRESSIBLE_RANS_FILES],
+    easyParams: [
+      ...COMMON_COMPRESSIBLE_PARAMS,
+      {
+        key: 'deltaT',
+        label: 'Time step (deltaT)',
+        help: 'Simulated seconds per step. Keep the Courant number near 1; lower if it diverges.',
+        kind: 'scalar',
+        example: '1e-5',
         file: 'system/controlDict',
         path: ['deltaT'],
       },

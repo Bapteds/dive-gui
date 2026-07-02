@@ -87,6 +87,30 @@ describe('renderSolverFile / parseApplication (unit)', () => {
     }
   });
 
+  it('renders compressible rhoSimpleFoam files: thermo, T, absolute p, energy scheme, no pRef', () => {
+    expect(renderSolverFile('rhoSimpleFoam', 'constant/thermophysicalProperties', [])).toContain(
+      'perfectGas',
+    );
+    expect(renderSolverFile('rhoSimpleFoam', '0/T', ['inlet'])).toContain('[0 0 0 1 0 0 0]');
+    // Compressible p is ABSOLUTE pressure in Pa, not the incompressible kinematic p.
+    expect(renderSolverFile('rhoSimpleFoam', '0/p', [])).toContain('[1 -1 -2 0 0 0 0]');
+    expect(parseApplication(renderSolverFile('rhoSimpleFoam', 'system/controlDict', []))).toBe(
+      'rhoSimpleFoam',
+    );
+    expect(renderSolverFile('rhoSimpleFoam', 'system/fvSchemes', [])).toContain('div(phi,e)');
+    const solution = renderSolverFile('rhoSimpleFoam', 'system/fvSolution', []);
+    expect(solution).toContain('rho'); // compressible rho solver / relaxation
+    expect(solution).not.toContain('pRefCell'); // absolute pressure needs no reference
+  });
+
+  it('renders transient rhoPimpleFoam with PIMPLE + Euler', () => {
+    expect(renderSolverFile('rhoPimpleFoam', 'system/fvSolution', [])).toContain('PIMPLE');
+    expect(renderSolverFile('rhoPimpleFoam', 'system/fvSchemes', [])).toContain('default         Euler;');
+    expect(parseApplication(renderSolverFile('rhoPimpleFoam', 'system/controlDict', []))).toBe(
+      'rhoPimpleFoam',
+    );
+  });
+
   it('references every mesh patch in a 0/ field boundaryField', () => {
     const k = renderSolverFile('simpleFoam', '0/k', ['inlet', 'walls']);
     expect(k).toContain('inlet');
@@ -191,6 +215,54 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
     const schemes = (await readCaseFile(id, 'system/fvSchemes'))?.toString('utf8') ?? '';
     expect(schemes).toContain('Euler');
     expect(schemes).not.toContain('steadyState');
+  });
+
+  it('scaffolds a compressible rhoSimpleFoam case and it becomes runnable', async () => {
+    const { auth, id } = await makeProject('runnable-rho@x.test');
+    await writeMesh(id);
+
+    const scaffold = await request(app)
+      .post(`/api/v1/projects/${id}/runnable/scaffold`)
+      .set('Authorization', auth)
+      .send({ solver: 'rhoSimpleFoam' });
+    expect(scaffold.status).toBe(201);
+    expect(scaffold.body.runnable.runnable).toBe(true);
+    expect(scaffold.body.runnable.solver).toBe('rhoSimpleFoam');
+    expect(scaffold.body.created).toEqual(
+      expect.arrayContaining(['constant/thermophysicalProperties', '0/T', '0/alphat']),
+    );
+    const p = (await readCaseFile(id, '0/p'))?.toString('utf8') ?? '';
+    expect(p).toContain('[1 -1 -2 0 0 0 0]'); // absolute pressure (Pa)
+  });
+
+  it('switching incompressible -> compressible rewrites the trio and 0/p to absolute pressure', async () => {
+    const { auth, id } = await makeProject('runnable-switch-rho@x.test');
+    await writeMesh(id);
+
+    await request(app).post(`/api/v1/projects/${id}/runnable/scaffold`).set('Authorization', auth);
+    const pBefore = (await readCaseFile(id, '0/p'))?.toString('utf8') ?? '';
+    expect(pBefore).toContain('[0 2 -2 0 0 0 0]'); // kinematic (incompressible)
+
+    const switched = await request(app)
+      .post(`/api/v1/projects/${id}/runnable/scaffold`)
+      .set('Authorization', auth)
+      .send({ solver: 'rhoSimpleFoam' });
+    expect(switched.status).toBe(201);
+    expect(switched.body.created).toEqual(
+      expect.arrayContaining([
+        'system/controlDict',
+        'system/fvSchemes',
+        'system/fvSolution',
+        '0/p',
+      ]),
+    );
+    expect(switched.body.runnable.runnable).toBe(true);
+    expect(switched.body.runnable.solver).toBe('rhoSimpleFoam');
+
+    const pAfter = (await readCaseFile(id, '0/p'))?.toString('utf8') ?? '';
+    expect(pAfter).toContain('[1 -1 -2 0 0 0 0]'); // absolute (compressible)
+    const schemes = (await readCaseFile(id, 'system/fvSchemes'))?.toString('utf8') ?? '';
+    expect(schemes).toContain('div(phi,e)');
   });
 
   it('retargets a generic controlDict (application foamRun) to simpleFoam', async () => {

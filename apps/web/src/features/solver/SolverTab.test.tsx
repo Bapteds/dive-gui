@@ -116,8 +116,9 @@ describe('SolverTab', () => {
 
     renderTab();
 
-    // Choose the transient (pimpleFoam) archetype, then generate.
-    await userEvent.click(await screen.findByRole('radio', { name: /transient/i }));
+    // Choose the transient incompressible (pimpleFoam) archetype, then generate.
+    // The matcher is specific: there is now also a transient compressible solver.
+    await userEvent.click(await screen.findByRole('radio', { name: /transient, incompressible/i }));
     await userEvent.click(screen.getByRole('button', { name: /generate solver setup/i }));
     await waitFor(() => expect(api.scaffoldSolver).toHaveBeenCalledWith('p1', 'pimpleFoam'));
   });

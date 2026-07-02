@@ -9,7 +9,7 @@
 // patches (the rule that 0/*.boundaryField must cover every polyMesh patch).
 //
 // See docs/openfoam-fichiers-obligatoires.md for the contract this encodes.
-import { CONSTRAINT_PATCH_TYPES, type ConfigurableSolverId } from '@dive/shared';
+import { CONSTRAINT_PATCH_TYPES, SOLVER_CATALOG, type ConfigurableSolverId } from '@dive/shared';
 
 /**
  * The five files that make up the mesh, living under constant/polyMesh/. These
@@ -574,40 +574,407 @@ relaxationFactors
 ${FOAM_FOOTER}`;
 }
 
+// ---------------------------------------------------------------------------
+// Runnable compressible cases (rhoSimpleFoam steady / rhoPimpleFoam transient).
+//
+// Compressible RANS reuses the turbulence model file and the U/k/omega/nut fields,
+// but replaces transportProperties with thermophysicalProperties, adds a
+// temperature field 0/T and a turbulent thermal diffusivity 0/alphat, and 0/p is
+// ABSOLUTE pressure in Pa (not the incompressible kinematic p). The system/ trio
+// carries the energy equation (div(phi,e)/div(phi,K)), a rho solver and, for the
+// steady case, a rho relaxation. Air / perfect-gas defaults; edit to your fluid.
+// ---------------------------------------------------------------------------
+
+/** constant/thermophysicalProperties - air, perfect gas, const transport (edit me). */
+function thermophysicalProperties(): string {
+  return `${foamHeader('dictionary', 'thermophysicalProperties', 'constant')}
+thermoType
+{
+    type            hePsiThermo;
+    mixture         pureMixture;
+    transport       const;
+    thermo          hConst;
+    equationOfState perfectGas;
+    specie          specie;
+    energy          sensibleInternalEnergy;
+}
+
+mixture
+{
+    specie
+    {
+        molWeight   28.9;
+    }
+    thermodynamics
+    {
+        Cp          1005;
+        Hf          0;
+    }
+    transport
+    {
+        // Dynamic viscosity mu [Pa.s] and Prandtl number Pr. Default ~ air.
+        mu          1.8e-05;
+        Pr          0.7;
+    }
+}
+${FOAM_FOOTER}`;
+}
+
+/** 0/T - temperature field (K); boundaryField covers every discovered patch. */
+function fieldT(patches: string[]): string {
+  return `${foamHeader('volScalarField', 'T', '0')}
+dimensions      [0 0 0 1 0 0 0];
+
+internalField   uniform 300;
+
+${boundaryFieldBlock(patches)}
+${FOAM_FOOTER}`;
+}
+
+/** 0/p (compressible) - ABSOLUTE pressure in Pa; boundaryField per patch. */
+function fieldPCompressible(patches: string[]): string {
+  return `${foamHeader('volScalarField', 'p', '0')}
+dimensions      [1 -1 -2 0 0 0 0];
+
+internalField   uniform 100000;
+
+${boundaryFieldBlock(patches)}
+${FOAM_FOOTER}`;
+}
+
+/** 0/alphat - turbulent thermal diffusivity; boundaryField per patch. */
+function fieldAlphat(patches: string[]): string {
+  return `${foamHeader('volScalarField', 'alphat', '0')}
+dimensions      [1 -1 -1 0 0 0 0];
+
+internalField   uniform 0;
+
+${boundaryFieldBlock(patches)}
+${FOAM_FOOTER}`;
+}
+
+/** system/controlDict tuned for a steady rhoSimpleFoam run. */
+function rhoSimpleFoamControlDict(): string {
+  return `${foamHeader('dictionary', 'controlDict', 'system')}
+application     rhoSimpleFoam;
+
+startFrom       startTime;
+startTime       0;
+
+stopAt          endTime;
+endTime         1000;
+
+deltaT          1;
+
+writeControl    timeStep;
+writeInterval   100;
+
+purgeWrite      0;
+
+writeFormat     ascii;
+writePrecision  6;
+writeCompression off;
+
+timeFormat      general;
+timePrecision   6;
+
+runTimeModifiable true;
+${FOAM_FOOTER}`;
+}
+
+/** system/fvSchemes for steady rhoSimpleFoam (energy + kinetic-energy terms). */
+function rhoSimpleFoamFvSchemes(): string {
+  return `${foamHeader('dictionary', 'fvSchemes', 'system')}
+ddtSchemes
+{
+    default         steadyState;
+}
+
+gradSchemes
+{
+    default         Gauss linear;
+}
+
+divSchemes
+{
+    default         none;
+    div(phi,U)      bounded Gauss linearUpwind grad(U);
+    div(phi,e)      bounded Gauss upwind;
+    div(phi,K)      bounded Gauss upwind;
+    div(phi,k)      bounded Gauss upwind;
+    div(phi,omega)  bounded Gauss upwind;
+    div(phiv,p)     bounded Gauss upwind;
+    div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;
+}
+
+laplacianSchemes
+{
+    default         Gauss linear corrected;
+}
+
+interpolationSchemes
+{
+    default         linear;
+}
+
+snGradSchemes
+{
+    default         corrected;
+}
+
+wallDist
+{
+    method          meshWave;
+}
+${FOAM_FOOTER}`;
+}
+
+/** system/fvSolution for steady rhoSimpleFoam (SIMPLE + rho relaxation). */
+function rhoSimpleFoamFvSolution(): string {
+  return `${foamHeader('dictionary', 'fvSolution', 'system')}
+solvers
+{
+    p
+    {
+        solver          GAMG;
+        smoother        GaussSeidel;
+        tolerance       1e-07;
+        relTol          0.1;
+    }
+
+    "(U|e|k|omega)"
+    {
+        solver          PBiCGStab;
+        preconditioner  DILU;
+        tolerance       1e-08;
+        relTol          0.1;
+    }
+
+    rho
+    {
+        solver          diagonal;
+    }
+}
+
+SIMPLE
+{
+    nNonOrthogonalCorrectors 0;
+    consistent      yes;
+
+    residualControl
+    {
+        p               1e-3;
+        U               1e-4;
+        e               1e-3;
+        "(k|omega)"     1e-3;
+    }
+}
+
+relaxationFactors
+{
+    fields
+    {
+        p               0.3;
+        rho             0.05;
+    }
+    equations
+    {
+        U               0.7;
+        e               0.7;
+        "(k|omega)"     0.7;
+    }
+}
+${FOAM_FOOTER}`;
+}
+
+/** system/controlDict tuned for a transient rhoPimpleFoam run. */
+function rhoPimpleFoamControlDict(): string {
+  return `${foamHeader('dictionary', 'controlDict', 'system')}
+application     rhoPimpleFoam;
+
+startFrom       startTime;
+startTime       0;
+
+stopAt          endTime;
+endTime         1;
+
+deltaT          1e-5;
+
+writeControl    adjustableRunTime;
+writeInterval   0.05;
+
+purgeWrite      0;
+
+writeFormat     ascii;
+writePrecision  6;
+writeCompression off;
+
+timeFormat      general;
+timePrecision   6;
+
+runTimeModifiable true;
+
+adjustTimeStep  yes;
+maxCo           1;
+maxDeltaT       1;
+${FOAM_FOOTER}`;
+}
+
+/** system/fvSchemes for transient rhoPimpleFoam (Euler time scheme). */
+function rhoPimpleFoamFvSchemes(): string {
+  return `${foamHeader('dictionary', 'fvSchemes', 'system')}
+ddtSchemes
+{
+    default         Euler;
+}
+
+gradSchemes
+{
+    default         Gauss linear;
+}
+
+divSchemes
+{
+    default         none;
+    div(phi,U)      Gauss linearUpwind grad(U);
+    div(phi,e)      Gauss limitedLinear 1;
+    div(phi,K)      Gauss limitedLinear 1;
+    div(phi,k)      Gauss limitedLinear 1;
+    div(phi,omega)  Gauss limitedLinear 1;
+    div(phiv,p)     Gauss linear;
+    div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;
+}
+
+laplacianSchemes
+{
+    default         Gauss linear corrected;
+}
+
+interpolationSchemes
+{
+    default         linear;
+}
+
+snGradSchemes
+{
+    default         corrected;
+}
+
+wallDist
+{
+    method          meshWave;
+}
+${FOAM_FOOTER}`;
+}
+
+/** system/fvSolution for transient rhoPimpleFoam (PIMPLE + Final solvers). */
+function rhoPimpleFoamFvSolution(): string {
+  return `${foamHeader('dictionary', 'fvSolution', 'system')}
+solvers
+{
+    "p.*"
+    {
+        solver          GAMG;
+        smoother        GaussSeidel;
+        tolerance       1e-07;
+        relTol          0.05;
+    }
+
+    "rho.*"
+    {
+        solver          diagonal;
+    }
+
+    "(U|e|k|omega).*"
+    {
+        solver          PBiCGStab;
+        preconditioner  DILU;
+        tolerance       1e-08;
+        relTol          0.1;
+    }
+}
+
+PIMPLE
+{
+    momentumPredictor yes;
+    nOuterCorrectors 1;
+    nCorrectors      2;
+    nNonOrthogonalCorrectors 0;
+}
+
+relaxationFactors
+{
+    equations
+    {
+        ".*"            1;
+    }
+}
+${FOAM_FOOTER}`;
+}
+
 /**
- * Render the content of a single solver file for `solver`. The transport /
- * turbulence properties and 0/ fields are shared incompressible-RANS setups
- * (identical for simpleFoam and pimpleFoam); only the system/ trio is
- * solver-specific (steady SIMPLE vs transient PIMPLE). `patches` is used only by
- * the 0/ fields so their boundaryField references the imported mesh's patches.
+ * Render the content of a single solver file for `solver`. The turbulence model
+ * file and the U/k/omega/nut fields are shared across all RANS solvers; the
+ * system/ trio, the transport-vs-thermo property file, the pressure field (kinematic
+ * vs absolute) and the compressible-only 0/{T,alphat} vary by solver family (incompressible
+ * vs compressible) and regime (steady vs transient). `patches` is used only by the
+ * 0/ fields so their boundaryField references the imported mesh's patches.
  */
 export function renderSolverFile(
   solver: ConfigurableSolverId,
-  path: SolverFilePath,
+  path: string,
   patches: string[],
 ): string {
-  const transient = solver === 'pimpleFoam';
+  const spec = SOLVER_CATALOG[solver];
+  const transient = spec.regime === 'transient';
+  const compressible = spec.family === 'compressible';
   switch (path) {
     case 'system/controlDict':
-      return transient ? pimpleFoamControlDict() : simpleFoamControlDict();
+      return compressible
+        ? transient
+          ? rhoPimpleFoamControlDict()
+          : rhoSimpleFoamControlDict()
+        : transient
+          ? pimpleFoamControlDict()
+          : simpleFoamControlDict();
     case 'system/fvSchemes':
-      return transient ? pimpleFoamFvSchemes() : simpleFoamFvSchemes();
+      return compressible
+        ? transient
+          ? rhoPimpleFoamFvSchemes()
+          : rhoSimpleFoamFvSchemes()
+        : transient
+          ? pimpleFoamFvSchemes()
+          : simpleFoamFvSchemes();
     case 'system/fvSolution':
-      return transient ? pimpleFoamFvSolution() : simpleFoamFvSolution();
+      return compressible
+        ? transient
+          ? rhoPimpleFoamFvSolution()
+          : rhoSimpleFoamFvSolution()
+        : transient
+          ? pimpleFoamFvSolution()
+          : simpleFoamFvSolution();
     case 'constant/transportProperties':
       return transportProperties();
+    case 'constant/thermophysicalProperties':
+      return thermophysicalProperties();
     case 'constant/turbulenceProperties':
       return turbulenceProperties();
     case '0/U':
       return fieldU(patches);
     case '0/p':
-      return fieldP(patches);
+      return compressible ? fieldPCompressible(patches) : fieldP(patches);
+    case '0/T':
+      return fieldT(patches);
     case '0/k':
       return fieldK(patches);
     case '0/omega':
       return fieldOmega(patches);
     case '0/nut':
       return fieldNut(patches);
+    case '0/alphat':
+      return fieldAlphat(patches);
+    default:
+      throw new Error(`No solver-file renderer for ${path}`);
   }
 }
 

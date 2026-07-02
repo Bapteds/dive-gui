@@ -32,7 +32,6 @@ import {
   BASE_FILE_PATHS,
   BOUNDARY_FILE,
   MESH_FILES,
-  SOLVER_FILE_PATHS,
   mergeFieldBoundary,
   parseApplication,
   parseBoundaryPatches,
@@ -252,18 +251,20 @@ export async function computeRunnable(projectId: string): Promise<RunnableCheck>
   const meshPresence = await Promise.all(MESH_FILES.map((file) => caseFileExists(projectId, file)));
   const missingMesh = MESH_FILES.filter((_, i) => !meshPresence[i]);
 
-  const presence = await Promise.all(
-    SOLVER_FILE_PATHS.map((file) => caseFileExists(projectId, file)),
-  );
-  const missingFiles = SOLVER_FILE_PATHS.filter((_, i) => !presence[i]);
-
   const controlDict = await readCaseFile(projectId, 'system/controlDict');
   const solver = controlDict ? parseApplication(controlDict.toString('utf8')) : null;
   // The case is runnable only when it targets a solver the app can configure
-  // (simpleFoam steady / pimpleFoam transient). A generic `foamRun` placeholder —
-  // or any name outside the catalog — is refused so the gate re-offers "Make
-  // runnable" (which points it at a real solver and fills the numerics).
+  // (simpleFoam/pimpleFoam/rhoSimpleFoam/rhoPimpleFoam). A generic `foamRun`
+  // placeholder — or any name outside the catalog — is refused so the gate
+  // re-offers "Make runnable" (which points it at a real solver and fills it in).
   const target = solver && isConfigurableSolver(solver) ? solver : null;
+
+  // Presence is checked against the RESOLVED solver's required files: a compressible
+  // solver needs thermophysicalProperties + 0/T + 0/alphat that an incompressible one
+  // does not. Before a solver is chosen, guide against simpleFoam's set.
+  const requiredFiles = (target ? SOLVER_CATALOG[target] : SOLVER_CATALOG.simpleFoam).requiredFiles;
+  const presence = await Promise.all(requiredFiles.map((file) => caseFileExists(projectId, file)));
+  const missingFiles = requiredFiles.filter((_, i) => !presence[i]);
 
   // Even when every file is present, the system/ numerics must match the target
   // solver (not a generic placeholder, and not the *other* solver's algorithm), or
@@ -325,16 +326,28 @@ async function systemNumericsNeedsRepair(
   const buffer = await readCaseFile(projectId, file);
   if (!buffer) return true;
   const content = buffer.toString('utf8');
-  const transient = SOLVER_CATALOG[solver].regime === 'transient';
+  const spec = SOLVER_CATALOG[solver];
+  const transient = spec.regime === 'transient';
+  const incompressible = spec.family === 'incompressible';
 
   if (file === 'system/fvSolution') {
-    if (!/pRef(Cell|Point)/.test(content)) return true;
-    return transient ? !/\bPIMPLE\b/.test(content) : !/\bSIMPLE\b/.test(content);
+    // Incompressible closed domains need a pressure reference; compressible p is
+    // absolute (Pa) with a real value, so no pRef is required there.
+    if (incompressible && !/pRef(Cell|Point)/.test(content)) return true;
+    if (transient ? !/\bPIMPLE\b/.test(content) : !/\bSIMPLE\b/.test(content)) return true;
+    // Family marker: a compressible setup carries a `rho` solver / relaxation entry.
+    // Its presence/absence flips the trio when the family is switched.
+    const hasRho = /\brho\b/.test(content);
+    return incompressible ? hasRho : !hasRho;
   }
   if (file === 'system/fvSchemes') {
     if (!/\bdiv\(phi,U\)/.test(content)) return true;
+    // Steady needs a steadyState time scheme; transient must NOT use steadyState.
     const steadyDdt = /default\s+steadyState/.test(content);
-    return transient ? steadyDdt : !steadyDdt;
+    if (transient ? steadyDdt : !steadyDdt) return true;
+    // Family marker: a compressible setup carries the energy convection term.
+    const hasEnergy = /div\(phi,e\)/.test(content);
+    return incompressible ? hasEnergy : !hasEnergy;
   }
   // system/controlDict
   if (parseApplication(content) !== solver) return true;
@@ -342,6 +355,25 @@ async function systemNumericsNeedsRepair(
   const endTime = match ? Number(match[1]) : 0;
   if (!Number.isFinite(endTime)) return true;
   return transient ? endTime <= 0 : endTime <= 1;
+}
+
+/**
+ * Does 0/p need to be (re)written for `solver`'s family? Incompressible p is
+ * KINEMATIC ([0 2 -2 …], i.e. p/rho); compressible p is ABSOLUTE pressure in Pa
+ * ([1 -1 -2 …]). True when 0/p is missing or its dimensions belong to the OTHER
+ * family, so switching a case between incompressible and compressible re-renders p
+ * with the right dimensions (the other 0/ fields are shared or additive).
+ */
+async function pFieldNeedsRepair(
+  projectId: string,
+  solver: ConfigurableSolverId,
+): Promise<boolean> {
+  const buffer = await readCaseFile(projectId, '0/p');
+  if (!buffer) return true;
+  const content = buffer.toString('utf8');
+  const compressible = SOLVER_CATALOG[solver].family === 'compressible';
+  const hasAbsolute = /\[\s*1\s+-1\s+-2\b/.test(content);
+  return compressible ? !hasAbsolute : hasAbsolute;
 }
 
 /**
@@ -370,7 +402,7 @@ export async function scaffoldSolver(
   const patches = boundary ? parseBoundaryPatches(boundary.toString('utf8')) : [];
 
   const created: string[] = [];
-  for (const file of SOLVER_FILE_PATHS) {
+  for (const file of SOLVER_CATALOG[solver].requiredFiles) {
     if (SYSTEM_NUMERICS_FILES.has(file)) {
       if (await systemNumericsNeedsRepair(projectId, file, solver)) {
         await writeCaseFile(projectId, file, renderSolverFile(solver, file, patches));
@@ -378,7 +410,17 @@ export async function scaffoldSolver(
       }
       continue;
     }
-    // 0/ fields + constant/*Properties: keep what the user has, add what is missing.
+    // 0/p is family-sensitive (kinematic vs absolute Pa): rewrite it when missing OR
+    // when its dimensions belong to the other family, so switching incompressible <->
+    // compressible fixes the pressure field.
+    if (file === '0/p') {
+      if (await pFieldNeedsRepair(projectId, solver)) {
+        await writeCaseFile(projectId, file, renderSolverFile(solver, file, patches));
+        created.push(file);
+      }
+      continue;
+    }
+    // Other 0/ fields + constant/*Properties: keep what the user has, add what is missing.
     if (await caseFileExists(projectId, file)) continue;
     await writeCaseFile(projectId, file, renderSolverFile(solver, file, patches));
     created.push(file);
