@@ -573,14 +573,239 @@ export function isTerminalRunStatus(status: RunStatus): boolean {
 }
 
 /**
- * OpenFOAM solver applications the app can run in v1. The actual solver is read
- * from the case's `system/controlDict` `application` keyword; this set bounds
- * what we accept (and is reused by the web client's labels). `foamRun` is the
- * generic launcher the scaffold writes by default; `simpleFoam` is the steady
- * incompressible RANS MVP.
+ * OpenFOAM solver applications the app accepts as a run target. The actual solver
+ * is read from the case's `system/controlDict` `application` keyword; this set
+ * bounds what we accept (and is reused by the web client's labels). `simpleFoam`
+ * (steady) and `pimpleFoam` (transient) are the incompressible RANS solvers the
+ * app can scaffold and configure (see SOLVER_CATALOG). `foamRun` is kept as a
+ * legacy generic placeholder the conversion scaffold may write: it is accepted as
+ * a name but is deliberately NOT configurable/runnable (the runnable gate refuses
+ * it), so a freshly-converted case must be pointed at a real solver first.
+ *
+ * Invocation is flavour-correct for ESI OpenFOAM.com v2406: classic binaries are
+ * run directly (`simpleFoam -case …`, `pimpleFoam -case …`), never `foamRun -solver`.
  */
-export const SOLVER_IDS = ['simpleFoam', 'foamRun'] as const;
+export const SOLVER_IDS = ['simpleFoam', 'pimpleFoam', 'foamRun'] as const;
 export type SolverId = (typeof SOLVER_IDS)[number];
+
+/**
+ * The solvers the app can fully set up (scaffold) and configure through the
+ * Easy/Advanced solver panel. A subset of SOLVER_IDS: `foamRun` is excluded (it is
+ * a non-runnable placeholder). Drives the runnable gate, the scaffold renderers,
+ * and the frontend solver picker + easy-mode form.
+ */
+export const CONFIGURABLE_SOLVER_IDS = ['simpleFoam', 'pimpleFoam'] as const;
+export type ConfigurableSolverId = (typeof CONFIGURABLE_SOLVER_IDS)[number];
+
+/** Is `id` a solver the app can scaffold and configure (vs a legacy placeholder)? */
+export function isConfigurableSolver(id: string): id is ConfigurableSolverId {
+  return (CONFIGURABLE_SOLVER_IDS as readonly string[]).includes(id);
+}
+
+/**
+ * How one curated "easy mode" solver parameter is edited, and where it lives. The
+ * frontend renders a control by `kind` and, on change, splices the new value into
+ * `file` at the dictionary `path` (via the same position-aware FOAM model the
+ * per-file editor uses), then saves that one file. This is what lets a single
+ * solver form write across controlDict / transportProperties / turbulenceProperties
+ * / fvSolution / 0-fields at once.
+ */
+export interface SolverParamDef {
+  /** Stable identity for the control (also its DOM id seed). */
+  key: string;
+  /** Short human label shown next to the control. */
+  label: string;
+  /** One concise sentence of help. */
+  help?: string;
+  /** Control kind: `enum`/`bool` render a <select> (options required), else an input. */
+  kind: 'enum' | 'scalar' | 'integer' | 'bool' | 'vector' | 'text';
+  /** Allowed tokens for `enum`/`bool` (bool lists the on-token first). */
+  options?: string[];
+  /** A representative example value (placeholder / default hint). */
+  example?: string;
+  /** Case file this parameter is written to, e.g. 'system/controlDict'. */
+  file: string;
+  /** Dictionary path of the leaf within that file, e.g. ['SIMPLE','residualControl','p']. */
+  path: string[];
+}
+
+/** A solver the app can scaffold and configure, with its files and easy-mode knobs. */
+export interface SolverSpec {
+  id: ConfigurableSolverId;
+  /** Case-archetype label for the picker, e.g. 'Steady-state, incompressible (RANS)'. */
+  label: string;
+  /** One-line "when to use this" summary. */
+  summary: string;
+  /** Steady (converges on residuals) vs transient (runs to endTime in time steps). */
+  regime: 'steady' | 'transient';
+  /** Physical family — bounds which parameters/files make sense (extensible). */
+  family: 'incompressible' | 'compressible' | 'multiphase' | 'potential';
+  /** Files this case needs to be runnable by this solver, beyond the mesh. */
+  requiredFiles: string[];
+  /** Curated cross-file parameters exposed in easy mode. */
+  easyParams: SolverParamDef[];
+}
+
+/**
+ * Files an incompressible RANS case needs beyond the mesh: the system trio plus
+ * transport + turbulence properties and the 0/ turbulence fields. simpleFoam and
+ * pimpleFoam share this exact set — only the file *contents* differ (steadyState
+ * vs Euler time scheme, SIMPLE vs PIMPLE algorithm, steady vs transient control).
+ */
+export const INCOMPRESSIBLE_RANS_FILES = [
+  'system/controlDict',
+  'system/fvSchemes',
+  'system/fvSolution',
+  'constant/transportProperties',
+  'constant/turbulenceProperties',
+  '0/U',
+  '0/p',
+  '0/k',
+  '0/omega',
+  '0/nut',
+] as const;
+
+/** Incompressible RANS turbulence models offered in easy mode (RAS.RASModel). */
+const RAS_MODEL_OPTIONS = [
+  'kOmegaSST',
+  'kEpsilon',
+  'kOmega',
+  'realizableKE',
+  'RNGkEpsilon',
+  'SpalartAllmaras',
+  'LaunderSharmaKE',
+];
+
+/** Parameters common to both incompressible RANS solvers. */
+const COMMON_INCOMPRESSIBLE_PARAMS: SolverParamDef[] = [
+  {
+    key: 'rasModel',
+    label: 'Turbulence model',
+    help: 'RANS turbulence model. kOmegaSST is a robust all-rounder for wall-bounded flow.',
+    kind: 'enum',
+    options: RAS_MODEL_OPTIONS,
+    example: 'kOmegaSST',
+    file: 'constant/turbulenceProperties',
+    path: ['RAS', 'RASModel'],
+  },
+  {
+    key: 'nu',
+    label: 'Kinematic viscosity (nu)',
+    help: 'Fluid kinematic viscosity in m^2/s (water ~ 1e-06, air ~ 1.5e-05).',
+    kind: 'text',
+    example: '[0 2 -1 0 0 0 0] 1e-06',
+    file: 'constant/transportProperties',
+    path: ['nu'],
+  },
+  {
+    key: 'initialU',
+    label: 'Initial velocity',
+    help: 'Internal field the run starts from, e.g. `uniform (0 0 0)` for fluid at rest.',
+    kind: 'text',
+    example: 'uniform (0 0 0)',
+    file: '0/U',
+    path: ['internalField'],
+  },
+  {
+    key: 'endTime',
+    label: 'End time / iterations',
+    help: 'Final iteration (steady) or simulated time in seconds (transient) the run targets.',
+    kind: 'scalar',
+    example: '1000',
+    file: 'system/controlDict',
+    path: ['endTime'],
+  },
+  {
+    key: 'writeInterval',
+    label: 'Write interval',
+    help: 'How often results are written, in the unit set by writeControl.',
+    kind: 'scalar',
+    example: '100',
+    file: 'system/controlDict',
+    path: ['writeInterval'],
+  },
+];
+
+/**
+ * The solver catalog: the single source of truth both the backend (runnable gate,
+ * scaffold renderers) and the frontend (solver picker, easy-mode form) consume.
+ * Initial set is incompressible-first (DIVE builds submersible hydro turbines):
+ * steady simpleFoam and transient pimpleFoam. Extend with compressible/multiphase
+ * entries later (see SOLVER_PLAN v2.5) — each is one catalog entry + one renderer set.
+ */
+export const SOLVER_CATALOG: Record<ConfigurableSolverId, SolverSpec> = {
+  simpleFoam: {
+    id: 'simpleFoam',
+    label: 'Steady-state, incompressible (RANS)',
+    summary: 'Time-averaged flow that settles to a steady solution — the usual first choice.',
+    regime: 'steady',
+    family: 'incompressible',
+    requiredFiles: [...INCOMPRESSIBLE_RANS_FILES],
+    easyParams: [
+      ...COMMON_INCOMPRESSIBLE_PARAMS,
+      {
+        key: 'residualP',
+        label: 'Convergence residual (p)',
+        help: 'The run stops once the pressure residual falls below this (e.g. 1e-4).',
+        kind: 'scalar',
+        example: '1e-4',
+        file: 'system/fvSolution',
+        path: ['SIMPLE', 'residualControl', 'p'],
+      },
+      {
+        key: 'relaxP',
+        label: 'Pressure relaxation',
+        help: 'Under-relaxation for pressure (0.3 is safe; higher converges faster but may diverge).',
+        kind: 'scalar',
+        example: '0.3',
+        file: 'system/fvSolution',
+        path: ['relaxationFactors', 'fields', 'p'],
+      },
+    ],
+  },
+  pimpleFoam: {
+    id: 'pimpleFoam',
+    label: 'Transient, incompressible (URANS)',
+    summary: 'Time-accurate unsteady flow — for vortex shedding, rotor-stator, startup transients.',
+    regime: 'transient',
+    family: 'incompressible',
+    requiredFiles: [...INCOMPRESSIBLE_RANS_FILES],
+    easyParams: [
+      ...COMMON_INCOMPRESSIBLE_PARAMS,
+      {
+        key: 'deltaT',
+        label: 'Time step (deltaT)',
+        help: 'Simulated seconds per step. Keep the Courant number near 1; lower if it diverges.',
+        kind: 'scalar',
+        example: '1e-4',
+        file: 'system/controlDict',
+        path: ['deltaT'],
+      },
+      {
+        key: 'adjustTimeStep',
+        label: 'Adjust time step',
+        help: 'Let the solver adapt deltaT each step to hold the max Courant number.',
+        kind: 'bool',
+        options: ['yes', 'no'],
+        example: 'yes',
+        file: 'system/controlDict',
+        path: ['adjustTimeStep'],
+      },
+      {
+        key: 'maxCo',
+        label: 'Max Courant number',
+        help: 'Upper bound on the Courant number when adjustTimeStep is on (1 is typical).',
+        kind: 'scalar',
+        example: '1',
+        file: 'system/controlDict',
+        path: ['maxCo'],
+      },
+    ],
+  },
+};
+
+/** The catalog as an ordered list (picker order: steady first, then transient). */
+export const SOLVER_SPECS: SolverSpec[] = CONFIGURABLE_SOLVER_IDS.map((id) => SOLVER_CATALOG[id]);
 
 /**
  * Residual field names the chart plots, shared so the parser, the legend, and
