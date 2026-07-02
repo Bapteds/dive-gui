@@ -716,12 +716,24 @@ export interface DashboardRun {
   createdAt: string;
 }
 
+/** A recent project with its run tally, for the dashboard grid. */
+export interface DashboardProject {
+  id: string;
+  title: string;
+  createdAt: string;
+  runCount: number;
+  converged: number;
+  diverged: number;
+  other: number;
+}
+
 /** `GET /dashboard` payload: server metrics + the viewer's runs. */
 export interface DashboardData {
   metrics: ServerMetrics;
   activeRuns: DashboardRun[];
   recentRuns: DashboardRun[];
   runCounts: Record<RunStatus, number>;
+  recentProjects: DashboardProject[];
 }
 
 export type { RunStatus, SolverId, ResidualSample };

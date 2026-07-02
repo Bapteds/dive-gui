@@ -1,51 +1,105 @@
 import { cn } from '@/lib/utils';
-import type { RunStatus } from '@/lib/api/types';
 
 /**
  * Hand-rolled SVG charts for the Home dashboard (no chart lib, same discipline as
- * the solver ResidualChart). All colours are brand tokens via inline CSS vars, so
- * they stay in the palette: blue (primary), orange (accent), green (success), red
- * (danger), grey (neutral), light blue (primary-light).
+ * the solver ResidualChart). Colours are passed in as brand-token CSS vars
+ * (see dashboardColors.ts), so nothing here hard-codes a hue.
  */
 
 const clamp = (value: number): number => Math.min(100, Math.max(0, value));
 
-/** Usage colour by health: blue (calm) -> orange (busy) -> red (saturated). */
-function usageColor(pct: number): string {
-  if (pct >= 90) return 'var(--color-danger)';
-  if (pct >= 75) return 'var(--color-accent)';
-  return 'var(--color-primary)';
-}
-
-/** Per-status colour for the run-outcome donut and legend. */
-const STATUS_COLOR: Record<RunStatus, string> = {
-  queued: 'var(--color-neutral)',
-  running: 'var(--color-primary-light)',
-  converged: 'var(--color-success)',
-  completed: 'var(--color-primary)',
-  diverged: 'var(--color-accent)',
-  failed: 'var(--color-danger)',
-  stopped: 'var(--color-neutral)',
-};
-
-/** A circular usage gauge (0-100%) with the value in the centre. */
-export function RadialGauge({ value, caption }: { value: number; caption?: string }) {
-  const size = 128;
-  const stroke = 12;
-  const radius = (size - stroke) / 2;
-  const circ = 2 * Math.PI * radius;
-  const pct = clamp(value);
-  const dash = (pct / 100) * circ;
+/** A trend sparkline (filled area + line) of recent 0-100 values, in `color`. */
+export function Sparkline({ values, color }: { values: number[]; color: string }) {
+  if (values.length < 2) {
+    return <div className="h-[34px] w-full" aria-hidden="true" />;
+  }
+  const width = 200;
+  const height = 40;
+  const step = width / (values.length - 1);
+  const points = values
+    .map((value, i) => `${(i * step).toFixed(1)},${(height - (clamp(value) / 100) * height).toFixed(1)}`)
+    .join(' ');
+  const area = `0,${height} ${points} ${width},${height}`;
 
   return (
-    <div className="flex flex-col items-center gap-1.5">
-      <div
-        className="relative grid place-items-center"
-        style={{ width: size, height: size }}
-        role="img"
-        aria-label={`${Math.round(pct)} percent`}
-      >
-        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      width="100%"
+      height="34"
+      preserveAspectRatio="none"
+      className="block"
+      aria-hidden="true"
+    >
+      <polygon points={area} style={{ fill: color, fillOpacity: 0.1 }} />
+      <polyline
+        points={points}
+        fill="none"
+        style={{ stroke: color }}
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
+  );
+}
+
+/** A thin multi-segment distribution bar. Empty renders a neutral track. */
+export function DistributionBar({
+  segments,
+  className,
+  label,
+}: {
+  segments: { value: number; color: string }[];
+  className?: string;
+  label?: string;
+}) {
+  const total = segments.reduce((sum, segment) => sum + segment.value, 0);
+  const visible = segments.filter((segment) => segment.value > 0);
+  return (
+    <div
+      className={cn('flex h-2.5 gap-[3px] overflow-hidden rounded-full', className)}
+      role={label ? 'img' : undefined}
+      aria-label={label}
+      aria-hidden={label ? undefined : true}
+    >
+      {total === 0 ? (
+        <span className="flex-1" style={{ background: 'var(--color-border)' }} />
+      ) : (
+        visible.map((segment, index) => (
+          <span key={index} style={{ flex: segment.value, background: segment.color }} />
+        ))
+      )}
+    </div>
+  );
+}
+
+/** A donut ring of coloured segments with a total in the centre. */
+export function Donut({
+  segments,
+  size = 132,
+  unit = 'total runs',
+}: {
+  segments: { value: number; color: string }[];
+  size?: number;
+  unit?: string;
+}) {
+  const stroke = 16;
+  const radius = (size - stroke) / 2;
+  const circ = 2 * Math.PI * radius;
+  const visible = segments.filter((segment) => segment.value > 0);
+  const total = visible.reduce((sum, segment) => sum + segment.value, 0);
+  let offset = 0;
+
+  return (
+    <div
+      className="relative grid shrink-0 place-items-center"
+      style={{ width: size, height: size }}
+      role="img"
+      aria-label={`${total} ${unit}`}
+    >
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
+        {total === 0 ? (
           <circle
             cx={size / 2}
             cy={size / 2}
@@ -54,169 +108,31 @@ export function RadialGauge({ value, caption }: { value: number; caption?: strin
             style={{ stroke: 'var(--color-border)' }}
             strokeWidth={stroke}
           />
-          <circle
-            cx={size / 2}
-            cy={size / 2}
-            r={radius}
-            fill="none"
-            style={{ stroke: usageColor(pct) }}
-            strokeWidth={stroke}
-            strokeLinecap="round"
-            strokeDasharray={`${dash} ${circ - dash}`}
-            className="transition-all duration-base ease-out"
-          />
-        </svg>
-        <span className="absolute flex items-baseline text-3xl font-semibold text-text tabular-nums">
-          {Math.round(pct)}
-          <span className="ml-0.5 text-base font-medium text-text-secondary">%</span>
-        </span>
-      </div>
-      {caption && <span className="text-xs text-text-secondary tabular-nums">{caption}</span>}
-    </div>
-  );
-}
-
-/** A thin filled sparkline of recent values (0-100). Decorative (the gauge has the number). */
-export function Sparkline({ values }: { values: number[] }) {
-  if (values.length < 2) {
-    return <div className="h-10 w-full" aria-hidden="true" />;
-  }
-  const width = 100;
-  const height = 28;
-  const step = width / (values.length - 1);
-  const points = values
-    .map((value, i) => `${(i * step).toFixed(2)},${(height - (clamp(value) / 100) * height).toFixed(2)}`)
-    .join(' ');
-  const area = `0,${height} ${points} ${width},${height}`;
-
-  return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      preserveAspectRatio="none"
-      className="h-10 w-full"
-      aria-hidden="true"
-    >
-      <polygon points={area} style={{ fill: 'var(--color-primary-tint)' }} />
-      <polyline
-        points={points}
-        fill="none"
-        style={{ stroke: 'var(--color-primary)' }}
-        strokeWidth={1.5}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-        vectorEffect="non-scaling-stroke"
-      />
-    </svg>
-  );
-}
-
-/** Run-outcome donut + legend. Empty state when there are no runs. */
-export function RunOutcomesDonut({ counts }: { counts: Record<RunStatus, number> }) {
-  const order: RunStatus[] = [
-    'converged',
-    'completed',
-    'running',
-    'queued',
-    'diverged',
-    'stopped',
-    'failed',
-  ];
-  const segments = order
-    .map((status) => ({ status, count: counts[status] ?? 0 }))
-    .filter((segment) => segment.count > 0);
-  const total = segments.reduce((sum, segment) => sum + segment.count, 0);
-
-  const size = 128;
-  const stroke = 16;
-  const radius = (size - stroke) / 2;
-  const circ = 2 * Math.PI * radius;
-  let offset = 0;
-
-  return (
-    <div className="flex items-center gap-4">
-      <div
-        className="relative grid shrink-0 place-items-center"
-        style={{ width: size, height: size }}
-        role="img"
-        aria-label={`${total} solver runs`}
-      >
-        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
-          {total === 0 ? (
-            <circle
-              cx={size / 2}
-              cy={size / 2}
-              r={radius}
-              fill="none"
-              style={{ stroke: 'var(--color-border)' }}
-              strokeWidth={stroke}
-            />
-          ) : (
-            segments.map((segment) => {
-              const length = (segment.count / total) * circ;
-              const element = (
-                <circle
-                  key={segment.status}
-                  cx={size / 2}
-                  cy={size / 2}
-                  r={radius}
-                  fill="none"
-                  style={{ stroke: STATUS_COLOR[segment.status] }}
-                  strokeWidth={stroke}
-                  strokeDasharray={`${length} ${circ - length}`}
-                  strokeDashoffset={-offset}
-                />
-              );
-              offset += length;
-              return element;
-            })
-          )}
-        </svg>
-        <div className="absolute flex flex-col items-center">
-          <span className="text-2xl font-semibold text-text tabular-nums">{total}</span>
-          <span className="text-xs text-text-secondary">runs</span>
-        </div>
-      </div>
-
-      <ul className="flex min-w-0 flex-1 flex-col gap-1">
-        {total === 0 ? (
-          <li className="text-sm text-text-secondary">No runs yet.</li>
         ) : (
-          segments.map((segment) => (
-            <li key={segment.status} className="flex items-center justify-between gap-2 text-xs">
-              <span className="flex min-w-0 items-center gap-1.5">
-                <span
-                  className="size-2.5 shrink-0 rounded-sm"
-                  style={{ backgroundColor: STATUS_COLOR[segment.status] }}
-                  aria-hidden="true"
-                />
-                <span className="truncate capitalize text-text-secondary">{segment.status}</span>
-              </span>
-              <span className="tabular-nums text-text">{segment.count}</span>
-            </li>
-          ))
+          visible.map((segment, index) => {
+            const length = (segment.value / total) * circ;
+            const element = (
+              <circle
+                key={index}
+                cx={size / 2}
+                cy={size / 2}
+                r={radius}
+                fill="none"
+                style={{ stroke: segment.color }}
+                strokeWidth={stroke}
+                strokeDasharray={`${length} ${circ - length}`}
+                strokeDashoffset={-offset}
+              />
+            );
+            offset += length;
+            return element;
+          })
         )}
-      </ul>
-    </div>
-  );
-}
-
-/** A compact stat tile: a big number + a label, optionally an icon slot. */
-export function StatTile({
-  label,
-  value,
-  hint,
-  className,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-  className?: string;
-}) {
-  return (
-    <div className={cn('flex flex-col justify-center rounded-md bg-bg/60 px-3 py-2', className)}>
-      <span className="text-lg font-semibold text-text tabular-nums">{value}</span>
-      <span className="text-xs text-text-secondary">{label}</span>
-      {hint && <span className="text-[11px] text-text-secondary/80 tabular-nums">{hint}</span>}
+      </svg>
+      <div className="absolute flex flex-col items-center">
+        <span className="font-mono text-3xl font-semibold text-text tabular-nums">{total}</span>
+        <span className="text-xs text-text-secondary">{unit}</span>
+      </div>
     </div>
   );
 }

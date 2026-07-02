@@ -50,6 +50,15 @@ describe('GET /dashboard', () => {
     expect(res.body.runCounts.running).toBe(1);
     expect(res.body.runCounts.converged).toBe(1);
     expect(res.body.runCounts.failed).toBe(0);
+    // Recent projects carry per-project run tallies (1 converged + 1 running = 2).
+    expect(res.body.recentProjects).toHaveLength(1);
+    expect(res.body.recentProjects[0]).toMatchObject({
+      title: 'Dash',
+      runCount: 2,
+      converged: 1,
+      diverged: 0,
+      other: 1,
+    });
 
     // A stranger sees none of the owner's runs.
     const strangerRes = await request(app)

@@ -38,6 +38,20 @@ export interface DashboardRun {
   createdAt: string;
 }
 
+/** A recent project with its run tally, for the dashboard grid. */
+export interface DashboardProject {
+  id: string;
+  title: string;
+  createdAt: string;
+  runCount: number;
+  /** converged + completed. */
+  converged: number;
+  /** diverged + failed. */
+  diverged: number;
+  /** stopped + queued + running. */
+  other: number;
+}
+
 /** The dashboard payload the Home page renders. */
 export interface DashboardData {
   metrics: ServerMetrics;
@@ -47,6 +61,8 @@ export interface DashboardData {
   recentRuns: DashboardRun[];
   /** Count of runs per terminal/active status, across visible projects. */
   runCounts: Record<RunStatus, number>;
+  /** The most recent projects with their run tallies, newest first. */
+  recentProjects: DashboardProject[];
 }
 
 /** Sum idle + total CPU ticks across all cores. */
@@ -142,5 +158,48 @@ export async function getDashboard(viewer: Viewer): Promise<DashboardData> {
     activeRuns: activeRuns.map(toDashboardRun),
     recentRuns: recentRuns.map(toDashboardRun),
     runCounts,
+    recentProjects: await getRecentProjects(project),
   };
+}
+
+/** Top-6 visible projects (newest first) each with its run tally by outcome bucket. */
+async function getRecentProjects(project: Prisma.ProjectWhereInput): Promise<DashboardProject[]> {
+  const projects = await prisma.project.findMany({
+    where: project,
+    orderBy: { createdAt: 'desc' },
+    take: 6,
+    select: { id: true, title: true, createdAt: true },
+  });
+  if (projects.length === 0) return [];
+
+  const ids = projects.map((entry) => entry.id);
+  const grouped = await prisma.run.groupBy({
+    by: ['projectId', 'status'],
+    where: { projectId: { in: ids } },
+    _count: true,
+  });
+
+  const stats = new Map<string, { converged: number; diverged: number; other: number; total: number }>();
+  for (const entry of projects) stats.set(entry.id, { converged: 0, diverged: 0, other: 0, total: 0 });
+  for (const row of grouped) {
+    const bucket = stats.get(row.projectId);
+    if (!bucket) continue;
+    bucket.total += row._count;
+    if (row.status === 'converged' || row.status === 'completed') bucket.converged += row._count;
+    else if (row.status === 'diverged' || row.status === 'failed') bucket.diverged += row._count;
+    else bucket.other += row._count;
+  }
+
+  return projects.map((entry) => {
+    const bucket = stats.get(entry.id) ?? { converged: 0, diverged: 0, other: 0, total: 0 };
+    return {
+      id: entry.id,
+      title: entry.title,
+      createdAt: entry.createdAt.toISOString(),
+      runCount: bucket.total,
+      converged: bucket.converged,
+      diverged: bucket.diverged,
+      other: bucket.other,
+    };
+  });
 }

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { DashboardData, Project } from '@/lib/api/types';
+import type { DashboardData, DashboardProject } from '@/lib/api/types';
 
 /**
  * HomePage dashboard tests. The dashboard + projects APIs are mocked, so the real
@@ -11,13 +11,12 @@ import type { DashboardData, Project } from '@/lib/api/types';
  */
 
 vi.mock('@/lib/api/dashboard', () => ({ getDashboard: vi.fn() }));
-vi.mock('@/lib/api/projects', () => ({ listProjects: vi.fn() }));
+vi.mock('@/lib/api/projects', () => ({ stopRun: vi.fn() }));
 vi.mock('@/features/auth/AuthProvider', () => ({
   useAuth: () => ({ user: { fullName: 'Ada Lovelace' } }),
 }));
 
 import * as dashboardApi from '@/lib/api/dashboard';
-import * as projectsApi from '@/lib/api/projects';
 import { HomePage } from './HomePage';
 
 const metrics = {
@@ -39,15 +38,8 @@ const zeroCounts = {
   stopped: 0,
 };
 
-function project(id: string, title: string): Project {
-  return {
-    id,
-    title,
-    owner: { id: 'u1', fullName: 'Ada Lovelace', email: 'ada@x.test' },
-    collaborators: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
+function project(id: string, title: string): DashboardProject {
+  return { id, title, createdAt: new Date().toISOString(), runCount: 4, converged: 2, diverged: 1, other: 1 };
 }
 
 function renderHome() {
@@ -83,9 +75,9 @@ describe('HomePage dashboard', () => {
       ],
       recentRuns: [],
       runCounts: { ...zeroCounts, running: 1, converged: 2, failed: 1 },
+      recentProjects: [project('p1', 'Turbine case')],
     };
     vi.mocked(dashboardApi.getDashboard).mockResolvedValue(data);
-    vi.mocked(projectsApi.listProjects).mockResolvedValue([project('p1', 'Turbine case')]);
 
     renderHome();
 
@@ -95,7 +87,7 @@ describe('HomePage dashboard', () => {
     expect(await screen.findByText('simpleFoam')).toBeInTheDocument();
     expect(screen.getAllByText('Turbine case').length).toBeGreaterThan(0);
     // The run-outcome donut totals the counts (2 + 1 + 1 = 4).
-    expect(screen.getByRole('img', { name: /4 solver runs/i })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /4 total runs/i })).toBeInTheDocument();
   });
 
   it('shows empty states when there are no runs or projects', async () => {
@@ -104,8 +96,8 @@ describe('HomePage dashboard', () => {
       activeRuns: [],
       recentRuns: [],
       runCounts: zeroCounts,
+      recentProjects: [],
     });
-    vi.mocked(projectsApi.listProjects).mockResolvedValue([]);
 
     renderHome();
 
