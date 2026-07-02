@@ -401,20 +401,40 @@ ${FOAM_FOOTER}`;
  * over the scaffolded default.
  */
 export function renderTurbulenceProperties(
-  simulationType: 'laminar' | 'RAS',
-  rasModel: string,
+  simulationType: 'laminar' | 'RAS' | 'LES',
+  model: string,
 ): string {
+  const header = foamHeader('dictionary', 'turbulenceProperties', 'constant');
   if (simulationType === 'laminar') {
-    return `${foamHeader('dictionary', 'turbulenceProperties', 'constant')}
+    return `${header}
 simulationType  laminar;
 ${FOAM_FOOTER}`;
   }
-  return `${foamHeader('dictionary', 'turbulenceProperties', 'constant')}
+  if (simulationType === 'LES') {
+    return `${header}
+simulationType  LES;
+
+LES
+{
+    LESModel        ${model};
+    turbulence      on;
+    printCoeffs     on;
+
+    delta           cubeRootVol;
+
+    cubeRootVolCoeffs
+    {
+        deltaCoeff      1;
+    }
+}
+${FOAM_FOOTER}`;
+  }
+  return `${header}
 simulationType  RAS;
 
 RAS
 {
-    RASModel        ${rasModel};
+    RASModel        ${model};
     turbulence      on;
     printCoeffs     on;
 }

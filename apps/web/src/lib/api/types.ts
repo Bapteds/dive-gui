@@ -699,13 +699,19 @@ export type { RunStatus, SolverId, ResidualSample };
 export {
   SOLVER_SPECS,
   SOLVER_CATALOG,
+  SOLVER_LIBRARY,
+  SOLVER_CATEGORIES,
   CONFIGURABLE_SOLVER_IDS,
   isConfigurableSolver,
   TURBULENCE_MODELS,
+  TURBULENCE_APPROACHES,
 } from '@dive/shared';
 export type {
   SolverSpec,
   SolverParamDef,
+  SolverInfo,
+  SolverCategory,
   ConfigurableSolverId,
   TurbulenceModelSpec,
+  TurbulenceApproach,
 } from '@dive/shared';

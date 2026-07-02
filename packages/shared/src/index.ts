@@ -586,10 +586,60 @@ export function isTerminalRunStatus(status: RunStatus): boolean {
  * run directly (`simpleFoam -case …`, `pimpleFoam -case …`), never `foamRun -solver`.
  */
 export const SOLVER_IDS = [
+  // Incompressible
   'simpleFoam',
   'pimpleFoam',
+  'pisoFoam',
+  'icoFoam',
+  'nonNewtonianIcoFoam',
+  'potentialFoam',
+  'SRFSimpleFoam',
+  'porousSimpleFoam',
+  'adjointShapeOptimizationFoam',
+  // Compressible
   'rhoSimpleFoam',
   'rhoPimpleFoam',
+  'rhoPorousSimpleFoam',
+  // High-speed / supersonic
+  'rhoCentralFoam',
+  'sonicFoam',
+  // Heat transfer & buoyancy
+  'buoyantSimpleFoam',
+  'buoyantPimpleFoam',
+  'chtMultiRegionFoam',
+  // Free surface (VoF)
+  'interFoam',
+  'interIsoFoam',
+  'multiphaseInterFoam',
+  'interPhaseChangeFoam',
+  'compressibleInterFoam',
+  'driftFluxFoam',
+  'potentialFreeSurfaceFoam',
+  // Multiphase (Euler)
+  'multiphaseEulerFoam',
+  'reactingTwoPhaseEulerFoam',
+  // Combustion & reactions
+  'reactingFoam',
+  'rhoReactingFoam',
+  'XiFoam',
+  'fireFoam',
+  'chemFoam',
+  // Particles (Lagrangian)
+  'DPMFoam',
+  'MPPICFoam',
+  'reactingParcelFoam',
+  // Basic & scalar
+  'laplacianFoam',
+  'scalarTransportFoam',
+  // Solid mechanics
+  'solidDisplacementFoam',
+  // Electromagnetics
+  'electrostaticFoam',
+  'mhdFoam',
+  'magneticFoam',
+  // Rarefied / molecular
+  'dsmcFoam',
+  // Legacy generic placeholder (openfoam.org launcher); accepted but never runnable here.
   'foamRun',
 ] as const;
 export type SolverId = (typeof SOLVER_IDS)[number];
@@ -976,34 +1026,142 @@ export const SOLVER_CATALOG: Record<ConfigurableSolverId, SolverSpec> = {
 export const SOLVER_SPECS: SolverSpec[] = CONFIGURABLE_SOLVER_IDS.map((id) => SOLVER_CATALOG[id]);
 
 /**
+ * Physics families the solver library is grouped by in the picker overlay. Order
+ * here is the display order (most common first). Mirrors the tutorial families in
+ * synthese/SYNTHESE.md, mapped to the ESI v2406 classic binaries the box runs.
+ */
+export const SOLVER_CATEGORIES = [
+  { id: 'incompressible', label: 'Incompressible' },
+  { id: 'compressible', label: 'Compressible' },
+  { id: 'heatTransfer', label: 'Heat transfer & buoyancy' },
+  { id: 'freeSurface', label: 'Free surface (VoF)' },
+  { id: 'multiphaseEuler', label: 'Multiphase (Euler-Euler)' },
+  { id: 'combustion', label: 'Combustion & reactions' },
+  { id: 'particle', label: 'Particles (Lagrangian)' },
+  { id: 'supersonic', label: 'High-speed / supersonic' },
+  { id: 'basic', label: 'Basic & scalar transport' },
+  { id: 'solid', label: 'Solid mechanics' },
+  { id: 'electromagnetics', label: 'Electromagnetics' },
+  { id: 'molecular', label: 'Rarefied / molecular' },
+] as const;
+export type SolverCategory = (typeof SOLVER_CATEGORIES)[number]['id'];
+
+/**
+ * One entry in the full solver library shown in the picker overlay: the ESI binary
+ * name, a human label, a one-line description, its physics family, and (when known)
+ * its time regime. Whether the app can fully scaffold + easy-configure a solver is
+ * NOT stored here: it is derived from SOLVER_CATALOG via isConfigurableSolver(id).
+ * Every other solver is still selectable (it sets controlDict `application` and is
+ * configured through the case-file editor).
+ */
+export interface SolverInfo {
+  id: SolverId;
+  label: string;
+  summary: string;
+  category: SolverCategory;
+  regime?: 'steady' | 'transient';
+}
+
+/** The full ESI v2406 solver library (drives the selection overlay). */
+export const SOLVER_LIBRARY: SolverInfo[] = [
+  // Incompressible
+  { id: 'simpleFoam', label: 'Steady-state, incompressible (RANS)', summary: 'Time-averaged single-phase flow that settles to a steady solution.', category: 'incompressible', regime: 'steady' },
+  { id: 'pimpleFoam', label: 'Transient, incompressible (URANS)', summary: 'Time-accurate single-phase flow for unsteady dynamics.', category: 'incompressible', regime: 'transient' },
+  { id: 'pisoFoam', label: 'Transient, incompressible (PISO)', summary: 'Transient single-phase flow with the PISO pressure-velocity loop.', category: 'incompressible', regime: 'transient' },
+  { id: 'icoFoam', label: 'Transient laminar (icoFoam)', summary: 'Transient laminar Newtonian flow. The classic lid-driven cavity solver.', category: 'incompressible', regime: 'transient' },
+  { id: 'nonNewtonianIcoFoam', label: 'Transient laminar, non-Newtonian', summary: 'Transient laminar flow with a non-Newtonian rheology model.', category: 'incompressible', regime: 'transient' },
+  { id: 'potentialFoam', label: 'Potential flow', summary: 'Inviscid potential flow, usually used to initialise a velocity field.', category: 'incompressible' },
+  { id: 'SRFSimpleFoam', label: 'Steady, single rotating frame (SRF)', summary: 'Steady incompressible flow in one rotating reference frame (SRF).', category: 'incompressible', regime: 'steady' },
+  { id: 'porousSimpleFoam', label: 'Steady, incompressible + porous', summary: 'Steady incompressible flow with porous-media momentum sources.', category: 'incompressible', regime: 'steady' },
+  { id: 'adjointShapeOptimizationFoam', label: 'Adjoint shape optimisation', summary: 'Adjoint-based shape optimisation for steady incompressible flow.', category: 'incompressible', regime: 'steady' },
+  // Compressible
+  { id: 'rhoSimpleFoam', label: 'Steady-state, compressible (RANS)', summary: 'Time-averaged compressible flow with heat, settling to steady.', category: 'compressible', regime: 'steady' },
+  { id: 'rhoPimpleFoam', label: 'Transient, compressible (RANS)', summary: 'Time-accurate compressible flow with heat, for unsteady dynamics.', category: 'compressible', regime: 'transient' },
+  { id: 'rhoPorousSimpleFoam', label: 'Steady, compressible + porous', summary: 'Steady compressible flow with porous zones and heat transfer.', category: 'compressible', regime: 'steady' },
+  // High-speed / supersonic
+  { id: 'rhoCentralFoam', label: 'Density-based, high-speed', summary: 'Density-based compressible solver for shocks (Kurganov-Tadmor).', category: 'supersonic', regime: 'transient' },
+  { id: 'sonicFoam', label: 'Transient, trans/supersonic', summary: 'Transient compressible flow through the transonic and supersonic range.', category: 'supersonic', regime: 'transient' },
+  // Heat transfer & buoyancy
+  { id: 'buoyantSimpleFoam', label: 'Steady, buoyant (natural convection)', summary: 'Steady compressible flow driven by buoyancy (natural convection).', category: 'heatTransfer', regime: 'steady' },
+  { id: 'buoyantPimpleFoam', label: 'Transient, buoyant', summary: 'Transient compressible flow driven by buoyancy and heat.', category: 'heatTransfer', regime: 'transient' },
+  { id: 'chtMultiRegionFoam', label: 'Conjugate heat transfer (CHT)', summary: 'Coupled heat transfer across solid and fluid regions.', category: 'heatTransfer' },
+  // Free surface (VoF)
+  { id: 'interFoam', label: 'Two-phase free surface (VoF)', summary: 'Two incompressible phases with a sharp interface (Volume of Fluid).', category: 'freeSurface', regime: 'transient' },
+  { id: 'interIsoFoam', label: 'Two-phase VoF (isoAdvector)', summary: 'interFoam with the geometric isoAdvector interface capturing scheme.', category: 'freeSurface', regime: 'transient' },
+  { id: 'multiphaseInterFoam', label: 'Many-phase free surface (VoF)', summary: 'More than two incompressible phases with sharp interfaces (VoF).', category: 'freeSurface', regime: 'transient' },
+  { id: 'interPhaseChangeFoam', label: 'Two-phase VoF + cavitation', summary: 'Two-phase VoF with phase change, for cavitation.', category: 'freeSurface', regime: 'transient' },
+  { id: 'compressibleInterFoam', label: 'Two-phase compressible free surface', summary: 'Two compressible phases with a sharp free surface.', category: 'freeSurface', regime: 'transient' },
+  { id: 'driftFluxFoam', label: 'Drift-flux mixture', summary: 'Mixture drift-flux for settling suspensions (sludge, sediment).', category: 'freeSurface', regime: 'transient' },
+  { id: 'potentialFreeSurfaceFoam', label: 'Potential free surface', summary: 'Incompressible flow with a linearised potential free surface.', category: 'freeSurface', regime: 'transient' },
+  // Multiphase (Euler-Euler)
+  { id: 'multiphaseEulerFoam', label: 'Euler-Euler multiphase', summary: 'Interpenetrating phases: bubble columns, fluidised beds, boiling.', category: 'multiphaseEuler', regime: 'transient' },
+  { id: 'reactingTwoPhaseEulerFoam', label: 'Two-phase Euler + reactions', summary: 'Two Euler-Euler phases with mass transfer, reactions and heat.', category: 'multiphaseEuler', regime: 'transient' },
+  // Combustion & reactions
+  { id: 'reactingFoam', label: 'Combustion (detailed chemistry)', summary: 'Compressible reacting flow with detailed finite-rate chemistry.', category: 'combustion', regime: 'transient' },
+  { id: 'rhoReactingFoam', label: 'Combustion (density-based)', summary: 'Density-based compressible combustion with chemistry.', category: 'combustion', regime: 'transient' },
+  { id: 'XiFoam', label: 'Premixed combustion', summary: 'Premixed and partially premixed turbulent combustion (Xi model).', category: 'combustion', regime: 'transient' },
+  { id: 'fireFoam', label: 'Fire and spray', summary: 'Fire, pool fires and spray combustion with radiation.', category: 'combustion', regime: 'transient' },
+  { id: 'chemFoam', label: 'Single-cell chemistry', summary: 'Zero-dimensional chemistry for validating a reaction mechanism.', category: 'combustion', regime: 'transient' },
+  // Particles (Lagrangian)
+  { id: 'DPMFoam', label: 'Dense discrete particles (DPM)', summary: 'Dense Lagrangian particles two-way coupled to a carrier fluid.', category: 'particle', regime: 'transient' },
+  { id: 'MPPICFoam', label: 'Dense particle cloud (MP-PIC)', summary: 'Dense particle cloud without resolving inter-particle collisions.', category: 'particle', regime: 'transient' },
+  { id: 'reactingParcelFoam', label: 'Reacting Lagrangian parcels', summary: 'Reacting Lagrangian parcels (sprays, droplets) in a reacting gas.', category: 'particle', regime: 'transient' },
+  // Basic & scalar transport
+  { id: 'laplacianFoam', label: 'Laplace / diffusion', summary: 'Solves the Laplace equation: pure diffusion of a scalar.', category: 'basic', regime: 'transient' },
+  { id: 'scalarTransportFoam', label: 'Passive scalar transport', summary: 'Transports a passive scalar through a frozen velocity field.', category: 'basic', regime: 'transient' },
+  // Solid mechanics
+  { id: 'solidDisplacementFoam', label: 'Linear-elastic solid stress', summary: 'Small-strain linear-elastic stress and displacement in a solid.', category: 'solid', regime: 'transient' },
+  // Electromagnetics
+  { id: 'electrostaticFoam', label: 'Electrostatics', summary: 'Electrostatic potential with charge density transport.', category: 'electromagnetics', regime: 'transient' },
+  { id: 'mhdFoam', label: 'Magnetohydrodynamics', summary: 'Incompressible conducting fluid coupled to a magnetic field (MHD).', category: 'electromagnetics', regime: 'transient' },
+  { id: 'magneticFoam', label: 'Magnetostatics', summary: 'Magnetic field of a set of permanent magnets.', category: 'electromagnetics' },
+  // Rarefied / molecular
+  { id: 'dsmcFoam', label: 'Rarefied gas (DSMC)', summary: 'Direct Simulation Monte Carlo for rarefied and high-Knudsen gas.', category: 'molecular', regime: 'transient' },
+];
+
+/**
  * One turbulence model offered in the setup wizard's second step. `simulationType`
  * is what goes into constant/turbulenceProperties: `laminar` disables turbulence
  * (the RAS/RASModel entry is then irrelevant); `RAS` writes RAS.RASModel = `id`.
  * These models apply to every incompressible and compressible RANS solver here.
  */
 export interface TurbulenceModelSpec {
-  /** OpenFOAM RAS.RASModel token, or 'laminar' for no turbulence model. */
+  /** OpenFOAM RAS.RASModel / LES.LESModel token, or 'laminar' for no model. */
   id: string;
   /** Short human label shown on the card. */
   label: string;
   /** One-line "when to use this" summary. */
   summary: string;
-  /** simulationType written to turbulenceProperties. */
-  simulationType: 'laminar' | 'RAS';
+  /** Modelling approach, written as simulationType in turbulenceProperties. */
+  simulationType: 'laminar' | 'RAS' | 'LES';
 }
 
-/** Turbulence models offered by the setup wizard (kOmegaSST first as the default). */
+/** Turbulence approaches for grouping the models in the picker (laminar first). */
+export const TURBULENCE_APPROACHES = [
+  { id: 'laminar', label: 'Laminar / DNS' },
+  { id: 'RAS', label: 'RANS (time-averaged)' },
+  { id: 'LES', label: 'LES / DES (scale-resolving)' },
+] as const;
+export type TurbulenceApproach = (typeof TURBULENCE_APPROACHES)[number]['id'];
+
+/**
+ * Turbulence models offered by the setup wizard, grouped by approach in the UI via
+ * simulationType. Covers laminar/DNS, the common RANS models (including two
+ * Reynolds-stress models) and the LES/DES subgrid models. kOmegaSST is the default.
+ */
 export const TURBULENCE_MODELS: TurbulenceModelSpec[] = [
+  // Laminar / DNS
+  {
+    id: 'laminar',
+    label: 'Laminar (no model)',
+    summary: 'No turbulence model. For low Reynolds number, creeping flow, or a resolved DNS.',
+    simulationType: 'laminar',
+  },
+  // RANS
   {
     id: 'kOmegaSST',
     label: 'k-omega SST',
     summary: 'Robust all-rounder for wall-bounded flow and adverse pressure gradients.',
-    simulationType: 'RAS',
-  },
-  {
-    id: 'kEpsilon',
-    label: 'k-epsilon',
-    summary: 'Classic model for fully turbulent free-shear and internal flows.',
     simulationType: 'RAS',
   },
   {
@@ -1013,9 +1171,33 @@ export const TURBULENCE_MODELS: TurbulenceModelSpec[] = [
     simulationType: 'RAS',
   },
   {
+    id: 'kEpsilon',
+    label: 'k-epsilon',
+    summary: 'Classic model for fully turbulent free-shear and internal flows.',
+    simulationType: 'RAS',
+  },
+  {
     id: 'realizableKE',
     label: 'Realizable k-epsilon',
     summary: 'A k-epsilon variant that does better on swirling and separated flow.',
+    simulationType: 'RAS',
+  },
+  {
+    id: 'RNGkEpsilon',
+    label: 'RNG k-epsilon',
+    summary: 'Renormalisation-group k-epsilon, improved for strained and swirling flow.',
+    simulationType: 'RAS',
+  },
+  {
+    id: 'LaunderSharmaKE',
+    label: 'Launder-Sharma k-epsilon',
+    summary: 'Low-Reynolds k-epsilon that integrates to the wall (no wall functions).',
+    simulationType: 'RAS',
+  },
+  {
+    id: 'kOmegaSSTLM',
+    label: 'k-omega SST LM (transition)',
+    summary: 'k-omega SST with the Langtry-Menter laminar-turbulent transition model.',
     simulationType: 'RAS',
   },
   {
@@ -1025,21 +1207,96 @@ export const TURBULENCE_MODELS: TurbulenceModelSpec[] = [
     simulationType: 'RAS',
   },
   {
-    id: 'laminar',
-    label: 'Laminar (no turbulence)',
-    summary: 'No turbulence model. For low Reynolds number or creeping flow.',
-    simulationType: 'laminar',
+    id: 'LRR',
+    label: 'Reynolds stress (LRR)',
+    summary: 'Reynolds-stress model: resolves anisotropy, no eddy-viscosity assumption.',
+    simulationType: 'RAS',
+  },
+  {
+    id: 'SSG',
+    label: 'Reynolds stress (SSG)',
+    summary: 'Speziale-Sarkar-Gatski Reynolds-stress model for strongly anisotropic flow.',
+    simulationType: 'RAS',
+  },
+  // LES / DES
+  {
+    id: 'Smagorinsky',
+    label: 'Smagorinsky',
+    summary: 'Algebraic subgrid model. Simple and cheap; needs near-wall damping.',
+    simulationType: 'LES',
+  },
+  {
+    id: 'kEqn',
+    label: 'kEqn',
+    summary: 'One-equation subgrid kinetic-energy model. A common LES default.',
+    simulationType: 'LES',
+  },
+  {
+    id: 'dynamicKEqn',
+    label: 'Dynamic kEqn',
+    summary: 'kEqn with dynamically computed model coefficients.',
+    simulationType: 'LES',
+  },
+  {
+    id: 'WALE',
+    label: 'WALE',
+    summary: 'Wall-adapting subgrid model with correct near-wall scaling.',
+    simulationType: 'LES',
+  },
+  {
+    id: 'dynamicLagrangian',
+    label: 'Dynamic Lagrangian',
+    summary: 'Dynamic Smagorinsky with Lagrangian averaging along pathlines.',
+    simulationType: 'LES',
+  },
+  {
+    id: 'SpalartAllmarasDES',
+    label: 'Spalart-Allmaras DES',
+    summary: 'Detached Eddy Simulation on the Spalart-Allmaras base.',
+    simulationType: 'LES',
+  },
+  {
+    id: 'SpalartAllmarasDDES',
+    label: 'Spalart-Allmaras DDES',
+    summary: 'Delayed DES: shields the boundary layer from grid-induced separation.',
+    simulationType: 'LES',
+  },
+  {
+    id: 'SpalartAllmarasIDDES',
+    label: 'Spalart-Allmaras IDDES',
+    summary: 'Improved delayed DES with wall-modelled LES near walls.',
+    simulationType: 'LES',
+  },
+  {
+    id: 'kOmegaSSTDES',
+    label: 'k-omega SST DES',
+    summary: 'Detached Eddy Simulation built on k-omega SST.',
+    simulationType: 'LES',
   },
 ];
 
 /** The turbulence model ids, as a literal tuple for zod validation. Matches TURBULENCE_MODELS. */
 export const TURBULENCE_MODEL_IDS = [
-  'kOmegaSST',
-  'kEpsilon',
-  'kOmega',
-  'realizableKE',
-  'SpalartAllmaras',
   'laminar',
+  'kOmegaSST',
+  'kOmega',
+  'kEpsilon',
+  'realizableKE',
+  'RNGkEpsilon',
+  'LaunderSharmaKE',
+  'kOmegaSSTLM',
+  'SpalartAllmaras',
+  'LRR',
+  'SSG',
+  'Smagorinsky',
+  'kEqn',
+  'dynamicKEqn',
+  'WALE',
+  'dynamicLagrangian',
+  'SpalartAllmarasDES',
+  'SpalartAllmarasDDES',
+  'SpalartAllmarasIDDES',
+  'kOmegaSSTDES',
 ] as const;
 export type TurbulenceModelId = (typeof TURBULENCE_MODEL_IDS)[number];
 

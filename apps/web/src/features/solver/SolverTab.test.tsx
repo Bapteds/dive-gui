@@ -121,11 +121,11 @@ describe('SolverTab', () => {
     // Step 1: pick the transient incompressible (pimpleFoam) archetype, then Next.
     await userEvent.click(await screen.findByRole('radio', { name: /transient, incompressible/i }));
     await userEvent.click(screen.getByRole('button', { name: /next/i }));
-    // Step 2: pick Spalart-Allmaras, then generate.
-    await userEvent.click(await screen.findByRole('radio', { name: /spalart/i }));
+    // Step 2: pick a specific turbulence model (unique matcher), then generate.
+    await userEvent.click(await screen.findByRole('radio', { name: /realizable/i }));
     await userEvent.click(screen.getByRole('button', { name: /generate solver setup/i }));
     await waitFor(() =>
-      expect(api.scaffoldSolver).toHaveBeenCalledWith('p1', 'pimpleFoam', 'SpalartAllmaras'),
+      expect(api.scaffoldSolver).toHaveBeenCalledWith('p1', 'pimpleFoam', 'realizableKE'),
     );
   });
 
