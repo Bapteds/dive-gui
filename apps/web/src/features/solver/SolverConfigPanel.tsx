@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQueries } from '@tanstack/react-query';
-import { AlertCircle, Check, ChevronDown, Code2, Loader2, Play, Sparkles } from 'lucide-react';
+import { AlertCircle, Check, ChevronDown, Code2, Loader2, Play, Sparkles, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
@@ -67,6 +67,8 @@ interface SolverConfigPanelProps {
   runLabel: string;
   runPending: boolean;
   onRun: () => void;
+  /** Re-open the setup wizard (solver -> turbulence -> files). */
+  onReconfigure: () => void;
 }
 
 export function SolverConfigPanel({
@@ -77,6 +79,7 @@ export function SolverConfigPanel({
   runLabel,
   runPending,
   onRun,
+  onReconfigure,
 }: SolverConfigPanelProps) {
   const [mode, setMode] = useState<'easy' | 'advanced'>(scaffoldable ? 'easy' : 'advanced');
   const configurable = solver && isConfigurableSolver(solver) ? solver : null;
@@ -88,12 +91,18 @@ export function SolverConfigPanel({
           <h2 className="text-sm font-semibold text-text">Solver configuration</h2>
           <ModeToggle mode={mode} onChange={setMode} />
         </div>
-        {!active && (
-          <Button variant="primary" loading={runPending} onClick={onRun} className="sm:shrink-0">
-            <Play strokeWidth={1.75} aria-hidden="true" />
-            {runLabel}
+        <div className="flex items-center gap-2 sm:shrink-0">
+          <Button variant="secondary" onClick={onReconfigure} disabled={active}>
+            <Wrench strokeWidth={1.75} aria-hidden="true" />
+            Reconfigure
           </Button>
-        )}
+          {!active && (
+            <Button variant="primary" loading={runPending} onClick={onRun}>
+              <Play strokeWidth={1.75} aria-hidden="true" />
+              {runLabel}
+            </Button>
+          )}
+        </div>
       </header>
 
       <div className="flex flex-col gap-4 p-4">

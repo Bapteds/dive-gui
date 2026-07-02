@@ -13,33 +13,38 @@ import {
 } from '@/lib/api/types';
 import { useSyncBoundaries } from '@/features/projects/useCaseFiles';
 import { SolverBrowserDialog } from './SolverBrowserDialog';
+import { SolverFilesStep } from './SolverFilesStep';
 import { TurbulencePicker } from './TurbulencePicker';
 import { useScaffoldSolver } from './useRuns';
 
 /**
- * SolverSetupWizard - a two-step setup for a case that is not yet runnable:
+ * SolverSetupWizard - a three-step setup for a case's solver:
  *   Step 1  choose the solver (archetype).
- *   Step 2  choose the turbulence model, then generate.
- * Generating scaffolds the case for that solver and applies the turbulence model;
- * the case then becomes runnable and the configure + run panel takes over.
+ *   Step 2  choose the turbulence model.
+ *   Step 3  generate the case, then edit its files (system / 0 / constant) in a
+ *           full-screen editor overlay (Easy or Advanced) + "Add from template file".
+ * Moving to step 3 scaffolds the case for that solver + turbulence; the case then
+ * becomes runnable and "Done" hands over to the configure + run panel. `onDone`
+ * closes the wizard (also used by the Reconfigure entry point).
  *
- * Paged (one step at a time) to match the "step 1 / step 2" mental model, with a
- * compact numbered indicator. Exactly ONE orange CTA (Generate), only on the last
- * step; Back is a ghost, Next is a neutral secondary.
+ * Paged with a compact numbered indicator. Exactly ONE orange CTA per zone.
  */
 export function SolverSetupWizard({
   projectId,
   initialSolver,
+  onDone,
 }: {
   projectId: string;
   /** The case's current controlDict solver, so the wizard opens on it (not simpleFoam). */
   initialSolver?: string | null;
+  /** Close the wizard (finished, or cancelled). */
+  onDone: () => void;
   missingFiles?: string[];
 }) {
   const scaffold = useScaffoldSolver(projectId);
   const syncBoundaries = useSyncBoundaries(projectId);
 
-  const [step, setStep] = useState<1 | 2>(1);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
   const [solver, setSolver] = useState<SolverId>(() =>
     initialSolver && SOLVER_LIBRARY.some((s) => s.id === initialSolver)
       ? (initialSolver as SolverId)
@@ -73,13 +78,15 @@ export function SolverSetupWizard({
     regime === 'steady' &&
     TURBULENCE_MODELS.find((m) => m.id === turbulence)?.simulationType === 'LES';
 
-  const handleGenerate = async () => {
+  // Step 2 -> 3: scaffold the case for the chosen solver + turbulence (and align the
+  // boundary fields), then open the file editor. The overlay opening is the feedback.
+  const handleGoToFiles = async () => {
     try {
       await scaffold.mutateAsync({ solver, turbulence });
       if (applyBoundaries) {
         await syncBoundaries.mutateAsync();
       }
-      toast.success('Solver setup generated. The case is ready to run.');
+      setStep(3);
     } catch (err) {
       toast.error(
         err instanceof ApiError ? err.message : 'Something went wrong. Please try again.',
@@ -88,7 +95,9 @@ export function SolverSetupWizard({
   };
 
   return (
-    <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-md border border-border bg-surface shadow-sm lg:min-h-0 lg:flex-1">
+    <>
+      {step !== 3 && (
+      <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-md border border-border bg-surface shadow-sm lg:min-h-0 lg:flex-1">
       <header className="flex shrink-0 flex-col gap-3 p-6 pb-4">
         <div className="flex items-center gap-2">
           <Cpu className="size-5 text-primary" strokeWidth={1.75} aria-hidden="true" />
@@ -192,13 +201,15 @@ export function SolverSetupWizard({
       </div>
 
       <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-border p-6 pt-4">
-        {step === 2 ? (
+        {step === 1 ? (
+          <Button variant="ghost" onClick={onDone} disabled={pending}>
+            Cancel
+          </Button>
+        ) : (
           <Button variant="ghost" onClick={() => setStep(1)} disabled={pending}>
             <ArrowLeft strokeWidth={1.75} aria-hidden="true" />
             Back
           </Button>
-        ) : (
-          <span />
         )}
 
         {step === 1 ? (
@@ -207,23 +218,37 @@ export function SolverSetupWizard({
             <ArrowRight strokeWidth={1.75} aria-hidden="true" />
           </Button>
         ) : (
-          <Button variant="primary" loading={pending} onClick={() => void handleGenerate()}>
+          <Button variant="primary" loading={pending} onClick={() => void handleGoToFiles()}>
             <Wrench strokeWidth={1.75} aria-hidden="true" />
-            Generate solver setup
+            Generate and continue
           </Button>
         )}
       </footer>
-    </div>
+      </div>
+      )}
+      <SolverFilesStep
+        projectId={projectId}
+        open={step === 3}
+        onBack={() => setStep(2)}
+        onDone={onDone}
+      />
+    </>
   );
 }
 
 /** A compact numbered step indicator: done (check), current (filled), upcoming (outline). */
-function StepIndicator({ step }: { step: 1 | 2 }) {
+function StepIndicator({ step }: { step: 1 | 2 | 3 }) {
   return (
-    <ol className="flex items-center gap-2" aria-label={`Setup step ${step} of 2`}>
+    <ol className="flex flex-wrap items-center gap-2" aria-label={`Setup step ${step} of 3`}>
       <StepDot n={1} label="Solver" state={step === 1 ? 'current' : 'done'} />
       <span className="h-px w-6 bg-border" aria-hidden="true" />
-      <StepDot n={2} label="Turbulence" state={step === 2 ? 'current' : 'upcoming'} />
+      <StepDot
+        n={2}
+        label="Turbulence"
+        state={step === 2 ? 'current' : step > 2 ? 'done' : 'upcoming'}
+      />
+      <span className="h-px w-6 bg-border" aria-hidden="true" />
+      <StepDot n={3} label="Files" state={step === 3 ? 'current' : 'upcoming'} />
     </ol>
   );
 }

@@ -327,6 +327,18 @@ export async function applyTemplate(
   );
 }
 
+/** Import SELECTED template files into this project's case ("Add from template file"). */
+export async function applyTemplateFiles(
+  projectId: string,
+  templateId: string,
+  paths: string[],
+): Promise<ApplyTemplateResponse> {
+  return apiClient.post<ApplyTemplateResponse>(
+    `/projects/${projectId}/apply-template/${templateId}/files`,
+    { paths },
+  );
+}
+
 // ---- Solver runs ("Solver" tab) ----
 
 /** Report whether the case can run simpleFoam (drives the Solver tab gate). */

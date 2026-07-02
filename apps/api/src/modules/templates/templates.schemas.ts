@@ -55,6 +55,11 @@ export const applyDecisionsSchema = z.object({
   decisions: z.record(applyDecisionSchema).optional(),
 });
 
+/** Body for importing selected template files into a case (per-file import). */
+export const applyTemplateFilesSchema = z.object({
+  paths: z.array(z.string().trim().min(1)).min(1, 'Select at least one file').max(1000),
+});
+
 /** Route params for the project-mounted apply endpoints (project id + template id). */
 export const applyTemplateParamSchema = z.object({
   id: z.string().min(1, 'Project id is required'),
@@ -65,3 +70,4 @@ export const applyTemplateParamSchema = z.object({
 export type CreateTemplateInput = z.infer<typeof createTemplateSchema>;
 export type UpdateTemplateInput = z.infer<typeof updateTemplateSchema>;
 export type ApplyDecision = z.infer<typeof applyDecisionSchema>;
+export type ApplyTemplateFilesInput = z.infer<typeof applyTemplateFilesSchema>;

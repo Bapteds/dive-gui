@@ -109,9 +109,14 @@ import {
 } from './projects.schemas';
 import {
   applyTemplateController,
+  applyTemplateFilesController,
   previewApplyTemplateController,
 } from '../templates/templates.controller';
-import { applyDecisionsSchema, applyTemplateParamSchema } from '../templates/templates.schemas';
+import {
+  applyDecisionsSchema,
+  applyTemplateFilesSchema,
+  applyTemplateParamSchema,
+} from '../templates/templates.schemas';
 
 /**
  * Body parser for the file-save route only. The global JSON limit (16kb) is far
@@ -442,6 +447,11 @@ export function createProjectsRouter(): Router {
     '/:id/apply-template/:templateId/preview',
     validate({ params: applyTemplateParamSchema }),
     asyncHandler(previewApplyTemplateController),
+  );
+  router.post(
+    '/:id/apply-template/:templateId/files',
+    validate({ params: applyTemplateParamSchema, body: applyTemplateFilesSchema }),
+    asyncHandler(applyTemplateFilesController),
   );
   router.post(
     '/:id/apply-template/:templateId',

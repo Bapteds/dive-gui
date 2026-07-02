@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { RunSummary, RunnableCheck } from '@/lib/api/types';
 
@@ -19,7 +20,8 @@ vi.mock('@/lib/api/projects', () => ({
   getRunLog: vi.fn(),
   startRun: vi.fn(),
   stopRun: vi.fn(),
-  // The Easy solver-config form reads/writes the solver files.
+  // The Easy solver-config form + step-3 file editor read/write the case files.
+  getCaseFiles: vi.fn(),
   getCaseFileContent: vi.fn(),
   saveCaseFileContent: vi.fn(),
 }));
@@ -53,15 +55,18 @@ const convergedRun: RunSummary = {
 
 function renderTab() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  // A data router so the step-3 file editor's useBlocker (unsaved-changes guard) works.
+  const router = createMemoryRouter([{ path: '/', element: <SolverTab projectId="p1" /> }]);
   render(
     <QueryClientProvider client={queryClient}>
-      <SolverTab projectId="p1" />
+      <RouterProvider router={router} />
     </QueryClientProvider>,
   );
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(api.getCaseFiles).mockResolvedValue([]);
   // Default case-file content for the Easy solver-config form (per-path values are
   // read by dictionary path; a missing path just renders an empty control).
   vi.mocked(api.getCaseFileContent).mockResolvedValue({
@@ -94,13 +99,15 @@ describe('SolverTab', () => {
     // Step 1 (solver) opens; advance to step 2 (turbulence) and generate.
     expect(await screen.findByText(/set up the solver/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /next/i }));
-    await userEvent.click(await screen.findByRole('button', { name: /generate solver setup/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /generate and continue/i }));
     // Defaults: steady simpleFoam + kOmegaSST.
     await waitFor(() =>
       expect(api.scaffoldSolver).toHaveBeenCalledWith('p1', 'simpleFoam', 'kOmegaSST'),
     );
     // The "apply boundary" checkbox is on by default, so boundaries are synced too.
     await waitFor(() => expect(api.syncBoundaries).toHaveBeenCalledWith('p1'));
+    // Step 3: the case-file editor overlay opens.
+    expect(await screen.findByText(/edit case files/i)).toBeInTheDocument();
   });
 
   it('scaffolds the solver + turbulence model chosen across the two wizard steps', async () => {
@@ -127,7 +134,7 @@ describe('SolverTab', () => {
     await userEvent.click(screen.getByRole('button', { name: /next/i }));
     // Step 2: pick a specific turbulence model (unique matcher), then generate.
     await userEvent.click(await screen.findByRole('radio', { name: /realizable/i }));
-    await userEvent.click(screen.getByRole('button', { name: /generate solver setup/i }));
+    await userEvent.click(screen.getByRole('button', { name: /generate and continue/i }));
     await waitFor(() =>
       expect(api.scaffoldSolver).toHaveBeenCalledWith('p1', 'pimpleFoam', 'realizableKE'),
     );

@@ -363,6 +363,47 @@ describe('applying a template to a project', () => {
     expect(apply.body.applied).toEqual(['0/p']);
     expect(await readCaseContent(project.id, authHeader(collaborator), '0/p')).toBe('TPL-P');
   });
+
+  it('imports only the selected template files (per-file), overwriting the case', async () => {
+    const owner = await createTestUser({ email: 'perfile@dive-turbinen.test' });
+    const project = await prisma.project.create({ data: { title: 'P', ownerId: owner.id } });
+    await importCaseZip(project.id, authHeader(owner), [
+      { path: 'system/controlDict', data: 'CASE-ORIGINAL' },
+    ]);
+    const id = await makeTemplate(authHeader(owner));
+    await importTemplateZip(id, authHeader(owner), [
+      { path: 'system/controlDict', data: 'TPL-CONTROL' },
+      { path: '0/U', data: 'TPL-U' },
+      { path: '0/p', data: 'TPL-P' },
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${project.id}/apply-template/${id}/files`)
+      .set('Authorization', authHeader(owner))
+      .send({ paths: ['0/U', 'system/controlDict', 'does/not/exist'] });
+    expect(res.status).toBe(200);
+    expect((res.body.applied as string[]).sort()).toEqual(['0/U', 'system/controlDict']);
+    expect(res.body.skipped).toContain('does/not/exist');
+    const paths = (res.body.entries as Array<{ path: string }>).map((e) => e.path);
+    expect(paths).not.toContain('0/p'); // not selected, so not imported
+
+    // Selected files overwrite the case (the user picked them on purpose).
+    expect(await readCaseContent(project.id, authHeader(owner), 'system/controlDict')).toBe(
+      'TPL-CONTROL',
+    );
+    expect(await readCaseContent(project.id, authHeader(owner), '0/U')).toBe('TPL-U');
+  });
+
+  it('rejects a per-file import with an empty paths list', async () => {
+    const owner = await createTestUser({ email: 'perfile-empty@dive-turbinen.test' });
+    const project = await prisma.project.create({ data: { title: 'P', ownerId: owner.id } });
+    const id = await makeTemplate(authHeader(owner));
+    const res = await request(app)
+      .post(`/api/v1/projects/${project.id}/apply-template/${id}/files`)
+      .set('Authorization', authHeader(owner))
+      .send({ paths: [] });
+    expect(res.status).toBe(422);
+  });
 });
 
 describe('template tags + single-file create', () => {

@@ -15,7 +15,7 @@ import {
   saveTemplateFileContent,
   updateTemplate,
 } from '@/lib/api/templates';
-import { applyTemplate, previewApplyTemplate } from '@/lib/api/projects';
+import { applyTemplate, applyTemplateFiles, previewApplyTemplate } from '@/lib/api/projects';
 import { caseFilesQueryKey } from '@/features/projects/useCaseFiles';
 import type { UploadFile } from '@/features/files/folderImport';
 import type {
@@ -50,11 +50,12 @@ export const templatesQueryKey = ['templates'] as const;
 /** Query key for a single template's metadata. */
 export const templateQueryKey = (id: string) => ['templates', id] as const;
 
-/** Load every (shared) template. */
-export function useTemplatesQuery() {
+/** Load every (shared) template. Pass `enabled: false` to hold off (e.g. a closed picker). */
+export function useTemplatesQuery(enabled = true) {
   return useQuery<Template[]>({
     queryKey: templatesQueryKey,
     queryFn: listTemplates,
+    enabled,
   });
 }
 
@@ -112,11 +113,12 @@ export const templateFilesQueryKey = (templateId: string) =>
 export const templateFileContentQueryKey = (templateId: string, path: string) =>
   ['templates', templateId, 'files', 'content', path] as const;
 
-/** Load a template's file tree. */
-export function useTemplateFilesQuery(templateId: string) {
+/** Load a template's file tree. Pass `enabled: false` to hold off (no template picked). */
+export function useTemplateFilesQuery(templateId: string, enabled = true) {
   return useQuery<CaseEntry[]>({
     queryKey: templateFilesQueryKey(templateId),
     queryFn: () => getTemplateFiles(templateId),
+    enabled: enabled && !!templateId,
   });
 }
 
@@ -228,6 +230,17 @@ export function useApplyTemplate(projectId: string) {
     { templateId: string; decisions?: Record<string, ApplyDecision> }
   >({
     mutationFn: ({ templateId, decisions }) => applyTemplate(projectId, templateId, decisions),
+    onSuccess: (result) => {
+      queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
+    },
+  });
+}
+
+/** Import selected template files into a project's case, then refresh the tree. */
+export function useApplyTemplateFiles(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<ApplyTemplateResponse, Error, { templateId: string; paths: string[] }>({
+    mutationFn: ({ templateId, paths }) => applyTemplateFiles(projectId, templateId, paths),
     onSuccess: (result) => {
       queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
     },

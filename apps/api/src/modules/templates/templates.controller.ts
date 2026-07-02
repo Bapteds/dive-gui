@@ -7,6 +7,7 @@ import type { Viewer } from '../projects/projects.service';
 import type { ImportPayload } from '../projects/files.service';
 import {
   applyTemplate,
+  applyTemplateFiles,
   createTemplate,
   createTemplateFile,
   deleteTemplate,
@@ -24,6 +25,7 @@ import {
 } from './templates.service';
 import type {
   ApplyDecision,
+  ApplyTemplateFilesInput,
   CreateTemplateInput,
   UpdateTemplateInput,
 } from './templates.schemas';
@@ -162,6 +164,22 @@ export async function applyTemplateController(req: Request, res: Response): Prom
     req.params.id,
     req.params.templateId,
     body.decisions ?? {},
+  );
+  res.status(200).json(result);
+}
+
+/**
+ * POST /projects/:id/apply-template/:templateId/files — import SELECTED template
+ * files into the project's case ("Add from template file"). Mounted on the
+ * projects router; authorization is project visibility.
+ */
+export async function applyTemplateFilesController(req: Request, res: Response): Promise<void> {
+  const { paths } = req.body as ApplyTemplateFilesInput;
+  const result = await applyTemplateFiles(
+    requireViewer(req),
+    req.params.id,
+    req.params.templateId,
+    paths,
   );
   res.status(200).json(result);
 }

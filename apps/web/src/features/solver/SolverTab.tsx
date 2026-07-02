@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { RotateCcw, Square } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { RotateCcw, Square, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/sonner';
 import { ApiError } from '@/lib/api/client';
@@ -30,6 +30,18 @@ import {
  */
 export function SolverTab({ projectId }: { projectId: string }) {
   const runnable = useRunnableQuery(projectId);
+  const [wizardOpen, setWizardOpen] = useState(false);
+
+  // Open the setup wizard the first time we learn the case is not runnable. Derived
+  // synchronously during render (not in an effect) so the wizard is present on the
+  // same commit. After that it is user-controlled: Done closes it, Reconfigure
+  // reopens it, so it stays through all three steps even once generating (mid-flow)
+  // makes the case runnable.
+  const inited = useRef(false);
+  if (!runnable.isPending && !inited.current) {
+    inited.current = true;
+    if (runnable.data && !runnable.data.runnable) setWizardOpen(true);
+  }
 
   if (runnable.isPending) return <SolverSkeleton />;
 
@@ -51,12 +63,22 @@ export function SolverTab({ projectId }: { projectId: string }) {
     );
   }
 
-  if (!runnable.data.runnable) {
+  if (wizardOpen) {
     return (
       <SolverSetupWizard
         projectId={projectId}
         initialSolver={runnable.data.solver}
         missingFiles={runnable.data.missingFiles}
+        onDone={() => setWizardOpen(false)}
+      />
+    );
+  }
+
+  if (!runnable.data.runnable) {
+    return (
+      <NotRunnableGate
+        missingFiles={runnable.data.missingFiles}
+        onConfigure={() => setWizardOpen(true)}
       />
     );
   }
@@ -66,7 +88,46 @@ export function SolverTab({ projectId }: { projectId: string }) {
       projectId={projectId}
       solver={runnable.data.solver}
       scaffoldable={runnable.data.scaffoldable}
+      onReconfigure={() => setWizardOpen(true)}
     />
+  );
+}
+
+/** Shown when the case is not runnable and the wizard is closed: offer to configure. */
+function NotRunnableGate({
+  missingFiles,
+  onConfigure,
+}: {
+  missingFiles: string[];
+  onConfigure: () => void;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-surface p-6 shadow-sm">
+      <h2 className="text-base font-semibold text-text">This case is not runnable yet</h2>
+      <p className="mt-1 text-sm text-text-secondary">
+        Set up the solver to generate the files it needs, then run it.
+      </p>
+      {missingFiles.length > 0 && (
+        <div className="mt-3">
+          <p className="text-xs font-medium text-text-secondary">Missing files</p>
+          <ul className="mt-1 flex flex-wrap gap-1.5">
+            {missingFiles.map((path) => (
+              <li
+                key={path}
+                className="rounded-sm bg-bg px-1.5 py-0.5 font-mono text-xs text-text-secondary"
+                translate="no"
+              >
+                {path}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <Button variant="primary" className="mt-4" onClick={onConfigure}>
+        <Wrench strokeWidth={1.75} aria-hidden="true" />
+        Configure the solver
+      </Button>
+    </div>
   );
 }
 
@@ -91,10 +152,12 @@ function RunnablePanel({
   projectId,
   solver,
   scaffoldable,
+  onReconfigure,
 }: {
   projectId: string;
   solver: string | null;
   scaffoldable: boolean;
+  onReconfigure: () => void;
 }) {
   const runs = useRunsQuery(projectId);
   const currentRun = runs.data?.[0] ?? null;
@@ -136,6 +199,7 @@ function RunnablePanel({
         runLabel={currentRun ? 'Run again' : 'Run solver'}
         runPending={startRun.isPending}
         onRun={() => void handleRun()}
+        onReconfigure={onReconfigure}
       />
 
       <LiveRun

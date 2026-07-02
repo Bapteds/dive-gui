@@ -400,3 +400,41 @@ export async function applyTemplate(
 
   return { applied, skipped, entries: await listCaseTree(projectId) };
 }
+
+/**
+ * Import SELECTED template files into a project's case (the "Add from template
+ * file" flow, used from the solver setup editor). Only the given paths that really
+ * exist in the template are copied; each overwrites the case file at the same path
+ * (the user picked them on purpose). Paths not in the template are reported as
+ * skipped rather than failing. Gated by project visibility.
+ */
+export async function applyTemplateFiles(
+  viewer: Viewer,
+  projectId: string,
+  templateId: string,
+  paths: string[],
+): Promise<ApplyResult> {
+  await assertProjectVisible(viewer, projectId);
+  await findOrThrow(templateId);
+
+  const available = new Set(await templateFilePaths(templateId));
+  const applied: string[] = [];
+  const skipped: string[] = [];
+
+  for (const rawPath of paths) {
+    const path = sanitizeRelative(rawPath);
+    if (!available.has(path)) {
+      skipped.push(rawPath);
+      continue;
+    }
+    const buffer = await readTemplateFile(templateId, path);
+    if (buffer === null) {
+      skipped.push(path);
+      continue;
+    }
+    await writeCaseFile(projectId, path, buffer);
+    applied.push(path);
+  }
+
+  return { applied, skipped, entries: await listCaseTree(projectId) };
+}
