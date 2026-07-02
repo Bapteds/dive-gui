@@ -9,7 +9,7 @@
 // patches (the rule that 0/*.boundaryField must cover every polyMesh patch).
 //
 // See docs/openfoam-fichiers-obligatoires.md for the contract this encodes.
-import { CONSTRAINT_PATCH_TYPES } from '@dive/shared';
+import { CONSTRAINT_PATCH_TYPES, type ConfigurableSolverId } from '@dive/shared';
 
 /**
  * The five files that make up the mesh, living under constant/polyMesh/. These
@@ -441,18 +441,159 @@ ${boundaryFieldBlock(patches)}
 ${FOAM_FOOTER}`;
 }
 
+// ---------------------------------------------------------------------------
+// Runnable pimpleFoam case (transient incompressible URANS).
+//
+// Shares the exact same file SET as simpleFoam (INCOMPRESSIBLE_RANS_FILES): the
+// transport/turbulence properties and 0/ fields are identical incompressible RANS
+// setups and are reused verbatim. Only the three system/ files differ — a
+// time-accurate solver needs an Euler time scheme (not steadyState), the PIMPLE
+// pressure-velocity algorithm (not SIMPLE + residualControl), and a transient
+// controlDict (a real deltaT, adjustable time-stepping bounded by maxCo). A
+// pimpleFoam run has no "converged" banner: it runs to endTime, so a clean run
+// finishes as `completed` (see classifyExit) — that is expected, not a warning.
+// ---------------------------------------------------------------------------
+
+/** system/controlDict tuned for a transient pimpleFoam run. */
+function pimpleFoamControlDict(): string {
+  return `${foamHeader('dictionary', 'controlDict', 'system')}
+application     pimpleFoam;
+
+startFrom       startTime;
+startTime       0;
+
+stopAt          endTime;
+endTime         1;
+
+deltaT          1e-4;
+
+writeControl    adjustableRunTime;
+writeInterval   0.05;
+
+purgeWrite      0;
+
+writeFormat     ascii;
+writePrecision  6;
+writeCompression off;
+
+timeFormat      general;
+timePrecision   6;
+
+runTimeModifiable true;
+
+adjustTimeStep  yes;
+maxCo           1;
+maxDeltaT       1;
+${FOAM_FOOTER}`;
+}
+
+/** system/fvSchemes with a transient (Euler) time scheme and concrete div schemes. */
+function pimpleFoamFvSchemes(): string {
+  return `${foamHeader('dictionary', 'fvSchemes', 'system')}
+ddtSchemes
+{
+    default         Euler;
+}
+
+gradSchemes
+{
+    default         Gauss linear;
+}
+
+divSchemes
+{
+    default         none;
+    div(phi,U)      Gauss linearUpwind grad(U);
+    div(phi,k)      Gauss limitedLinear 1;
+    div(phi,omega)  Gauss limitedLinear 1;
+    div((nuEff*dev2(T(grad(U))))) Gauss linear;
+}
+
+laplacianSchemes
+{
+    default         Gauss linear corrected;
+}
+
+interpolationSchemes
+{
+    default         linear;
+}
+
+snGradSchemes
+{
+    default         corrected;
+}
+
+wallDist
+{
+    method          meshWave;
+}
+${FOAM_FOOTER}`;
+}
+
+/** system/fvSolution with the PIMPLE algorithm and per-field (incl. Final) solvers. */
+function pimpleFoamFvSolution(): string {
+  return `${foamHeader('dictionary', 'fvSolution', 'system')}
+solvers
+{
+    "p.*"
+    {
+        solver          GAMG;
+        smoother        GaussSeidel;
+        tolerance       1e-06;
+        relTol          0.05;
+    }
+
+    "(U|k|omega).*"
+    {
+        solver          smoothSolver;
+        smoother        symGaussSeidel;
+        tolerance       1e-05;
+        relTol          0.1;
+    }
+}
+
+PIMPLE
+{
+    nOuterCorrectors 1;
+    nCorrectors      2;
+    nNonOrthogonalCorrectors 0;
+
+    // No fixedValue pressure patch in the generic setup, so pin a reference.
+    pRefCell        0;
+    pRefValue       0;
+}
+
+relaxationFactors
+{
+    equations
+    {
+        ".*"            1;
+    }
+}
+${FOAM_FOOTER}`;
+}
+
 /**
- * Render the content of a single simpleFoam solver file. `patches` is used only
- * by the 0/ fields so their boundaryField references the imported mesh's patches.
+ * Render the content of a single solver file for `solver`. The transport /
+ * turbulence properties and 0/ fields are shared incompressible-RANS setups
+ * (identical for simpleFoam and pimpleFoam); only the system/ trio is
+ * solver-specific (steady SIMPLE vs transient PIMPLE). `patches` is used only by
+ * the 0/ fields so their boundaryField references the imported mesh's patches.
  */
-export function renderSolverFile(path: SolverFilePath, patches: string[]): string {
+export function renderSolverFile(
+  solver: ConfigurableSolverId,
+  path: SolverFilePath,
+  patches: string[],
+): string {
+  const transient = solver === 'pimpleFoam';
   switch (path) {
     case 'system/controlDict':
-      return simpleFoamControlDict();
+      return transient ? pimpleFoamControlDict() : simpleFoamControlDict();
     case 'system/fvSchemes':
-      return simpleFoamFvSchemes();
+      return transient ? pimpleFoamFvSchemes() : simpleFoamFvSchemes();
     case 'system/fvSolution':
-      return simpleFoamFvSolution();
+      return transient ? pimpleFoamFvSolution() : simpleFoamFvSolution();
     case 'constant/transportProperties':
       return transportProperties();
     case 'constant/turbulenceProperties':

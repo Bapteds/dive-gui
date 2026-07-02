@@ -86,7 +86,12 @@ import {
   renamePatchSchema,
   setPatchTypeSchema,
 } from './mesh.schemas';
-import { createFileSchema, filePathQuerySchema, movePathSchema } from './files.schemas';
+import {
+  createFileSchema,
+  filePathQuerySchema,
+  movePathSchema,
+  scaffoldSolverSchema,
+} from './files.schemas';
 import { runIdParamSchema, startRunSchema } from './runs.schemas';
 import { cgnsNameQuerySchema, convertCgnsSchema } from './conversion.schemas';
 import {
@@ -188,7 +193,7 @@ export function createProjectsRouter(): Router {
   );
   router.post(
     '/:id/runnable/scaffold',
-    validate({ params: projectIdParamSchema }),
+    validate({ params: projectIdParamSchema, body: scaffoldSolverSchema }),
     asyncHandler(scaffoldSolverController),
   );
   router.post(

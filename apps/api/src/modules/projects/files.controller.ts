@@ -23,7 +23,7 @@ import {
   verifyRunnable,
   type ImportPayload,
 } from './files.service';
-import type { MovePathInput } from './files.schemas';
+import type { MovePathInput, ScaffoldSolverInput } from './files.schemas';
 
 /**
  * Multipart parser for case imports. Files are buffered in memory. A folder
@@ -124,9 +124,10 @@ export async function verifyRunnableController(req: Request, res: Response): Pro
   res.status(200).json({ runnable });
 }
 
-/** POST /projects/:id/runnable/scaffold — generate the missing simpleFoam files. */
+/** POST /projects/:id/runnable/scaffold — generate the missing files for a solver. */
 export async function scaffoldSolverController(req: Request, res: Response): Promise<void> {
-  const result = await scaffoldSolver(requireViewer(req), req.params.id);
+  const { solver } = req.body as ScaffoldSolverInput;
+  const result = await scaffoldSolver(requireViewer(req), req.params.id, solver);
   res.status(201).json(result);
 }
 

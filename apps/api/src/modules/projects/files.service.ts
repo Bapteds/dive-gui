@@ -5,7 +5,12 @@
 // projects service enforces. Members may both read and contribute case files;
 // project management (delete, collaborators) remains owner/super-admin only and
 // lives in projects.service.
-import { EDITABLE_FILE_MAX_BYTES } from '@dive/shared';
+import {
+  EDITABLE_FILE_MAX_BYTES,
+  SOLVER_CATALOG,
+  isConfigurableSolver,
+  type ConfigurableSolverId,
+} from '@dive/shared';
 import { AppError } from '../../lib/AppError';
 import {
   caseFileExists,
@@ -254,28 +259,31 @@ export async function computeRunnable(projectId: string): Promise<RunnableCheck>
 
   const controlDict = await readCaseFile(projectId, 'system/controlDict');
   const solver = controlDict ? parseApplication(controlDict.toString('utf8')) : null;
+  // The case is runnable only when it targets a solver the app can configure
+  // (simpleFoam steady / pimpleFoam transient). A generic `foamRun` placeholder —
+  // or any name outside the catalog — is refused so the gate re-offers "Make
+  // runnable" (which points it at a real solver and fills the numerics).
+  const target = solver && isConfigurableSolver(solver) ? solver : null;
 
-  // Even when every file is present, the system/ numerics must be simpleFoam-ready
-  // (not a generic placeholder), or the run aborts at solve time (e.g. an
-  // fvSolution without pRefCell). Detect generic numerics so the gate re-offers
-  // "Make runnable" (which repairs them), keeping the whole thing self-healing.
-  const systemRepairs = await Promise.all(
-    [...SYSTEM_NUMERICS_FILES].map((file) => systemNumericsNeedsRepair(projectId, file)),
-  );
-  const numericsReady = systemRepairs.every((needsRepair) => !needsRepair);
+  // Even when every file is present, the system/ numerics must match the target
+  // solver (not a generic placeholder, and not the *other* solver's algorithm), or
+  // the run aborts at solve time (e.g. an fvSolution without pRefCell, or a steady
+  // SIMPLE setup under pimpleFoam). This check is solver-aware and self-healing:
+  // when it fails the gate re-offers "Make runnable", which repairs the trio.
+  let numericsReady = false;
+  if (target) {
+    const systemRepairs = await Promise.all(
+      [...SYSTEM_NUMERICS_FILES].map((file) => systemNumericsNeedsRepair(projectId, file, target)),
+    );
+    numericsReady = systemRepairs.every((needsRepair) => !needsRepair);
+  }
 
-  // v1 runs simpleFoam end to end, and the scaffolded turbulence/transport files
-  // are written for it. A case targeting another application (e.g. the generic
-  // `foamRun` the conversion flow writes) is NOT runnable here.
   return {
     hasMesh: missingMesh.length === 0,
     missingMesh,
     missingFiles,
     runnable:
-      missingMesh.length === 0 &&
-      missingFiles.length === 0 &&
-      solver === 'simpleFoam' &&
-      numericsReady,
+      missingMesh.length === 0 && missingFiles.length === 0 && target !== null && numericsReady,
     solver,
   };
 }
@@ -294,44 +302,63 @@ const SYSTEM_NUMERICS_FILES = new Set<string>([
 ]);
 
 /**
- * Does a system/ numerics file need to be (re)written for simpleFoam? True when
- * it is missing or still a generic placeholder, detected by the marker that
- * simpleFoam requires and the base scaffold omits:
- *  - fvSolution: a pressure reference (pRefCell/pRefPoint) — without it simpleFoam
- *    aborts on a closed domain ("Unable to set reference cell for field p").
- *  - fvSchemes: a real divergence scheme (the base scaffold writes `div none`).
- *  - controlDict: application=simpleFoam and a non-trivial endTime (the base
- *    scaffold writes `application foamRun; endTime 1;`, which runs one step).
- * Marker-guarded so a second "Make runnable" is a no-op, and a real imported case
- * (which already has these markers) is never overwritten.
+ * Does a system/ numerics file need to be (re)written for `solver`? True when it
+ * is missing, still a generic placeholder, or written for the *other* solver's
+ * algorithm — detected by markers that differ steady vs transient:
+ *  - fvSolution: needs a pressure reference (pRefCell/pRefPoint — without it the
+ *    solver aborts on a closed domain), AND the target algorithm dictionary
+ *    (`SIMPLE` for steady, `PIMPLE` for transient).
+ *  - fvSchemes: needs a real divergence scheme (the base scaffold writes
+ *    `div none`), AND a regime-correct time scheme (steady = `steadyState`,
+ *    transient must NOT be `steadyState`).
+ *  - controlDict: application must equal `solver`, with a regime-appropriate
+ *    endTime (steady runs many iterations so `> 1`; transient any positive time).
+ * Marker-guarded so a second "Make runnable" for the same solver is a no-op and a
+ * real imported case is never overwritten, while switching solver re-renders the
+ * trio for the new algorithm.
  */
-async function systemNumericsNeedsRepair(projectId: string, file: string): Promise<boolean> {
+async function systemNumericsNeedsRepair(
+  projectId: string,
+  file: string,
+  solver: ConfigurableSolverId,
+): Promise<boolean> {
   const buffer = await readCaseFile(projectId, file);
   if (!buffer) return true;
   const content = buffer.toString('utf8');
+  const transient = SOLVER_CATALOG[solver].regime === 'transient';
 
-  if (file === 'system/fvSolution') return !/pRef(Cell|Point)/.test(content);
-  if (file === 'system/fvSchemes') return !/\bdiv\(phi,U\)/.test(content);
+  if (file === 'system/fvSolution') {
+    if (!/pRef(Cell|Point)/.test(content)) return true;
+    return transient ? !/\bPIMPLE\b/.test(content) : !/\bSIMPLE\b/.test(content);
+  }
+  if (file === 'system/fvSchemes') {
+    if (!/\bdiv\(phi,U\)/.test(content)) return true;
+    const steadyDdt = /default\s+steadyState/.test(content);
+    return transient ? steadyDdt : !steadyDdt;
+  }
   // system/controlDict
-  if (parseApplication(content) !== 'simpleFoam') return true;
+  if (parseApplication(content) !== solver) return true;
   const match = content.match(/\bendTime\s+([0-9.eE+-]+)\s*;/);
   const endTime = match ? Number(match[1]) : 0;
-  return !Number.isFinite(endTime) || endTime <= 1;
+  if (!Number.isFinite(endTime)) return true;
+  return transient ? endTime <= 0 : endTime <= 1;
 }
 
 /**
- * Generate the simpleFoam files a case needs to be runnable (the "Make runnable"
- * action). The 0/ fields and constant/*Properties are written only when missing,
- * so user-set boundary conditions / property values are kept. The system/
- * numerics (controlDict / fvSchemes / fvSolution) are instead REPAIRED when they
- * are generic placeholders (e.g. from the conversion flow): a placeholder
- * fvSolution lacks pRefCell and simpleFoam aborts, fvSchemes has `div none`, and
- * controlDict targets foamRun with endTime 1. The repair is marker-guarded, so a
- * real imported case or a second call is left untouched.
+ * Generate the files a case needs to be runnable by `solver` (the "Make runnable"
+ * action; `solver` defaults to simpleFoam). The 0/ fields and constant/*Properties
+ * are written only when missing, so user-set boundary conditions / property values
+ * are kept (simpleFoam and pimpleFoam share the same incompressible-RANS set). The
+ * system/ numerics (controlDict / fvSchemes / fvSolution) are instead REPAIRED when
+ * they are generic placeholders (e.g. from the conversion flow) OR written for the
+ * other solver's algorithm — so switching solver re-renders the trio (steady SIMPLE
+ * <-> transient PIMPLE). The repair is marker-guarded, so a real imported case or a
+ * second call for the same solver is left untouched.
  */
 export async function scaffoldSolver(
   viewer: Viewer,
   projectId: string,
+  solver: ConfigurableSolverId = 'simpleFoam',
 ): Promise<ScaffoldSolverResult> {
   await assertProjectVisible(viewer, projectId);
 
@@ -345,24 +372,24 @@ export async function scaffoldSolver(
   const created: string[] = [];
   for (const file of SOLVER_FILE_PATHS) {
     if (SYSTEM_NUMERICS_FILES.has(file)) {
-      if (await systemNumericsNeedsRepair(projectId, file)) {
-        await writeCaseFile(projectId, file, renderSolverFile(file, patches));
+      if (await systemNumericsNeedsRepair(projectId, file, solver)) {
+        await writeCaseFile(projectId, file, renderSolverFile(solver, file, patches));
         created.push(file);
       }
       continue;
     }
     // 0/ fields + constant/*Properties: keep what the user has, add what is missing.
     if (await caseFileExists(projectId, file)) continue;
-    await writeCaseFile(projectId, file, renderSolverFile(file, patches));
+    await writeCaseFile(projectId, file, renderSolverFile(solver, file, patches));
     created.push(file);
   }
 
-  // Belt and suspenders: make sure controlDict targets simpleFoam even if the
-  // repair check above kept it (idempotent no-op when already simpleFoam).
+  // Belt and suspenders: make sure controlDict targets the chosen solver even if
+  // the repair check above kept it (idempotent no-op when already correct).
   const controlDict = await readCaseFile(projectId, 'system/controlDict');
   if (controlDict) {
     const content = controlDict.toString('utf8');
-    const next = setApplication(content, 'simpleFoam');
+    const next = setApplication(content, solver);
     if (next !== content) await writeCaseFile(projectId, 'system/controlDict', next);
   }
 

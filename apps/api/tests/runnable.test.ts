@@ -44,22 +44,51 @@ afterAll(async () => {
 
 describe('renderSolverFile / parseApplication (unit)', () => {
   it('renders a simpleFoam controlDict whose application parses back', () => {
-    const c = renderSolverFile('system/controlDict', []);
+    const c = renderSolverFile('simpleFoam', 'system/controlDict', []);
     expect(c).toContain('application     simpleFoam;');
     expect(parseApplication(c)).toBe('simpleFoam');
   });
 
   it('renders turbulenceProperties with the k-omega SST model', () => {
-    expect(renderSolverFile('constant/turbulenceProperties', [])).toContain('kOmegaSST');
+    expect(renderSolverFile('simpleFoam', 'constant/turbulenceProperties', [])).toContain(
+      'kOmegaSST',
+    );
   });
 
   it('renders fvSolution with residualControl and fvSchemes with a real div scheme', () => {
-    expect(renderSolverFile('system/fvSolution', [])).toContain('residualControl');
-    expect(renderSolverFile('system/fvSchemes', [])).toContain('div(phi,U)');
+    expect(renderSolverFile('simpleFoam', 'system/fvSolution', [])).toContain('residualControl');
+    expect(renderSolverFile('simpleFoam', 'system/fvSchemes', [])).toContain('div(phi,U)');
+  });
+
+  it('renders a transient pimpleFoam trio: PIMPLE algorithm, Euler ddt, adjustable dt', () => {
+    const control = renderSolverFile('pimpleFoam', 'system/controlDict', []);
+    expect(control).toContain('application     pimpleFoam;');
+    expect(parseApplication(control)).toBe('pimpleFoam');
+    expect(control).toContain('adjustTimeStep  yes;');
+    expect(control).toContain('maxCo           1;');
+
+    const schemes = renderSolverFile('pimpleFoam', 'system/fvSchemes', []);
+    expect(schemes).toContain('default         Euler;');
+    expect(schemes).not.toContain('steadyState');
+    expect(schemes).toContain('div(phi,U)');
+
+    const solution = renderSolverFile('pimpleFoam', 'system/fvSolution', []);
+    expect(solution).toContain('PIMPLE');
+    expect(solution).toContain('pRefCell');
+    expect(solution).not.toContain('residualControl');
+  });
+
+  it('shares the transport/turbulence/0-fields between simpleFoam and pimpleFoam', () => {
+    // The incompressible-RANS files are identical across the two solvers.
+    for (const file of ['constant/transportProperties', 'constant/turbulenceProperties', '0/k'] as const) {
+      expect(renderSolverFile('pimpleFoam', file, ['inlet'])).toBe(
+        renderSolverFile('simpleFoam', file, ['inlet']),
+      );
+    }
   });
 
   it('references every mesh patch in a 0/ field boundaryField', () => {
-    const k = renderSolverFile('0/k', ['inlet', 'walls']);
+    const k = renderSolverFile('simpleFoam', '0/k', ['inlet', 'walls']);
     expect(k).toContain('inlet');
     expect(k).toContain('walls');
   });
@@ -116,6 +145,52 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
       .set('Authorization', auth);
     expect(again.body.created).toHaveLength(0);
     expect(again.body.runnable.runnable).toBe(true);
+  });
+
+  it('scaffolds a pimpleFoam (transient) case and it becomes runnable', async () => {
+    const { auth, id } = await makeProject('runnable-pimple@x.test');
+    await writeMesh(id);
+
+    const scaffold = await request(app)
+      .post(`/api/v1/projects/${id}/runnable/scaffold`)
+      .set('Authorization', auth)
+      .send({ solver: 'pimpleFoam' });
+    expect(scaffold.status).toBe(201);
+    expect(scaffold.body.runnable.runnable).toBe(true);
+    expect(scaffold.body.runnable.solver).toBe('pimpleFoam');
+
+    const control = (await readCaseFile(id, 'system/controlDict'))?.toString('utf8') ?? '';
+    const schemes = (await readCaseFile(id, 'system/fvSchemes'))?.toString('utf8') ?? '';
+    const solution = (await readCaseFile(id, 'system/fvSolution'))?.toString('utf8') ?? '';
+    expect(control).toMatch(/application\s+pimpleFoam/);
+    expect(schemes).toContain('Euler');
+    expect(solution).toContain('PIMPLE');
+  });
+
+  it('switching solver re-renders the system trio (simpleFoam -> pimpleFoam)', async () => {
+    const { auth, id } = await makeProject('runnable-switch@x.test');
+    await writeMesh(id);
+
+    // Start steady, then switch to transient: the system/ trio must be rewritten
+    // for the PIMPLE algorithm and an Euler time scheme, but the shared
+    // turbulence/transport/0-fields are kept (not re-created).
+    await request(app).post(`/api/v1/projects/${id}/runnable/scaffold`).set('Authorization', auth);
+    const switched = await request(app)
+      .post(`/api/v1/projects/${id}/runnable/scaffold`)
+      .set('Authorization', auth)
+      .send({ solver: 'pimpleFoam' });
+    expect(switched.status).toBe(201);
+    expect(switched.body.created).toEqual(
+      expect.arrayContaining(['system/controlDict', 'system/fvSchemes', 'system/fvSolution']),
+    );
+    expect(switched.body.created).not.toContain('constant/turbulenceProperties');
+    expect(switched.body.created).not.toContain('0/k');
+    expect(switched.body.runnable.runnable).toBe(true);
+    expect(switched.body.runnable.solver).toBe('pimpleFoam');
+
+    const schemes = (await readCaseFile(id, 'system/fvSchemes'))?.toString('utf8') ?? '';
+    expect(schemes).toContain('Euler');
+    expect(schemes).not.toContain('steadyState');
   });
 
   it('retargets a generic controlDict (application foamRun) to simpleFoam', async () => {

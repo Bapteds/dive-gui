@@ -1,5 +1,22 @@
 // Zod schemas for the case-file content endpoints.
 import { z } from 'zod';
+import { CONFIGURABLE_SOLVER_IDS } from '@dive/shared';
+
+/**
+ * Body for "Make runnable" (POST /runnable/scaffold). `solver` is optional and
+ * bounded to the solvers the app can scaffold (simpleFoam / pimpleFoam); it
+ * defaults to simpleFoam server-side when omitted. The preprocess tolerates a
+ * bodiless POST (Express leaves req.body undefined) by treating it as `{}`, while
+ * still rejecting an out-of-set solver value.
+ */
+export const scaffoldSolverSchema = z.preprocess(
+  (value) => value ?? {},
+  z.object({
+    solver: z.enum(CONFIGURABLE_SOLVER_IDS).optional(),
+  }),
+);
+
+export type ScaffoldSolverInput = z.infer<typeof scaffoldSolverSchema>;
 
 /** Query carrying a case-relative file path (e.g. ?path=system/controlDict). */
 export const filePathQuerySchema = z.object({
