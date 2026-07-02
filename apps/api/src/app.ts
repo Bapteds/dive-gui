@@ -12,6 +12,7 @@ import { createUsersRouter } from './modules/users/users.routes';
 import { createAuditRouter } from './modules/audit/audit.routes';
 import { createProjectsRouter } from './modules/projects/projects.routes';
 import { createTemplatesRouter } from './modules/templates/templates.routes';
+import { createDashboardRouter } from './modules/dashboard/dashboard.routes';
 
 /**
  * Create and configure the Express application.
@@ -54,6 +55,7 @@ export function createApp(): Express {
   app.use('/api/v1/audit-logs', createAuditRouter());
   app.use('/api/v1/projects', createProjectsRouter());
   app.use('/api/v1/templates', createTemplatesRouter());
+  app.use('/api/v1/dashboard', createDashboardRouter());
 
   // 404 + error handling must be registered last.
   app.use(notFoundHandler);

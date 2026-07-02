@@ -694,6 +694,36 @@ export interface RunLogPayload {
   logBytes: number;
 }
 
+/** Live metrics of the machine running the API (Home dashboard). */
+export interface ServerMetrics {
+  cpuPercent: number;
+  cores: number;
+  memUsedBytes: number;
+  memTotalBytes: number;
+  loadAvg1: number;
+  uptimeSec: number;
+}
+
+/** A run surfaced on the dashboard, with its project's title. */
+export interface DashboardRun {
+  runId: string;
+  projectId: string;
+  projectTitle: string;
+  solver: string;
+  status: RunStatus;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+}
+
+/** `GET /dashboard` payload: server metrics + the viewer's runs. */
+export interface DashboardData {
+  metrics: ServerMetrics;
+  activeRuns: DashboardRun[];
+  recentRuns: DashboardRun[];
+  runCounts: Record<RunStatus, number>;
+}
+
 export type { RunStatus, SolverId, ResidualSample };
 
 // Solver catalog (single source of truth in @dive/shared) - drives the solver
