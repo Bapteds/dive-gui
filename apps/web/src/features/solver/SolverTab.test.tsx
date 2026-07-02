@@ -121,8 +121,9 @@ describe('SolverTab', () => {
 
     renderTab();
 
-    // Step 1: pick the transient incompressible (pimpleFoam) archetype, then Next.
-    await userEvent.click(await screen.findByRole('radio', { name: /transient, incompressible/i }));
+    // Step 1: open the solver overlay and pick pimpleFoam (URANS is unique to it).
+    await userEvent.click(await screen.findByRole('button', { name: /browse all solvers/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /URANS/i }));
     await userEvent.click(screen.getByRole('button', { name: /next/i }));
     // Step 2: pick a specific turbulence model (unique matcher), then generate.
     await userEvent.click(await screen.findByRole('radio', { name: /realizable/i }));

@@ -1,12 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Check, Cpu, Wrench } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, Cpu, Search, Sparkles, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
 import { ApiError } from '@/lib/api/client';
-import { SOLVER_CATALOG, TURBULENCE_MODELS, type ConfigurableSolverId } from '@/lib/api/types';
+import {
+  SOLVER_LIBRARY,
+  TURBULENCE_MODELS,
+  isConfigurableSolver,
+  type SolverId,
+} from '@/lib/api/types';
 import { useSyncBoundaries } from '@/features/projects/useCaseFiles';
-import { SolverPicker } from './SolverPicker';
+import { SolverBrowserDialog } from './SolverBrowserDialog';
 import { TurbulencePicker } from './TurbulencePicker';
 import { useScaffoldSolver } from './useRuns';
 
@@ -26,7 +32,8 @@ export function SolverSetupWizard({ projectId }: { projectId: string; missingFil
   const syncBoundaries = useSyncBoundaries(projectId);
 
   const [step, setStep] = useState<1 | 2>(1);
-  const [solver, setSolver] = useState<ConfigurableSolverId>('simpleFoam');
+  const [solver, setSolver] = useState<SolverId>('simpleFoam');
+  const [browserOpen, setBrowserOpen] = useState(false);
   const [turbulence, setTurbulence] = useState<string>('kOmegaSST');
   // Default on: a freshly scaffolded case usually needs its 0/ boundaryFields
   // aligned to the mesh patches (names + types) to actually run.
@@ -45,7 +52,9 @@ export function SolverSetupWizard({ projectId }: { projectId: string; missingFil
   }, [step]);
 
   const pending = scaffold.isPending || syncBoundaries.isPending;
-  const solverLabel = SOLVER_CATALOG[solver].label;
+  const solverInfo = SOLVER_LIBRARY.find((s) => s.id === solver);
+  const solverLabel = solverInfo?.label ?? solver;
+  const guided = isConfigurableSolver(solver);
   const turbulenceLabel = TURBULENCE_MODELS.find((m) => m.id === turbulence)?.label ?? turbulence;
 
   const handleGenerate = async () => {
@@ -76,10 +85,42 @@ export function SolverSetupWizard({ projectId }: { projectId: string; missingFil
         {step === 1 ? (
           <section className="flex flex-col gap-3" aria-labelledby="setup-step-1">
             <p id="setup-step-1" className="text-sm text-text-secondary">
-              Choose the solver that matches your case. It fixes the physics (steady or transient,
-              incompressible or compressible); you can fine-tune every value after generating.
+              Choose the solver that matches your case, from the full library. It fixes the physics;
+              you can fine-tune every value after generating.
             </p>
-            <SolverPicker value={solver} onChange={setSolver} disabled={pending} />
+            <div className="flex flex-col gap-1 rounded-md border border-primary bg-primary-tint p-3">
+              <div className="flex items-start justify-between gap-2">
+                <span className="text-sm font-medium text-primary">{solverLabel}</span>
+                {guided ? (
+                  <Badge variant="primary" className="shrink-0 border border-primary/20">
+                    <Sparkles className="size-3" strokeWidth={1.75} aria-hidden="true" />
+                    Guided setup
+                  </Badge>
+                ) : (
+                  <Badge variant="neutral" className="shrink-0">
+                    Manual setup
+                  </Badge>
+                )}
+              </div>
+              <span className="font-mono text-xs text-text-secondary" translate="no">
+                {solver}
+              </span>
+              {solverInfo?.summary && (
+                <span className="text-xs text-text-secondary">{solverInfo.summary}</span>
+              )}
+            </div>
+            <div>
+              <Button variant="secondary" onClick={() => setBrowserOpen(true)} disabled={pending}>
+                <Search strokeWidth={1.75} aria-hidden="true" />
+                Browse all solvers
+              </Button>
+            </div>
+            <SolverBrowserDialog
+              open={browserOpen}
+              onOpenChange={setBrowserOpen}
+              value={solver}
+              onSelect={setSolver}
+            />
           </section>
         ) : (
           <section className="flex flex-col gap-3" aria-labelledby="setup-step-2">

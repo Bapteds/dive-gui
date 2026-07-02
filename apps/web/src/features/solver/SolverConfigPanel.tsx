@@ -6,7 +6,14 @@ import { toast } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
 import { ApiError } from '@/lib/api/client';
 import { getCaseFileContent } from '@/lib/api/projects';
-import { SOLVER_CATALOG, type ConfigurableSolverId, type SolverParamDef } from '@/lib/api/types';
+import {
+  SOLVER_CATALOG,
+  SOLVER_LIBRARY,
+  isConfigurableSolver,
+  type ConfigurableSolverId,
+  type SolverId,
+  type SolverParamDef,
+} from '@/lib/api/types';
 import {
   caseFileContentQueryKey,
   useCaseFileContentQuery,
@@ -19,8 +26,19 @@ import {
   setFoamValue,
 } from '@/features/projects/foamModel';
 import { CaseFileEditor } from '@/features/projects/CaseFileEditor';
-import { SolverPicker } from './SolverPicker';
+import { SolverBrowserDialog } from './SolverBrowserDialog';
 import { useScaffoldSolver } from './useRuns';
+
+/** Solver files exposed in Advanced mode when the solver has no catalog template. */
+const DEFAULT_SOLVER_FILES = [
+  'system/controlDict',
+  'system/fvSchemes',
+  'system/fvSolution',
+  'constant/turbulenceProperties',
+  'constant/transportProperties',
+  '0/U',
+  '0/p',
+];
 
 /**
  * SolverConfigPanel - configure the solver with the same Easy / Advanced split as
@@ -39,7 +57,10 @@ import { useScaffoldSolver } from './useRuns';
  */
 interface SolverConfigPanelProps {
   projectId: string;
-  solver: ConfigurableSolverId;
+  /** The solver read from controlDict (any library binary), or null. */
+  solver: string | null;
+  /** Whether the solver has a guided (easy) form; else it is manual setup. */
+  scaffoldable: boolean;
   active: boolean;
   runLabel: string;
   runPending: boolean;
@@ -49,12 +70,14 @@ interface SolverConfigPanelProps {
 export function SolverConfigPanel({
   projectId,
   solver,
+  scaffoldable,
   active,
   runLabel,
   runPending,
   onRun,
 }: SolverConfigPanelProps) {
-  const [mode, setMode] = useState<'easy' | 'advanced'>('easy');
+  const [mode, setMode] = useState<'easy' | 'advanced'>(scaffoldable ? 'easy' : 'advanced');
+  const configurable = solver && isConfigurableSolver(solver) ? solver : null;
 
   return (
     <div className="rounded-md border border-border bg-surface shadow-sm">
@@ -71,18 +94,38 @@ export function SolverConfigPanel({
         )}
       </header>
 
-      <div className="p-4">
+      <div className="flex flex-col gap-4 p-4">
         {active && (
-          <p className="mb-3 text-xs text-text-secondary" role="status">
+          <p className="text-xs text-text-secondary" role="status">
             Configuration is locked while a run is active.
           </p>
         )}
+        <ChangeSolver projectId={projectId} current={solver} disabled={active} />
         {mode === 'easy' ? (
-          <EasyConfig projectId={projectId} solver={solver} disabled={active} />
+          configurable ? (
+            <SolverEasyForm projectId={projectId} solver={configurable} disabled={active} />
+          ) : (
+            <ManualEasyNote solver={solver} />
+          )
         ) : (
-          <AdvancedConfig projectId={projectId} solver={solver} disabled={active} />
+          <AdvancedConfig projectId={projectId} solver={configurable} disabled={active} />
         )}
       </div>
+    </div>
+  );
+}
+
+/** Easy-mode note for a solver with no guided form: point to Advanced / the editor. */
+function ManualEasyNote({ solver }: { solver: string | null }) {
+  const info = SOLVER_LIBRARY.find((entry) => entry.id === solver);
+  return (
+    <div className="rounded-md border border-border bg-bg/40 p-4">
+      <p className="text-sm font-medium text-text">Manual setup</p>
+      <p className="mt-1 text-sm text-text-secondary">
+        {info?.label ?? solver ?? 'This solver'} has no guided form yet. Set its `application`
+        and edit the solver files in Advanced mode (or the Detail file editor). It runs once the
+        case files are in place.
+      </p>
     </div>
   );
 }
@@ -145,29 +188,10 @@ function ModeButton({
   );
 }
 
-/** Easy mode: change-solver control + the curated cross-file parameter form. */
-function EasyConfig({
-  projectId,
-  solver,
-  disabled,
-}: {
-  projectId: string;
-  solver: ConfigurableSolverId;
-  disabled: boolean;
-}) {
-  return (
-    <div className="flex flex-col gap-4">
-      <ChangeSolver projectId={projectId} current={solver} disabled={disabled} />
-      <SolverEasyForm projectId={projectId} solver={solver} disabled={disabled} />
-    </div>
-  );
-}
-
 /**
- * Show the current solver and, on demand, let the user switch archetype. Switching
- * re-scaffolds (rewrites the time scheme + algorithm files for the new solver), so
- * it is an explicit two-step action (choose, then Apply) with a plain warning -
- * never a silent change on select.
+ * Show the current solver and let the user switch to any library solver via the
+ * browser overlay. Switching re-scaffolds the case, so it is an explicit two-step
+ * action: pick in the overlay, then Apply (with a plain note), never silent.
  */
 function ChangeSolver({
   projectId,
@@ -175,20 +199,21 @@ function ChangeSolver({
   disabled,
 }: {
   projectId: string;
-  current: ConfigurableSolverId;
+  current: string | null;
   disabled: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  const [choice, setChoice] = useState<ConfigurableSolverId>(current);
-  useEffect(() => setChoice(current), [current]);
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const [choice, setChoice] = useState<SolverId | null>(null);
   const scaffold = useScaffoldSolver(projectId);
-  const spec = SOLVER_CATALOG[current];
+  const info = SOLVER_LIBRARY.find((entry) => entry.id === current);
+  const pendingChoice = choice && choice !== current ? choice : null;
 
   const apply = async () => {
+    if (!pendingChoice) return;
     try {
-      await scaffold.mutateAsync({ solver: choice });
-      toast.success(`Switched to ${choice}. The solver files were updated.`);
-      setOpen(false);
+      await scaffold.mutateAsync({ solver: pendingChoice });
+      toast.success(`Switched to ${pendingChoice}. The case was updated.`);
+      setChoice(null);
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Could not switch the solver.');
     }
@@ -197,55 +222,57 @@ function ChangeSolver({
   return (
     <section className="rounded-md border border-border bg-bg/40 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-col">
+        <div className="flex min-w-0 flex-col">
           <span className="text-xs font-medium text-text-secondary">Solver</span>
           <span className="text-sm font-medium text-text">
-            {spec.label}{' '}
+            {info?.label ?? current ?? 'None selected'}{' '}
             <span className="font-mono text-xs text-text-secondary" translate="no">
-              ({current})
+              ({current ?? '-'})
             </span>
           </span>
         </div>
         <Button
           variant="ghost"
           size="sm"
-          className={open ? 'text-text-secondary' : 'text-primary'}
+          className="text-primary"
           disabled={disabled || scaffold.isPending}
-          aria-expanded={open}
-          onClick={() => setOpen((value) => !value)}
+          onClick={() => setBrowserOpen(true)}
         >
-          {open ? 'Cancel' : 'Change solver'}
+          Change solver
         </Button>
       </div>
 
-      {open && (
-        <div className="mt-3 flex flex-col gap-3">
-          <SolverPicker
-            value={choice}
-            onChange={setChoice}
+      {pendingChoice && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            loading={scaffold.isPending}
+            onClick={() => void apply()}
+          >
+            Apply {pendingChoice}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
             disabled={scaffold.isPending}
-            name="change-solver"
-            legend="Switch to"
-          />
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              loading={scaffold.isPending}
-              disabled={choice === current}
-              onClick={() => void apply()}
-            >
-              Apply solver
-            </Button>
-            {choice !== current && (
-              <p className="text-xs text-text-secondary">
-                Rewrites the time scheme and algorithm files for {choice}. Your boundary conditions
-                and property values are kept.
-              </p>
-            )}
-          </div>
+            onClick={() => setChoice(null)}
+          >
+            Cancel
+          </Button>
+          <p className="text-xs text-text-secondary">
+            Switching regenerates the solver setup. Your boundary conditions and property values
+            are kept.
+          </p>
         </div>
       )}
+
+      <SolverBrowserDialog
+        open={browserOpen}
+        onOpenChange={setBrowserOpen}
+        value={(pendingChoice ?? current ?? 'simpleFoam') as SolverId}
+        onSelect={(id) => setChoice(id)}
+      />
     </section>
   );
 }
@@ -499,10 +526,12 @@ function AdvancedConfig({
   disabled,
 }: {
   projectId: string;
-  solver: ConfigurableSolverId;
+  solver: ConfigurableSolverId | null;
   disabled: boolean;
 }) {
-  const files = SOLVER_CATALOG[solver].requiredFiles;
+  // A configurable solver exposes its exact required files; a manual solver falls
+  // back to the common solver files so the raw editor still has something to edit.
+  const files = solver ? SOLVER_CATALOG[solver].requiredFiles : DEFAULT_SOLVER_FILES;
   const [selected, setSelected] = useState<string>(files[0] ?? 'system/controlDict');
   useEffect(() => {
     if (!files.includes(selected)) setSelected(files[0] ?? 'system/controlDict');

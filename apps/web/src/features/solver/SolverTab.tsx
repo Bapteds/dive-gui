@@ -3,13 +3,7 @@ import { RotateCcw, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/sonner';
 import { ApiError } from '@/lib/api/client';
-import { isConfigurableSolver } from '@/lib/api/types';
-import type {
-  ConfigurableSolverId,
-  ResidualSample,
-  RunStatus,
-  RunSummary,
-} from '@/lib/api/types';
+import type { ResidualSample, RunStatus, RunSummary } from '@/lib/api/types';
 import { ResidualChart } from './ResidualChart';
 import { SolverSetupWizard } from './SolverSetupWizard';
 import { SolverConfigPanel } from './SolverConfigPanel';
@@ -63,7 +57,13 @@ export function SolverTab({ projectId }: { projectId: string }) {
     );
   }
 
-  return <RunnablePanel projectId={projectId} solver={runnable.data.solver} />;
+  return (
+    <RunnablePanel
+      projectId={projectId}
+      solver={runnable.data.solver}
+      scaffoldable={runnable.data.scaffoldable}
+    />
+  );
 }
 
 /** Loading skeleton matching the panel shape. */
@@ -83,7 +83,15 @@ function SolverSkeleton() {
 }
 
 /** The runnable panel: config + live run + history, with live polling. */
-function RunnablePanel({ projectId, solver }: { projectId: string; solver: string | null }) {
+function RunnablePanel({
+  projectId,
+  solver,
+  scaffoldable,
+}: {
+  projectId: string;
+  solver: string | null;
+  scaffoldable: boolean;
+}) {
   const runs = useRunsQuery(projectId);
   const currentRun = runs.data?.[0] ?? null;
   const logQuery = useRunLogQuery(projectId, currentRun?.id ?? null);
@@ -114,14 +122,12 @@ function RunnablePanel({ projectId, solver }: { projectId: string; solver: strin
     }
   };
 
-  const configSolver: ConfigurableSolverId =
-    solver && isConfigurableSolver(solver) ? solver : 'simpleFoam';
-
   return (
     <div className="flex flex-col gap-5 lg:min-h-0 lg:flex-1 lg:overflow-auto lg:overscroll-contain">
       <SolverConfigPanel
         projectId={projectId}
-        solver={configSolver}
+        solver={solver}
+        scaffoldable={scaffoldable}
         active={active}
         runLabel={currentRun ? 'Run again' : 'Run solver'}
         runPending={startRun.isPending}
