@@ -186,7 +186,7 @@ function ChangeSolver({
 
   const apply = async () => {
     try {
-      await scaffold.mutateAsync(choice);
+      await scaffold.mutateAsync({ solver: choice });
       toast.success(`Switched to ${choice}. The solver files were updated.`);
       setOpen(false);
     } catch (err) {

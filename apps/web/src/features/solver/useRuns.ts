@@ -55,11 +55,17 @@ export function useRunnableQuery(projectId: string, enabled = true) {
   });
 }
 
-/** Generate the files a case needs to be runnable by a chosen solver ("Make runnable"). */
+/** Variables for the "Make runnable" scaffold: a solver and/or a turbulence model. */
+export interface ScaffoldSolverVars {
+  solver?: ConfigurableSolverId;
+  turbulence?: string;
+}
+
+/** Generate the files a case needs to be runnable by a chosen solver + turbulence model. */
 export function useScaffoldSolver(projectId: string) {
   const queryClient = useQueryClient();
-  return useMutation<ScaffoldSolverResponse, Error, ConfigurableSolverId | undefined>({
-    mutationFn: (solver) => scaffoldSolver(projectId, solver),
+  return useMutation<ScaffoldSolverResponse, Error, ScaffoldSolverVars | undefined>({
+    mutationFn: (vars) => scaffoldSolver(projectId, vars?.solver, vars?.turbulence),
     onSuccess: (result) => {
       queryClient.setQueryData(runnableQueryKey(projectId), result.runnable);
       // New case files were written; keep the case tree / summary in sync.

@@ -126,8 +126,8 @@ export async function verifyRunnableController(req: Request, res: Response): Pro
 
 /** POST /projects/:id/runnable/scaffold — generate the missing files for a solver. */
 export async function scaffoldSolverController(req: Request, res: Response): Promise<void> {
-  const { solver } = req.body as ScaffoldSolverInput;
-  const result = await scaffoldSolver(requireViewer(req), req.params.id, solver);
+  const { solver, turbulence } = req.body as ScaffoldSolverInput;
+  const result = await scaffoldSolver(requireViewer(req), req.params.id, solver, turbulence);
   res.status(201).json(result);
 }
 

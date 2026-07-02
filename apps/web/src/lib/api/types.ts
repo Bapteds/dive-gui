@@ -701,5 +701,11 @@ export {
   SOLVER_CATALOG,
   CONFIGURABLE_SOLVER_IDS,
   isConfigurableSolver,
+  TURBULENCE_MODELS,
 } from '@dive/shared';
-export type { SolverSpec, SolverParamDef, ConfigurableSolverId } from '@dive/shared';
+export type {
+  SolverSpec,
+  SolverParamDef,
+  ConfigurableSolverId,
+  TurbulenceModelSpec,
+} from '@dive/shared';

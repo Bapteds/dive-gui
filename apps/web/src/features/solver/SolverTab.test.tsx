@@ -72,7 +72,7 @@ beforeEach(() => {
 });
 
 describe('SolverTab', () => {
-  it('shows the not-runnable gate, lists missing files, and triggers scaffold', async () => {
+  it('walks the setup wizard (solver -> turbulence -> generate) and scaffolds + syncs', async () => {
     vi.mocked(api.getRunnable).mockResolvedValue({
       hasMesh: true,
       missingMesh: [],
@@ -89,17 +89,19 @@ describe('SolverTab', () => {
 
     renderTab();
 
-    expect(await screen.findByText(/not ready to run/i)).toBeInTheDocument();
-    expect(screen.getByText('constant/transportProperties')).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole('button', { name: /generate solver setup/i }));
-    // Steady simpleFoam is the default archetype in the picker.
-    await waitFor(() => expect(api.scaffoldSolver).toHaveBeenCalledWith('p1', 'simpleFoam'));
+    // Step 1 (solver) opens; advance to step 2 (turbulence) and generate.
+    expect(await screen.findByText(/set up the solver/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /next/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /generate solver setup/i }));
+    // Defaults: steady simpleFoam + kOmegaSST.
+    await waitFor(() =>
+      expect(api.scaffoldSolver).toHaveBeenCalledWith('p1', 'simpleFoam', 'kOmegaSST'),
+    );
     // The "apply boundary" checkbox is on by default, so boundaries are synced too.
     await waitFor(() => expect(api.syncBoundaries).toHaveBeenCalledWith('p1'));
   });
 
-  it('scaffolds the transient solver when the pimpleFoam archetype is picked', async () => {
+  it('scaffolds the solver + turbulence model chosen across the two wizard steps', async () => {
     vi.mocked(api.getRunnable).mockResolvedValue({
       hasMesh: true,
       missingMesh: [],
@@ -116,11 +118,15 @@ describe('SolverTab', () => {
 
     renderTab();
 
-    // Choose the transient incompressible (pimpleFoam) archetype, then generate.
-    // The matcher is specific: there is now also a transient compressible solver.
+    // Step 1: pick the transient incompressible (pimpleFoam) archetype, then Next.
     await userEvent.click(await screen.findByRole('radio', { name: /transient, incompressible/i }));
+    await userEvent.click(screen.getByRole('button', { name: /next/i }));
+    // Step 2: pick Spalart-Allmaras, then generate.
+    await userEvent.click(await screen.findByRole('radio', { name: /spalart/i }));
     await userEvent.click(screen.getByRole('button', { name: /generate solver setup/i }));
-    await waitFor(() => expect(api.scaffoldSolver).toHaveBeenCalledWith('p1', 'pimpleFoam'));
+    await waitFor(() =>
+      expect(api.scaffoldSolver).toHaveBeenCalledWith('p1', 'pimpleFoam', 'SpalartAllmaras'),
+    );
   });
 
   it('shows the run config + empty history and starts a run when runnable', async () => {

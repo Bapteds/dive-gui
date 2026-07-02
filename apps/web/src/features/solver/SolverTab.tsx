@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { FileWarning, RotateCcw, Square, Wrench } from 'lucide-react';
+import { RotateCcw, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/sonner';
 import { ApiError } from '@/lib/api/client';
@@ -11,19 +11,17 @@ import type {
   RunSummary,
 } from '@/lib/api/types';
 import { ResidualChart } from './ResidualChart';
-import { SolverPicker } from './SolverPicker';
+import { SolverSetupWizard } from './SolverSetupWizard';
 import { SolverConfigPanel } from './SolverConfigPanel';
 import { RunHistory } from './RunHistory';
 import { RunLog } from './RunLog';
 import { RunStatusBadge } from './RunStatusBadge';
 import { runStatusMeta } from './runStatusMeta';
-import { useSyncBoundaries } from '@/features/projects/useCaseFiles';
 import {
   isRunActive,
   useRunLogQuery,
   useRunnableQuery,
   useRunsQuery,
-  useScaffoldSolver,
   useStartRun,
   useStopRun,
 } from './useRuns';
@@ -60,7 +58,9 @@ export function SolverTab({ projectId }: { projectId: string }) {
   }
 
   if (!runnable.data.runnable) {
-    return <RunnableGate projectId={projectId} missingFiles={runnable.data.missingFiles} />;
+    return (
+      <SolverSetupWizard projectId={projectId} missingFiles={runnable.data.missingFiles} />
+    );
   }
 
   return <RunnablePanel projectId={projectId} solver={runnable.data.solver} />;
@@ -78,86 +78,6 @@ function SolverSkeleton() {
       <div className="h-10 w-48 animate-pulse rounded-sm bg-bg" />
       <div className="h-56 animate-pulse rounded-md bg-bg" />
       <div className="h-24 animate-pulse rounded-md bg-bg" />
-    </div>
-  );
-}
-
-/** Not-runnable gate: explain what is missing and offer to generate it. */
-function RunnableGate({ projectId, missingFiles }: { projectId: string; missingFiles: string[] }) {
-  const scaffold = useScaffoldSolver(projectId);
-  const syncBoundaries = useSyncBoundaries(projectId);
-  // The solver to scaffold for. Steady simpleFoam is the sensible default; a
-  // transient case is one click away via the picker.
-  const [solver, setSolver] = useState<ConfigurableSolverId>('simpleFoam');
-  // Default on: a polyMesh given a template or default files usually needs its
-  // boundaryFields aligned to the mesh patches (names + types) to actually run.
-  const [applyBoundaries, setApplyBoundaries] = useState(true);
-  const pending = scaffold.isPending || syncBoundaries.isPending;
-
-  const handleMakeRunnable = async () => {
-    try {
-      await scaffold.mutateAsync(solver);
-      if (applyBoundaries) {
-        await syncBoundaries.mutateAsync();
-      }
-      toast.success('Solver files generated. The case is ready to run.');
-    } catch (err) {
-      toast.error(
-        err instanceof ApiError ? err.message : 'Something went wrong. Please try again.',
-      );
-    }
-  };
-
-  return (
-    <div className="flex max-w-2xl flex-col items-start gap-4 rounded-md border border-border bg-surface p-6 shadow-sm">
-      <div className="flex items-center gap-2">
-        <FileWarning className="size-5 text-cta" strokeWidth={1.75} aria-hidden="true" />
-        <h2 className="text-base font-semibold text-text">This case is not ready to run</h2>
-      </div>
-      <p className="text-sm text-text-secondary">
-        Pick the solver that matches your case, then generate the solver files and the controlDict
-        application it needs. You can refine every value afterwards in the editor.
-      </p>
-
-      <SolverPicker value={solver} onChange={setSolver} disabled={pending} />
-
-      {missingFiles.length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          <p className="text-xs font-medium text-text-secondary">Missing files</p>
-          <ul className="flex flex-wrap gap-1.5">
-            {missingFiles.map((file) => (
-              <li
-                key={file}
-                className="rounded-sm border border-border bg-bg px-2 py-0.5 font-mono text-xs text-text-secondary"
-                translate="no"
-              >
-                {file}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <label className="flex items-start gap-2">
-        <input
-          type="checkbox"
-          checked={applyBoundaries}
-          onChange={(event) => setApplyBoundaries(event.target.checked)}
-          className="mt-0.5 size-4 shrink-0 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
-        />
-        <span className="text-sm text-text">
-          Apply the boundary type and name to the 0/ fields
-          <span className="block text-xs text-text-secondary">
-            Rewrites each field&apos;s boundaryField to match the mesh patches (needed after a
-            polyMesh import with a template or default files).
-          </span>
-        </span>
-      </label>
-
-      <Button variant="primary" loading={pending} onClick={() => void handleMakeRunnable()}>
-        <Wrench strokeWidth={1.75} aria-hidden="true" />
-        Generate solver setup
-      </Button>
     </div>
   );
 }

@@ -8,6 +8,7 @@
 import {
   EDITABLE_FILE_MAX_BYTES,
   SOLVER_CATALOG,
+  TURBULENCE_MODELS,
   isConfigurableSolver,
   type ConfigurableSolverId,
 } from '@dive/shared';
@@ -39,6 +40,7 @@ import {
   rebuildFieldBoundary,
   renderBaseFile,
   renderSolverFile,
+  renderTurbulenceProperties,
   setApplication,
   type BoundaryPatch,
 } from '../../lib/openfoamCase';
@@ -391,6 +393,7 @@ export async function scaffoldSolver(
   viewer: Viewer,
   projectId: string,
   solver: ConfigurableSolverId = 'simpleFoam',
+  turbulence?: string,
 ): Promise<ScaffoldSolverResult> {
   await assertProjectVisible(viewer, projectId);
 
@@ -433,6 +436,32 @@ export async function scaffoldSolver(
     const content = controlDict.toString('utf8');
     const next = setApplication(content, solver);
     if (next !== content) await writeCaseFile(projectId, 'system/controlDict', next);
+  }
+
+  // Turbulence fields for models beyond the k-omega default: writing 0/epsilon and
+  // 0/nuTilda (when missing) lets the user pick any offered model (k-epsilon family
+  // or Spalart-Allmaras) without a broken case. A model ignores the fields it does
+  // not read, so these extras are harmless for k-omega models.
+  for (const file of ['0/epsilon', '0/nuTilda'] as const) {
+    if (await caseFileExists(projectId, file)) continue;
+    await writeCaseFile(projectId, file, renderSolverFile(solver, file, patches));
+    created.push(file);
+  }
+
+  // Apply the chosen turbulence model (wizard step 2) over the scaffolded default.
+  // When absent (e.g. a "change solver" call) turbulenceProperties is left untouched.
+  if (turbulence) {
+    const model = TURBULENCE_MODELS.find((entry) => entry.id === turbulence);
+    if (model) {
+      const content = renderTurbulenceProperties(model.simulationType, model.id);
+      const existing = await readCaseFile(projectId, 'constant/turbulenceProperties');
+      if (!existing || existing.toString('utf8') !== content) {
+        await writeCaseFile(projectId, 'constant/turbulenceProperties', content);
+        if (!created.includes('constant/turbulenceProperties')) {
+          created.push('constant/turbulenceProperties');
+        }
+      }
+    }
   }
 
   const [runnable, entries] = await Promise.all([

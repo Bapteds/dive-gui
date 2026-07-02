@@ -976,6 +976,74 @@ export const SOLVER_CATALOG: Record<ConfigurableSolverId, SolverSpec> = {
 export const SOLVER_SPECS: SolverSpec[] = CONFIGURABLE_SOLVER_IDS.map((id) => SOLVER_CATALOG[id]);
 
 /**
+ * One turbulence model offered in the setup wizard's second step. `simulationType`
+ * is what goes into constant/turbulenceProperties: `laminar` disables turbulence
+ * (the RAS/RASModel entry is then irrelevant); `RAS` writes RAS.RASModel = `id`.
+ * These models apply to every incompressible and compressible RANS solver here.
+ */
+export interface TurbulenceModelSpec {
+  /** OpenFOAM RAS.RASModel token, or 'laminar' for no turbulence model. */
+  id: string;
+  /** Short human label shown on the card. */
+  label: string;
+  /** One-line "when to use this" summary. */
+  summary: string;
+  /** simulationType written to turbulenceProperties. */
+  simulationType: 'laminar' | 'RAS';
+}
+
+/** Turbulence models offered by the setup wizard (kOmegaSST first as the default). */
+export const TURBULENCE_MODELS: TurbulenceModelSpec[] = [
+  {
+    id: 'kOmegaSST',
+    label: 'k-omega SST',
+    summary: 'Robust all-rounder for wall-bounded flow and adverse pressure gradients.',
+    simulationType: 'RAS',
+  },
+  {
+    id: 'kEpsilon',
+    label: 'k-epsilon',
+    summary: 'Classic model for fully turbulent free-shear and internal flows.',
+    simulationType: 'RAS',
+  },
+  {
+    id: 'kOmega',
+    label: 'k-omega',
+    summary: 'Strong near walls and at low Reynolds number; sensitive to the freestream.',
+    simulationType: 'RAS',
+  },
+  {
+    id: 'realizableKE',
+    label: 'Realizable k-epsilon',
+    summary: 'A k-epsilon variant that does better on swirling and separated flow.',
+    simulationType: 'RAS',
+  },
+  {
+    id: 'SpalartAllmaras',
+    label: 'Spalart-Allmaras',
+    summary: 'One-equation model tuned for external aerodynamics.',
+    simulationType: 'RAS',
+  },
+  {
+    id: 'laminar',
+    label: 'Laminar (no turbulence)',
+    summary: 'No turbulence model. For low Reynolds number or creeping flow.',
+    simulationType: 'laminar',
+  },
+];
+
+/** The turbulence model ids, as a literal tuple for zod validation. Matches TURBULENCE_MODELS. */
+export const TURBULENCE_MODEL_IDS = [
+  'kOmegaSST',
+  'kEpsilon',
+  'kOmega',
+  'realizableKE',
+  'SpalartAllmaras',
+  'laminar',
+] as const;
+export type TurbulenceModelId = (typeof TURBULENCE_MODEL_IDS)[number];
+
+/**
  * Residual field names the chart plots, shared so the parser, the legend, and
  * the per-series colors stay in sync. The parser stays tolerant to others; this
  * list only drives display ordering and the known palette. Ux/Uy/Uz are kept

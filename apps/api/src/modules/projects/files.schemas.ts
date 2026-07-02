@@ -1,18 +1,19 @@
 // Zod schemas for the case-file content endpoints.
 import { z } from 'zod';
-import { CONFIGURABLE_SOLVER_IDS } from '@dive/shared';
+import { CONFIGURABLE_SOLVER_IDS, TURBULENCE_MODEL_IDS } from '@dive/shared';
 
 /**
- * Body for "Make runnable" (POST /runnable/scaffold). `solver` is optional and
- * bounded to the solvers the app can scaffold (simpleFoam / pimpleFoam); it
- * defaults to simpleFoam server-side when omitted. The preprocess tolerates a
- * bodiless POST (Express leaves req.body undefined) by treating it as `{}`, while
- * still rejecting an out-of-set solver value.
+ * Body for "Make runnable" (POST /runnable/scaffold). Both fields are optional and
+ * bounded: `solver` to the scaffoldable solvers (defaults to simpleFoam server-side),
+ * `turbulence` to the offered turbulence models (applied over the scaffold default
+ * when present). The preprocess tolerates a bodiless POST (Express leaves req.body
+ * undefined) by treating it as `{}`, while still rejecting out-of-set values.
  */
 export const scaffoldSolverSchema = z.preprocess(
   (value) => value ?? {},
   z.object({
     solver: z.enum(CONFIGURABLE_SOLVER_IDS).optional(),
+    turbulence: z.enum(TURBULENCE_MODEL_IDS).optional(),
   }),
 );
 

@@ -265,6 +265,40 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
     expect(schemes).toContain('div(phi,e)');
   });
 
+  it('applies the chosen turbulence model and writes its fields (kEpsilon)', async () => {
+    const { auth, id } = await makeProject('runnable-turb@x.test');
+    await writeMesh(id);
+
+    const scaffold = await request(app)
+      .post(`/api/v1/projects/${id}/runnable/scaffold`)
+      .set('Authorization', auth)
+      .send({ solver: 'simpleFoam', turbulence: 'kEpsilon' });
+    expect(scaffold.status).toBe(201);
+    expect(scaffold.body.runnable.runnable).toBe(true);
+
+    const turb = (await readCaseFile(id, 'constant/turbulenceProperties'))?.toString('utf8') ?? '';
+    expect(turb).toMatch(/RASModel\s+kEpsilon/);
+    // The k-epsilon field is written so the model has what it needs (harmless for k-omega).
+    expect((await readCaseFile(id, '0/epsilon'))?.toString('utf8') ?? '').toContain(
+      '[0 2 -3 0 0 0 0]',
+    );
+  });
+
+  it('writes a laminar turbulenceProperties (no RAS block) when laminar is chosen', async () => {
+    const { auth, id } = await makeProject('runnable-laminar@x.test');
+    await writeMesh(id);
+
+    const scaffold = await request(app)
+      .post(`/api/v1/projects/${id}/runnable/scaffold`)
+      .set('Authorization', auth)
+      .send({ solver: 'simpleFoam', turbulence: 'laminar' });
+    expect(scaffold.status).toBe(201);
+
+    const turb = (await readCaseFile(id, 'constant/turbulenceProperties'))?.toString('utf8') ?? '';
+    expect(turb).toMatch(/simulationType\s+laminar/);
+    expect(turb).not.toMatch(/RASModel/);
+  });
+
   it('retargets a generic controlDict (application foamRun) to simpleFoam', async () => {
     const { auth, id } = await makeProject('runnable-foamrun@x.test');
     await writeMesh(id);

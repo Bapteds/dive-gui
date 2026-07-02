@@ -336,15 +336,16 @@ export async function getRunnable(id: string): Promise<RunnableCheck> {
   return data.runnable;
 }
 
-/** Generate the files a case needs to be runnable by `solver` (the "Make runnable" action). */
+/** Generate the files a case needs to be runnable by `solver` + turbulence model. */
 export async function scaffoldSolver(
   id: string,
   solver?: ConfigurableSolverId,
+  turbulence?: string,
 ): Promise<ScaffoldSolverResponse> {
-  return apiClient.post<ScaffoldSolverResponse>(
-    `/projects/${id}/runnable/scaffold`,
-    solver ? { solver } : {},
-  );
+  const body: { solver?: ConfigurableSolverId; turbulence?: string } = {};
+  if (solver) body.solver = solver;
+  if (turbulence) body.turbulence = turbulence;
+  return apiClient.post<ScaffoldSolverResponse>(`/projects/${id}/runnable/scaffold`, body);
 }
 
 /** Apply the mesh boundary (patch names + types) to every 0/ field's boundaryField. */

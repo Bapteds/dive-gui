@@ -394,18 +394,36 @@ nu              [0 2 -1 0 0 0 0] 1e-05;
 ${FOAM_FOOTER}`;
 }
 
-/** constant/turbulenceProperties — RAS with the k-omega SST model. */
-function turbulenceProperties(): string {
+/**
+ * constant/turbulenceProperties for a chosen turbulence model. `laminar` writes
+ * only `simulationType laminar;` (no RAS block); any other id is written as a RAS
+ * model. Exported so "Make runnable" can apply the setup wizard's step-2 choice
+ * over the scaffolded default.
+ */
+export function renderTurbulenceProperties(
+  simulationType: 'laminar' | 'RAS',
+  rasModel: string,
+): string {
+  if (simulationType === 'laminar') {
+    return `${foamHeader('dictionary', 'turbulenceProperties', 'constant')}
+simulationType  laminar;
+${FOAM_FOOTER}`;
+  }
   return `${foamHeader('dictionary', 'turbulenceProperties', 'constant')}
 simulationType  RAS;
 
 RAS
 {
-    RASModel        kOmegaSST;
+    RASModel        ${rasModel};
     turbulence      on;
     printCoeffs     on;
 }
 ${FOAM_FOOTER}`;
+}
+
+/** constant/turbulenceProperties — RAS with the k-omega SST model (scaffold default). */
+function turbulenceProperties(): string {
+  return renderTurbulenceProperties('RAS', 'kOmegaSST');
 }
 
 /** 0/k — turbulent kinetic energy; boundaryField covers every discovered patch. */
@@ -433,6 +451,28 @@ ${FOAM_FOOTER}`;
 /** 0/nut — turbulent viscosity (computed by the model); boundaryField per patch. */
 function fieldNut(patches: string[]): string {
   return `${foamHeader('volScalarField', 'nut', '0')}
+dimensions      [0 2 -1 0 0 0 0];
+
+internalField   uniform 0;
+
+${boundaryFieldBlock(patches)}
+${FOAM_FOOTER}`;
+}
+
+/** 0/epsilon — turbulent dissipation rate (k-epsilon family); boundaryField per patch. */
+function fieldEpsilon(patches: string[]): string {
+  return `${foamHeader('volScalarField', 'epsilon', '0')}
+dimensions      [0 2 -3 0 0 0 0];
+
+internalField   uniform 0.1;
+
+${boundaryFieldBlock(patches)}
+${FOAM_FOOTER}`;
+}
+
+/** 0/nuTilda — Spalart-Allmaras transported variable; boundaryField per patch. */
+function fieldNuTilda(patches: string[]): string {
+  return `${foamHeader('volScalarField', 'nuTilda', '0')}
 dimensions      [0 2 -1 0 0 0 0];
 
 internalField   uniform 0;
@@ -971,6 +1011,10 @@ export function renderSolverFile(
       return fieldOmega(patches);
     case '0/nut':
       return fieldNut(patches);
+    case '0/epsilon':
+      return fieldEpsilon(patches);
+    case '0/nuTilda':
+      return fieldNuTilda(patches);
     case '0/alphat':
       return fieldAlphat(patches);
     default:
