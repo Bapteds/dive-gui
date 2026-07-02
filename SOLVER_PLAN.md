@@ -285,4 +285,84 @@ Parallèle/MPI (`decomposePar`/`mpirun`/`reconstructPar`, `MPI_BIN` réservé) ;
 **API (nouveaux)** : `lib/streamRunner.ts`, `lib/residualParser.ts`, `lib/runStorage.ts`, `modules/projects/runs.{service,controller,schemas}.ts`, `tests/{solver,residualParser}.test.ts`. **API (modifiés)** : `prisma/schema.prisma` (+migration), `config/env.ts`, `.env.example`, `vitest.config.ts`, `modules/projects/projects.routes.ts`, `modules/projects/files.service.ts` (gate runnable), `server.ts` (réconciliation boot). **Shared** : `packages/shared/src/index.ts`. **Web (nouveaux)** : `features/solver/{useRuns.ts,SolverTab.tsx,ResidualChart.tsx,RunHistory.tsx,RunLog.tsx,solver.test.tsx}`, `lib/api/runs.ts`. **Web (modifiés)** : `lib/api/{types.ts,client.ts}` (stream reader), `pages/ProjectDetailPage.tsx` (3e onglet). **Docs** : ce fichier + `PLAN.md` §10 (par slice) + backlog mémoire (à passer « in progress » quand Slice 1 atterrit).
 
 ---
-*Fin du SOLVER_PLAN.md — à relire avant de commencer l'implémentation. Recommandation : démarrer par la Slice 0 (runnabilité via template), qui débloque tout le reste.*
+*Fin du SOLVER_PLAN.md v1 (exécution) — livré. La suite ci-dessous est le plan v2 (configuration).*
+
+---
+
+# SOLVER_PLAN v2 — Configuration du solveur en Easy / Advanced (multi-solveur)
+
+> v1 a livré **l'exécution** d'un run (spawn, log persistant, résidus live, stop, historique) — mais figée sur **un seul solveur** (`simpleFoam`, k-omegaSST codé en dur) et une **config en lecture seule**. v2 apporte le verbe manquant côté **mise en place** : choisir le **bon solveur selon le cas** et régler ses paramètres via le **même principe Easy / Advanced** que l'éditeur de fichiers (`foamFieldCatalog` + `CaseFileForm` + `ModeToggle`), mais **centré solveur et transverse aux fichiers** (un seul formulaire écrit dans controlDict + transportProperties + turbulenceProperties + fvSolution + 0/…).
+> Statut : **PLAN**. Chaque slice est livrable, gates verts, un commit par slice (règle mémoire « commit each change »), log en bas de `PLAN.md`.
+
+## v2.0 — Rappels de flavour (ESI OpenFOAM.com v2406)
+Cible déploiement = **ESI v2406** (`/usr/lib/openfoam/openfoam2406`) → **solveurs classiques invoqués directement** (`simpleFoam -case …`, `pimpleFoam -case …`), PAS `foamRun -solver`. L'invocation actuelle (`planOpenfoamCommand(solver, ['-case', dir])`) est **déjà correcte** et se généralise pour tout binaire classique sans changement. `foamRun` (openfoam.org) reste dans `SOLVER_IDS` comme **placeholder générique NON runnable** (le scaffold de conversion l'écrit ; le gate le refuse — comportement testé, à préserver) : il n'entre **pas** dans le catalogue configurable.
+
+## v2.1 — Le catalogue solveur (source unique, `@dive/shared`)
+Un catalogue partagé pilote **à la fois** le backend (fichiers requis pour le gate, rendu du scaffold) et le frontend (sélecteur + formulaire Easy). Modèle :
+```ts
+export interface SolverParamDef {
+  key: string; label: string; help?: string;
+  kind: 'enum' | 'scalar' | 'integer' | 'bool' | 'vector' | 'text';
+  options?: string[];
+  file: string;      // ex. 'system/controlDict'
+  path: string[];    // chemin dict dans ce fichier, ex. ['endTime'] ou ['SIMPLE','residualControl','p']
+}
+export interface SolverSpec {
+  id: ConfigurableSolverId;                 // 'simpleFoam' | 'pimpleFoam'
+  label: string;                            // « Steady-state, incompressible (RANS) »
+  summary: string;                          // une ligne « quand l'utiliser »
+  regime: 'steady' | 'transient';
+  family: 'incompressible' | 'compressible' | 'multiphase' | 'potential';
+  requiredFiles: string[];                  // au-delà du maillage (drive le gate + le scaffold)
+  easyParams: SolverParamDef[];             // knobs curatés transverses
+}
+export const CONFIGURABLE_SOLVER_IDS = ['simpleFoam', 'pimpleFoam'] as const;
+export const SOLVER_CATALOG: Record<ConfigurableSolverId, SolverSpec> = { … };
+export const SOLVER_IDS = ['simpleFoam', 'pimpleFoam', 'foamRun'] as const; // noms d'app acceptés (foamRun = légacy)
+```
+**Catalogue initial (incompressible d'abord — DIVE = turbines hydrauliques submersibles, eau, machine tournante) :**
+- **`simpleFoam`** — *Steady-state, incompressible (RANS)*. `regime:'steady'`. Convergence par `residualControl`. Le MVP existant.
+- **`pimpleFoam`** — *Transient, incompressible (URANS)*. `regime:'transient'`. Tourne jusqu'à `endTime` → statut **`completed`** (jamais `converged`, honnête). `deltaT`/`adjustTimeStep`/`maxCo` en plus.
+
+Les deux partagent **le même jeu de fichiers requis** (`SOLVER_FILE_PATHS` actuel : trio system + transport + turbulence + `0/{U,p,k,omega,nut}`) ; seul **le contenu** diffère (steadyState vs Euler, `SIMPLE` vs `PIMPLE`, controlDict steady vs transient). Généralisation propre, zéro nouveau fichier.
+
+**`easyParams` — la « sélection des choses utiles » (transverse, un formulaire) :**
+| Knob | kind | file → path | commun / spécifique |
+|---|---|---|---|
+| Turbulence model | enum (kOmegaSST, kEpsilon, kOmega, realizableKE, SpalartAllmaras) | `constant/turbulenceProperties` → RAS.RASModel | commun |
+| Kinematic viscosity (nu) | dimensioned | `constant/transportProperties` → nu | commun |
+| Initial velocity | vector/text | `0/U` → internalField | commun |
+| End time / iterations | scalar | `system/controlDict` → endTime | commun |
+| Write interval | scalar | `system/controlDict` → writeInterval | commun |
+| Convergence residual (p) | scalar | `system/fvSolution` → SIMPLE.residualControl.p | simpleFoam |
+| Pressure relaxation | scalar | `system/fvSolution` → relaxationFactors.fields.p | simpleFoam |
+| Time step (deltaT) | scalar | `system/controlDict` → deltaT | pimpleFoam |
+| Adjust time step | bool (yes/no) | `system/controlDict` → adjustTimeStep | pimpleFoam |
+| Max Courant (maxCo) | scalar | `system/controlDict` → maxCo | pimpleFoam |
+
+## v2.2 — Backend : scaffold + gate paramétrés par solveur
+- **`openfoamCase.ts`** : ajouter les renderers `pimpleFoam*` (controlDict transitoire : `adjustTimeStep yes; maxCo 1; writeControl adjustableRunTime;` ; fvSchemes `ddtSchemes default Euler;` + `div(phi,U) Gauss linearUpwind grad(U)` ; fvSolution `PIMPLE { nOuterCorrectors 1; nCorrectors 2; nNonOrthogonalCorrectors 0; }` + solveurs `p`/`pFinal`). Transport/turbulence/0-fields **réutilisés** tels quels. Signature : `renderSolverFile(solver: ConfigurableSolverId, path, patches)` ; `requiredFilesFor(solver)` (= `SOLVER_FILE_PATHS` pour les deux en v2).
+- **`files.service.ts`** : `computeRunnable(projectId)` **résout le solveur depuis `controlDict.application`** ; si `∈ SOLVER_CATALOG` → gate sur *ses* `requiredFiles` + *ses* marqueurs numériques (simpleFoam : pRefCell + div(phi,U) + app + endTime>1 ; pimpleFoam : pRefCell + div(phi,U) + bloc `PIMPLE` + app + endTime présent) ; sinon (foamRun/vide) → **non runnable** (préserve le test « foamRun not runnable »). `scaffoldSolver(viewer, projectId, solver='simpleFoam')`.
+- **Endpoints** : `POST /:id/runnable/scaffold` accepte `{ solver? }` (zod `CONFIGURABLE_SOLVER_IDS`). `POST /:id/runs` accepte déjà `{ solver? }` — inchangé. `GET /:id/runnable` renvoie déjà `solver`.
+- **`resolveSolver`** : `simpleFoam`/`pimpleFoam` ∈ `SOLVER_IDS` → passent le gate d'acceptation ; l'invocation devient `pimpleFoam -case …` **gratuitement**.
+- **Résidus/stop/statuts** : **inchangés**. `pimpleFoam` sans bannière « converged » → `completed` (déjà géré par `classifyExit`). `stopAt writeNow` marche pour les deux.
+
+## v2.3 — Frontend : onglet Solver en Easy / Advanced (séquence skills §0 AVANT tout JSX)
+- **Gate « non runnable »** → carte **« Set up solver »** avec `ModeToggle` :
+  - *Easy* : `<select>` du catalogue (labels groupés Steady / Transient) → « Generate <solver> setup » (scaffold + option sync boundaries, comme aujourd'hui).
+  - *Advanced* : champ **application libre** + « Scaffold base files » + lien vers l'éditeur de fichiers (Detail) pour tout régler à la main.
+- **Panneau runnable** : la carte **RunConfig lecture seule devient « Solver configuration »** avec `ModeToggle` :
+  - *Easy* : **sélecteur de solveur** (changer → re-scaffold) + les `easyParams` du solveur courant rendus en lignes de formulaire (dropdown/numérique), **chaque édition = un `setFoamValue` splice + save** du fichier ciblé (réutilise `foamModel` + la mutation d'écriture existante). C'est « la sélection des choses utiles ».
+  - *Advanced* : application libre + éditeurs bruts (`CaseFileEditor`) des fichiers solveur, ou lien Detail. « saisir ce qu'il veut ».
+- Réutilise **`ModeToggle`, `CaseFileForm`/`CaseFileEditor`, `foamModel.setFoamValue`, useCaseFiles/useSave**. Tokens only, 1 CTA orange/zone (Run reste le seul), Stop danger-outline, 0 em-dash, A11y clavier + ARIA, tous les états.
+
+## v2.4 — Slices (livrables, gates verts, 1 commit chacun)
+- **Slice A — Catalogue partagé** : types + `SOLVER_CATALOG` (simpleFoam, pimpleFoam) + `CONFIGURABLE_SOLVER_IDS` + `SOLVER_IDS += pimpleFoam`. `build:shared`. *(Additif, zéro changement de comportement ; débloque B et C.)*
+- **Slice B — Backend multi-solveur** : renderers pimpleFoam + `renderSolverFile(solver,…)` + gate/scaffold résolus par solveur + endpoint scaffold `{ solver }`. Tests : runnable + scaffold pour les DEUX solveurs, foamRun toujours non runnable, pimpleFoam → completed.
+- **Slice C — Frontend Easy/Advanced** : séquence skills §0, puis sélecteur + formulaire Easy transverse + Advanced. Tests web. Review `web-design-guidelines`.
+
+## v2.5 — Différé (explicite, extensions du même catalogue)
+Compressible (`rhoSimpleFoam`/`rhoPimpleFoam` : `thermophysicalProperties` + champ `T` + `p` en Pa) ; multiphase VOF (`interFoam` : deux phases + `g` + `alpha.*`/`p_rgh`) ; **MRF / rotor tournant** (`constant/MRFProperties`, `family` inchangée — modificateur, pas un nouveau solveur) ; LES (`turbulenceProperties.simulationType LES`) ; parallèle/MPI (déjà différé v1). Chacun = 1 entrée catalogue + 1 set de renderers + 1 slice.
+
+---
+*Fin du SOLVER_PLAN v2. Démarrer par la Slice A (catalogue partagé), additive et sans risque.*
