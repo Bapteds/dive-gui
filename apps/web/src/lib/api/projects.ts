@@ -40,6 +40,7 @@ import type {
   ScaffoldCaseResponse,
   ScaffoldSolverResponse,
   SolverId,
+  ConfigurableSolverId,
   VerifyCaseResponse,
 } from './types';
 
@@ -335,9 +336,15 @@ export async function getRunnable(id: string): Promise<RunnableCheck> {
   return data.runnable;
 }
 
-/** Generate the missing simpleFoam files (the "Make runnable" action). */
-export async function scaffoldSolver(id: string): Promise<ScaffoldSolverResponse> {
-  return apiClient.post<ScaffoldSolverResponse>(`/projects/${id}/runnable/scaffold`);
+/** Generate the files a case needs to be runnable by `solver` (the "Make runnable" action). */
+export async function scaffoldSolver(
+  id: string,
+  solver?: ConfigurableSolverId,
+): Promise<ScaffoldSolverResponse> {
+  return apiClient.post<ScaffoldSolverResponse>(
+    `/projects/${id}/runnable/scaffold`,
+    solver ? { solver } : {},
+  );
 }
 
 /** Apply the mesh boundary (patch names + types) to every 0/ field's boundaryField. */

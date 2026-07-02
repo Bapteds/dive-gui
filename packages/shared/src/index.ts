@@ -737,7 +737,7 @@ export const SOLVER_CATALOG: Record<ConfigurableSolverId, SolverSpec> = {
   simpleFoam: {
     id: 'simpleFoam',
     label: 'Steady-state, incompressible (RANS)',
-    summary: 'Time-averaged flow that settles to a steady solution — the usual first choice.',
+    summary: 'Time-averaged flow that settles to a steady solution. Usually the first choice.',
     regime: 'steady',
     family: 'incompressible',
     requiredFiles: [...INCOMPRESSIBLE_RANS_FILES],
@@ -766,7 +766,7 @@ export const SOLVER_CATALOG: Record<ConfigurableSolverId, SolverSpec> = {
   pimpleFoam: {
     id: 'pimpleFoam',
     label: 'Transient, incompressible (URANS)',
-    summary: 'Time-accurate unsteady flow — for vortex shedding, rotor-stator, startup transients.',
+    summary: 'Time-accurate unsteady flow, for vortex shedding, rotor-stator and startup transients.',
     regime: 'transient',
     family: 'incompressible',
     requiredFiles: [...INCOMPRESSIBLE_RANS_FILES],

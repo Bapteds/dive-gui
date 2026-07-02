@@ -8,6 +8,7 @@ import {
   stopRun,
 } from '@/lib/api/projects';
 import type {
+  ConfigurableSolverId,
   RunLogPayload,
   RunStatus,
   RunSummary,
@@ -54,11 +55,11 @@ export function useRunnableQuery(projectId: string, enabled = true) {
   });
 }
 
-/** Generate the missing simpleFoam files (the "Make runnable" action). */
+/** Generate the files a case needs to be runnable by a chosen solver ("Make runnable"). */
 export function useScaffoldSolver(projectId: string) {
   const queryClient = useQueryClient();
-  return useMutation<ScaffoldSolverResponse>({
-    mutationFn: () => scaffoldSolver(projectId),
+  return useMutation<ScaffoldSolverResponse, Error, ConfigurableSolverId | undefined>({
+    mutationFn: (solver) => scaffoldSolver(projectId, solver),
     onSuccess: (result) => {
       queryClient.setQueryData(runnableQueryKey(projectId), result.runnable);
       // New case files were written; keep the case tree / summary in sync.

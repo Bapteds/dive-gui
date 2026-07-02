@@ -3,8 +3,14 @@ import { FileWarning, Play, RotateCcw, Square, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/sonner';
 import { ApiError } from '@/lib/api/client';
-import type { ResidualSample, RunStatus, RunSummary } from '@/lib/api/types';
+import type {
+  ConfigurableSolverId,
+  ResidualSample,
+  RunStatus,
+  RunSummary,
+} from '@/lib/api/types';
 import { ResidualChart } from './ResidualChart';
+import { SolverPicker } from './SolverPicker';
 import { RunHistory } from './RunHistory';
 import { RunLog } from './RunLog';
 import { RunStatusBadge } from './RunStatusBadge';
@@ -78,6 +84,9 @@ function SolverSkeleton() {
 function RunnableGate({ projectId, missingFiles }: { projectId: string; missingFiles: string[] }) {
   const scaffold = useScaffoldSolver(projectId);
   const syncBoundaries = useSyncBoundaries(projectId);
+  // The solver to scaffold for. Steady simpleFoam is the sensible default; a
+  // transient case is one click away via the picker.
+  const [solver, setSolver] = useState<ConfigurableSolverId>('simpleFoam');
   // Default on: a polyMesh given a template or default files usually needs its
   // boundaryFields aligned to the mesh patches (names + types) to actually run.
   const [applyBoundaries, setApplyBoundaries] = useState(true);
@@ -85,7 +94,7 @@ function RunnableGate({ projectId, missingFiles }: { projectId: string; missingF
 
   const handleMakeRunnable = async () => {
     try {
-      await scaffold.mutateAsync();
+      await scaffold.mutateAsync(solver);
       if (applyBoundaries) {
         await syncBoundaries.mutateAsync();
       }
@@ -104,23 +113,29 @@ function RunnableGate({ projectId, missingFiles }: { projectId: string; missingF
         <h2 className="text-base font-semibold text-text">This case is not ready to run</h2>
       </div>
       <p className="text-sm text-text-secondary">
-        This case needs its simpleFoam setup completed (solver files and the controlDict
-        application). Generate the missing pieces to make it runnable, then refine the values in
-        the editor.
+        Pick the solver that matches your case, then generate the solver files and the controlDict
+        application it needs. You can refine every value afterwards in the editor.
       </p>
+
+      <SolverPicker value={solver} onChange={setSolver} disabled={pending} />
+
       {missingFiles.length > 0 && (
-        <ul className="flex flex-wrap gap-1.5">
-          {missingFiles.map((file) => (
-            <li
-              key={file}
-              className="rounded-sm border border-border bg-bg px-2 py-0.5 font-mono text-xs text-text-secondary"
-              translate="no"
-            >
-              {file}
-            </li>
-          ))}
-        </ul>
+        <div className="flex flex-col gap-1.5">
+          <p className="text-xs font-medium text-text-secondary">Missing files</p>
+          <ul className="flex flex-wrap gap-1.5">
+            {missingFiles.map((file) => (
+              <li
+                key={file}
+                className="rounded-sm border border-border bg-bg px-2 py-0.5 font-mono text-xs text-text-secondary"
+                translate="no"
+              >
+                {file}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
+
       <label className="flex items-start gap-2">
         <input
           type="checkbox"
@@ -136,9 +151,10 @@ function RunnableGate({ projectId, missingFiles }: { projectId: string; missingF
           </span>
         </span>
       </label>
+
       <Button variant="primary" loading={pending} onClick={() => void handleMakeRunnable()}>
         <Wrench strokeWidth={1.75} aria-hidden="true" />
-        Make runnable for simpleFoam
+        Generate solver setup
       </Button>
     </div>
   );

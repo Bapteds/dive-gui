@@ -693,3 +693,13 @@ export interface RunLogPayload {
 }
 
 export type { RunStatus, SolverId, ResidualSample };
+
+// Solver catalog (single source of truth in @dive/shared) - drives the solver
+// picker and the easy-mode solver configuration form on the Solver tab.
+export {
+  SOLVER_SPECS,
+  SOLVER_CATALOG,
+  CONFIGURABLE_SOLVER_IDS,
+  isConfigurableSolver,
+} from '@dive/shared';
+export type { SolverSpec, SolverParamDef, ConfigurableSolverId } from '@dive/shared';

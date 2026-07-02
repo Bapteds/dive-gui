@@ -81,10 +81,34 @@ describe('SolverTab', () => {
     expect(await screen.findByText(/not ready to run/i)).toBeInTheDocument();
     expect(screen.getByText('constant/transportProperties')).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: /make runnable/i }));
-    await waitFor(() => expect(api.scaffoldSolver).toHaveBeenCalledWith('p1'));
+    await userEvent.click(screen.getByRole('button', { name: /generate solver setup/i }));
+    // Steady simpleFoam is the default archetype in the picker.
+    await waitFor(() => expect(api.scaffoldSolver).toHaveBeenCalledWith('p1', 'simpleFoam'));
     // The "apply boundary" checkbox is on by default, so boundaries are synced too.
     await waitFor(() => expect(api.syncBoundaries).toHaveBeenCalledWith('p1'));
+  });
+
+  it('scaffolds the transient solver when the pimpleFoam archetype is picked', async () => {
+    vi.mocked(api.getRunnable).mockResolvedValue({
+      hasMesh: true,
+      missingMesh: [],
+      missingFiles: ['0/k'],
+      runnable: false,
+      solver: null,
+    });
+    vi.mocked(api.scaffoldSolver).mockResolvedValue({
+      created: ['0/k'],
+      runnable: runnableYes,
+      entries: [],
+    });
+    vi.mocked(api.syncBoundaries).mockResolvedValue({ updated: [], entries: [] });
+
+    renderTab();
+
+    // Choose the transient (pimpleFoam) archetype, then generate.
+    await userEvent.click(await screen.findByRole('radio', { name: /transient/i }));
+    await userEvent.click(screen.getByRole('button', { name: /generate solver setup/i }));
+    await waitFor(() => expect(api.scaffoldSolver).toHaveBeenCalledWith('p1', 'pimpleFoam'));
   });
 
   it('shows the run config + empty history and starts a run when runnable', async () => {
