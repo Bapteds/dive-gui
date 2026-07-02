@@ -151,6 +151,27 @@ describe('SolverTab', () => {
     await waitFor(() => expect(api.startRun).toHaveBeenCalledWith('p1', undefined));
   });
 
+  it('applies a turbulence model through the scaffold from the config panel', async () => {
+    vi.mocked(api.getRunnable).mockResolvedValue(runnableYes);
+    vi.mocked(api.listRuns).mockResolvedValue([]);
+    vi.mocked(api.scaffoldSolver).mockResolvedValue({
+      created: [],
+      runnable: runnableYes,
+      entries: [],
+    });
+
+    renderTab();
+
+    // The turbulence control is a select of all models; changing it re-scaffolds
+    // (writes the RAS/LES/laminar block + the 0/ fields), not a raw RASModel splice.
+    const select = await screen.findByLabelText('Turbulence model');
+    await userEvent.selectOptions(select, 'kEpsilon');
+    await waitFor(() =>
+      expect(api.scaffoldSolver).toHaveBeenCalledWith('p1', 'simpleFoam', 'kEpsilon'),
+    );
+    expect(api.saveCaseFileContent).not.toHaveBeenCalled();
+  });
+
   it('renders the live status and the residual chart for an existing run', async () => {
     vi.mocked(api.getRunnable).mockResolvedValue(runnableYes);
     vi.mocked(api.listRuns).mockResolvedValue([convergedRun]);

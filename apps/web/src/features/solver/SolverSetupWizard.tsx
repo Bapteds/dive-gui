@@ -67,7 +67,11 @@ export function SolverSetupWizard({
   const solverInfo = SOLVER_LIBRARY.find((s) => s.id === solver);
   const solverLabel = solverInfo?.label ?? solver;
   const tier = SOLVER_CATALOG[solver]?.tier ?? 'base';
+  const regime = SOLVER_CATALOG[solver]?.regime ?? 'steady';
   const turbulenceLabel = TURBULENCE_MODELS.find((m) => m.id === turbulence)?.label ?? turbulence;
+  const lesOnSteady =
+    regime === 'steady' &&
+    TURBULENCE_MODELS.find((m) => m.id === turbulence)?.simulationType === 'LES';
 
   const handleGenerate = async () => {
     try {
@@ -155,6 +159,13 @@ export function SolverSetupWizard({
                 <dd className="font-medium text-text">{turbulenceLabel}</dd>
               </div>
             </dl>
+
+            {lesOnSteady && (
+              <p className="rounded-md bg-accent-tint px-3 py-2 text-xs text-text">
+                {turbulenceLabel} is an LES/DES model, which needs a transient solver. Go back and
+                pick a transient solver (e.g. pimpleFoam) to run it.
+              </p>
+            )}
 
             <label className="flex items-start gap-2">
               <input

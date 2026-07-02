@@ -9,6 +9,8 @@ import { getCaseFileContent } from '@/lib/api/projects';
 import {
   SOLVER_CATALOG,
   SOLVER_LIBRARY,
+  TURBULENCE_APPROACHES,
+  TURBULENCE_MODELS,
   isConfigurableSolver,
   type ConfigurableSolverId,
   type SolverId,
@@ -374,6 +376,20 @@ function SolverEasyForm({
   return (
     <div className="flex flex-col gap-4">
       {params.map((param) => {
+        // The turbulence model is applied through the scaffold (it must rewrite the
+        // whole RAS/LES/laminar block AND ensure the model's 0/ fields), not spliced
+        // as a bare RASModel value - so it gets a dedicated control.
+        if (param.key === 'rasModel') {
+          return (
+            <TurbulenceField
+              key={param.key}
+              projectId={projectId}
+              solver={solver}
+              content={contentByFile[param.file]}
+              disabled={disabled}
+            />
+          );
+        }
         const content = contentByFile[param.file];
         const value = content != null ? getFoamValue(parseFoamModel(content), param.path) ?? '' : '';
         return (
@@ -386,6 +402,116 @@ function SolverEasyForm({
           />
         );
       })}
+    </div>
+  );
+}
+
+/** Read the active turbulence model from turbulenceProperties (RAS / LES / laminar). */
+function currentTurbulenceModel(content: string): string {
+  const doc = parseFoamModel(content);
+  const simulationType = getFoamValue(doc, ['simulationType']);
+  if (simulationType === 'laminar') return 'laminar';
+  if (simulationType === 'LES') return getFoamValue(doc, ['LES', 'LESModel']) ?? '';
+  return getFoamValue(doc, ['RAS', 'RASModel']) ?? '';
+}
+
+/**
+ * The turbulence-model control. Unlike the other easy params (single-value splices),
+ * changing the turbulence model must rewrite the whole simulationType block (RAS vs
+ * LES vs laminar) AND ensure the model's 0/ fields exist - so it applies through the
+ * scaffold (same path the setup wizard uses), and offers every model, not just RAS.
+ */
+function TurbulenceField({
+  projectId,
+  solver,
+  content,
+  disabled,
+}: {
+  projectId: string;
+  solver: ConfigurableSolverId;
+  content: string | null;
+  disabled: boolean;
+}) {
+  const scaffold = useScaffoldSolver(projectId);
+  const current = content ? currentTurbulenceModel(content) : '';
+  const regime = SOLVER_CATALOG[solver]?.regime ?? 'steady';
+  const selected = TURBULENCE_MODELS.find((model) => model.id === current);
+  const lesOnSteady = selected?.simulationType === 'LES' && regime === 'steady';
+  const id = 'solver-turbulence';
+
+  const apply = async (model: string) => {
+    if (!model || model === current) return;
+    try {
+      await scaffold.mutateAsync({ solver, turbulence: model });
+      toast.success(`Turbulence model set to ${model}.`);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not apply the turbulence model.');
+    }
+  };
+
+  return (
+    <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)] sm:items-start sm:gap-3">
+      <div className="flex flex-col pt-1.5">
+        <label htmlFor={id} className="text-sm font-medium text-text">
+          Turbulence model
+        </label>
+        <span className="font-mono text-xs text-text-secondary" translate="no">
+          simulationType
+        </span>
+      </div>
+      <div className="flex flex-col gap-1">
+        <div className="relative">
+          <select
+            id={id}
+            value={current}
+            disabled={disabled || scaffold.isPending}
+            onChange={(event) => void apply(event.target.value)}
+            className={cn(
+              'h-9 w-full appearance-none rounded-md border border-border bg-surface pl-3 pr-9 text-sm text-text',
+              'transition-colors duration-fast ease-out hover:border-border-strong',
+              'focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
+              'disabled:cursor-not-allowed disabled:opacity-60',
+            )}
+          >
+            {!current && (
+              <option value="" disabled>
+                Select a model
+              </option>
+            )}
+            {TURBULENCE_APPROACHES.map((approach) => (
+              <optgroup key={approach.id} label={approach.label}>
+                {TURBULENCE_MODELS.filter((model) => model.simulationType === approach.id).map(
+                  (model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.label}
+                    </option>
+                  ),
+                )}
+              </optgroup>
+            ))}
+          </select>
+          {scaffold.isPending ? (
+            <Loader2
+              className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 animate-spin text-text-secondary"
+              aria-hidden="true"
+            />
+          ) : (
+            <ChevronDown
+              className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-text-secondary"
+              strokeWidth={1.75}
+              aria-hidden="true"
+            />
+          )}
+        </div>
+        <p className="text-xs text-text-secondary">
+          Rewrites turbulenceProperties and adds the matching 0/ fields for this model.
+        </p>
+        {lesOnSteady && (
+          <p className="rounded-md bg-accent-tint px-2.5 py-1.5 text-xs text-text">
+            LES/DES needs a transient solver. Change the solver above (e.g. pimpleFoam) to run this.
+          </p>
+        )}
+      </div>
     </div>
   );
 }
