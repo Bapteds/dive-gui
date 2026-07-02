@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { AlertTriangle, Loader2, Pencil, SquarePen, Trash2 } from 'lucide-react';
+import { AlertTriangle, Loader2, Pencil, Search, SquarePen, Trash2, X } from 'lucide-react';
 import { PageHeader } from '@/components/common/PageHeader';
 import { EmptyState } from '@/components/common/EmptyState';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 import {
   Table,
   TableBody,
@@ -58,9 +60,28 @@ export function TemplatesPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Template | null>(null);
   const [deleting, setDeleting] = useState<Template | null>(null);
+  const [query, setQuery] = useState('');
+  const [activeTags, setActiveTags] = useState<string[]>([]);
 
   const canManage = (template: Template) =>
     user?.role === 'SUPER_ADMIN' || template.owner.id === user?.id;
+
+  const toggleTag = (tag: string) =>
+    setActiveTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
+
+  // Filter by the search box (name / description / tags) and every active tag.
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return (templates ?? []).filter((template) => {
+      const matchesQuery =
+        !q ||
+        template.name.toLowerCase().includes(q) ||
+        (template.description ?? '').toLowerCase().includes(q) ||
+        template.tags.some((tag) => tag.includes(q));
+      const matchesTags = activeTags.every((tag) => template.tags.includes(tag));
+      return matchesQuery && matchesTags;
+    });
+  }, [templates, query, activeTags]);
 
   const openCreate = () => {
     setEditing(null);
@@ -121,7 +142,20 @@ export function TemplatesPage() {
           action={newTemplateButton}
         />
       ) : (
-        <div className="overflow-hidden rounded-md border border-border bg-surface shadow-sm">
+        <div className="flex flex-col gap-4">
+          <TemplatesToolbar
+            query={query}
+            onQuery={setQuery}
+            activeTags={activeTags}
+            onToggleTag={toggleTag}
+            onClear={() => setActiveTags([])}
+          />
+          {filtered.length === 0 ? (
+            <p className="rounded-md border border-border bg-surface px-4 py-10 text-center text-sm text-text-secondary">
+              No templates match your search.
+            </p>
+          ) : (
+            <div className="overflow-hidden rounded-md border border-border bg-surface shadow-sm">
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-bg">
@@ -139,17 +173,31 @@ export function TemplatesPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {templates.map((template) => {
+              {filtered.map((template) => {
                 const author = template.owner.id === user?.id ? 'You' : template.owner.email;
                 return (
                   <TableRow key={template.id}>
                     <TableCell className="font-medium text-text">
-                      <Link
-                        to={`/templates/${template.id}/edit`}
-                        className="rounded-sm hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
-                      >
-                        {template.name}
-                      </Link>
+                      <div className="flex flex-col gap-1.5">
+                        <Link
+                          to={`/templates/${template.id}/edit`}
+                          className="rounded-sm hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
+                        >
+                          {template.name}
+                        </Link>
+                        {template.tags.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {template.tags.map((tag) => (
+                              <TagChip
+                                key={tag}
+                                tag={tag}
+                                active={activeTags.includes(tag)}
+                                onClick={() => toggleTag(tag)}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="hidden min-w-0 text-text-secondary md:table-cell">
                       <span className="line-clamp-1 break-words">
@@ -203,6 +251,8 @@ export function TemplatesPage() {
               })}
             </TableBody>
           </Table>
+            </div>
+          )}
         </div>
       )}
 
@@ -214,6 +264,87 @@ export function TemplatesPage() {
       />
       <DeleteTemplateDialog template={deleting} onOpenChange={(open) => !open && setDeleting(null)} />
     </div>
+  );
+}
+
+/** Search box + active tag filters for the templates list. */
+function TemplatesToolbar({
+  query,
+  onQuery,
+  activeTags,
+  onToggleTag,
+  onClear,
+}: {
+  query: string;
+  onQuery: (value: string) => void;
+  activeTags: string[];
+  onToggleTag: (tag: string) => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+      <div className="relative sm:max-w-xs sm:flex-1">
+        <Search
+          className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-text-secondary"
+          strokeWidth={1.75}
+          aria-hidden="true"
+        />
+        <Input
+          type="search"
+          value={query}
+          onChange={(event) => onQuery(event.target.value)}
+          placeholder="Search templates…"
+          aria-label="Search templates"
+          spellCheck={false}
+          autoComplete="off"
+          className="pl-8"
+        />
+      </div>
+      {activeTags.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-text-secondary">Filtered by</span>
+          {activeTags.map((tag) => (
+            <button
+              key={tag}
+              type="button"
+              onClick={() => onToggleTag(tag)}
+              aria-label={`Remove filter ${tag}`}
+              className="inline-flex items-center gap-1 rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1"
+            >
+              {tag}
+              <X className="size-3" strokeWidth={2.5} aria-hidden="true" />
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={onClear}
+            className="rounded-sm text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1"
+          >
+            Clear
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A clickable tag chip in a row; active = the list is filtered by this tag. */
+function TagChip({ tag, active, onClick }: { tag: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        'rounded-full px-2 py-0.5 text-xs font-medium transition-colors duration-fast ease-out',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
+        active
+          ? 'bg-primary text-white'
+          : 'bg-bg text-text-secondary hover:bg-primary-tint hover:text-primary',
+      )}
+    >
+      {tag}
+    </button>
   );
 }
 

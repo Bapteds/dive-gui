@@ -364,3 +364,61 @@ describe('applying a template to a project', () => {
     expect(await readCaseContent(project.id, authHeader(collaborator), '0/p')).toBe('TPL-P');
   });
 });
+
+describe('template tags + single-file create', () => {
+  it('normalizes, dedupes and drops junk tags on create', async () => {
+    const user = await createTestUser({ email: 'tags@dive-turbinen.test' });
+    const res = await request(app)
+      .post('/api/v1/templates')
+      .set('Authorization', authHeader(user))
+      .send({ name: 'Starter', tags: ['Steady RANS', 'steady rans', 'k-Omega!', '  '] });
+    expect(res.status).toBe(201);
+    expect(res.body.template.tags).toEqual(['steady-rans', 'k-omega']);
+  });
+
+  it('creates a single-file template with inline content', async () => {
+    const user = await createTestUser({ email: 'onefile@dive-turbinen.test' });
+    const res = await request(app)
+      .post('/api/v1/templates')
+      .set('Authorization', authHeader(user))
+      .send({
+        name: 'One file',
+        tags: ['snippet'],
+        file: { path: 'system/fvSolution', content: 'FoamFile { object fvSolution; }\n' },
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.template.tags).toEqual(['snippet']);
+    const id = res.body.template.id as string;
+
+    const files = await request(app)
+      .get(`/api/v1/templates/${id}/files`)
+      .set('Authorization', authHeader(user));
+    const paths = (files.body.entries as Array<{ path: string; type: string }>)
+      .filter((entry) => entry.type === 'file')
+      .map((entry) => entry.path);
+    expect(paths).toContain('system/fvSolution');
+
+    const content = await request(app)
+      .get(`/api/v1/templates/${id}/files/content?path=system/fvSolution`)
+      .set('Authorization', authHeader(user));
+    expect(content.body.file.content).toMatch(/object fvSolution/);
+  });
+
+  it('updates tags and returns them from the list', async () => {
+    const user = await createTestUser({ email: 'updtags@dive-turbinen.test' });
+    const id = await makeTemplate(authHeader(user), 'T');
+
+    const patched = await request(app)
+      .patch(`/api/v1/templates/${id}`)
+      .set('Authorization', authHeader(user))
+      .send({ tags: ['MESH', 'mesh', 'inlet'] });
+    expect(patched.status).toBe(200);
+    expect(patched.body.template.tags).toEqual(['mesh', 'inlet']);
+
+    const list = await request(app).get('/api/v1/templates').set('Authorization', authHeader(user));
+    const found = (list.body.templates as Array<{ id: string; tags: string[] }>).find(
+      (template) => template.id === id,
+    );
+    expect(found?.tags).toEqual(['mesh', 'inlet']);
+  });
+});

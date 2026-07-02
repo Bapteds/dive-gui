@@ -1,15 +1,29 @@
 // Zod schemas for the templates module (shared, reusable file templates).
 import { z } from 'zod';
-import { TEMPLATE_DESCRIPTION_MAX_LENGTH, TEMPLATE_NAME_MAX_LENGTH } from '@dive/shared';
+import {
+  TEMPLATE_DESCRIPTION_MAX_LENGTH,
+  TEMPLATE_NAME_MAX_LENGTH,
+  TEMPLATE_TAGS_MAX,
+  TEMPLATE_TAG_MAX_LENGTH,
+} from '@dive/shared';
 
 /** Shared field validators. */
 const name = z.string().trim().min(1, 'A name is required').max(TEMPLATE_NAME_MAX_LENGTH);
 const description = z.string().trim().max(TEMPLATE_DESCRIPTION_MAX_LENGTH);
+/** Raw tags (normalized server-side to lowercase kebab tokens; empties + extras dropped). */
+const tags = z.array(z.string().max(TEMPLATE_TAG_MAX_LENGTH * 3)).max(TEMPLATE_TAGS_MAX * 2);
+/** Optional inline first file, so a single-file template is created in one call. */
+const initialFile = z.object({
+  path: z.string().trim().min(1, 'A file path is required'),
+  content: z.string(),
+});
 
-/** Body for creating a template (files are added afterwards). */
+/** Body for creating a template. `file` seeds a single-file template inline. */
 export const createTemplateSchema = z.object({
   name,
   description: description.optional(),
+  tags: tags.optional(),
+  file: initialFile.optional(),
 });
 
 /** Body for updating a template's metadata. At least one field required. */
@@ -17,6 +31,7 @@ export const updateTemplateSchema = z
   .object({
     name: name.optional(),
     description: description.optional(),
+    tags: tags.optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: 'At least one field must be provided',

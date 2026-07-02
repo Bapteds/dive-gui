@@ -12,7 +12,7 @@
 // stored. Applying copies files into the project's case; conflicts are resolved
 // per file by the caller's decision map (default: keep the existing case file).
 import type { Prisma } from '@prisma/client';
-import { EDITABLE_FILE_MAX_BYTES } from '@dive/shared';
+import { EDITABLE_FILE_MAX_BYTES, normalizeTags } from '@dive/shared';
 import { AppError } from '../../lib/AppError';
 import { prisma } from '../../lib/prisma';
 import { sanitizeRelative } from '../../lib/fileTreeStorage';
@@ -51,6 +51,8 @@ export interface PublicTemplate {
   id: string;
   name: string;
   description: string | null;
+  /** Normalized tags for search + sort (may be empty). */
+  tags: string[];
   owner: UserSummary;
   createdAt: string;
   updatedAt: string;
@@ -93,11 +95,22 @@ function toUserSummary(user: { id: string; fullName: string; email: string }): U
   return { id: user.id, fullName: user.fullName, email: user.email };
 }
 
+/** Parse the JSON-encoded tags column into a string[] (tolerant of bad data). */
+function parseTags(raw: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((tag): tag is string => typeof tag === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 function toPublicTemplate(template: TemplateWithOwner): PublicTemplate {
   return {
     id: template.id,
     name: template.name,
     description: template.description,
+    tags: parseTags(template.tags),
     owner: toUserSummary(template.owner),
     createdAt: template.createdAt.toISOString(),
     updatedAt: template.updatedAt.toISOString(),
@@ -141,7 +154,11 @@ export async function getTemplate(id: string): Promise<PublicTemplate> {
   return toPublicTemplate(await findOrThrow(id));
 }
 
-/** Create a template owned by the viewer. */
+/**
+ * Create a template owned by the viewer. An optional inline `file` seeds a
+ * single-file template in one call (write whatever you want, tag it, done);
+ * otherwise the template starts empty and files are added in the editor.
+ */
 export async function createTemplate(
   viewer: Viewer,
   input: CreateTemplateInput,
@@ -150,10 +167,20 @@ export async function createTemplate(
     data: {
       name: input.name.trim(),
       description: input.description?.trim() ? input.description.trim() : null,
+      tags: JSON.stringify(normalizeTags(input.tags ?? [])),
       ownerId: viewer.id,
     },
     include: templateInclude,
   });
+
+  if (input.file) {
+    const safePath = sanitizeRelative(input.file.path);
+    if (Buffer.byteLength(input.file.content, 'utf8') > EDITABLE_FILE_MAX_BYTES) {
+      throw new AppError(413, 'FILE_TOO_LARGE', 'The file content is too large to create here');
+    }
+    await writeTemplateFile(template.id, safePath, input.file.content);
+  }
+
   return toPublicTemplate(template);
 }
 
@@ -170,6 +197,7 @@ export async function updateTemplate(
   if (input.description !== undefined) {
     data.description = input.description.trim() ? input.description.trim() : null;
   }
+  if (input.tags !== undefined) data.tags = JSON.stringify(normalizeTags(input.tags));
 
   const updated = await prisma.template.update({ where: { id }, data, include: templateInclude });
   return toPublicTemplate(updated);

@@ -28,6 +28,43 @@ export const TEMPLATE_NAME_MAX_LENGTH = 120;
 /** Maximum length of a reusable template's description. */
 export const TEMPLATE_DESCRIPTION_MAX_LENGTH = 2000;
 
+/** Maximum length of a single template tag (after normalization). */
+export const TEMPLATE_TAG_MAX_LENGTH = 24;
+
+/** Maximum number of tags a template may carry. */
+export const TEMPLATE_TAGS_MAX = 12;
+
+/**
+ * Normalize a tag to a lowercase kebab token (trim, spaces -> hyphens, strip
+ * anything but a-z 0-9 and hyphens, collapse/edge-trim hyphens, length-cap). An
+ * all-junk input yields ''. Keeps search + sort predictable across the app.
+ */
+export function normalizeTag(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, TEMPLATE_TAG_MAX_LENGTH);
+}
+
+/** Normalize, drop empties, dedupe, and cap a list of tags (order preserved). */
+export function normalizeTags(tags: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const tag of tags) {
+    const normalized = normalizeTag(tag);
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      out.push(normalized);
+      if (out.length >= TEMPLATE_TAGS_MAX) break;
+    }
+  }
+  return out;
+}
+
 /**
  * Maximum size of a case file that may be opened/saved in the in-app editor.
  * Configuration dictionaries are tiny; large mesh files (e.g. `points`) are not

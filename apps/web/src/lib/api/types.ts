@@ -238,22 +238,27 @@ export interface Template {
   id: string;
   name: string;
   description: string | null;
+  /** Normalized tags for search + sort (may be empty). */
+  tags: string[];
   /** The author; templates are shared, so this is shown for attribution. */
   owner: UserSummary;
   createdAt: string;
   updatedAt: string;
 }
 
-/** Payload for `POST /templates`. */
+/** Payload for `POST /templates`. `file` seeds a single-file template inline. */
 export interface CreateTemplateInput {
   name: string;
   description?: string;
+  tags?: string[];
+  file?: { path: string; content: string };
 }
 
 /** Payload for `PATCH /templates/:id` (all fields optional). */
 export interface UpdateTemplateInput {
   name?: string;
   description?: string;
+  tags?: string[];
 }
 
 /** `GET /templates` response. */

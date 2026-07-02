@@ -98,6 +98,9 @@ model Template {
   id          String   @id @default(cuid())
   name        String
   description String?
+  /// JSON-encoded string[] of normalized tags (SQLite has no array type). Used for
+  /// search + sort in the templates list. Defaults to an empty array.
+  tags        String   @default("[]")
   ownerId     String
   owner       User     @relation("TemplateOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   createdAt   DateTime @default(now())

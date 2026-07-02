@@ -37,6 +37,7 @@ const template: Template = {
   id: 't1',
   name: 'Steady RANS',
   description: null,
+  tags: [],
   owner: { id: 'u1', fullName: 'Mara Henning', email: 'mara@dive-turbinen.de' },
   createdAt: '2026-06-20T08:00:00.000Z',
   updatedAt: '2026-06-20T08:00:00.000Z',
