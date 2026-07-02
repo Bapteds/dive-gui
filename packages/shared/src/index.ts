@@ -650,17 +650,19 @@ export type SolverId = (typeof SOLVER_IDS)[number];
  * a non-runnable placeholder). Drives the runnable gate, the scaffold renderers,
  * and the frontend solver picker + easy-mode form.
  */
-export const CONFIGURABLE_SOLVER_IDS = [
-  'simpleFoam',
-  'pimpleFoam',
-  'rhoSimpleFoam',
-  'rhoPimpleFoam',
-] as const;
-export type ConfigurableSolverId = (typeof CONFIGURABLE_SOLVER_IDS)[number];
+/**
+ * Every solver the app guides (scaffold + Easy/Advanced configure) is now the whole
+ * library minus `foamRun` (a non-runnable placeholder). Each library solver gets a
+ * generated SolverSpec (see buildSolverSpec / SOLVER_CATALOG): the incompressible +
+ * compressible RANS families get the full template; the other physics families get a
+ * base flow scaffold you extend. `ConfigurableSolverId` is therefore any SolverId.
+ * `CONFIGURABLE_SOLVER_IDS` is defined next to SOLVER_CATALOG (needs SOLVER_LIBRARY).
+ */
+export type ConfigurableSolverId = SolverId;
 
-/** Is `id` a solver the app can scaffold and configure (vs a legacy placeholder)? */
+/** Is `id` a solver the app guides (any library binary, not the foamRun placeholder)? */
 export function isConfigurableSolver(id: string): id is ConfigurableSolverId {
-  return (CONFIGURABLE_SOLVER_IDS as readonly string[]).includes(id);
+  return id !== 'foamRun' && SOLVER_LIBRARY.some((info) => info.id === id);
 }
 
 /**
@@ -705,6 +707,12 @@ export interface SolverSpec {
   requiredFiles: string[];
   /** Curated cross-file parameters exposed in easy mode. */
   easyParams: SolverParamDef[];
+  /**
+   * `full` = a complete, verified template for its physics (the incompressible +
+   * compressible RANS families). `base` = a flow scaffold + the universal knobs the
+   * other families share; the solver's physics-specific fields are added by the user.
+   */
+  tier: 'full' | 'base';
 }
 
 /**
@@ -737,55 +745,126 @@ const RAS_MODEL_OPTIONS = [
   'LaunderSharmaKE',
 ];
 
-/** Parameters common to both incompressible RANS solvers. */
-const COMMON_INCOMPRESSIBLE_PARAMS: SolverParamDef[] = [
-  {
-    key: 'rasModel',
-    label: 'Turbulence model',
-    help: 'RANS turbulence model. kOmegaSST is a robust all-rounder for wall-bounded flow.',
-    kind: 'enum',
-    options: RAS_MODEL_OPTIONS,
-    example: 'kOmegaSST',
-    file: 'constant/turbulenceProperties',
-    path: ['RAS', 'RASModel'],
-  },
-  {
-    key: 'nu',
-    label: 'Kinematic viscosity (nu)',
-    help: 'Fluid kinematic viscosity in m^2/s (water ~ 1e-06, air ~ 1.5e-05).',
-    kind: 'text',
-    example: '[0 2 -1 0 0 0 0] 1e-06',
-    file: 'constant/transportProperties',
-    path: ['nu'],
-  },
-  {
-    key: 'initialU',
-    label: 'Initial velocity',
-    help: 'Internal field the run starts from, e.g. `uniform (0 0 0)` for fluid at rest.',
-    kind: 'text',
-    example: 'uniform (0 0 0)',
-    file: '0/U',
-    path: ['internalField'],
-  },
-  {
-    key: 'endTime',
-    label: 'End time / iterations',
-    help: 'Final iteration (steady) or simulated time in seconds (transient) the run targets.',
-    kind: 'scalar',
-    example: '1000',
-    file: 'system/controlDict',
-    path: ['endTime'],
-  },
-  {
-    key: 'writeInterval',
-    label: 'Write interval',
-    help: 'How often results are written, in the unit set by writeControl.',
-    kind: 'scalar',
-    example: '100',
-    file: 'system/controlDict',
-    path: ['writeInterval'],
-  },
-];
+// Individual easy-mode parameters, composed per solver by buildSolverSpec.
+const turbulenceParam: SolverParamDef = {
+  key: 'rasModel',
+  label: 'Turbulence model',
+  help: 'RANS turbulence model. kOmegaSST is a robust all-rounder for wall-bounded flow.',
+  kind: 'enum',
+  options: RAS_MODEL_OPTIONS,
+  example: 'kOmegaSST',
+  file: 'constant/turbulenceProperties',
+  path: ['RAS', 'RASModel'],
+};
+const nuParam: SolverParamDef = {
+  key: 'nu',
+  label: 'Kinematic viscosity (nu)',
+  help: 'Fluid kinematic viscosity in m^2/s (water ~ 1e-06, air ~ 1.5e-05).',
+  kind: 'text',
+  example: '[0 2 -1 0 0 0 0] 1e-06',
+  file: 'constant/transportProperties',
+  path: ['nu'],
+};
+const muParam: SolverParamDef = {
+  key: 'mu',
+  label: 'Dynamic viscosity (mu)',
+  help: 'Fluid dynamic viscosity in Pa.s (air ~ 1.8e-05). Used by the const transport model.',
+  kind: 'scalar',
+  example: '1.8e-05',
+  file: 'constant/thermophysicalProperties',
+  path: ['mixture', 'transport', 'mu'],
+};
+const initialUParam: SolverParamDef = {
+  key: 'initialU',
+  label: 'Initial velocity',
+  help: 'Internal field the run starts from, e.g. `uniform (0 0 0)` for fluid at rest.',
+  kind: 'text',
+  example: 'uniform (0 0 0)',
+  file: '0/U',
+  path: ['internalField'],
+};
+const initialTParam: SolverParamDef = {
+  key: 'initialT',
+  label: 'Initial temperature',
+  help: 'Internal temperature field in kelvin, e.g. `uniform 300`.',
+  kind: 'text',
+  example: 'uniform 300',
+  file: '0/T',
+  path: ['internalField'],
+};
+const initialPParam: SolverParamDef = {
+  key: 'initialP',
+  label: 'Initial pressure',
+  help: 'Internal ABSOLUTE pressure field in Pa, e.g. `uniform 100000` (1 atm).',
+  kind: 'text',
+  example: 'uniform 100000',
+  file: '0/p',
+  path: ['internalField'],
+};
+const endTimeParam: SolverParamDef = {
+  key: 'endTime',
+  label: 'End time / iterations',
+  help: 'Final iteration (steady) or simulated time in seconds (transient) the run targets.',
+  kind: 'scalar',
+  example: '1000',
+  file: 'system/controlDict',
+  path: ['endTime'],
+};
+const writeIntervalParam: SolverParamDef = {
+  key: 'writeInterval',
+  label: 'Write interval',
+  help: 'How often results are written, in the unit set by writeControl.',
+  kind: 'scalar',
+  example: '100',
+  file: 'system/controlDict',
+  path: ['writeInterval'],
+};
+const residualPParam: SolverParamDef = {
+  key: 'residualP',
+  label: 'Convergence residual (p)',
+  help: 'The run stops once the pressure residual falls below this (e.g. 1e-4).',
+  kind: 'scalar',
+  example: '1e-4',
+  file: 'system/fvSolution',
+  path: ['SIMPLE', 'residualControl', 'p'],
+};
+const relaxPParam: SolverParamDef = {
+  key: 'relaxP',
+  label: 'Pressure relaxation',
+  help: 'Under-relaxation for pressure (0.3 is safe; higher converges faster but may diverge).',
+  kind: 'scalar',
+  example: '0.3',
+  file: 'system/fvSolution',
+  path: ['relaxationFactors', 'fields', 'p'],
+};
+const deltaTParam: SolverParamDef = {
+  key: 'deltaT',
+  label: 'Time step (deltaT)',
+  help: 'Simulated seconds per step. Keep the Courant number near 1; lower if it diverges.',
+  kind: 'scalar',
+  example: '1e-4',
+  file: 'system/controlDict',
+  path: ['deltaT'],
+};
+const adjustTimeStepParam: SolverParamDef = {
+  key: 'adjustTimeStep',
+  label: 'Adjust time step',
+  help: 'Let the solver adapt deltaT each step to hold the max Courant number.',
+  kind: 'bool',
+  options: ['yes', 'no'],
+  example: 'yes',
+  file: 'system/controlDict',
+  path: ['adjustTimeStep'],
+};
+const maxCoParam: SolverParamDef = {
+  key: 'maxCo',
+  label: 'Max Courant number',
+  help: 'Upper bound on the Courant number when adjustTimeStep is on (1 is typical).',
+  kind: 'scalar',
+  example: '1',
+  file: 'system/controlDict',
+  path: ['maxCo'],
+};
 
 /**
  * Files a compressible RANS case needs beyond the mesh: like the incompressible
@@ -808,222 +887,52 @@ export const COMPRESSIBLE_RANS_FILES = [
   '0/alphat',
 ] as const;
 
-/** Parameters common to both compressible RANS solvers. */
-const COMMON_COMPRESSIBLE_PARAMS: SolverParamDef[] = [
-  {
-    key: 'rasModel',
-    label: 'Turbulence model',
-    help: 'RANS turbulence model. kOmegaSST is a robust all-rounder for wall-bounded flow.',
-    kind: 'enum',
-    options: RAS_MODEL_OPTIONS,
-    example: 'kOmegaSST',
-    file: 'constant/turbulenceProperties',
-    path: ['RAS', 'RASModel'],
-  },
-  {
-    key: 'mu',
-    label: 'Dynamic viscosity (mu)',
-    help: 'Fluid dynamic viscosity in Pa.s (air ~ 1.8e-05). Used by the const transport model.',
-    kind: 'scalar',
-    example: '1.8e-05',
-    file: 'constant/thermophysicalProperties',
-    path: ['mixture', 'transport', 'mu'],
-  },
-  {
-    key: 'initialU',
-    label: 'Initial velocity',
-    help: 'Internal field the run starts from, e.g. `uniform (0 0 0)` for fluid at rest.',
-    kind: 'text',
-    example: 'uniform (0 0 0)',
-    file: '0/U',
-    path: ['internalField'],
-  },
-  {
-    key: 'initialT',
-    label: 'Initial temperature',
-    help: 'Internal temperature field in kelvin, e.g. `uniform 300`.',
-    kind: 'text',
-    example: 'uniform 300',
-    file: '0/T',
-    path: ['internalField'],
-  },
-  {
-    key: 'initialP',
-    label: 'Initial pressure',
-    help: 'Internal ABSOLUTE pressure field in Pa, e.g. `uniform 100000` (1 atm).',
-    kind: 'text',
-    example: 'uniform 100000',
-    file: '0/p',
-    path: ['internalField'],
-  },
-  {
-    key: 'endTime',
-    label: 'End time / iterations',
-    help: 'Final iteration (steady) or simulated time in seconds (transient) the run targets.',
-    kind: 'scalar',
-    example: '1000',
-    file: 'system/controlDict',
-    path: ['endTime'],
-  },
-  {
-    key: 'writeInterval',
-    label: 'Write interval',
-    help: 'How often results are written, in the unit set by writeControl.',
-    kind: 'scalar',
-    example: '100',
-    file: 'system/controlDict',
-    path: ['writeInterval'],
-  },
-];
+/** Categories whose base scaffold + templates are compressible (0/p absolute, thermo, 0/T). */
+const COMPRESSIBLE_CATEGORIES = ['compressible', 'supersonic', 'heatTransfer', 'combustion'];
+/** Categories with a complete, verified template (full easy-param set). */
+const FULL_TEMPLATE_CATEGORIES = ['incompressible', 'compressible', 'supersonic'];
+/** Categories that are not fluid flow: no turbulence knob in the base easy form. */
+const NON_FLOW_CATEGORIES = ['basic', 'solid', 'electromagnetics', 'molecular'];
 
 /**
- * The solver catalog: the single source of truth both the backend (runnable gate,
- * scaffold renderers) and the frontend (solver picker, easy-mode form) consume.
- * Covers a steady/transient x incompressible/compressible matrix: simpleFoam,
- * pimpleFoam, rhoSimpleFoam, rhoPimpleFoam. Extend with multiphase / MRF entries
- * later (see SOLVER_PLAN v2.5) — each is one catalog entry + one renderer set.
+ * Build a solver's easy-mode spec from its library entry. Every library solver is
+ * guided: the incompressible + compressible RANS families (FULL_TEMPLATE_CATEGORIES)
+ * get the complete template + full parameter set; every other family gets a base
+ * flow scaffold (the same RANS file set) plus the universal knobs it shares
+ * (turbulence, initial velocity, end time, write interval, and time-step controls
+ * when transient) — its physics-specific fields are added by the user in Advanced.
  */
-export const SOLVER_CATALOG: Record<ConfigurableSolverId, SolverSpec> = {
-  simpleFoam: {
-    id: 'simpleFoam',
-    label: 'Steady-state, incompressible (RANS)',
-    summary: 'Time-averaged flow that settles to a steady solution. Usually the first choice.',
-    regime: 'steady',
-    family: 'incompressible',
-    requiredFiles: [...INCOMPRESSIBLE_RANS_FILES],
-    easyParams: [
-      ...COMMON_INCOMPRESSIBLE_PARAMS,
-      {
-        key: 'residualP',
-        label: 'Convergence residual (p)',
-        help: 'The run stops once the pressure residual falls below this (e.g. 1e-4).',
-        kind: 'scalar',
-        example: '1e-4',
-        file: 'system/fvSolution',
-        path: ['SIMPLE', 'residualControl', 'p'],
-      },
-      {
-        key: 'relaxP',
-        label: 'Pressure relaxation',
-        help: 'Under-relaxation for pressure (0.3 is safe; higher converges faster but may diverge).',
-        kind: 'scalar',
-        example: '0.3',
-        file: 'system/fvSolution',
-        path: ['relaxationFactors', 'fields', 'p'],
-      },
-    ],
-  },
-  pimpleFoam: {
-    id: 'pimpleFoam',
-    label: 'Transient, incompressible (URANS)',
-    summary: 'Time-accurate unsteady flow, for vortex shedding, rotor-stator and startup transients.',
-    regime: 'transient',
-    family: 'incompressible',
-    requiredFiles: [...INCOMPRESSIBLE_RANS_FILES],
-    easyParams: [
-      ...COMMON_INCOMPRESSIBLE_PARAMS,
-      {
-        key: 'deltaT',
-        label: 'Time step (deltaT)',
-        help: 'Simulated seconds per step. Keep the Courant number near 1; lower if it diverges.',
-        kind: 'scalar',
-        example: '1e-4',
-        file: 'system/controlDict',
-        path: ['deltaT'],
-      },
-      {
-        key: 'adjustTimeStep',
-        label: 'Adjust time step',
-        help: 'Let the solver adapt deltaT each step to hold the max Courant number.',
-        kind: 'bool',
-        options: ['yes', 'no'],
-        example: 'yes',
-        file: 'system/controlDict',
-        path: ['adjustTimeStep'],
-      },
-      {
-        key: 'maxCo',
-        label: 'Max Courant number',
-        help: 'Upper bound on the Courant number when adjustTimeStep is on (1 is typical).',
-        kind: 'scalar',
-        example: '1',
-        file: 'system/controlDict',
-        path: ['maxCo'],
-      },
-    ],
-  },
-  rhoSimpleFoam: {
-    id: 'rhoSimpleFoam',
-    label: 'Steady-state, compressible (RANS)',
-    summary: 'Time-averaged compressible flow with heat. For gas or steam paths that settle to steady.',
-    regime: 'steady',
-    family: 'compressible',
-    requiredFiles: [...COMPRESSIBLE_RANS_FILES],
-    easyParams: [
-      ...COMMON_COMPRESSIBLE_PARAMS,
-      {
-        key: 'residualP',
-        label: 'Convergence residual (p)',
-        help: 'The run stops once the pressure residual falls below this (e.g. 1e-3).',
-        kind: 'scalar',
-        example: '1e-3',
-        file: 'system/fvSolution',
-        path: ['SIMPLE', 'residualControl', 'p'],
-      },
-      {
-        key: 'relaxP',
-        label: 'Pressure relaxation',
-        help: 'Under-relaxation for pressure (0.3 is safe for compressible SIMPLE).',
-        kind: 'scalar',
-        example: '0.3',
-        file: 'system/fvSolution',
-        path: ['relaxationFactors', 'fields', 'p'],
-      },
-    ],
-  },
-  rhoPimpleFoam: {
-    id: 'rhoPimpleFoam',
-    label: 'Transient, compressible (RANS)',
-    summary: 'Time-accurate compressible flow with heat, for unsteady gas or steam dynamics.',
-    regime: 'transient',
-    family: 'compressible',
-    requiredFiles: [...COMPRESSIBLE_RANS_FILES],
-    easyParams: [
-      ...COMMON_COMPRESSIBLE_PARAMS,
-      {
-        key: 'deltaT',
-        label: 'Time step (deltaT)',
-        help: 'Simulated seconds per step. Keep the Courant number near 1; lower if it diverges.',
-        kind: 'scalar',
-        example: '1e-5',
-        file: 'system/controlDict',
-        path: ['deltaT'],
-      },
-      {
-        key: 'adjustTimeStep',
-        label: 'Adjust time step',
-        help: 'Let the solver adapt deltaT each step to hold the max Courant number.',
-        kind: 'bool',
-        options: ['yes', 'no'],
-        example: 'yes',
-        file: 'system/controlDict',
-        path: ['adjustTimeStep'],
-      },
-      {
-        key: 'maxCo',
-        label: 'Max Courant number',
-        help: 'Upper bound on the Courant number when adjustTimeStep is on (1 is typical).',
-        kind: 'scalar',
-        example: '1',
-        file: 'system/controlDict',
-        path: ['maxCo'],
-      },
-    ],
-  },
-};
+function buildSolverSpec(info: SolverInfo): SolverSpec {
+  const compressible = COMPRESSIBLE_CATEGORIES.includes(info.category);
+  const full = FULL_TEMPLATE_CATEGORIES.includes(info.category);
+  const flow = !NON_FLOW_CATEGORIES.includes(info.category);
+  const regime = info.regime ?? 'steady';
 
-/** The catalog as an ordered list (picker order: steady first, then transient). */
-export const SOLVER_SPECS: SolverSpec[] = CONFIGURABLE_SOLVER_IDS.map((id) => SOLVER_CATALOG[id]);
+  const easyParams: SolverParamDef[] = [];
+  if (flow) easyParams.push(turbulenceParam);
+  if (full && !compressible) easyParams.push(nuParam);
+  if (full && compressible) easyParams.push(muParam);
+  easyParams.push(initialUParam);
+  if (full && compressible) easyParams.push(initialTParam, initialPParam);
+  easyParams.push(endTimeParam, writeIntervalParam);
+  if (regime === 'transient') easyParams.push(deltaTParam, adjustTimeStepParam, maxCoParam);
+  else if (full) easyParams.push(residualPParam, relaxPParam);
+
+  return {
+    id: info.id,
+    label: info.label,
+    summary: info.summary,
+    regime,
+    family: compressible ? 'compressible' : 'incompressible',
+    requiredFiles: compressible ? [...COMPRESSIBLE_RANS_FILES] : [...INCOMPRESSIBLE_RANS_FILES],
+    easyParams,
+    tier: full ? 'full' : 'base',
+  };
+}
+
+// SOLVER_CATALOG, CONFIGURABLE_SOLVER_IDS and SOLVER_SPECS are generated from
+// SOLVER_LIBRARY (via buildSolverSpec) just after it is defined below — every
+// library solver becomes guided, so the catalog is derived, not hand-written.
 
 /**
  * Physics families the solver library is grouped by in the picker overlay. Order
@@ -1118,6 +1027,22 @@ export const SOLVER_LIBRARY: SolverInfo[] = [
   // Rarefied / molecular
   { id: 'dsmcFoam', label: 'Rarefied gas (DSMC)', summary: 'Direct Simulation Monte Carlo for rarefied and high-Knudsen gas.', category: 'molecular', regime: 'transient' },
 ];
+
+/**
+ * The solver catalog: one SolverSpec per library solver, generated from
+ * SOLVER_LIBRARY via buildSolverSpec. The single source of truth both the backend
+ * (runnable gate, scaffold renderers) and the frontend (solver picker, easy-mode
+ * form) consume. Every library binary is guided; foamRun stays out (placeholder).
+ */
+export const SOLVER_CATALOG = Object.fromEntries(
+  SOLVER_LIBRARY.map((info) => [info.id, buildSolverSpec(info)]),
+) as Record<SolverId, SolverSpec>;
+
+/** Every guided solver id (the full library, in picker order). */
+export const CONFIGURABLE_SOLVER_IDS: SolverId[] = SOLVER_LIBRARY.map((info) => info.id);
+
+/** The catalog as an ordered list (library order). */
+export const SOLVER_SPECS: SolverSpec[] = CONFIGURABLE_SOLVER_IDS.map((id) => SOLVER_CATALOG[id]);
 
 /**
  * One turbulence model offered in the setup wizard's second step. `simulationType`

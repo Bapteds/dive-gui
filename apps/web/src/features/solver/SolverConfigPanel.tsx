@@ -103,7 +103,10 @@ export function SolverConfigPanel({
         <ChangeSolver projectId={projectId} current={solver} disabled={active} />
         {mode === 'easy' ? (
           configurable ? (
-            <SolverEasyForm projectId={projectId} solver={configurable} disabled={active} />
+            <div className="flex flex-col gap-3">
+              {SOLVER_CATALOG[configurable]?.tier === 'base' && <BaseSetupHint />}
+              <SolverEasyForm projectId={projectId} solver={configurable} disabled={active} />
+            </div>
           ) : (
             <ManualEasyNote solver={solver} />
           )
@@ -111,6 +114,16 @@ export function SolverConfigPanel({
           <AdvancedConfig projectId={projectId} solver={configurable} disabled={active} />
         )}
       </div>
+    </div>
+  );
+}
+
+/** Honest hint for base-tier solvers: the scaffold is a flow base you extend. */
+function BaseSetupHint() {
+  return (
+    <div className="rounded-md border border-border bg-bg/40 p-3 text-xs text-text-secondary">
+      Base setup. The parameters below are the universal knobs; this solver&apos;s physics-specific
+      fields (phases, chemistry, sources, ...) are added in the Advanced tab or the file editor.
     </div>
   );
 }

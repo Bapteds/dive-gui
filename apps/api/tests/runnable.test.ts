@@ -299,8 +299,8 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
     expect(turb).not.toMatch(/RASModel/);
   });
 
-  it('scaffolds a manual (non-configurable) solver with a generic skeleton (interFoam)', async () => {
-    const { auth, id } = await makeProject('runnable-manual@x.test');
+  it('scaffolds a base-tier solver as a guided incompressible scaffold (interFoam)', async () => {
+    const { auth, id } = await makeProject('runnable-base@x.test');
     await writeMesh(id);
 
     const scaffold = await request(app)
@@ -309,19 +309,21 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
       .send({ solver: 'interFoam' });
     expect(scaffold.status).toBe(201);
 
-    // A generic skeleton is written and controlDict points at interFoam.
+    // The full incompressible base is written and controlDict points at interFoam.
     const control = (await readCaseFile(id, 'system/controlDict'))?.toString('utf8') ?? '';
     expect(control).toMatch(/application\s+interFoam/);
-    // Best-effort runnable (mesh + system trio present), but flagged as manual setup.
+    expect(await readCaseFile(id, 'constant/turbulenceProperties')).toBeTruthy();
+    expect(await readCaseFile(id, '0/k')).toBeTruthy();
+    // interFoam is now guided (base tier): runnable AND scaffoldable.
     expect(scaffold.body.runnable.runnable).toBe(true);
-    expect(scaffold.body.runnable.scaffoldable).toBe(false);
+    expect(scaffold.body.runnable.scaffoldable).toBe(true);
     expect(scaffold.body.runnable.solver).toBe('interFoam');
   });
 
-  it('a manual solver is not runnable until a mesh + system trio exist', async () => {
-    const { auth, id } = await makeProject('runnable-manual-gate@x.test');
+  it('a base-tier solver gates on its full incompressible file set (interFoam)', async () => {
+    const { auth, id } = await makeProject('runnable-base-gate@x.test');
     await writeMesh(id);
-    // controlDict targets interFoam, but fvSchemes / fvSolution are absent.
+    // controlDict targets interFoam, but the rest of the incompressible set is absent.
     await writeCaseFile(
       id,
       'system/controlDict',
@@ -330,7 +332,7 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
 
     const res = await request(app).get(`/api/v1/projects/${id}/runnable`).set('Authorization', auth);
     expect(res.body.runnable.solver).toBe('interFoam');
-    expect(res.body.runnable.scaffoldable).toBe(false);
+    expect(res.body.runnable.scaffoldable).toBe(true);
     expect(res.body.runnable.runnable).toBe(false);
     expect(res.body.runnable.missingFiles).toContain('system/fvSchemes');
   });

@@ -11,9 +11,9 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import {
+  SOLVER_CATALOG,
   SOLVER_CATEGORIES,
   SOLVER_LIBRARY,
-  isConfigurableSolver,
   type SolverId,
   type SolverInfo,
 } from '@/lib/api/types';
@@ -21,9 +21,9 @@ import {
 /**
  * SolverBrowserDialog - the "choose a solver" overlay: the whole solver library
  * (every ESI binary on this build) grouped by physics family, searchable, each with
- * a one-line description. A "Guided" badge marks the solvers the app fully sets up
- * and easy-configures; the rest are selectable and configured in the file editor.
- * Picking a solver selects it and closes.
+ * a one-line description. Every solver is guided; the badge tells you which kind of
+ * setup you get: "Guided" = a complete verified template (incompressible/compressible
+ * RANS), "Base setup" = a flow scaffold you extend. Picking a solver selects + closes.
  */
 interface SolverBrowserDialogProps {
   open: boolean;
@@ -59,8 +59,8 @@ export function SolverBrowserDialog({ open, onOpenChange, value, onSelect }: Sol
         <DialogHeader>
           <DialogTitle>Choose a solver</DialogTitle>
           <DialogDescription>
-            Every solver on this OpenFOAM build, by physics. Guided solvers get a step-by-step
-            setup; the others you configure in the file editor.
+            Every solver on this OpenFOAM build, by physics. All are guided: “Guided” solvers get a
+            complete template, “Base setup” solvers a flow scaffold you extend.
           </DialogDescription>
         </DialogHeader>
 
@@ -100,7 +100,7 @@ export function SolverBrowserDialog({ open, onOpenChange, value, onSelect }: Sol
                         <SolverRow
                           solver={solver}
                           selected={solver.id === value}
-                          guided={isConfigurableSolver(solver.id)}
+                          tier={SOLVER_CATALOG[solver.id]?.tier ?? 'base'}
                           onSelect={() => pick(solver.id)}
                         />
                       </li>
@@ -116,16 +116,16 @@ export function SolverBrowserDialog({ open, onOpenChange, value, onSelect }: Sol
   );
 }
 
-/** One selectable solver row: label + mono id + summary + a guided/manual badge. */
+/** One selectable solver row: label + mono id + summary + a setup-tier badge. */
 function SolverRow({
   solver,
   selected,
-  guided,
+  tier,
   onSelect,
 }: {
   solver: SolverInfo;
   selected: boolean;
-  guided: boolean;
+  tier: 'full' | 'base';
   onSelect: () => void;
 }) {
   return (
@@ -150,14 +150,14 @@ function SolverRow({
             <Check className="size-4 shrink-0 text-primary" strokeWidth={2} aria-hidden="true" />
           )}
         </span>
-        {guided ? (
+        {tier === 'full' ? (
           <Badge variant="primary" className="shrink-0">
             <Sparkles className="size-3" strokeWidth={1.75} aria-hidden="true" />
             Guided
           </Badge>
         ) : (
           <Badge variant="neutral" className="shrink-0">
-            Manual
+            Base setup
           </Badge>
         )}
       </div>

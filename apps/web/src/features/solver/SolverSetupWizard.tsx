@@ -6,9 +6,9 @@ import { toast } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
 import { ApiError } from '@/lib/api/client';
 import {
+  SOLVER_CATALOG,
   SOLVER_LIBRARY,
   TURBULENCE_MODELS,
-  isConfigurableSolver,
   type SolverId,
 } from '@/lib/api/types';
 import { useSyncBoundaries } from '@/features/projects/useCaseFiles';
@@ -54,7 +54,7 @@ export function SolverSetupWizard({ projectId }: { projectId: string; missingFil
   const pending = scaffold.isPending || syncBoundaries.isPending;
   const solverInfo = SOLVER_LIBRARY.find((s) => s.id === solver);
   const solverLabel = solverInfo?.label ?? solver;
-  const guided = isConfigurableSolver(solver);
+  const tier = SOLVER_CATALOG[solver]?.tier ?? 'base';
   const turbulenceLabel = TURBULENCE_MODELS.find((m) => m.id === turbulence)?.label ?? turbulence;
 
   const handleGenerate = async () => {
@@ -91,14 +91,14 @@ export function SolverSetupWizard({ projectId }: { projectId: string; missingFil
             <div className="flex flex-col gap-1 rounded-md border border-primary bg-primary-tint p-3">
               <div className="flex items-start justify-between gap-2">
                 <span className="text-sm font-medium text-primary">{solverLabel}</span>
-                {guided ? (
+                {tier === 'full' ? (
                   <Badge variant="primary" className="shrink-0 border border-primary/20">
                     <Sparkles className="size-3" strokeWidth={1.75} aria-hidden="true" />
                     Guided setup
                   </Badge>
                 ) : (
                   <Badge variant="neutral" className="shrink-0">
-                    Manual setup
+                    Base setup
                   </Badge>
                 )}
               </div>
