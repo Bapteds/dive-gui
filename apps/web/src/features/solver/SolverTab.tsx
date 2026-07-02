@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { FileWarning, Play, RotateCcw, Square, Wrench } from 'lucide-react';
+import { FileWarning, RotateCcw, Square, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/sonner';
 import { ApiError } from '@/lib/api/client';
+import { isConfigurableSolver } from '@/lib/api/types';
 import type {
   ConfigurableSolverId,
   ResidualSample,
@@ -11,6 +12,7 @@ import type {
 } from '@/lib/api/types';
 import { ResidualChart } from './ResidualChart';
 import { SolverPicker } from './SolverPicker';
+import { SolverConfigPanel } from './SolverConfigPanel';
 import { RunHistory } from './RunHistory';
 import { RunLog } from './RunLog';
 import { RunStatusBadge } from './RunStatusBadge';
@@ -192,10 +194,14 @@ function RunnablePanel({ projectId, solver }: { projectId: string; solver: strin
     }
   };
 
+  const configSolver: ConfigurableSolverId =
+    solver && isConfigurableSolver(solver) ? solver : 'simpleFoam';
+
   return (
     <div className="flex flex-col gap-5 lg:min-h-0 lg:flex-1 lg:overflow-auto lg:overscroll-contain">
-      <RunConfig
-        solver={solver}
+      <SolverConfigPanel
+        projectId={projectId}
+        solver={configSolver}
         active={active}
         runLabel={currentRun ? 'Run again' : 'Run solver'}
         runPending={startRun.isPending}
@@ -219,56 +225,6 @@ function RunnablePanel({ projectId, solver }: { projectId: string; solver: strin
           <RunHistory runs={runs.data ?? []} />
         )}
       </section>
-    </div>
-  );
-}
-
-/** Read-only run config + the single orange Run CTA (hidden while a run is active). */
-function RunConfig({
-  solver,
-  active,
-  runLabel,
-  runPending,
-  onRun,
-}: {
-  solver: string | null;
-  active: boolean;
-  runLabel: string;
-  runPending: boolean;
-  onRun: () => void;
-}) {
-  return (
-    <div className="rounded-md border border-border bg-surface p-5 shadow-sm">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <dl className="grid grid-cols-1 gap-x-8 gap-y-3 sm:grid-cols-3">
-          <div className="flex flex-col gap-1">
-            <dt className="text-xs font-medium text-text-secondary">Solver</dt>
-            <dd className="font-mono text-sm text-text" translate="no">
-              {solver ?? 'simpleFoam'}
-            </dd>
-          </div>
-          <div className="flex flex-col gap-1">
-            <dt className="text-xs font-medium text-text-secondary">Stops at</dt>
-            <dd className="text-sm text-text">Convergence or endTime</dd>
-          </div>
-          <div className="flex flex-col gap-1">
-            <dt className="text-xs font-medium text-text-secondary">Parallel</dt>
-            <dd className="flex items-center gap-2 text-sm text-text tabular-nums">
-              1
-              <span className="rounded-sm border border-border bg-bg px-1.5 py-0.5 text-xs font-medium text-text-secondary">
-                Deferred
-              </span>
-            </dd>
-          </div>
-        </dl>
-
-        {!active && (
-          <Button variant="primary" loading={runPending} onClick={onRun} className="sm:shrink-0">
-            <Play strokeWidth={1.75} aria-hidden="true" />
-            {runLabel}
-          </Button>
-        )}
-      </div>
     </div>
   );
 }

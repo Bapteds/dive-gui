@@ -19,6 +19,9 @@ vi.mock('@/lib/api/projects', () => ({
   getRunLog: vi.fn(),
   startRun: vi.fn(),
   stopRun: vi.fn(),
+  // The Easy solver-config form reads/writes the solver files.
+  getCaseFileContent: vi.fn(),
+  saveCaseFileContent: vi.fn(),
 }));
 
 vi.mock('@/components/ui/sonner', () => ({
@@ -58,6 +61,14 @@ function renderTab() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default case-file content for the Easy solver-config form (per-path values are
+  // read by dictionary path; a missing path just renders an empty control).
+  vi.mocked(api.getCaseFileContent).mockResolvedValue({
+    path: 'system/controlDict',
+    content: 'FoamFile { object controlDict; }\napplication simpleFoam;\nendTime 1000;\nwriteInterval 100;\n',
+    size: 20,
+  });
+  vi.mocked(api.saveCaseFileContent).mockResolvedValue(undefined);
 });
 
 describe('SolverTab', () => {
@@ -119,6 +130,9 @@ describe('SolverTab', () => {
     renderTab();
 
     expect(await screen.findByRole('button', { name: /run solver/i })).toBeInTheDocument();
+    // The Easy solver-config panel renders with the curated parameters.
+    expect(await screen.findByText('Solver configuration')).toBeInTheDocument();
+    expect(await screen.findByText('Turbulence model')).toBeInTheDocument();
     // History resolves on its own query; wait for the empty state.
     expect(await screen.findByText(/no runs yet/i)).toBeInTheDocument();
 
