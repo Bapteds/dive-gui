@@ -19,10 +19,12 @@ import {
  * AssemblyViewer - the live three.js canvas for the "Assemble" tab.
  *
  * It renders the whole assembly in ONE scene: the base part (opaque neutral, the
- * only pickable body), every other added part (opaque blue tint, at its
+ * only pickable body), every other added part (semi-transparent blue ghost, at its
  * transform - identity = its imported position by default), and the part being
- * worked on (semi-transparent BLUE ghost, DoubleSide). Colours: orange selection
- * (the picked base patch), blue ghost (the part being placed).
+ * worked on (a slightly more present blue ghost, DoubleSide). Only the base is
+ * solid so it reads as the reference body and you can see the added/merged parts
+ * through it. Colours: orange selection (the picked base patch), blue ghost (the
+ * added parts).
  *
  * PLACEMENT IS OPTIONAL. A part stays at its imported world coordinates unless
  * the user opts to reposition it. When they do, a TransformControls gizmo drives
@@ -67,8 +69,10 @@ function detectWebgl(): boolean {
 
 /** Squared pointer-move threshold (px^2) below which a drag still counts as a click. */
 const CLICK_DRAG_THRESHOLD_SQ = 36;
-/** Opacity of the semi-transparent blue preview ghost. */
-const PREVIEW_OPACITY = 0.35;
+/** Opacity of the active part being placed (the blue ghost you are working on). */
+const PREVIEW_OPACITY = 0.4;
+/** Opacity of an already-added part (a fainter blue ghost, so it reads as done). */
+const PLACED_OPACITY = 0.28;
 
 /** A part with its loaded geometry, as handed to the viewer. */
 export interface ViewerPart {
@@ -354,6 +358,18 @@ export function AssemblyViewer({
     const neutralMaterial = (color: THREE.Color) =>
       new THREE.MeshLambertMaterial({ color: color.clone(), side: THREE.DoubleSide });
 
+    // A see-through ghost: the added parts (and the active one) so the solid base
+    // and the couplings stay visible through them. depthWrite off keeps the blend
+    // clean against the opaque base.
+    const ghostMaterial = (color: THREE.Color, opacity: number) =>
+      new THREE.MeshLambertMaterial({
+        color: color.clone(),
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity,
+        depthWrite: false,
+      });
+
     /**
      * Place the active ghost at the current transform. Skipped WHILE a gizmo
      * handle is being dragged (the gizmo then owns the group), so the drag never
@@ -438,30 +454,25 @@ export function AssemblyViewer({
         baseRoot = baseHandles.group;
         contentRoot.add(baseHandles.group);
 
-        // Other added parts, each at its transform (identity = imported position).
+        // Other added parts, each at its transform (identity = imported position),
+        // as faint blue ghosts so the base stays readable through them.
         for (const part of data.placed) {
           const loaded = await parseGlb(loader, part.geometry);
           if (disposed) return;
-          const handles = buildPart(loaded, () => neutralMaterial(placedTint), () => {}, true);
+          const handles = buildPart(loaded, () => ghostMaterial(placedTint, PLACED_OPACITY), () => {}, true);
           setMatrix(handles.group, composeMatrix(part.transform));
           contentRoot.add(handles.group);
         }
 
-        // The active ghost (semi-transparent blue). Its group keeps
-        // matrixAutoUpdate ON so the gizmo and the numeric fields can drive it.
+        // The active ghost (semi-transparent blue, a touch more present than the
+        // placed parts). Its group keeps matrixAutoUpdate ON so the gizmo and the
+        // numeric fields can drive it.
         if (data.active) {
           const loaded = await parseGlb(loader, data.active.geometry);
           if (disposed) return;
           activeHandles = buildPart(
             loaded,
-            () =>
-              new THREE.MeshLambertMaterial({
-                color: primary.clone(),
-                side: THREE.DoubleSide,
-                transparent: true,
-                opacity: PREVIEW_OPACITY,
-                depthWrite: false,
-              }),
+            () => ghostMaterial(primary, PREVIEW_OPACITY),
             () => {},
             false,
           );
