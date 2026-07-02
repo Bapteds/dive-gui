@@ -299,6 +299,51 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
     expect(turb).not.toMatch(/RASModel/);
   });
 
+  it('scaffolds a manual (non-configurable) solver with a generic skeleton (interFoam)', async () => {
+    const { auth, id } = await makeProject('runnable-manual@x.test');
+    await writeMesh(id);
+
+    const scaffold = await request(app)
+      .post(`/api/v1/projects/${id}/runnable/scaffold`)
+      .set('Authorization', auth)
+      .send({ solver: 'interFoam' });
+    expect(scaffold.status).toBe(201);
+
+    // A generic skeleton is written and controlDict points at interFoam.
+    const control = (await readCaseFile(id, 'system/controlDict'))?.toString('utf8') ?? '';
+    expect(control).toMatch(/application\s+interFoam/);
+    // Best-effort runnable (mesh + system trio present), but flagged as manual setup.
+    expect(scaffold.body.runnable.runnable).toBe(true);
+    expect(scaffold.body.runnable.scaffoldable).toBe(false);
+    expect(scaffold.body.runnable.solver).toBe('interFoam');
+  });
+
+  it('a manual solver is not runnable until a mesh + system trio exist', async () => {
+    const { auth, id } = await makeProject('runnable-manual-gate@x.test');
+    await writeMesh(id);
+    // controlDict targets interFoam, but fvSchemes / fvSolution are absent.
+    await writeCaseFile(
+      id,
+      'system/controlDict',
+      'FoamFile { object controlDict; }\napplication interFoam;\n',
+    );
+
+    const res = await request(app).get(`/api/v1/projects/${id}/runnable`).set('Authorization', auth);
+    expect(res.body.runnable.solver).toBe('interFoam');
+    expect(res.body.runnable.scaffoldable).toBe(false);
+    expect(res.body.runnable.runnable).toBe(false);
+    expect(res.body.runnable.missingFiles).toContain('system/fvSchemes');
+  });
+
+  it('reports scaffoldable=true for a configurable solver', async () => {
+    const { auth, id } = await makeProject('runnable-scaffoldable@x.test');
+    await writeMesh(id);
+    const scaffold = await request(app)
+      .post(`/api/v1/projects/${id}/runnable/scaffold`)
+      .set('Authorization', auth);
+    expect(scaffold.body.runnable.scaffoldable).toBe(true);
+  });
+
   it('retargets a generic controlDict (application foamRun) to simpleFoam', async () => {
     const { auth, id } = await makeProject('runnable-foamrun@x.test');
     await writeMesh(id);

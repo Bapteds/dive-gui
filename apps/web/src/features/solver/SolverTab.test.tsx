@@ -37,6 +37,7 @@ const runnableYes: RunnableCheck = {
   missingFiles: [],
   runnable: true,
   solver: 'simpleFoam',
+  scaffoldable: true,
 };
 
 const convergedRun: RunSummary = {
@@ -79,6 +80,7 @@ describe('SolverTab', () => {
       missingFiles: ['constant/transportProperties', '0/k'],
       runnable: false,
       solver: null,
+      scaffoldable: false,
     });
     vi.mocked(api.scaffoldSolver).mockResolvedValue({
       created: ['0/k'],
@@ -108,6 +110,7 @@ describe('SolverTab', () => {
       missingFiles: ['0/k'],
       runnable: false,
       solver: null,
+      scaffoldable: false,
     });
     vi.mocked(api.scaffoldSolver).mockResolvedValue({
       created: ['0/k'],

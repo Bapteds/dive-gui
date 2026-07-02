@@ -40,7 +40,6 @@ import type {
   ScaffoldCaseResponse,
   ScaffoldSolverResponse,
   SolverId,
-  ConfigurableSolverId,
   VerifyCaseResponse,
 } from './types';
 
@@ -339,10 +338,10 @@ export async function getRunnable(id: string): Promise<RunnableCheck> {
 /** Generate the files a case needs to be runnable by `solver` + turbulence model. */
 export async function scaffoldSolver(
   id: string,
-  solver?: ConfigurableSolverId,
+  solver?: SolverId,
   turbulence?: string,
 ): Promise<ScaffoldSolverResponse> {
-  const body: { solver?: ConfigurableSolverId; turbulence?: string } = {};
+  const body: { solver?: SolverId; turbulence?: string } = {};
   if (solver) body.solver = solver;
   if (turbulence) body.turbulence = turbulence;
   return apiClient.post<ScaffoldSolverResponse>(`/projects/${id}/runnable/scaffold`, body);

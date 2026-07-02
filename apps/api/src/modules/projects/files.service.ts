@@ -8,9 +8,11 @@
 import {
   EDITABLE_FILE_MAX_BYTES,
   SOLVER_CATALOG,
+  SOLVER_LIBRARY,
   TURBULENCE_MODELS,
   isConfigurableSolver,
   type ConfigurableSolverId,
+  type SolverId,
 } from '@dive/shared';
 import { AppError } from '../../lib/AppError';
 import {
@@ -236,6 +238,12 @@ export interface RunnableCheck {
   runnable: boolean;
   /** Solver read from system/controlDict `application`, or null when unset. */
   solver: string | null;
+  /**
+   * Whether the resolved solver is one the app fully scaffolds and easy-configures
+   * (simpleFoam / pimpleFoam / rho*). False for any other library solver, which is
+   * "manual setup": selectable + runnable best-effort, configured via the file editor.
+   */
+  scaffoldable: boolean;
 }
 
 /** Result of generating the missing simpleFoam files: created + refreshed state. */
@@ -255,39 +263,62 @@ export async function computeRunnable(projectId: string): Promise<RunnableCheck>
 
   const controlDict = await readCaseFile(projectId, 'system/controlDict');
   const solver = controlDict ? parseApplication(controlDict.toString('utf8')) : null;
-  // The case is runnable only when it targets a solver the app can configure
-  // (simpleFoam/pimpleFoam/rhoSimpleFoam/rhoPimpleFoam). A generic `foamRun`
-  // placeholder — or any name outside the catalog — is refused so the gate
-  // re-offers "Make runnable" (which points it at a real solver and fills it in).
+
+  // Three tiers of gate, by what the app knows about the solver:
+  //  1. configurable (simpleFoam/pimpleFoam/rho*): fully scaffolded + easy-configured,
+  //     so check its exact required files AND solver-correct system/ numerics.
+  //  2. known but not configurable (any other ESI library solver, e.g. interFoam): the
+  //     app cannot auto-scaffold its solver-specific files, so it is best-effort — the
+  //     user sets those up by hand; we only require a mesh and a system/ trio to run it.
+  //  3. `foamRun` placeholder / unknown / unset: not runnable; the gate offers to pick a solver.
   const target = solver && isConfigurableSolver(solver) ? solver : null;
+  const known = solver && SOLVER_LIBRARY.some((info) => info.id === solver);
 
-  // Presence is checked against the RESOLVED solver's required files: a compressible
-  // solver needs thermophysicalProperties + 0/T + 0/alphat that an incompressible one
-  // does not. Before a solver is chosen, guide against simpleFoam's set.
-  const requiredFiles = (target ? SOLVER_CATALOG[target] : SOLVER_CATALOG.simpleFoam).requiredFiles;
-  const presence = await Promise.all(requiredFiles.map((file) => caseFileExists(projectId, file)));
-  const missingFiles = requiredFiles.filter((_, i) => !presence[i]);
-
-  // Even when every file is present, the system/ numerics must match the target
-  // solver (not a generic placeholder, and not the *other* solver's algorithm), or
-  // the run aborts at solve time (e.g. an fvSolution without pRefCell, or a steady
-  // SIMPLE setup under pimpleFoam). This check is solver-aware and self-healing:
-  // when it fails the gate re-offers "Make runnable", which repairs the trio.
-  let numericsReady = false;
   if (target) {
+    const requiredFiles = SOLVER_CATALOG[target].requiredFiles;
+    const presence = await Promise.all(requiredFiles.map((file) => caseFileExists(projectId, file)));
+    const missingFiles = requiredFiles.filter((_, i) => !presence[i]);
     const systemRepairs = await Promise.all(
       [...SYSTEM_NUMERICS_FILES].map((file) => systemNumericsNeedsRepair(projectId, file, target)),
     );
-    numericsReady = systemRepairs.every((needsRepair) => !needsRepair);
+    const numericsReady = systemRepairs.every((needsRepair) => !needsRepair);
+    return {
+      hasMesh: missingMesh.length === 0,
+      missingMesh,
+      missingFiles,
+      runnable: missingMesh.length === 0 && missingFiles.length === 0 && numericsReady,
+      solver,
+      scaffoldable: true,
+    };
   }
 
+  if (known) {
+    // Best-effort: a real solver the app cannot auto-scaffold. Require the mesh and a
+    // system/ trio; trust the user for the solver-specific 0/ + constant/ files.
+    const trio = ['system/controlDict', 'system/fvSchemes', 'system/fvSolution'];
+    const presence = await Promise.all(trio.map((file) => caseFileExists(projectId, file)));
+    const missingFiles = trio.filter((_, i) => !presence[i]);
+    return {
+      hasMesh: missingMesh.length === 0,
+      missingMesh,
+      missingFiles,
+      runnable: missingMesh.length === 0 && missingFiles.length === 0,
+      solver,
+      scaffoldable: false,
+    };
+  }
+
+  // foamRun / unknown / unset: not runnable. Guide against the default (simpleFoam) set.
+  const requiredFiles = SOLVER_CATALOG.simpleFoam.requiredFiles;
+  const presence = await Promise.all(requiredFiles.map((file) => caseFileExists(projectId, file)));
+  const missingFiles = requiredFiles.filter((_, i) => !presence[i]);
   return {
     hasMesh: missingMesh.length === 0,
     missingMesh,
     missingFiles,
-    runnable:
-      missingMesh.length === 0 && missingFiles.length === 0 && target !== null && numericsReady,
+    runnable: false,
     solver,
+    scaffoldable: false,
   };
 }
 
@@ -388,11 +419,16 @@ async function pFieldNeedsRepair(
  * other solver's algorithm — so switching solver re-renders the trio (steady SIMPLE
  * <-> transient PIMPLE). The repair is marker-guarded, so a real imported case or a
  * second call for the same solver is left untouched.
+ *
+ * For a solver the app does NOT fully template (any library solver outside
+ * SOLVER_CATALOG, e.g. interFoam), it only writes a generic skeleton (the system
+ * trio + 0/{U,p}) and points controlDict at that solver; the user completes the
+ * solver-specific files in the editor.
  */
 export async function scaffoldSolver(
   viewer: Viewer,
   projectId: string,
-  solver: ConfigurableSolverId = 'simpleFoam',
+  solver: SolverId = 'simpleFoam',
   turbulence?: string,
 ): Promise<ScaffoldSolverResult> {
   await assertProjectVisible(viewer, projectId);
@@ -405,6 +441,42 @@ export async function scaffoldSolver(
   const patches = boundary ? parseBoundaryPatches(boundary.toString('utf8')) : [];
 
   const created: string[] = [];
+
+  if (!isConfigurableSolver(solver)) {
+    // Manual solver: write a generic skeleton and point controlDict at it. The user
+    // completes the solver-specific 0/ + constant/ files in the editor afterwards.
+    for (const file of BASE_FILE_PATHS) {
+      if (await caseFileExists(projectId, file)) continue;
+      await writeCaseFile(projectId, file, renderBaseFile(file, patches));
+      created.push(file);
+    }
+    const controlDict = await readCaseFile(projectId, 'system/controlDict');
+    if (controlDict) {
+      const content = controlDict.toString('utf8');
+      const next = setApplication(content, solver);
+      if (next !== content) {
+        await writeCaseFile(projectId, 'system/controlDict', next);
+        if (!created.includes('system/controlDict')) created.push('system/controlDict');
+      }
+    }
+    if (turbulence) {
+      const model = TURBULENCE_MODELS.find((entry) => entry.id === turbulence);
+      if (model) {
+        await writeCaseFile(
+          projectId,
+          'constant/turbulenceProperties',
+          renderTurbulenceProperties(model.simulationType, model.id),
+        );
+        created.push('constant/turbulenceProperties');
+      }
+    }
+    const [runnable, entries] = await Promise.all([
+      computeRunnable(projectId),
+      listCaseTree(projectId),
+    ]);
+    return { created, runnable, entries };
+  }
+
   for (const file of SOLVER_CATALOG[solver].requiredFiles) {
     if (SYSTEM_NUMERICS_FILES.has(file)) {
       if (await systemNumericsNeedsRepair(projectId, file, solver)) {

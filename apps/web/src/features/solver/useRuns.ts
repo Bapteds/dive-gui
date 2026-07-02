@@ -8,7 +8,6 @@ import {
   stopRun,
 } from '@/lib/api/projects';
 import type {
-  ConfigurableSolverId,
   RunLogPayload,
   RunStatus,
   RunSummary,
@@ -57,7 +56,7 @@ export function useRunnableQuery(projectId: string, enabled = true) {
 
 /** Variables for the "Make runnable" scaffold: a solver and/or a turbulence model. */
 export interface ScaffoldSolverVars {
-  solver?: ConfigurableSolverId;
+  solver?: SolverId;
   turbulence?: string;
 }
 

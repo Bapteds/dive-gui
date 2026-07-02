@@ -643,6 +643,8 @@ export interface RunnableCheck {
   runnable: boolean;
   /** Solver read from controlDict `application`, or null. */
   solver: string | null;
+  /** Whether the solver is fully scaffolded + easy-configured (vs manual setup). */
+  scaffoldable: boolean;
 }
 
 /** `GET /projects/:id/runnable` response. */
