@@ -510,11 +510,12 @@ export async function scaffoldSolver(
     if (next !== content) await writeCaseFile(projectId, 'system/controlDict', next);
   }
 
-  // Turbulence fields for models beyond the k-omega default: writing 0/epsilon and
-  // 0/nuTilda (when missing) lets the user pick any offered model (k-epsilon family
-  // or Spalart-Allmaras) without a broken case. A model ignores the fields it does
-  // not read, so these extras are harmless for k-omega models.
-  for (const file of ['0/epsilon', '0/nuTilda'] as const) {
+  // Turbulence fields for models beyond the k-omega default: writing 0/epsilon,
+  // 0/nuTilda and 0/R (when missing) lets the user pick ANY offered model without a
+  // broken case - k-epsilon family (epsilon), Spalart-Allmaras (nuTilda) and the
+  // Reynolds-stress models LRR/SSG (R). A model ignores the fields it does not read,
+  // so these extras are harmless for the k-omega default.
+  for (const file of ['0/epsilon', '0/nuTilda', '0/R'] as const) {
     if (await caseFileExists(projectId, file)) continue;
     await writeCaseFile(projectId, file, renderSolverFile(solver, file, patches));
     created.push(file);

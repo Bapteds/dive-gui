@@ -501,6 +501,17 @@ ${boundaryFieldBlock(patches)}
 ${FOAM_FOOTER}`;
 }
 
+/** 0/R — Reynolds-stress tensor (RSM models: LRR, SSG); boundaryField per patch. */
+function fieldR(patches: string[]): string {
+  return `${foamHeader('volSymmTensorField', 'R', '0')}
+dimensions      [0 2 -2 0 0 0 0];
+
+internalField   uniform (0 0 0 0 0 0);
+
+${boundaryFieldBlock(patches)}
+${FOAM_FOOTER}`;
+}
+
 // ---------------------------------------------------------------------------
 // Runnable pimpleFoam case (transient incompressible URANS).
 //
@@ -1035,6 +1046,8 @@ export function renderSolverFile(
       return fieldEpsilon(patches);
     case '0/nuTilda':
       return fieldNuTilda(patches);
+    case '0/R':
+      return fieldR(patches);
     case '0/alphat':
       return fieldAlphat(patches);
     default:

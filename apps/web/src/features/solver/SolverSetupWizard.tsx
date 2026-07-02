@@ -27,12 +27,24 @@ import { useScaffoldSolver } from './useRuns';
  * compact numbered indicator. Exactly ONE orange CTA (Generate), only on the last
  * step; Back is a ghost, Next is a neutral secondary.
  */
-export function SolverSetupWizard({ projectId }: { projectId: string; missingFiles?: string[] }) {
+export function SolverSetupWizard({
+  projectId,
+  initialSolver,
+}: {
+  projectId: string;
+  /** The case's current controlDict solver, so the wizard opens on it (not simpleFoam). */
+  initialSolver?: string | null;
+  missingFiles?: string[];
+}) {
   const scaffold = useScaffoldSolver(projectId);
   const syncBoundaries = useSyncBoundaries(projectId);
 
   const [step, setStep] = useState<1 | 2>(1);
-  const [solver, setSolver] = useState<SolverId>('simpleFoam');
+  const [solver, setSolver] = useState<SolverId>(() =>
+    initialSolver && SOLVER_LIBRARY.some((s) => s.id === initialSolver)
+      ? (initialSolver as SolverId)
+      : 'simpleFoam',
+  );
   const [browserOpen, setBrowserOpen] = useState(false);
   const [turbulence, setTurbulence] = useState<string>('kOmegaSST');
   // Default on: a freshly scaffolded case usually needs its 0/ boundaryFields
@@ -72,8 +84,8 @@ export function SolverSetupWizard({ projectId }: { projectId: string; missingFil
   };
 
   return (
-    <div className="flex w-full max-w-2xl flex-col gap-5 rounded-md border border-border bg-surface p-6 shadow-sm">
-      <header className="flex flex-col gap-3">
+    <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-md border border-border bg-surface shadow-sm lg:min-h-0 lg:flex-1">
+      <header className="flex shrink-0 flex-col gap-3 p-6 pb-4">
         <div className="flex items-center gap-2">
           <Cpu className="size-5 text-primary" strokeWidth={1.75} aria-hidden="true" />
           <h2 className="text-base font-semibold text-text">Set up the solver</h2>
@@ -81,7 +93,11 @@ export function SolverSetupWizard({ projectId }: { projectId: string; missingFil
         <StepIndicator step={step} />
       </header>
 
-      <div ref={stepRef} tabIndex={-1} className="focus:outline-none">
+      <div
+        ref={stepRef}
+        tabIndex={-1}
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-1 focus:outline-none"
+      >
         {step === 1 ? (
           <section className="flex flex-col gap-3" aria-labelledby="setup-step-1">
             <p id="setup-step-1" className="text-sm text-text-secondary">
@@ -164,7 +180,7 @@ export function SolverSetupWizard({ projectId }: { projectId: string; missingFil
         )}
       </div>
 
-      <footer className="flex items-center justify-between gap-3 border-t border-border pt-4">
+      <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-border p-6 pt-4">
         {step === 2 ? (
           <Button variant="ghost" onClick={() => setStep(1)} disabled={pending}>
             <ArrowLeft strokeWidth={1.75} aria-hidden="true" />

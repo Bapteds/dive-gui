@@ -299,6 +299,24 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
     expect(turb).not.toMatch(/RASModel/);
   });
 
+  it('applies a Reynolds-stress model and writes its 0/R field (turbulence -> 0/ fields)', async () => {
+    const { auth, id } = await makeProject('runnable-rstress@x.test');
+    await writeMesh(id);
+
+    const scaffold = await request(app)
+      .post(`/api/v1/projects/${id}/runnable/scaffold`)
+      .set('Authorization', auth)
+      .send({ solver: 'simpleFoam', turbulence: 'LRR' });
+    expect(scaffold.status).toBe(201);
+
+    const turb = (await readCaseFile(id, 'constant/turbulenceProperties'))?.toString('utf8') ?? '';
+    expect(turb).toMatch(/RASModel\s+LRR/);
+    // The Reynolds-stress tensor field is written so the model actually runs.
+    const rField = (await readCaseFile(id, '0/R'))?.toString('utf8') ?? '';
+    expect(rField).toMatch(/volSymmTensorField/);
+    expect(rField).toMatch(/uniform \(0 0 0 0 0 0\)/);
+  });
+
   it('scaffolds a base-tier solver as a guided incompressible scaffold (interFoam)', async () => {
     const { auth, id } = await makeProject('runnable-base@x.test');
     await writeMesh(id);

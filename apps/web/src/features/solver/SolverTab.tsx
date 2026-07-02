@@ -53,7 +53,11 @@ export function SolverTab({ projectId }: { projectId: string }) {
 
   if (!runnable.data.runnable) {
     return (
-      <SolverSetupWizard projectId={projectId} missingFiles={runnable.data.missingFiles} />
+      <SolverSetupWizard
+        projectId={projectId}
+        initialSolver={runnable.data.solver}
+        missingFiles={runnable.data.missingFiles}
+      />
     );
   }
 
