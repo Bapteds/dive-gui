@@ -552,7 +552,10 @@ function RowActions({
   );
 
   return (
-    <DropdownMenu>
+    // modal={false}: this row-actions menu is often rendered inside the solver-setup
+    // Dialog; a modal menu would fight the parent Dialog (and clicking it could close
+    // the wizard). Non-modal is also fine standalone on the project Edit page.
+    <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"

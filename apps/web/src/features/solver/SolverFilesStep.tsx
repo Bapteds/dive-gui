@@ -74,7 +74,23 @@ export function SolverFilesStep({
         if (!next) onDone();
       }}
     >
-      <DialogContent className="flex h-[90vh] w-[90vw] max-w-none flex-col gap-0 overflow-hidden p-0">
+      <DialogContent
+        className="flex h-[90vh] w-[90vw] max-w-none flex-col gap-0 overflow-hidden p-0"
+        onInteractOutside={(event) => {
+          // The file "…" actions menu, the delete-confirm / new-file dialogs and the
+          // template picker all portal OUTSIDE this content, so Radix reports a click
+          // on them as "outside" and would close the whole wizard. Ignore those — only
+          // a real backdrop click closes the step.
+          const target = event.target as Element | null;
+          if (
+            target?.closest(
+              '[data-radix-popper-content-wrapper],[role="menu"],[role="dialog"],[role="alertdialog"]',
+            )
+          ) {
+            event.preventDefault();
+          }
+        }}
+      >
         <DialogHeader className="shrink-0 border-b border-border p-4 pr-12">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-col gap-1.5">
