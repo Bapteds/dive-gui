@@ -1096,6 +1096,14 @@ export interface TurbulenceModelSpec {
   summary: string;
   /** Modelling approach, written as simulationType in turbulenceProperties. */
   simulationType: 'laminar' | 'RAS' | 'LES';
+  /**
+   * The 0/ turbulence fields this model actually reads (basenames, e.g.
+   * ['k','omega','nut']). Single source of truth for which fields the case
+   * generator writes — and which it deletes on a model switch: k-epsilon carries
+   * epsilon (never omega), Spalart-Allmaras carries nuTilda, the Reynolds-stress
+   * models carry R, and laminar carries none.
+   */
+  fields: readonly string[];
 }
 
 /** Turbulence approaches for grouping the models in the picker (laminar first). */
@@ -1118,6 +1126,7 @@ export const TURBULENCE_MODELS: TurbulenceModelSpec[] = [
     label: 'Laminar (no model)',
     summary: 'No turbulence model. For low Reynolds number, creeping flow, or a resolved DNS.',
     simulationType: 'laminar',
+    fields: [],
   },
   // RANS
   {
@@ -1125,60 +1134,71 @@ export const TURBULENCE_MODELS: TurbulenceModelSpec[] = [
     label: 'k-omega SST',
     summary: 'Robust all-rounder for wall-bounded flow and adverse pressure gradients.',
     simulationType: 'RAS',
+    fields: ['k', 'omega', 'nut'],
   },
   {
     id: 'kOmega',
     label: 'k-omega',
     summary: 'Strong near walls and at low Reynolds number; sensitive to the freestream.',
     simulationType: 'RAS',
+    fields: ['k', 'omega', 'nut'],
   },
   {
     id: 'kEpsilon',
     label: 'k-epsilon',
     summary: 'Classic model for fully turbulent free-shear and internal flows.',
     simulationType: 'RAS',
+    fields: ['k', 'epsilon', 'nut'],
   },
   {
     id: 'realizableKE',
     label: 'Realizable k-epsilon',
     summary: 'A k-epsilon variant that does better on swirling and separated flow.',
     simulationType: 'RAS',
+    fields: ['k', 'epsilon', 'nut'],
   },
   {
     id: 'RNGkEpsilon',
     label: 'RNG k-epsilon',
     summary: 'Renormalisation-group k-epsilon, improved for strained and swirling flow.',
     simulationType: 'RAS',
+    fields: ['k', 'epsilon', 'nut'],
   },
   {
     id: 'LaunderSharmaKE',
     label: 'Launder-Sharma k-epsilon',
     summary: 'Low-Reynolds k-epsilon that integrates to the wall (no wall functions).',
     simulationType: 'RAS',
+    fields: ['k', 'epsilon', 'nut'],
   },
   {
     id: 'kOmegaSSTLM',
     label: 'k-omega SST LM (transition)',
     summary: 'k-omega SST with the Langtry-Menter laminar-turbulent transition model.',
     simulationType: 'RAS',
+    // Transition adds gammaInt/ReThetat; the core turbulence fields are k/omega/nut.
+    fields: ['k', 'omega', 'nut'],
   },
   {
     id: 'SpalartAllmaras',
     label: 'Spalart-Allmaras',
     summary: 'One-equation model tuned for external aerodynamics.',
     simulationType: 'RAS',
+    fields: ['nuTilda', 'nut'],
   },
   {
     id: 'LRR',
     label: 'Reynolds stress (LRR)',
     summary: 'Reynolds-stress model: resolves anisotropy, no eddy-viscosity assumption.',
     simulationType: 'RAS',
+    fields: ['R', 'k', 'epsilon', 'nut'],
   },
   {
     id: 'SSG',
     label: 'Reynolds stress (SSG)',
     summary: 'Speziale-Sarkar-Gatski Reynolds-stress model for strongly anisotropic flow.',
     simulationType: 'RAS',
+    fields: ['R', 'k', 'epsilon', 'nut'],
   },
   // LES / DES
   {
@@ -1186,56 +1206,120 @@ export const TURBULENCE_MODELS: TurbulenceModelSpec[] = [
     label: 'Smagorinsky',
     summary: 'Algebraic subgrid model. Simple and cheap; needs near-wall damping.',
     simulationType: 'LES',
+    fields: ['nut'],
   },
   {
     id: 'kEqn',
     label: 'kEqn',
     summary: 'One-equation subgrid kinetic-energy model. A common LES default.',
     simulationType: 'LES',
+    fields: ['k', 'nut'],
   },
   {
     id: 'dynamicKEqn',
     label: 'Dynamic kEqn',
     summary: 'kEqn with dynamically computed model coefficients.',
     simulationType: 'LES',
+    fields: ['k', 'nut'],
   },
   {
     id: 'WALE',
     label: 'WALE',
     summary: 'Wall-adapting subgrid model with correct near-wall scaling.',
     simulationType: 'LES',
+    fields: ['nut'],
   },
   {
     id: 'dynamicLagrangian',
     label: 'Dynamic Lagrangian',
     summary: 'Dynamic Smagorinsky with Lagrangian averaging along pathlines.',
     simulationType: 'LES',
+    fields: ['nut'],
   },
   {
     id: 'SpalartAllmarasDES',
     label: 'Spalart-Allmaras DES',
     summary: 'Detached Eddy Simulation on the Spalart-Allmaras base.',
     simulationType: 'LES',
+    fields: ['nuTilda', 'nut'],
   },
   {
     id: 'SpalartAllmarasDDES',
     label: 'Spalart-Allmaras DDES',
     summary: 'Delayed DES: shields the boundary layer from grid-induced separation.',
     simulationType: 'LES',
+    fields: ['nuTilda', 'nut'],
   },
   {
     id: 'SpalartAllmarasIDDES',
     label: 'Spalart-Allmaras IDDES',
     summary: 'Improved delayed DES with wall-modelled LES near walls.',
     simulationType: 'LES',
+    fields: ['nuTilda', 'nut'],
   },
   {
     id: 'kOmegaSSTDES',
     label: 'k-omega SST DES',
     summary: 'Detached Eddy Simulation built on k-omega SST.',
     simulationType: 'LES',
+    fields: ['k', 'omega', 'nut'],
   },
 ];
+
+/**
+ * Every 0/ turbulence field the app may generate for an incompressible/compressible
+ * RANS/LES case. Used to DELETE the fields a chosen model does not read (so a
+ * k-epsilon case ships no stale omega). `nut` is common to every turbulence model;
+ * the rest are model-specific.
+ */
+export const TURBULENCE_FIELD_NAMES = ['k', 'epsilon', 'omega', 'nut', 'nuTilda', 'R'] as const;
+
+/**
+ * The 0/ turbulence field basenames a model reads. The single source of truth the
+ * case generator uses to write EXACTLY the fields a model needs (k-epsilon →
+ * k/epsilon/nut, k-omega → k/omega/nut, Spalart-Allmaras → nuTilda/nut, RSM →
+ * R/k/epsilon/nut) and to remove the others. `laminar` reads none. An unknown id
+ * falls back to the k-omega set (the app default family), never [].
+ */
+export function turbulenceFieldsFor(modelId: string): string[] {
+  const model = TURBULENCE_MODELS.find((entry) => entry.id === modelId);
+  if (!model) return ['k', 'omega', 'nut'];
+  return [...model.fields];
+}
+
+/**
+ * The wall-function boundary type for a turbulence field on a `wall` patch under
+ * `modelId`, or null when the field is not one the model reads (caller then uses a
+ * generic BC). Standard high-Re wall functions, valid for ESI OpenFOAM.com v2406:
+ *   nut     → nutkWallFunction (k-based models) | nutUSpaldingWallFunction (no-k: SA, algebraic LES)
+ *   k       → kqRWallFunction
+ *   epsilon → epsilonWallFunction
+ *   omega   → omegaWallFunction
+ *   R       → kqRWallFunction
+ *   nuTilda → fixedValue (0 at the wall)
+ * These are the model-aware BCs the app writes automatically when a patch is a wall,
+ * so the user never wires them by hand.
+ */
+export function turbulenceWallBc(fieldName: string, modelId: string): string | null {
+  const fields = turbulenceFieldsFor(modelId);
+  if (!fields.includes(fieldName)) return null;
+  switch (fieldName) {
+    case 'k':
+      return 'kqRWallFunction';
+    case 'epsilon':
+      return 'epsilonWallFunction';
+    case 'omega':
+      return 'omegaWallFunction';
+    case 'R':
+      return 'kqRWallFunction';
+    case 'nuTilda':
+      return 'fixedValue';
+    case 'nut':
+      return fields.includes('k') ? 'nutkWallFunction' : 'nutUSpaldingWallFunction';
+    default:
+      return null;
+  }
+}
 
 /** The turbulence model ids, as a literal tuple for zod validation. Matches TURBULENCE_MODELS. */
 export const TURBULENCE_MODEL_IDS = [
