@@ -184,9 +184,14 @@ const envSchema = z
     // Grace period (ms) after a graceful stop request (writing `stopAt writeNow`)
     // before escalating to SIGTERM/SIGKILL.
     RUN_STOP_GRACE_MS: z.coerce.number().int().positive().default(30000),
-    // MPI launcher for the DEFERRED parallel path (decomposePar + mpirun -np N
-    // solver -parallel + reconstructPar). Declared now so the env shape is stable.
+    // MPI launcher for the parallel path (decomposePar + mpirun -np N solver
+    // -parallel + reconstructPar).
     MPI_BIN: z.string().min(1).default('mpirun'),
+    // Global core budget for parallel runs across ALL projects. A new run is
+    // rejected (409 NOT_ENOUGH_CORES) when the sum of active runs' cores plus the
+    // requested cores would exceed this — preventing oversubscription across
+    // projects. 0 = use the machine's logical core count (os.cpus().length).
+    SOLVER_TOTAL_CORES: z.coerce.number().int().min(0).default(0),
     // Number of trusted reverse-proxy hops in front of the API. 0 = trust none
     // (default, correct for direct exposure / local dev). Set to 1 behind a
     // single proxy/load balancer so the login rate-limiter keys on the real

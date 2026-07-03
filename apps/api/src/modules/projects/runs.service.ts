@@ -15,6 +15,7 @@
 // Access model: gated by project visibility (assertProjectVisible), same as case
 // files; any member may start/stop a run. A tool failure never throws (the run
 // resolves `failed`); only validation/authorization errors throw (404/409/422).
+import os from 'node:os';
 import {
   ACTIVE_RUN_STATUSES,
   RUN_DIRNAME,
@@ -29,13 +30,16 @@ import { env } from '../../config/env';
 import { AppError } from '../../lib/AppError';
 import { prisma } from '../../lib/prisma';
 import { logger } from '../../lib/logger';
-import { planOpenfoamCommand } from '../../lib/openfoamCommand';
+import { commandFailed, planOpenfoamCommand } from '../../lib/openfoamCommand';
+import { runCommand } from '../../lib/commandRunner';
 import { runStream, type StreamExit, type StreamHandle } from '../../lib/streamRunner';
 import {
   caseDirAbsolute,
+  deleteCaseDir,
   readCaseFile,
   writeCaseFile,
 } from '../../lib/caseStorage';
+import { renderDecomposeParDict } from '../../lib/openfoamCase';
 import { ensureRunDir, readRunLog, runLogAbsolute } from '../../lib/runStorage';
 import { downsampleResiduals, parseResiduals } from '../../lib/residualParser';
 import { computeRunnable } from './files.service';
@@ -46,6 +50,8 @@ import type { StartRunInput } from './runs.schemas';
 export interface PublicRun {
   id: string;
   solver: string;
+  /** Cores (parallel subdomains) the run used; 1 = serial single-core. */
+  cores: number;
   status: RunStatus;
   exitCode: number | null;
   reason: string | null;
@@ -79,6 +85,7 @@ function toPublicRun(run: Run): PublicRun {
   return {
     id: run.id,
     solver: run.solver,
+    cores: run.cores,
     status: run.status as RunStatus,
     exitCode: run.exitCode,
     reason: run.reason,
@@ -99,6 +106,15 @@ function resolveSolver(fromControlDict: string | null, fromInput?: SolverId): So
     'NOT_RUNNABLE',
     `Unsupported solver "${candidate}". This version runs: ${SOLVER_IDS.join(', ')}.`,
   );
+}
+
+/**
+ * The global core budget for parallel runs across ALL projects: the configured cap
+ * (SOLVER_TOTAL_CORES), or the machine's logical core count when unset (0). A new
+ * run is refused when the sum of active runs' cores + the request would exceed it.
+ */
+function coreBudget(): number {
+  return env.SOLVER_TOTAL_CORES > 0 ? env.SOLVER_TOTAL_CORES : os.cpus().length;
 }
 
 /**
@@ -187,11 +203,42 @@ function classifyExit(
 }
 
 /**
+ * After a parallel run finishes, reassemble the decomposed time directories with
+ * `reconstructPar -latestTime`, then drop the processor* directories on success
+ * (kept on failure for debugging). Best-effort: a reconstruct failure is logged,
+ * never thrown — the run's terminal status already stands.
+ */
+async function reconstructParallel(projectId: string, cores: number): Promise<void> {
+  const caseDir = caseDirAbsolute(projectId);
+  try {
+    const result = await runCommand({
+      ...planOpenfoamCommand('reconstructPar', ['-case', caseDir, '-latestTime'], caseDir),
+      timeoutMs: env.SOLVER_MAX_RUNTIME_MS,
+    });
+    if (commandFailed(result)) {
+      logger.error(`reconstructPar failed for project ${projectId}; processor dirs kept.`);
+      return;
+    }
+    for (let i = 0; i < cores; i += 1) {
+      await deleteCaseDir(projectId, `processor${i}`).catch(() => undefined);
+    }
+  } catch (err) {
+    logger.error('reconstructPar orchestration failed', err);
+  }
+}
+
+/**
  * Drive a run to its terminal state once the process ends. Uses updateMany with
  * an active-status filter so a status already set elsewhere (e.g. boot
- * reconciliation, a direct stop) is never clobbered — first writer wins.
+ * reconciliation, a direct stop) is never clobbered — first writer wins. For a
+ * parallel run (cores > 1) the decomposed result is reassembled afterwards.
  */
-async function finalizeRun(projectId: string, runId: string, exit: StreamExit): Promise<void> {
+async function finalizeRun(
+  projectId: string,
+  runId: string,
+  exit: StreamExit,
+  cores = 1,
+): Promise<void> {
   handles.delete(runId);
   const wasStopped = stopRequested.delete(runId);
 
@@ -203,6 +250,14 @@ async function finalizeRun(projectId: string, runId: string, exit: StreamExit): 
   }
 
   const { status, reason } = classifyExit(exit, wasStopped, log);
+
+  // A parallel run's output is written per-processor; reassemble it BEFORE marking
+  // the run terminal, so the reconstructed result is ready when the status flips
+  // (skipped when the solver never spawned).
+  if (cores > 1 && !exit.spawnError) {
+    await reconstructParallel(projectId, cores);
+  }
+
   await prisma.run.updateMany({
     where: { id: runId, status: { in: [...ACTIVE_RUN_STATUSES] } },
     data: { status, reason, exitCode: exit.exitCode, pid: null, finishedAt: new Date() },
@@ -250,18 +305,78 @@ export async function startRun(
   await clearGracefulStop(projectId);
   await ensureRunTimeModifiable(projectId);
 
+  // Resolve the requested cores and enforce the GLOBAL core budget: the sum of all
+  // active runs' cores (across every project) plus this request must fit, so two
+  // projects cannot oversubscribe the machine.
+  const cores = input.cores ?? 1;
+  const budget = coreBudget();
+  if (cores > budget) {
+    throw new AppError(
+      422,
+      'TOO_MANY_CORES',
+      `This machine has ${budget} core(s); a run cannot use ${cores}.`,
+    );
+  }
+  const used =
+    (
+      await prisma.run.aggregate({
+        where: { status: { in: [...ACTIVE_RUN_STATUSES] } },
+        _sum: { cores: true },
+      })
+    )._sum.cores ?? 0;
+  if (used + cores > budget) {
+    throw new AppError(
+      409,
+      'NOT_ENOUGH_CORES',
+      `Not enough free cores: ${used} in use, ${cores} requested, ${budget} total. ` +
+        'Wait for a run to finish, or use fewer cores.',
+    );
+  }
+
   // Create the row first so we have an id to derive the log path from.
   const created = await prisma.run.create({
-    data: { projectId, solver, status: 'queued', command: '', logPath: '' },
+    data: { projectId, solver, cores, status: 'queued', command: '', logPath: '' },
   });
 
   const caseDir = caseDirAbsolute(projectId);
   const logAbs = runLogAbsolute(projectId, created.id);
   await ensureRunDir(projectId, created.id);
 
-  // argv-safe invocation; sources OPENFOAM_BASHRC when configured (same helper
-  // the conversion/autoPatch pipeline uses).
-  const plan = planOpenfoamCommand(solver, ['-case', caseDir], caseDir);
+  // Parallel run: decompose the mesh into `cores` subdomains first (blocking), then
+  // launch the solver under MPI. A decompose failure ends the run before any spawn.
+  if (cores > 1) {
+    await writeCaseFile(projectId, 'system/decomposeParDict', renderDecomposeParDict(cores));
+    const decompose = await runCommand({
+      ...planOpenfoamCommand('decomposePar', ['-case', caseDir, '-force'], caseDir),
+      timeoutMs: env.SOLVER_MAX_RUNTIME_MS,
+    });
+    if (commandFailed(decompose)) {
+      const failed = await prisma.run.update({
+        where: { id: created.id },
+        data: {
+          status: 'failed',
+          reason:
+            'decomposePar failed: could not split the mesh for a parallel run. ' +
+            'Check the mesh, or try fewer cores.',
+          finishedAt: new Date(),
+        },
+      });
+      return toPublicRun(failed);
+    }
+  }
+
+  // argv-safe invocation; sources OPENFOAM_BASHRC when configured (same helper the
+  // conversion/autoPatch pipeline uses). Serial: `<solver> -case <dir>`. Parallel:
+  // `mpirun --allow-run-as-root -np N <solver> -case <dir> -parallel` (the flag is a
+  // no-op unless the API runs as root, e.g. inside a container).
+  const plan =
+    cores > 1
+      ? planOpenfoamCommand(
+          env.MPI_BIN,
+          ['--allow-run-as-root', '-np', String(cores), solver, '-case', caseDir, '-parallel'],
+          caseDir,
+        )
+      : planOpenfoamCommand(solver, ['-case', caseDir], caseDir);
   const handle = runStream({
     command: plan.command,
     args: plan.args,
@@ -285,7 +400,7 @@ export async function startRun(
 
   // Reconcile to a terminal state when the process ends (fire and forget).
   void handle.onExit
-    .then((exit) => finalizeRun(projectId, created.id, exit))
+    .then((exit) => finalizeRun(projectId, created.id, exit, cores))
     .catch((err) => logger.error('Run finalization failed', err));
 
   return toPublicRun(run);

@@ -32,6 +32,8 @@ export default defineConfig({
       // Short stop grace so the solver-run stop test does not wait 30 s for the
       // SIGTERM escalation (the stream runner is faked, so this only paces tests).
       RUN_STOP_GRACE_MS: '50',
+      // Deterministic core budget for the parallel-run tests (not the CI machine's).
+      SOLVER_TOTAL_CORES: '8',
       SEED_ADMIN_EMAIL: 'admin@dive-turbinen.test',
       SEED_ADMIN_PASSWORD: 'TestAdminPassw0rd!',
       SEED_ADMIN_NAME: 'Test Super Admin',

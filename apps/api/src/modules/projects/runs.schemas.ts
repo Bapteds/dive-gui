@@ -9,6 +9,12 @@ import { SOLVER_IDS } from '@dive/shared';
  */
 export const startRunSchema = z.object({
   solver: z.enum(SOLVER_IDS).optional(),
+  /**
+   * Number of cores (parallel subdomains) to run on. 1 (default) = serial. When > 1
+   * the run decomposes the mesh, runs `mpirun -np N <solver> -parallel`, then
+   * reconstructs. The effective cap is the server's core budget (checked at start).
+   */
+  cores: z.coerce.number().int().min(1).max(1024).optional(),
 });
 
 export type StartRunInput = z.infer<typeof startRunSchema>;

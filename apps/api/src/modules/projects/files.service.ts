@@ -16,7 +16,9 @@ import {
   type ConfigurableSolverId,
   type SolverId,
 } from '@dive/shared';
+import os from 'node:os';
 import { AppError } from '../../lib/AppError';
+import { env } from '../../config/env';
 import {
   caseFileExists,
   caseIsEmpty,
@@ -249,6 +251,8 @@ export interface RunnableCheck {
    * "manual setup": selectable + runnable best-effort, configured via the file editor.
    */
   scaffoldable: boolean;
+  /** Server core budget: the max cores a run may request (machine cores, or the cap). */
+  maxCores: number;
 }
 
 /** Result of generating the missing simpleFoam files: created + refreshed state. */
@@ -334,6 +338,7 @@ export async function computeRunnable(projectId: string): Promise<RunnableCheck>
   // (k-epsilon needs epsilon not omega; laminar needs none), so the gate matches
   // exactly what scaffoldSolver writes for that model.
   const model = await caseTurbulenceModel(projectId);
+  const maxCores = env.SOLVER_TOTAL_CORES > 0 ? env.SOLVER_TOTAL_CORES : os.cpus().length;
 
   // Three tiers of gate, by what the app knows about the solver:
   //  1. configurable (simpleFoam/pimpleFoam/rho*): fully scaffolded + easy-configured,
@@ -360,6 +365,7 @@ export async function computeRunnable(projectId: string): Promise<RunnableCheck>
       runnable: missingMesh.length === 0 && missingFiles.length === 0 && numericsReady,
       solver,
       scaffoldable: true,
+      maxCores,
     };
   }
 
@@ -376,6 +382,7 @@ export async function computeRunnable(projectId: string): Promise<RunnableCheck>
       runnable: missingMesh.length === 0 && missingFiles.length === 0,
       solver,
       scaffoldable: false,
+      maxCores,
     };
   }
 
@@ -390,6 +397,7 @@ export async function computeRunnable(projectId: string): Promise<RunnableCheck>
     runnable: false,
     solver,
     scaffoldable: false,
+    maxCores,
   };
 }
 

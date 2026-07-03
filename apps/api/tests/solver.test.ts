@@ -23,6 +23,7 @@ import {
   type StreamHandle,
   type StreamRunner,
 } from '../src/lib/streamRunner';
+import { setCommandRunner, type CommandResult } from '../src/lib/commandRunner';
 import { reconcileOrphanRuns } from '../src/modules/projects/runs.service';
 
 const BOUNDARY = `FoamFile { class polyBoundaryMesh; object boundary; }
@@ -121,6 +122,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   setStreamRunner(null); // restore the real runner
+  setCommandRunner(null); // restore the real one-shot runner (parallel tests swap it)
 });
 
 afterAll(async () => {
@@ -283,5 +285,82 @@ describe('solver run guards and access', () => {
     const reloaded = await prisma.run.findUnique({ where: { id: orphan.id } });
     expect(reloaded?.status).toBe('failed');
     expect(reloaded?.reason).toMatch(/restart/i);
+  });
+});
+
+describe('parallel runs (cores)', () => {
+  /** A one-shot command fake that records invocations and always succeeds. */
+  function recordingCommandRunner(sink: string[]) {
+    return async (spec: { command: string; args: string[] }): Promise<CommandResult> => {
+      sink.push([spec.command, ...spec.args].join(' '));
+      return {
+        command: spec.command,
+        args: spec.args,
+        exitCode: 0,
+        stdout: '',
+        stderr: '',
+        durationMs: 1,
+        timedOut: false,
+      };
+    };
+  }
+
+  it('decomposes, runs under mpirun -parallel, then reconstructs (cores > 1)', async () => {
+    const commands: string[] = [];
+    setCommandRunner(recordingCommandRunner(commands));
+    let solverCmd = '';
+    setStreamRunner((spec): StreamHandle => {
+      solverCmd = [spec.command, ...spec.args].join(' ');
+      return fakeRunner('converge')(spec);
+    });
+
+    const { id, auth } = await makeRunnableProject('solver-parallel@x.test');
+    const start = await request(app)
+      .post(`/api/v1/projects/${id}/runs`)
+      .set('Authorization', auth)
+      .send({ cores: 4 });
+    expect(start.status).toBe(201);
+    expect(start.body.run.cores).toBe(4);
+
+    const settled = await waitForTerminal(id, start.body.run.id, auth);
+    expect(settled.status).toBe('converged');
+    expect(settled.cores).toBe(4);
+
+    // decomposeParDict was written for 4 subdomains and decomposePar ran.
+    const dict = (await readCaseFile(id, 'system/decomposeParDict'))?.toString('utf8') ?? '';
+    expect(dict).toMatch(/numberOfSubdomains\s+4/);
+    expect(commands.some((c) => c.includes('decomposePar') && c.includes('-force'))).toBe(true);
+    // The solver launched under mpirun -np 4 ... -parallel.
+    expect(solverCmd).toMatch(/mpirun/);
+    expect(solverCmd).toMatch(/-np 4\b/);
+    expect(solverCmd).toContain('-parallel');
+    // reconstructPar ran (before the run was marked terminal).
+    expect(commands.some((c) => c.includes('reconstructPar'))).toBe(true);
+  });
+
+  it('rejects a run that would exceed the global core budget (409 NOT_ENOUGH_CORES)', async () => {
+    // Budget is 8 (test env). A 6-core run active in another project leaves 2 free.
+    const { id, auth } = await makeRunnableProject('solver-budget@x.test');
+    const other = await makeRunnableProject('solver-budget-other@x.test');
+    await prisma.run.create({
+      data: { projectId: other.id, solver: 'simpleFoam', cores: 6, status: 'running', command: 'x', logPath: 'x' },
+    });
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/runs`)
+      .set('Authorization', auth)
+      .send({ cores: 4 });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('NOT_ENOUGH_CORES');
+  });
+
+  it('rejects more cores than the machine budget (422 TOO_MANY_CORES)', async () => {
+    const { id, auth } = await makeRunnableProject('solver-toomany@x.test');
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/runs`)
+      .set('Authorization', auth)
+      .send({ cores: 999 });
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe('TOO_MANY_CORES');
   });
 });

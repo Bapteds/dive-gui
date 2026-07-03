@@ -558,6 +558,20 @@ RAS
 ${FOAM_FOOTER}`;
 }
 
+/**
+ * system/decomposeParDict for a parallel run: split the mesh into
+ * `numberOfSubdomains` pieces with the `scotch` method (automatic, balanced, needs
+ * no coefficients — valid on ESI OpenFOAM.com v2406). The run service writes this
+ * when cores > 1, then `decomposePar` uses it before `mpirun -np N <solver> -parallel`.
+ */
+export function renderDecomposeParDict(numberOfSubdomains: number): string {
+  return `${foamHeader('dictionary', 'decomposeParDict', 'system')}
+numberOfSubdomains ${numberOfSubdomains};
+
+method          scotch;
+${FOAM_FOOTER}`;
+}
+
 /** constant/turbulenceProperties — RAS with the k-omega SST model (scaffold default). */
 function turbulenceProperties(): string {
   return renderTurbulenceProperties('RAS', 'kOmegaSST');
