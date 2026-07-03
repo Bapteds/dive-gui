@@ -322,6 +322,30 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
     expect(switched.body.runnable.runnable).toBe(true);
   });
 
+  it('refreshes a retained field wall function on a model switch (k-omega -> Spalart-Allmaras)', async () => {
+    const { auth, id } = await makeProject('runnable-wallfn-refresh@x.test');
+    await writeMesh(id);
+    // k-omega: 0/nut wall gets nutkWallFunction.
+    await request(app).post(`/api/v1/projects/${id}/runnable/scaffold`).set('Authorization', auth);
+    expect((await readCaseFile(id, '0/nut'))?.toString('utf8') ?? '').toMatch(
+      /walls\s*\{[\s\S]*?nutkWallFunction/,
+    );
+
+    // Spalart-Allmaras has no k, so nut's wall function must switch to
+    // nutUSpaldingWallFunction even though 0/nut is retained (not re-created).
+    const switched = await request(app)
+      .post(`/api/v1/projects/${id}/runnable/scaffold`)
+      .set('Authorization', auth)
+      .send({ solver: 'simpleFoam', turbulence: 'SpalartAllmaras' });
+    expect(switched.status).toBe(201);
+    const nut = (await readCaseFile(id, '0/nut'))?.toString('utf8') ?? '';
+    expect(nut).toMatch(/walls\s*\{[\s\S]*?nutUSpaldingWallFunction/);
+    expect(nut).not.toContain('nutkWallFunction');
+    // k/omega dropped, nuTilda written.
+    expect(await readCaseFile(id, '0/omega')).toBeNull();
+    expect(await readCaseFile(id, '0/nuTilda')).toBeTruthy();
+  });
+
   it('writes a laminar turbulenceProperties (no RAS block) when laminar is chosen', async () => {
     const { auth, id } = await makeProject('runnable-laminar@x.test');
     await writeMesh(id);

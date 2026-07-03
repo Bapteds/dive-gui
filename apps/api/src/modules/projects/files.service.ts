@@ -37,6 +37,8 @@ import {
   BASE_FILE_PATHS,
   BOUNDARY_FILE,
   MESH_FILES,
+  fieldBcBody,
+  getFieldPatchType,
   mergeFieldBoundary,
   parseApplication,
   parseBoundaryPatchesWithTypes,
@@ -46,6 +48,7 @@ import {
   renderSolverFile,
   renderTurbulenceProperties,
   setApplication,
+  setFieldPatchBc,
   type BoundaryPatch,
 } from '../../lib/openfoamCase';
 import { assertProjectVisible, type Viewer } from './projects.service';
@@ -285,6 +288,36 @@ async function caseTurbulenceModel(projectId: string): Promise<string> {
   const turb = await readCaseFile(projectId, 'constant/turbulenceProperties');
   const parsed = turb ? parseTurbulenceModel(turb.toString('utf8')) : null;
   return parsed ?? 'kOmegaSST';
+}
+
+/** Wall-patch field BCs the app manages automatically (safe to refresh on a model
+ * switch): a generic zeroGradient, noSlip, or any wall function. A custom BC (a
+ * specific fixedValue, calculated, etc.) is left untouched. */
+function isAutoManagedWallBc(bc: string): boolean {
+  return bc === 'zeroGradient' || bc === 'noSlip' || bc.includes('WallFunction');
+}
+
+/**
+ * Refresh the wall-patch entries of a RETAINED turbulence field to the current
+ * model's wall function, so switching model updates them even on fields kept from
+ * the previous model — e.g. k-omega -> Spalart-Allmaras changes nut from
+ * nutkWallFunction to nutUSpaldingWallFunction (no k). Only auto-managed wall BCs
+ * are rewritten (see isAutoManagedWallBc); a user's custom wall BC is preserved.
+ * Idempotent: a same-model re-scaffold produces identical text. Pure text.
+ */
+function refreshWallBcs(
+  text: string,
+  fieldName: string,
+  wallPatches: BoundaryPatch[],
+  model: string,
+): string {
+  let out = text;
+  for (const patch of wallPatches) {
+    const current = getFieldPatchType(out, patch.name);
+    if (current === null || !isAutoManagedWallBc(current)) continue;
+    out = setFieldPatchBc(out, patch.name, fieldBcBody(fieldName, 'wall', model));
+  }
+  return out;
 }
 
 /**
@@ -579,14 +612,26 @@ export async function scaffoldSolver(
   }
 
   // Turbulence 0/ fields, model-driven: write EXACTLY the fields the chosen model
-  // reads (with the model-aware wall functions on the mesh's wall patches), and
-  // REMOVE the ones it does not — so a k-epsilon case ships k/epsilon/nut and no
-  // stale 0/omega, and switching model cleans up the previous model's fields (from
-  // both 0/ and the pristine 0.orig/).
-  for (const path of modelFields.map((field) => `0/${field}`)) {
-    if (await caseFileExists(projectId, path)) continue;
-    await writeCaseFile(projectId, path, renderSolverFile(solver, path, patches, model));
-    created.push(path);
+  // reads (with the model-aware wall functions on the mesh's wall patches), REFRESH
+  // the wall BCs of a retained field to the current model (so switching model updates
+  // e.g. nut's wall function), and REMOVE the fields the model does not read — so a
+  // k-epsilon case ships k/epsilon/nut and no stale 0/omega (from both 0/ and 0.orig/).
+  const wallPatches = patches.filter((patch) => patch.type === 'wall');
+  for (const field of modelFields) {
+    const path = `0/${field}`;
+    if (!(await caseFileExists(projectId, path))) {
+      await writeCaseFile(projectId, path, renderSolverFile(solver, path, patches, model));
+      created.push(path);
+      continue;
+    }
+    // Retained field: refresh its wall functions to the current model (idempotent
+    // when the model is unchanged). Do not push to `created` — the file already existed.
+    if (wallPatches.length === 0) continue;
+    const buffer = await readCaseFile(projectId, path);
+    if (!buffer) continue;
+    const text = buffer.toString('utf8');
+    const next = refreshWallBcs(text, field, wallPatches, model);
+    if (next !== text) await writeCaseFile(projectId, path, next);
   }
   for (const field of TURBULENCE_FIELD_NAMES) {
     if (modelFields.includes(field)) continue;
