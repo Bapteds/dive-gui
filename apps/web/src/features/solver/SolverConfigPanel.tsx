@@ -36,6 +36,7 @@ import {
 import {
   caseFileContentQueryKey,
   useCaseFileContentQuery,
+  useCaseFilesQuery,
   useSaveCaseFile,
 } from '@/features/projects/useCaseFiles';
 import {
@@ -48,7 +49,12 @@ import { CaseFileEditor } from '@/features/projects/CaseFileEditor';
 import { SolverBrowserDialog } from './SolverBrowserDialog';
 import { useScaffoldSolver } from './useRuns';
 
-/** Solver files exposed in Advanced mode when the solver has no catalog template. */
+/**
+ * The solver files worth surfacing FIRST in Advanced mode (a solver with no catalog
+ * template falls back to these). This is only a preferred ORDERING — the dropdown
+ * lists the case's REAL files (see AdvancedConfig), so a name here that isn't on disk
+ * is simply never shown, instead of being offered and 404-ing on open.
+ */
 const DEFAULT_SOLVER_FILES = [
   'system/controlDict',
   'system/fvSchemes',
@@ -58,6 +64,18 @@ const DEFAULT_SOLVER_FILES = [
   '0/U',
   '0/p',
 ];
+
+/**
+ * Keep only editable config files: system/, 0/, constant/, minus the binary mesh
+ * (mirrors the wizard's SolverFilesStep). Used to list the case's REAL files so the
+ * Advanced editor never advertises a path that does not exist on disk.
+ */
+function isConfigFile(path: string): boolean {
+  const top = path.split('/')[0];
+  if (top !== 'system' && top !== '0' && top !== 'constant') return false;
+  if (path === 'constant/polyMesh' || path.startsWith('constant/polyMesh/')) return false;
+  return true;
+}
 
 /**
  * SolverConfigPanel - configure the solver with the same Easy / Advanced split as
@@ -79,6 +97,32 @@ function clampCores(value: string, max: number): number {
   const n = Math.floor(Number(value));
   if (!Number.isFinite(n) || n < 1) return 1;
   return Math.min(n, max);
+}
+
+/** Per-project storage key for the chosen core count. */
+const coresStorageKey = (projectId: string) => `dive.solver.cores.${projectId}`;
+
+/**
+ * Read the persisted core count for a project (clamped to [1, max]), so the choice
+ * survives leaving/returning to the tab or a reload — otherwise it silently resets to
+ * 1 and the next "Run again" goes serial without the user noticing. Defaults to 1.
+ */
+function readStoredCores(projectId: string, max: number): number {
+  try {
+    const raw = window.localStorage.getItem(coresStorageKey(projectId));
+    return raw == null ? 1 : clampCores(raw, max);
+  } catch {
+    return 1;
+  }
+}
+
+/** Persist the chosen core count for a project (best-effort; storage may be unavailable). */
+function writeStoredCores(projectId: string, value: number): void {
+  try {
+    window.localStorage.setItem(coresStorageKey(projectId), String(value));
+  } catch {
+    /* storage blocked (private mode) — the in-memory value still applies this session */
+  }
 }
 
 interface SolverConfigPanelProps {
@@ -109,8 +153,19 @@ export function SolverConfigPanel({
   onReconfigure,
 }: SolverConfigPanelProps) {
   const [mode, setMode] = useState<'easy' | 'advanced'>(scaffoldable ? 'easy' : 'advanced');
-  const [cores, setCores] = useState(1);
+  const [cores, setCores] = useState(() => readStoredCores(projectId, maxCores));
   const [configOpen, setConfigOpen] = useState(false);
+
+  // Persist the choice and keep it within the current server budget (it may shrink
+  // while the panel is mounted, e.g. another project starts a run).
+  const updateCores = (value: string) => {
+    const next = clampCores(value, maxCores);
+    setCores(next);
+    writeStoredCores(projectId, next);
+  };
+  useEffect(() => {
+    setCores((current) => Math.min(current, maxCores));
+  }, [maxCores]);
   const configurable = solver && isConfigurableSolver(solver) ? solver : null;
   const solverLabel = SOLVER_LIBRARY.find((entry) => entry.id === solver)?.label ?? solver ?? 'None';
 
@@ -149,7 +204,7 @@ export function SolverConfigPanel({
                 min={1}
                 max={maxCores}
                 value={cores}
-                onChange={(event) => setCores(clampCores(event.target.value, maxCores))}
+                onChange={(event) => updateCores(event.target.value)}
                 aria-label="Number of cores for the run"
                 className="w-24 rounded-sm border border-border bg-surface px-2 py-2 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
               />
@@ -417,14 +472,16 @@ function SolverEasyForm({
   solver: ConfigurableSolverId;
   disabled: boolean;
 }) {
-  const params = SOLVER_CATALOG[solver].easyParams;
-  const files = useMemo(() => Array.from(new Set(params.map((param) => param.file))), [params]);
+  const allParams = SOLVER_CATALOG[solver].easyParams;
+  const files = useMemo(() => Array.from(new Set(allParams.map((param) => param.file))), [allParams]);
 
   const results = useQueries({
     queries: files.map((file) => ({
       queryKey: caseFileContentQueryKey(projectId, file),
       queryFn: () => getCaseFileContent(projectId, file),
       staleTime: 5_000,
+      // A merely-absent optional file (404) should fail fast and be skipped, not retried.
+      retry: false,
     })),
   });
   const save = useSaveCaseFile(projectId);
@@ -434,8 +491,14 @@ function SolverEasyForm({
     contentByFile[file] = results[index]?.data?.content ?? null;
   });
 
+  // Only configure params whose file actually loaded (exists on disk). One missing file
+  // no longer errors the whole form — its param is skipped and the rest still render.
+  const params = allParams.filter((param) => contentByFile[param.file] != null);
+
   const loading = results.some((result) => result.isPending);
-  const errored = results.some((result) => result.isError);
+  // Show the error state only when EVERY file failed to load (a real load problem), not
+  // when a single optional file is simply absent.
+  const errored = results.length > 0 && results.every((result) => result.isError);
 
   const commit = (param: SolverParamDef, value: string) => {
     const content = contentByFile[param.file];
@@ -479,6 +542,15 @@ function SolverEasyForm({
           <div key={index} className="h-9 animate-pulse rounded-md bg-bg" />
         ))}
       </div>
+    );
+  }
+
+  if (params.length === 0) {
+    return (
+      <p className="rounded-md border border-border bg-bg/40 p-3 text-sm text-text-secondary">
+        This solver&apos;s setup files are not generated yet. Use Reconfigure to create them, then
+        the guided settings will appear here.
+      </p>
     );
   }
 
@@ -777,12 +849,25 @@ function AdvancedConfig({
   solver: ConfigurableSolverId | null;
   disabled: boolean;
 }) {
-  // A configurable solver exposes its exact required files; a manual solver falls
-  // back to the common solver files so the raw editor still has something to edit.
-  const files = solver ? SOLVER_CATALOG[solver].requiredFiles : DEFAULT_SOLVER_FILES;
-  const [selected, setSelected] = useState<string>(files[0] ?? 'system/controlDict');
+  // List the case's REAL config files, so the dropdown never offers a path that does
+  // not exist on disk (which would 404 on open). Order the solver's own files first
+  // (when present), then the rest of the tree.
+  const filesQuery = useCaseFilesQuery(projectId);
+  const preferred = solver ? SOLVER_CATALOG[solver].requiredFiles : DEFAULT_SOLVER_FILES;
+  const files = useMemo(() => {
+    const real = (filesQuery.data ?? [])
+      .filter((entry) => entry.type === 'file' && isConfigFile(entry.path))
+      .map((entry) => entry.path);
+    const realSet = new Set(real);
+    const first = preferred.filter((path) => realSet.has(path));
+    const firstSet = new Set(first);
+    const rest = real.filter((path) => !firstSet.has(path)).sort();
+    return [...first, ...rest];
+  }, [filesQuery.data, preferred]);
+
+  const [selected, setSelected] = useState<string>('');
   useEffect(() => {
-    if (!files.includes(selected)) setSelected(files[0] ?? 'system/controlDict');
+    if (files.length > 0 && !files.includes(selected)) setSelected(files[0]);
   }, [files, selected]);
 
   return (
@@ -793,30 +878,48 @@ function AdvancedConfig({
         <label htmlFor="solver-raw-file" className="text-xs font-medium text-text-secondary">
           Edit a solver file
         </label>
-        <div className="relative sm:max-w-xs">
-          <select
-            id="solver-raw-file"
-            value={selected}
-            onChange={(event) => setSelected(event.target.value)}
-            className={cn(
-              'h-9 w-full appearance-none rounded-md border border-border bg-surface pl-3 pr-9 font-mono text-sm text-text',
-              'transition-colors duration-fast ease-out hover:border-border-strong',
-              'focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
-            )}
-          >
-            {files.map((file) => (
-              <option key={file} value={file}>
-                {file}
-              </option>
-            ))}
-          </select>
-          <ChevronDown
-            className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-text-secondary"
-            strokeWidth={1.75}
-            aria-hidden="true"
-          />
-        </div>
-        <RawFileEditor projectId={projectId} path={selected} disabled={disabled} />
+        {filesQuery.isPending ? (
+          <div className="h-9 w-full animate-pulse rounded-md bg-bg sm:max-w-xs" role="status" aria-label="Loading the case files" />
+        ) : filesQuery.isError ? (
+          <div role="alert" className="rounded-md border border-danger/30 bg-danger-tint p-3">
+            <p className="text-sm text-danger">We could not load this case&apos;s files.</p>
+            <Button variant="secondary" size="sm" className="mt-2" onClick={() => void filesQuery.refetch()}>
+              Try again
+            </Button>
+          </div>
+        ) : files.length === 0 ? (
+          <p className="rounded-md border border-border bg-bg/40 p-3 text-sm text-text-secondary">
+            No editable config files yet. Generate the solver setup first (Reconfigure), then edit
+            them here.
+          </p>
+        ) : (
+          <>
+            <div className="relative sm:max-w-xs">
+              <select
+                id="solver-raw-file"
+                value={selected}
+                onChange={(event) => setSelected(event.target.value)}
+                className={cn(
+                  'h-9 w-full appearance-none rounded-md border border-border bg-surface pl-3 pr-9 font-mono text-sm text-text',
+                  'transition-colors duration-fast ease-out hover:border-border-strong',
+                  'focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
+                )}
+              >
+                {files.map((file) => (
+                  <option key={file} value={file}>
+                    {file}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown
+                className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-text-secondary"
+                strokeWidth={1.75}
+                aria-hidden="true"
+              />
+            </div>
+            {selected && <RawFileEditor projectId={projectId} path={selected} disabled={disabled} />}
+          </>
+        )}
       </div>
     </div>
   );

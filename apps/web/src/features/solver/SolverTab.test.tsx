@@ -59,7 +59,7 @@ function renderTab() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   // A data router so the step-3 file editor's useBlocker (unsaved-changes guard) works.
   const router = createMemoryRouter([{ path: '/', element: <SolverTab projectId="p1" /> }]);
-  render(
+  return render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
     </QueryClientProvider>,
@@ -68,6 +68,8 @@ function renderTab() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The core count persists per project in localStorage; isolate tests from each other.
+  window.localStorage.clear();
   vi.mocked(api.getCaseFiles).mockResolvedValue([]);
   // Default case-file content for the Easy solver-config form (per-path values are
   // read by dictionary path; a missing path just renders an empty control).
@@ -176,6 +178,21 @@ describe('SolverTab', () => {
     fireEvent.change(cores, { target: { value: '4' } });
     await userEvent.click(screen.getByRole('button', { name: /run solver/i }));
     await waitFor(() => expect(api.startRun).toHaveBeenCalledWith('p1', { cores: 4 }));
+  });
+
+  it('remembers the chosen core count across remounts (no silent reset to 1)', async () => {
+    vi.mocked(api.getRunnable).mockResolvedValue(runnableYes);
+    vi.mocked(api.listRuns).mockResolvedValue([]);
+
+    const first = renderTab();
+    const cores = await screen.findByLabelText(/number of cores/i);
+    fireEvent.change(cores, { target: { value: '4' } });
+    // Leave the tab (unmount), then come back: the choice must survive, so "Run again"
+    // does not silently fall back to a serial (1-core) run.
+    first.unmount();
+
+    renderTab();
+    expect(await screen.findByLabelText(/number of cores/i)).toHaveValue(4);
   });
 
   it('applies a turbulence model through the scaffold from the config panel', async () => {
