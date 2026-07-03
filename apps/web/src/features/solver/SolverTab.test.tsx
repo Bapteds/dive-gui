@@ -152,9 +152,11 @@ describe('SolverTab', () => {
     renderTab();
 
     expect(await screen.findByRole('button', { name: /run solver/i })).toBeInTheDocument();
-    // The Easy solver-config panel renders with the curated parameters.
+    // The run panel shows the config summary (Configure opens the params overlay) and
+    // the Cores selector; the turbulence params live in that overlay now.
     expect(await screen.findByText('Solver configuration')).toBeInTheDocument();
-    expect(await screen.findByText('Turbulence model')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Configure' })).toBeInTheDocument();
+    expect(screen.getByLabelText(/number of cores/i)).toBeInTheDocument();
     // History resolves on its own query; wait for the empty state.
     expect(await screen.findByText(/no runs yet/i)).toBeInTheDocument();
 
@@ -187,8 +189,9 @@ describe('SolverTab', () => {
 
     renderTab();
 
-    // The turbulence control is a select of all models; changing it re-scaffolds
-    // (writes the RAS/LES/laminar block + the 0/ fields), not a raw RASModel splice.
+    // The solver config lives in an overlay now; open it first. Changing turbulence
+    // re-scaffolds (writes the RAS/LES/laminar block + the 0/ fields), not a raw splice.
+    await userEvent.click(await screen.findByRole('button', { name: 'Configure' }));
     const select = await screen.findByLabelText('Turbulence model');
     await userEvent.selectOptions(select, 'kEpsilon');
     await waitFor(() =>

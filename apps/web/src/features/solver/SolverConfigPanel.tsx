@@ -1,7 +1,24 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQueries } from '@tanstack/react-query';
-import { AlertCircle, Check, ChevronDown, Code2, Loader2, Play, Sparkles, Wrench } from 'lucide-react';
+import {
+  AlertCircle,
+  Check,
+  ChevronDown,
+  Code2,
+  Loader2,
+  Play,
+  SlidersHorizontal,
+  Sparkles,
+  Wrench,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { toast } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
 import { ApiError } from '@/lib/api/client';
@@ -93,14 +110,15 @@ export function SolverConfigPanel({
 }: SolverConfigPanelProps) {
   const [mode, setMode] = useState<'easy' | 'advanced'>(scaffoldable ? 'easy' : 'advanced');
   const [cores, setCores] = useState(1);
+  const [configOpen, setConfigOpen] = useState(false);
   const configurable = solver && isConfigurableSolver(solver) ? solver : null;
+  const solverLabel = SOLVER_LIBRARY.find((entry) => entry.id === solver)?.label ?? solver ?? 'None';
 
   return (
     <div className="rounded-md border border-border bg-surface shadow-sm">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div className="flex items-center gap-3">
           <h2 className="text-sm font-semibold text-text">Solver configuration</h2>
-          <ModeToggle mode={mode} onChange={setMode} />
         </div>
         <div className="flex items-center gap-2 sm:shrink-0">
           <Button variant="secondary" onClick={onReconfigure} disabled={active}>
@@ -142,20 +160,71 @@ export function SolverConfigPanel({
             </p>
           </div>
         )}
-        <ChangeSolver projectId={projectId} current={solver} disabled={active} />
-        {mode === 'easy' ? (
-          configurable ? (
-            <div className="flex flex-col gap-3">
-              {SOLVER_CATALOG[configurable]?.tier === 'base' && <BaseSetupHint />}
-              <SolverEasyForm projectId={projectId} solver={configurable} disabled={active} />
-            </div>
-          ) : (
-            <ManualEasyNote solver={solver} />
-          )
-        ) : (
-          <AdvancedConfig projectId={projectId} solver={configurable} disabled={active} />
-        )}
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-bg/40 p-3">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-xs font-medium text-text-secondary">Solver</span>
+            <span className="text-sm font-medium text-text">{solverLabel}</span>
+          </div>
+          <Button variant="secondary" onClick={() => setConfigOpen(true)} disabled={active}>
+            <SlidersHorizontal strokeWidth={1.75} aria-hidden="true" />
+            Configure
+          </Button>
+        </div>
       </div>
+
+      <Dialog open={configOpen} onOpenChange={setConfigOpen}>
+        <DialogContent
+          className="flex h-[85vh] w-[90vw] max-w-[60rem] flex-col gap-0 overflow-hidden p-0"
+          onInteractOutside={(event) => {
+            // The solver browser and file editor inside portal outside this content;
+            // don't close the config overlay when interacting with them.
+            const target = event.target as Element | null;
+            if (
+              target?.closest(
+                '[data-radix-popper-content-wrapper],[role="menu"],[role="dialog"],[role="alertdialog"]',
+              )
+            ) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <DialogHeader className="shrink-0 border-b border-border p-4 pr-12">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-col gap-1.5">
+                <DialogTitle>Configure the solver</DialogTitle>
+                <DialogDescription>
+                  Set the solver and its parameters (Easy), or edit the raw dictionaries
+                  (Advanced). Changes save automatically.
+                </DialogDescription>
+              </div>
+              <ModeToggle mode={mode} onChange={setMode} />
+            </div>
+          </DialogHeader>
+
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-contain p-4">
+            <ChangeSolver projectId={projectId} current={solver} disabled={active} />
+            {mode === 'easy' ? (
+              configurable ? (
+                <div className="flex flex-col gap-3">
+                  {SOLVER_CATALOG[configurable]?.tier === 'base' && <BaseSetupHint />}
+                  <SolverEasyForm projectId={projectId} solver={configurable} disabled={active} />
+                </div>
+              ) : (
+                <ManualEasyNote solver={solver} />
+              )
+            ) : (
+              <AdvancedConfig projectId={projectId} solver={configurable} disabled={active} />
+            )}
+          </div>
+
+          <footer className="flex shrink-0 items-center justify-end gap-3 border-t border-border p-4">
+            <Button variant="primary" onClick={() => setConfigOpen(false)}>
+              <Check strokeWidth={1.9} aria-hidden="true" />
+              Done
+            </Button>
+          </footer>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
