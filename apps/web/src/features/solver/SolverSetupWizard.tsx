@@ -97,7 +97,7 @@ export function SolverSetupWizard({
   return (
     <>
       {step !== 3 && (
-      <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-md border border-border bg-surface shadow-sm lg:min-h-0 lg:flex-1">
+      <div className="flex w-full flex-col overflow-hidden rounded-md border border-border bg-surface shadow-sm lg:min-h-0 lg:flex-1">
       <header className="flex shrink-0 flex-col gap-3 p-6 pb-4">
         <div className="flex items-center gap-2">
           <Cpu className="size-5 text-primary" strokeWidth={1.75} aria-hidden="true" />
