@@ -265,6 +265,76 @@ async function finalizeRun(
 }
 
 /**
+ * Launch a PARALLEL run in the background: decompose the mesh (a blocking pre-step),
+ * then spawn `mpirun -np N <solver> -parallel` and drive it to a terminal state.
+ * Detached from the start request so a slow decomposePar never blocks the HTTP call —
+ * the run stays 'queued' until MPI actually starts. A decompose failure, or a stop
+ * requested during decomposition, ends the run without spawning the solver.
+ */
+async function launchParallelRun(
+  projectId: string,
+  runId: string,
+  solver: SolverId,
+  cores: number,
+  caseDir: string,
+  logAbs: string,
+): Promise<void> {
+  await writeCaseFile(projectId, 'system/decomposeParDict', renderDecomposeParDict(cores));
+  const decompose = await runCommand({
+    ...planOpenfoamCommand('decomposePar', ['-case', caseDir, '-force'], caseDir),
+    timeoutMs: env.SOLVER_DECOMPOSE_TIMEOUT_MS,
+  });
+  if (commandFailed(decompose)) {
+    await prisma.run.updateMany({
+      where: { id: runId, status: { in: [...ACTIVE_RUN_STATUSES] } },
+      data: {
+        status: 'failed',
+        reason:
+          'decomposePar failed: could not split the mesh for a parallel run. ' +
+          'Check the mesh, or try fewer cores.',
+        finishedAt: new Date(),
+      },
+    });
+    return;
+  }
+  // Stop requested while decomposing: stopRun already marked the run stopped.
+  if (stopRequested.has(runId)) {
+    stopRequested.delete(runId);
+    return;
+  }
+
+  // `mpirun --allow-run-as-root -np N <solver> -case <dir> -parallel` (the flag is a
+  // no-op unless the API runs as root, e.g. inside a container).
+  const plan = planOpenfoamCommand(
+    env.MPI_BIN,
+    ['--allow-run-as-root', '-np', String(cores), solver, '-case', caseDir, '-parallel'],
+    caseDir,
+  );
+  const handle = runStream({
+    command: plan.command,
+    args: plan.args,
+    cwd: plan.cwd,
+    env: plan.env,
+    logFile: logAbs,
+    timeoutMs: env.SOLVER_MAX_RUNTIME_MS,
+  });
+  handles.set(runId, handle);
+  await prisma.run.updateMany({
+    where: { id: runId, status: { in: [...ACTIVE_RUN_STATUSES] } },
+    data: {
+      status: 'running',
+      command: plan.display,
+      logPath: `${RUN_DIRNAME}/${runId}/solver.log`,
+      pid: handle.pid,
+      startedAt: new Date(),
+    },
+  });
+
+  const exit = await handle.onExit;
+  await finalizeRun(projectId, runId, exit, cores);
+}
+
+/**
  * Start a solver run for a project's case.
  * @throws 409 RUN_IN_PROGRESS if a run is already active, 409 NO_MESH if there is
  *         no mesh, 422 NOT_RUNNABLE if solver files are missing / unsupported,
@@ -342,41 +412,19 @@ export async function startRun(
   const logAbs = runLogAbsolute(projectId, created.id);
   await ensureRunDir(projectId, created.id);
 
-  // Parallel run: decompose the mesh into `cores` subdomains first (blocking), then
-  // launch the solver under MPI. A decompose failure ends the run before any spawn.
+  // Parallel run: decomposePar can be slow on a big mesh, so decompose + MPI launch
+  // happen in the BACKGROUND. The request returns immediately with a 'queued' run the
+  // client polls, instead of blocking the HTTP call until the solver spawns.
   if (cores > 1) {
-    await writeCaseFile(projectId, 'system/decomposeParDict', renderDecomposeParDict(cores));
-    const decompose = await runCommand({
-      ...planOpenfoamCommand('decomposePar', ['-case', caseDir, '-force'], caseDir),
-      timeoutMs: env.SOLVER_MAX_RUNTIME_MS,
-    });
-    if (commandFailed(decompose)) {
-      const failed = await prisma.run.update({
-        where: { id: created.id },
-        data: {
-          status: 'failed',
-          reason:
-            'decomposePar failed: could not split the mesh for a parallel run. ' +
-            'Check the mesh, or try fewer cores.',
-          finishedAt: new Date(),
-        },
-      });
-      return toPublicRun(failed);
-    }
+    void launchParallelRun(projectId, created.id, solver, cores, caseDir, logAbs).catch((err) =>
+      logger.error('Parallel run launch failed', err),
+    );
+    return toPublicRun(created);
   }
 
-  // argv-safe invocation; sources OPENFOAM_BASHRC when configured (same helper the
-  // conversion/autoPatch pipeline uses). Serial: `<solver> -case <dir>`. Parallel:
-  // `mpirun --allow-run-as-root -np N <solver> -case <dir> -parallel` (the flag is a
-  // no-op unless the API runs as root, e.g. inside a container).
-  const plan =
-    cores > 1
-      ? planOpenfoamCommand(
-          env.MPI_BIN,
-          ['--allow-run-as-root', '-np', String(cores), solver, '-case', caseDir, '-parallel'],
-          caseDir,
-        )
-      : planOpenfoamCommand(solver, ['-case', caseDir], caseDir);
+  // Serial: spawn `<solver> -case <dir>` now and return 'running'. argv-safe; sources
+  // OPENFOAM_BASHRC when configured (same helper the conversion/autoPatch pipeline uses).
+  const plan = planOpenfoamCommand(solver, ['-case', caseDir], caseDir);
   const handle = runStream({
     command: plan.command,
     args: plan.args,

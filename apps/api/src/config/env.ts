@@ -192,6 +192,9 @@ const envSchema = z
     // requested cores would exceed this — preventing oversubscription across
     // projects. 0 = use the machine's logical core count (os.cpus().length).
     SOLVER_TOTAL_CORES: z.coerce.number().int().min(0).default(0),
+    // Timeout (ms) for the parallel pre/post steps (decomposePar / reconstructPar),
+    // separate from the long solver runtime. Default 30 min.
+    SOLVER_DECOMPOSE_TIMEOUT_MS: z.coerce.number().int().positive().default(1800000),
     // Number of trusted reverse-proxy hops in front of the API. 0 = trust none
     // (default, correct for direct exposure / local dev). Set to 1 behind a
     // single proxy/load balancer so the login rate-limiter keys on the real
