@@ -40,7 +40,7 @@ import {
   writeCaseFile,
 } from '../../lib/caseStorage';
 import { renderDecomposeParDict } from '../../lib/openfoamCase';
-import { ensureRunDir, readRunLog, runLogAbsolute } from '../../lib/runStorage';
+import { appendRunLog, ensureRunDir, readRunLog, runLogAbsolute } from '../../lib/runStorage';
 import { downsampleResiduals, parseResiduals } from '../../lib/residualParser';
 import { computeRunnable } from './files.service';
 import { assertProjectVisible, type Viewer } from './projects.service';
@@ -264,12 +264,22 @@ async function finalizeRun(
   });
 }
 
+/** Mark a run failed with a reason — best-effort, and only while it is still active. */
+async function failRun(runId: string, reason: string): Promise<void> {
+  await prisma.run.updateMany({
+    where: { id: runId, status: { in: [...ACTIVE_RUN_STATUSES] } },
+    data: { status: 'failed', reason: reason.slice(0, 800), pid: null, finishedAt: new Date() },
+  });
+}
+
 /**
  * Launch a PARALLEL run in the background: decompose the mesh (a blocking pre-step),
  * then spawn `mpirun -np N <solver> -parallel` and drive it to a terminal state.
  * Detached from the start request so a slow decomposePar never blocks the HTTP call —
- * the run stays 'queued' until MPI actually starts. A decompose failure, or a stop
- * requested during decomposition, ends the run without spawning the solver.
+ * the run stays 'queued' until MPI actually starts. Progress and tool output are
+ * written to the run log so it never looks like "queued, nothing happening", and
+ * ANY failure (decompose error, stop during decompose, or an unexpected throw) ends
+ * the run as `failed` with a reason rather than leaving it stuck.
  */
 async function launchParallelRun(
   projectId: string,
@@ -279,59 +289,76 @@ async function launchParallelRun(
   caseDir: string,
   logAbs: string,
 ): Promise<void> {
-  await writeCaseFile(projectId, 'system/decomposeParDict', renderDecomposeParDict(cores));
-  const decompose = await runCommand({
-    ...planOpenfoamCommand('decomposePar', ['-case', caseDir, '-force'], caseDir),
-    timeoutMs: env.SOLVER_DECOMPOSE_TIMEOUT_MS,
-  });
-  if (commandFailed(decompose)) {
+  try {
+    await appendRunLog(
+      projectId,
+      runId,
+      `Decomposing the mesh into ${cores} subdomains (decomposePar)...\n`,
+    );
+    await writeCaseFile(projectId, 'system/decomposeParDict', renderDecomposeParDict(cores));
+
+    const decompose = await runCommand({
+      ...planOpenfoamCommand('decomposePar', ['-case', caseDir, '-force'], caseDir),
+      timeoutMs: env.SOLVER_DECOMPOSE_TIMEOUT_MS,
+    });
+    // Mirror decomposePar's output into the run log so it is visible in the UI.
+    await appendRunLog(projectId, runId, `${decompose.stdout}${decompose.stderr}\n`);
+    if (commandFailed(decompose)) {
+      const why = decompose.spawnError
+        ? `decomposePar could not start (${decompose.spawnError})`
+        : decompose.timedOut
+          ? 'decomposePar timed out'
+          : `decomposePar exited with code ${decompose.exitCode}`;
+      const tail = (decompose.stderr || decompose.stdout || '').trim().split('\n').slice(-3).join(' ');
+      logger.error(
+        `Parallel run: ${why} (project ${projectId})\n${decompose.stderr || decompose.stdout}`,
+      );
+      await failRun(runId, tail ? `${why}. ${tail}` : `${why}. Check the mesh, or try fewer cores.`);
+      return;
+    }
+    // Stop requested while decomposing: stopRun already marked the run stopped.
+    if (stopRequested.has(runId)) {
+      stopRequested.delete(runId);
+      return;
+    }
+
+    // `mpirun --allow-run-as-root -np N <solver> -case <dir> -parallel` (the flag is a
+    // no-op unless the API runs as root, e.g. inside a container).
+    const plan = planOpenfoamCommand(
+      env.MPI_BIN,
+      ['--allow-run-as-root', '-np', String(cores), solver, '-case', caseDir, '-parallel'],
+      caseDir,
+    );
+    const handle = runStream({
+      command: plan.command,
+      args: plan.args,
+      cwd: plan.cwd,
+      env: plan.env,
+      logFile: logAbs,
+      timeoutMs: env.SOLVER_MAX_RUNTIME_MS,
+    });
+    handles.set(runId, handle);
     await prisma.run.updateMany({
       where: { id: runId, status: { in: [...ACTIVE_RUN_STATUSES] } },
       data: {
-        status: 'failed',
-        reason:
-          'decomposePar failed: could not split the mesh for a parallel run. ' +
-          'Check the mesh, or try fewer cores.',
-        finishedAt: new Date(),
+        status: 'running',
+        command: plan.display,
+        logPath: `${RUN_DIRNAME}/${runId}/solver.log`,
+        pid: handle.pid,
+        startedAt: new Date(),
       },
     });
-    return;
-  }
-  // Stop requested while decomposing: stopRun already marked the run stopped.
-  if (stopRequested.has(runId)) {
-    stopRequested.delete(runId);
-    return;
-  }
 
-  // `mpirun --allow-run-as-root -np N <solver> -case <dir> -parallel` (the flag is a
-  // no-op unless the API runs as root, e.g. inside a container).
-  const plan = planOpenfoamCommand(
-    env.MPI_BIN,
-    ['--allow-run-as-root', '-np', String(cores), solver, '-case', caseDir, '-parallel'],
-    caseDir,
-  );
-  const handle = runStream({
-    command: plan.command,
-    args: plan.args,
-    cwd: plan.cwd,
-    env: plan.env,
-    logFile: logAbs,
-    timeoutMs: env.SOLVER_MAX_RUNTIME_MS,
-  });
-  handles.set(runId, handle);
-  await prisma.run.updateMany({
-    where: { id: runId, status: { in: [...ACTIVE_RUN_STATUSES] } },
-    data: {
-      status: 'running',
-      command: plan.display,
-      logPath: `${RUN_DIRNAME}/${runId}/solver.log`,
-      pid: handle.pid,
-      startedAt: new Date(),
-    },
-  });
-
-  const exit = await handle.onExit;
-  await finalizeRun(projectId, runId, exit, cores);
+    const exit = await handle.onExit;
+    await finalizeRun(projectId, runId, exit, cores);
+  } catch (err) {
+    // Never leave the run stuck 'queued' on an unexpected error.
+    logger.error(`Parallel run orchestration threw (project ${projectId})`, err);
+    await failRun(
+      runId,
+      `Parallel run setup failed: ${err instanceof Error ? err.message : String(err)}`,
+    ).catch(() => undefined);
+  }
 }
 
 /**

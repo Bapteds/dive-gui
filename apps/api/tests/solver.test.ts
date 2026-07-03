@@ -363,4 +363,31 @@ describe('parallel runs (cores)', () => {
     expect(res.status).toBe(422);
     expect(res.body.error.code).toBe('TOO_MANY_CORES');
   });
+
+  it('marks the run failed (not stuck queued) when decomposePar fails', async () => {
+    // decomposePar returns non-zero: the run must settle failed with a reason, never
+    // stay stuck 'queued'.
+    setCommandRunner(
+      async (spec): Promise<CommandResult> => ({
+        command: spec.command,
+        args: spec.args,
+        exitCode: 1,
+        stdout: '',
+        stderr: 'FOAM FATAL ERROR: Unknown decompositionMethod scotch',
+        durationMs: 1,
+        timedOut: false,
+      }),
+    );
+    const { id, auth } = await makeRunnableProject('solver-decompose-fail@x.test');
+
+    const start = await request(app)
+      .post(`/api/v1/projects/${id}/runs`)
+      .set('Authorization', auth)
+      .send({ cores: 4 });
+    expect(start.status).toBe(201);
+
+    const settled = await waitForTerminal(id, start.body.run.id, auth);
+    expect(settled.status).toBe('failed');
+    expect(settled.reason).toMatch(/decomposePar/i);
+  });
 });

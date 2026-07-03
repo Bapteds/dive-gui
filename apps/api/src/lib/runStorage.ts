@@ -36,6 +36,21 @@ export async function ensureRunDir(projectId: string, runId: string): Promise<st
   return dir;
 }
 
+/**
+ * Append text to a run's solver.log (best-effort; creates the run dir if needed).
+ * Used to surface pre-solver progress (mesh decomposition) and tool output in the
+ * run log so a parallel run does not look like "queued, nothing happening".
+ */
+export async function appendRunLog(projectId: string, runId: string, text: string): Promise<void> {
+  try {
+    const abs = runLogAbsolute(projectId, runId);
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.appendFile(abs, text);
+  } catch {
+    /* best-effort: the log is a convenience, never the source of truth */
+  }
+}
+
 /** Current size of a run's log in bytes (0 when absent). */
 export async function runLogSize(projectId: string, runId: string): Promise<number> {
   try {
