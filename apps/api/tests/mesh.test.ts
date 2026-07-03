@@ -338,6 +338,14 @@ describe('POST /projects/:id/mesh/patches/rename', () => {
     const res = await rename(id, authHeader(stranger), 'inlet', 'intake');
     expect(res.status).toBe(404);
   });
+
+  it('accepts a hyphenated Fluent-style name (velocity-inlet)', async () => {
+    const { id, auth } = await makeProject('mesh-rename-hyphen@dive-turbinen.test');
+    await writePolyMesh(id);
+    const res = await rename(id, auth, 'inlet', 'velocity-inlet');
+    expect(res.status).toBe(200);
+    expect(res.body.patches).toContain('velocity-inlet');
+  });
 });
 
 function setType(id: string, auth: string, patch: string, type: string) {
@@ -693,6 +701,49 @@ describe('PUT /projects/:id/mesh/patches (batch edit)', () => {
     expect(field).toMatch(/intake\s*\{/); // renamed
     expect(field).toMatch(/walls\s*\{\s*type\s+empty;\s*\}/); // constraint propagated
     expect(field).not.toMatch(/inlet\s*\{/);
+  });
+
+  it('sets a type on a hyphenated patch (Fluent zones) without a validation error', async () => {
+    const { id, auth } = await makeProject('mesh-edit-hyphen@dive-turbinen.test');
+    // A Fluent-style mesh whose patches carry hyphens.
+    for (const name of ['points', 'faces', 'owner', 'neighbour']) {
+      await writeCaseFile(id, `constant/polyMesh/${name}`, `${name}-data`);
+    }
+    await writeCaseFile(
+      id,
+      'constant/polyMesh/boundary',
+      'FoamFile { class polyBoundaryMesh; object boundary; }\n2\n(\n    velocity-inlet { type patch; nFaces 10; startFace 100; }\n    wall-1 { type patch; nFaces 20; startFace 110; }\n)\n',
+    );
+    await writeCaseFile(
+      id,
+      '0/U',
+      'FoamFile { class volVectorField; object U; }\ninternalField uniform (0 0 0);\nboundaryField\n{\n    velocity-inlet { type zeroGradient; }\n    wall-1 { type zeroGradient; }\n}\n',
+    );
+
+    // Type-only change on the hyphenated patch (to === from). This used to 422 on the
+    // patch-name validation, blocking every edit on a Fluent-imported mesh.
+    const res = await editPatches(id, auth, [{ from: 'wall-1', to: 'wall-1', type: 'wall' }]);
+    expect(res.status).toBe(200);
+
+    const boundary = (await readCaseFile(id, 'constant/polyMesh/boundary'))?.toString('utf8') ?? '';
+    expect(boundary).toMatch(/wall-1\s*\{[^}]*type\s+wall;/);
+    const u = (await readCaseFile(id, '0/U'))?.toString('utf8') ?? '';
+    expect(u).toMatch(/wall-1\s*\{\s*type\s+noSlip;/); // wall BC propagated to the field
+  });
+
+  it('renames a patch to a hyphenated Fluent-style name', async () => {
+    const { id, auth } = await makeProject('mesh-edit-hyphen-rename@dive-turbinen.test');
+    await writePolyMesh(id);
+    await writeCaseFile(id, '0/U', FIELD_U);
+
+    const res = await editPatches(id, auth, [
+      { from: 'inlet', to: 'velocity-inlet', type: 'patch' },
+    ]);
+    expect(res.status).toBe(200);
+    expect(res.body.patches).toContain('velocity-inlet');
+    const boundary = (await readCaseFile(id, 'constant/polyMesh/boundary'))?.toString('utf8') ?? '';
+    expect(boundary).toMatch(/velocity-inlet\s*\{/);
+    expect((await readCaseFile(id, '0/U'))?.toString('utf8') ?? '').toMatch(/velocity-inlet\s*\{/);
   });
 
   it('swaps two patch names without an intermediate collision', async () => {

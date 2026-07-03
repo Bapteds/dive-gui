@@ -17,8 +17,8 @@ export const renamePatchSchema = z.object({
     .min(1, 'A new patch name is required')
     .max(80, 'Patch name is too long')
     .regex(
-      /^[A-Za-z_][A-Za-z0-9_]*$/,
-      'Use letters, digits, or underscore; it must not start with a digit',
+      /^[A-Za-z_][A-Za-z0-9_-]*$/,
+      'Use letters, digits, underscore, or hyphen; it must not start with a digit',
     ),
 });
 
@@ -72,8 +72,8 @@ export const editPatchesSchema = z.object({
           .min(1, 'A new patch name is required')
           .max(80, 'Patch name is too long')
           .regex(
-            /^[A-Za-z_][A-Za-z0-9_]*$/,
-            'Use letters, digits, or underscore; it must not start with a digit',
+            /^[A-Za-z_][A-Za-z0-9_-]*$/,
+            'Use letters, digits, underscore, or hyphen; it must not start with a digit',
           ),
         type: z.enum(MESH_PATCH_SETTINGS),
       }),

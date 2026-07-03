@@ -28,7 +28,10 @@ import type { MeshTarget } from './MeshViewer';
  * (on the first edit) captures the original into the backup slot.
  */
 
-const PATCH_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// Letter/underscore start, then letters/digits/underscore/hyphen. Hyphens are valid
+// OpenFOAM words and routine in Fluent .msh zone names (velocity-inlet, wall-1), so
+// they must pass validation — matching what the mesh parser already accepts.
+const PATCH_NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 interface Row {
   /** Original patch name — identifies the patch and never changes here. */
@@ -90,7 +93,7 @@ export function EditPatchesDialog({
     const value = row.name.trim();
     if (!value) return 'Enter a patch name.';
     if (!PATCH_NAME_RE.test(value)) {
-      return 'Use letters, digits, or underscore; it must not start with a digit.';
+      return 'Use letters, digits, underscore, or hyphen; it must not start with a digit.';
     }
     if (duplicates.has(value)) return 'Another patch already uses this name.';
     return null;

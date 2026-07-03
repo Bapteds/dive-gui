@@ -1455,8 +1455,11 @@ export function mergeFieldBoundary(
   return content.slice(0, keyword) + `boundaryField\n{\n${body}\n}` + content.slice(span.close + 1);
 }
 
-/** A valid OpenFOAM patch name: a "word" token (letter/underscore start). */
-const PATCH_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** A valid OpenFOAM patch name: a "word" token starting with a letter/underscore,
+ * then letters/digits/underscore/HYPHEN. Hyphens are common in Fluent .msh zone
+ * names (e.g. `velocity-inlet`, `wall-1`) and are valid OpenFOAM words, so they are
+ * allowed here to match what the boundary parser already accepts. */
+const PATCH_NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 /** Is `name` a syntactically valid OpenFOAM patch name? */
 export function isValidPatchName(name: string): boolean {
