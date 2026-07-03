@@ -88,6 +88,7 @@ export function SolverTab({ projectId }: { projectId: string }) {
       projectId={projectId}
       solver={runnable.data.solver}
       scaffoldable={runnable.data.scaffoldable}
+      maxCores={runnable.data.maxCores}
       onReconfigure={() => setWizardOpen(true)}
     />
   );
@@ -152,11 +153,13 @@ function RunnablePanel({
   projectId,
   solver,
   scaffoldable,
+  maxCores,
   onReconfigure,
 }: {
   projectId: string;
   solver: string | null;
   scaffoldable: boolean;
+  maxCores: number;
   onReconfigure: () => void;
 }) {
   const runs = useRunsQuery(projectId);
@@ -172,9 +175,9 @@ function RunnablePanel({
   const startRun = useStartRun(projectId);
   const stopRun = useStopRun(projectId);
 
-  const handleRun = async () => {
+  const handleRun = async (cores: number) => {
     try {
-      await startRun.mutateAsync(undefined);
+      await startRun.mutateAsync({ cores });
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
     }
@@ -196,9 +199,10 @@ function RunnablePanel({
         solver={solver}
         scaffoldable={scaffoldable}
         active={active}
+        maxCores={maxCores}
         runLabel={currentRun ? 'Run again' : 'Run solver'}
         runPending={startRun.isPending}
-        onRun={() => void handleRun()}
+        onRun={(cores) => void handleRun(cores)}
         onReconfigure={onReconfigure}
       />
 

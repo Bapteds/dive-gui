@@ -92,8 +92,8 @@ export function useRunsQuery(projectId: string, enabled = true) {
 /** Start a solver run, then refresh the runs list (the new run becomes current). */
 export function useStartRun(projectId: string) {
   const queryClient = useQueryClient();
-  return useMutation<RunSummary, Error, SolverId | undefined>({
-    mutationFn: (solver) => startRun(projectId, solver),
+  return useMutation<RunSummary, Error, { solver?: SolverId; cores?: number } | undefined>({
+    mutationFn: (vars) => startRun(projectId, vars),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: runsQueryKey(projectId) });
     },

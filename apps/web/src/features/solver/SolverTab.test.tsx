@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -40,11 +40,13 @@ const runnableYes: RunnableCheck = {
   runnable: true,
   solver: 'simpleFoam',
   scaffoldable: true,
+  maxCores: 8,
 };
 
 const convergedRun: RunSummary = {
   id: 'r1',
   solver: 'simpleFoam',
+  cores: 1,
   status: 'converged',
   exitCode: 0,
   reason: null,
@@ -86,6 +88,7 @@ describe('SolverTab', () => {
       runnable: false,
       solver: null,
       scaffoldable: false,
+      maxCores: 8,
     });
     vi.mocked(api.scaffoldSolver).mockResolvedValue({
       created: ['0/k'],
@@ -118,6 +121,7 @@ describe('SolverTab', () => {
       runnable: false,
       solver: null,
       scaffoldable: false,
+      maxCores: 8,
     });
     vi.mocked(api.scaffoldSolver).mockResolvedValue({
       created: ['0/k'],
@@ -155,7 +159,21 @@ describe('SolverTab', () => {
     expect(await screen.findByText(/no runs yet/i)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: /run solver/i }));
-    await waitFor(() => expect(api.startRun).toHaveBeenCalledWith('p1', undefined));
+    // Default cores = 1 (serial); the client omits an explicit solver.
+    await waitFor(() => expect(api.startRun).toHaveBeenCalledWith('p1', { cores: 1 }));
+  });
+
+  it('starts a parallel run with the chosen core count', async () => {
+    vi.mocked(api.getRunnable).mockResolvedValue(runnableYes); // maxCores: 8
+    vi.mocked(api.listRuns).mockResolvedValue([]);
+    vi.mocked(api.startRun).mockResolvedValue({ ...convergedRun, status: 'running', exitCode: null });
+
+    renderTab();
+
+    const cores = await screen.findByLabelText(/number of cores/i);
+    fireEvent.change(cores, { target: { value: '4' } });
+    await userEvent.click(screen.getByRole('button', { name: /run solver/i }));
+    await waitFor(() => expect(api.startRun).toHaveBeenCalledWith('p1', { cores: 4 }));
   });
 
   it('applies a turbulence model through the scaffold from the config panel', async () => {

@@ -368,12 +368,16 @@ export async function syncBoundaries(
   );
 }
 
-/** Start a solver run. Resolves with the created run (status `running`). */
-export async function startRun(id: string, solver?: SolverId): Promise<RunSummary> {
-  const data = await apiClient.post<RunResponse>(
-    `/projects/${id}/runs`,
-    solver ? { solver } : {},
-  );
+/** Start a solver run. Resolves with the created run (status `running`). `cores` > 1
+ * runs the solver in parallel (decomposePar + mpirun); omitted / 1 = serial. */
+export async function startRun(
+  id: string,
+  opts?: { solver?: SolverId; cores?: number },
+): Promise<RunSummary> {
+  const body: { solver?: SolverId; cores?: number } = {};
+  if (opts?.solver) body.solver = opts.solver;
+  if (opts?.cores && opts.cores > 1) body.cores = opts.cores;
+  const data = await apiClient.post<RunResponse>(`/projects/${id}/runs`, body);
   return data.run;
 }
 

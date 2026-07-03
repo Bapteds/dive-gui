@@ -57,6 +57,13 @@ const DEFAULT_SOLVER_FILES = [
  * The single orange CTA in this zone stays the Run button; every configuration
  * control is neutral or brand-blue. Editing is locked while a run is active.
  */
+/** Clamp a core-count input to the integer range [1, max]. */
+function clampCores(value: string, max: number): number {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(n, max);
+}
+
 interface SolverConfigPanelProps {
   projectId: string;
   /** The solver read from controlDict (any library binary), or null. */
@@ -64,9 +71,11 @@ interface SolverConfigPanelProps {
   /** Whether the solver has a guided (easy) form; else it is manual setup. */
   scaffoldable: boolean;
   active: boolean;
+  /** Server core budget: the max cores the run selector allows. */
+  maxCores: number;
   runLabel: string;
   runPending: boolean;
-  onRun: () => void;
+  onRun: (cores: number) => void;
   /** Re-open the setup wizard (solver -> turbulence -> files). */
   onReconfigure: () => void;
 }
@@ -76,12 +85,14 @@ export function SolverConfigPanel({
   solver,
   scaffoldable,
   active,
+  maxCores,
   runLabel,
   runPending,
   onRun,
   onReconfigure,
 }: SolverConfigPanelProps) {
   const [mode, setMode] = useState<'easy' | 'advanced'>(scaffoldable ? 'easy' : 'advanced');
+  const [cores, setCores] = useState(1);
   const configurable = solver && isConfigurableSolver(solver) ? solver : null;
 
   return (
@@ -97,7 +108,7 @@ export function SolverConfigPanel({
             Reconfigure
           </Button>
           {!active && (
-            <Button variant="primary" loading={runPending} onClick={onRun}>
+            <Button variant="primary" loading={runPending} onClick={() => onRun(cores)}>
               <Play strokeWidth={1.75} aria-hidden="true" />
               {runLabel}
             </Button>
@@ -110,6 +121,26 @@ export function SolverConfigPanel({
           <p className="text-xs text-text-secondary" role="status">
             Configuration is locked while a run is active.
           </p>
+        )}
+        {!active && (
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-text-secondary">Cores</span>
+              <input
+                type="number"
+                min={1}
+                max={maxCores}
+                value={cores}
+                onChange={(event) => setCores(clampCores(event.target.value, maxCores))}
+                aria-label="Number of cores for the run"
+                className="w-24 rounded-sm border border-border bg-surface px-2 py-2 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+              />
+            </label>
+            <p className="max-w-[30rem] text-xs text-text-secondary">
+              {maxCores} available on the server. 1 runs serially; more runs the solver in
+              parallel (decomposePar + mpirun). A run is refused if not enough cores are free.
+            </p>
+          </div>
         )}
         <ChangeSolver projectId={projectId} current={solver} disabled={active} />
         {mode === 'easy' ? (

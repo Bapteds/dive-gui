@@ -651,6 +651,8 @@ export interface RunnableCheck {
   solver: string | null;
   /** Whether the solver is fully scaffolded + easy-configured (vs manual setup). */
   scaffoldable: boolean;
+  /** Server core budget: the max cores a run may request (machine cores, or the cap). */
+  maxCores: number;
 }
 
 /** `GET /projects/:id/runnable` response. */
@@ -669,6 +671,8 @@ export interface ScaffoldSolverResponse {
 export interface RunSummary {
   id: string;
   solver: string;
+  /** Cores (parallel subdomains) the run used; 1 = serial. */
+  cores: number;
   status: RunStatus;
   /** Process exit code, or null while running / never spawned. */
   exitCode: number | null;
