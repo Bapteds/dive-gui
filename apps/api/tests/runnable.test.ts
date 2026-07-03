@@ -265,7 +265,7 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
     expect(schemes).toContain('div(phi,e)');
   });
 
-  it('applies the chosen turbulence model and writes its fields (kEpsilon)', async () => {
+  it('applies the chosen turbulence model and writes ONLY its fields (kEpsilon, no omega)', async () => {
     const { auth, id } = await makeProject('runnable-turb@x.test');
     await writeMesh(id);
 
@@ -278,10 +278,48 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
 
     const turb = (await readCaseFile(id, 'constant/turbulenceProperties'))?.toString('utf8') ?? '';
     expect(turb).toMatch(/RASModel\s+kEpsilon/);
-    // The k-epsilon field is written so the model has what it needs (harmless for k-omega).
-    expect((await readCaseFile(id, '0/epsilon'))?.toString('utf8') ?? '').toContain(
-      '[0 2 -3 0 0 0 0]',
-    );
+    // k-epsilon reads epsilon, NOT omega: the app writes epsilon (with its wall
+    // function on the wall patch) and ships no stale omega.
+    const eps = (await readCaseFile(id, '0/epsilon'))?.toString('utf8') ?? '';
+    expect(eps).toContain('[0 2 -3 0 0 0 0]');
+    expect(eps).toMatch(/walls\s*\{[\s\S]*?epsilonWallFunction/);
+    expect(await readCaseFile(id, '0/omega')).toBeNull();
+  });
+
+  it('scaffolds model-aware wall functions on wall patches (k-omega default)', async () => {
+    const { auth, id } = await makeProject('runnable-wallfn@x.test');
+    await writeMesh(id);
+    await request(app).post(`/api/v1/projects/${id}/runnable/scaffold`).set('Authorization', auth);
+
+    const nut = (await readCaseFile(id, '0/nut'))?.toString('utf8') ?? '';
+    const k = (await readCaseFile(id, '0/k'))?.toString('utf8') ?? '';
+    const omega = (await readCaseFile(id, '0/omega'))?.toString('utf8') ?? '';
+    const u = (await readCaseFile(id, '0/U'))?.toString('utf8') ?? '';
+    // walls (type wall) get the k-omega wall functions automatically; inlet (patch) stays generic.
+    expect(nut).toMatch(/walls\s*\{[\s\S]*?nutkWallFunction/);
+    expect(k).toMatch(/walls\s*\{[\s\S]*?kqRWallFunction/);
+    expect(omega).toMatch(/walls\s*\{[\s\S]*?omegaWallFunction/);
+    expect(u).toMatch(/walls\s*\{\s*type\s+noSlip;/);
+    expect(nut).toMatch(/inlet\s*\{\s*type\s+zeroGradient;/);
+  });
+
+  it('removes the stale 0/omega when switching k-omega -> k-epsilon (still runnable)', async () => {
+    const { auth, id } = await makeProject('runnable-switch-turb@x.test');
+    await writeMesh(id);
+    // Start k-omega (default): 0/omega is created.
+    await request(app).post(`/api/v1/projects/${id}/runnable/scaffold`).set('Authorization', auth);
+    expect(await readCaseFile(id, '0/omega')).toBeTruthy();
+
+    // Switch to k-epsilon: 0/omega must be removed, 0/epsilon written, case still runnable.
+    const switched = await request(app)
+      .post(`/api/v1/projects/${id}/runnable/scaffold`)
+      .set('Authorization', auth)
+      .send({ solver: 'simpleFoam', turbulence: 'kEpsilon' });
+    expect(switched.status).toBe(201);
+    expect(switched.body.removed).toContain('0/omega');
+    expect(await readCaseFile(id, '0/omega')).toBeNull();
+    expect(await readCaseFile(id, '0/epsilon')).toBeTruthy();
+    expect(switched.body.runnable.runnable).toBe(true);
   });
 
   it('writes a laminar turbulenceProperties (no RAS block) when laminar is chosen', async () => {

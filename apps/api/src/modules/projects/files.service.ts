@@ -9,8 +9,10 @@ import {
   EDITABLE_FILE_MAX_BYTES,
   SOLVER_CATALOG,
   SOLVER_LIBRARY,
+  TURBULENCE_FIELD_NAMES,
   TURBULENCE_MODELS,
   isConfigurableSolver,
+  turbulenceFieldsFor,
   type ConfigurableSolverId,
   type SolverId,
 } from '@dive/shared';
@@ -37,8 +39,8 @@ import {
   MESH_FILES,
   mergeFieldBoundary,
   parseApplication,
-  parseBoundaryPatches,
   parseBoundaryPatchesWithTypes,
+  parseTurbulenceModel,
   rebuildFieldBoundary,
   renderBaseFile,
   renderSolverFile,
@@ -179,7 +181,7 @@ export async function scaffoldCase(viewer: Viewer, projectId: string): Promise<S
   await assertProjectVisible(viewer, projectId);
 
   const boundary = await readCaseFile(projectId, BOUNDARY_FILE);
-  const patches = boundary ? parseBoundaryPatches(boundary.toString('utf8')) : [];
+  const patches = boundary ? parseBoundaryPatchesWithTypes(boundary.toString('utf8')) : [];
 
   const created: string[] = [];
   for (const file of BASE_FILE_PATHS) {
@@ -249,8 +251,40 @@ export interface RunnableCheck {
 /** Result of generating the missing simpleFoam files: created + refreshed state. */
 export interface ScaffoldSolverResult {
   created: string[];
+  /** 0/ turbulence fields removed because the chosen model does not read them
+   * (e.g. a stale 0/omega dropped when switching to k-epsilon). */
+  removed: string[];
   runnable: RunnableCheck;
   entries: CaseEntry[];
+}
+
+/** The 0/ turbulence field paths, any of which a model may or may not read. */
+const TURBULENCE_FIELD_PATHS = TURBULENCE_FIELD_NAMES.map((field) => `0/${field}`);
+
+/**
+ * The files a case needs to be runnable by a solver whose base file set is
+ * `baseRequired`, specialised to the turbulence `model`: the non-turbulence files
+ * unchanged, plus EXACTLY the 0/ turbulence fields the model reads (k-epsilon →
+ * k/epsilon/nut, k-omega → k/omega/nut, laminar → none). So the gate never demands
+ * a stale 0/omega for a k-epsilon case (which would leave a correctly-cleaned case
+ * wrongly reported NOT_RUNNABLE).
+ */
+function requiredFilesForModel(baseRequired: readonly string[], model: string): string[] {
+  const turbSet = new Set(TURBULENCE_FIELD_PATHS);
+  const nonTurb = baseRequired.filter((file) => !turbSet.has(file));
+  const turb = turbulenceFieldsFor(model).map((field) => `0/${field}`);
+  return [...nonTurb, ...turb];
+}
+
+/**
+ * The case's turbulence model, read from constant/turbulenceProperties, or the
+ * k-omega default when absent/unparseable (the app's default family). Drives which
+ * 0/ turbulence fields and wall functions the generator and the gate expect.
+ */
+async function caseTurbulenceModel(projectId: string): Promise<string> {
+  const turb = await readCaseFile(projectId, 'constant/turbulenceProperties');
+  const parsed = turb ? parseTurbulenceModel(turb.toString('utf8')) : null;
+  return parsed ?? 'kOmegaSST';
 }
 
 /**
@@ -263,6 +297,10 @@ export async function computeRunnable(projectId: string): Promise<RunnableCheck>
 
   const controlDict = await readCaseFile(projectId, 'system/controlDict');
   const solver = controlDict ? parseApplication(controlDict.toString('utf8')) : null;
+  // The chosen turbulence model decides which 0/ turbulence fields are required
+  // (k-epsilon needs epsilon not omega; laminar needs none), so the gate matches
+  // exactly what scaffoldSolver writes for that model.
+  const model = await caseTurbulenceModel(projectId);
 
   // Three tiers of gate, by what the app knows about the solver:
   //  1. configurable (simpleFoam/pimpleFoam/rho*): fully scaffolded + easy-configured,
@@ -275,7 +313,7 @@ export async function computeRunnable(projectId: string): Promise<RunnableCheck>
   const known = solver && SOLVER_LIBRARY.some((info) => info.id === solver);
 
   if (target) {
-    const requiredFiles = SOLVER_CATALOG[target].requiredFiles;
+    const requiredFiles = requiredFilesForModel(SOLVER_CATALOG[target].requiredFiles, model);
     const presence = await Promise.all(requiredFiles.map((file) => caseFileExists(projectId, file)));
     const missingFiles = requiredFiles.filter((_, i) => !presence[i]);
     const systemRepairs = await Promise.all(
@@ -309,7 +347,7 @@ export async function computeRunnable(projectId: string): Promise<RunnableCheck>
   }
 
   // foamRun / unknown / unset: not runnable. Guide against the default (simpleFoam) set.
-  const requiredFiles = SOLVER_CATALOG.simpleFoam.requiredFiles;
+  const requiredFiles = requiredFilesForModel(SOLVER_CATALOG.simpleFoam.requiredFiles, model);
   const presence = await Promise.all(requiredFiles.map((file) => caseFileExists(projectId, file)));
   const missingFiles = requiredFiles.filter((_, i) => !presence[i]);
   return {
@@ -438,9 +476,24 @@ export async function scaffoldSolver(
   await ensureZeroFromOrig(projectId);
 
   const boundary = await readCaseFile(projectId, BOUNDARY_FILE);
-  const patches = boundary ? parseBoundaryPatches(boundary.toString('utf8')) : [];
+  const patches = boundary ? parseBoundaryPatchesWithTypes(boundary.toString('utf8')) : [];
+
+  // The effective turbulence model drives which 0/ fields and wall functions we
+  // write: the wizard's explicit choice, else the case's current model (so a
+  // "change solver" call preserves it), else the k-omega default. An unknown id
+  // (should never reach here — the route validates) falls back to k-omega.
+  const existingTurb = await readCaseFile(projectId, 'constant/turbulenceProperties');
+  let model =
+    turbulence ??
+    (existingTurb ? parseTurbulenceModel(existingTurb.toString('utf8')) : null) ??
+    'kOmegaSST';
+  if (!TURBULENCE_MODELS.some((entry) => entry.id === model)) model = 'kOmegaSST';
+  const simulationType =
+    TURBULENCE_MODELS.find((entry) => entry.id === model)?.simulationType ?? 'RAS';
+  const modelFields = turbulenceFieldsFor(model);
 
   const created: string[] = [];
+  const removed: string[] = [];
 
   if (!isConfigurableSolver(solver)) {
     // Manual solver: write a generic skeleton and point controlDict at it. The user
@@ -460,13 +513,12 @@ export async function scaffoldSolver(
       }
     }
     if (turbulence) {
-      const model = TURBULENCE_MODELS.find((entry) => entry.id === turbulence);
-      if (model) {
-        await writeCaseFile(
-          projectId,
-          'constant/turbulenceProperties',
-          renderTurbulenceProperties(model.simulationType, model.id),
-        );
+      await writeCaseFile(
+        projectId,
+        'constant/turbulenceProperties',
+        renderTurbulenceProperties(simulationType, model),
+      );
+      if (!created.includes('constant/turbulenceProperties')) {
         created.push('constant/turbulenceProperties');
       }
     }
@@ -474,13 +526,17 @@ export async function scaffoldSolver(
       computeRunnable(projectId),
       listCaseTree(projectId),
     ]);
-    return { created, runnable, entries };
+    return { created, removed, runnable, entries };
   }
 
   for (const file of SOLVER_CATALOG[solver].requiredFiles) {
+    // Turbulence-dependent files are written model-aware below: turbulenceProperties
+    // for the chosen model, and ONLY the 0/ turbulence fields that model reads.
+    if (file === 'constant/turbulenceProperties') continue;
+    if (TURBULENCE_FIELD_PATHS.includes(file)) continue;
     if (SYSTEM_NUMERICS_FILES.has(file)) {
       if (await systemNumericsNeedsRepair(projectId, file, solver)) {
-        await writeCaseFile(projectId, file, renderSolverFile(solver, file, patches));
+        await writeCaseFile(projectId, file, renderSolverFile(solver, file, patches, model));
         created.push(file);
       }
       continue;
@@ -490,14 +546,14 @@ export async function scaffoldSolver(
     // compressible fixes the pressure field.
     if (file === '0/p') {
       if (await pFieldNeedsRepair(projectId, solver)) {
-        await writeCaseFile(projectId, file, renderSolverFile(solver, file, patches));
+        await writeCaseFile(projectId, file, renderSolverFile(solver, file, patches, model));
         created.push(file);
       }
       continue;
     }
     // Other 0/ fields + constant/*Properties: keep what the user has, add what is missing.
     if (await caseFileExists(projectId, file)) continue;
-    await writeCaseFile(projectId, file, renderSolverFile(solver, file, patches));
+    await writeCaseFile(projectId, file, renderSolverFile(solver, file, patches, model));
     created.push(file);
   }
 
@@ -510,29 +566,34 @@ export async function scaffoldSolver(
     if (next !== content) await writeCaseFile(projectId, 'system/controlDict', next);
   }
 
-  // Turbulence fields for models beyond the k-omega default: writing 0/epsilon,
-  // 0/nuTilda and 0/R (when missing) lets the user pick ANY offered model without a
-  // broken case - k-epsilon family (epsilon), Spalart-Allmaras (nuTilda) and the
-  // Reynolds-stress models LRR/SSG (R). A model ignores the fields it does not read,
-  // so these extras are harmless for the k-omega default.
-  for (const file of ['0/epsilon', '0/nuTilda', '0/R'] as const) {
-    if (await caseFileExists(projectId, file)) continue;
-    await writeCaseFile(projectId, file, renderSolverFile(solver, file, patches));
-    created.push(file);
+  // Turbulence model file — written for the effective model (wizard choice, or the
+  // case's current/default model). Idempotent: unchanged content is not rewritten.
+  {
+    const content = renderTurbulenceProperties(simulationType, model);
+    if (!existingTurb || existingTurb.toString('utf8') !== content) {
+      await writeCaseFile(projectId, 'constant/turbulenceProperties', content);
+      if (!created.includes('constant/turbulenceProperties')) {
+        created.push('constant/turbulenceProperties');
+      }
+    }
   }
 
-  // Apply the chosen turbulence model (wizard step 2) over the scaffolded default.
-  // When absent (e.g. a "change solver" call) turbulenceProperties is left untouched.
-  if (turbulence) {
-    const model = TURBULENCE_MODELS.find((entry) => entry.id === turbulence);
-    if (model) {
-      const content = renderTurbulenceProperties(model.simulationType, model.id);
-      const existing = await readCaseFile(projectId, 'constant/turbulenceProperties');
-      if (!existing || existing.toString('utf8') !== content) {
-        await writeCaseFile(projectId, 'constant/turbulenceProperties', content);
-        if (!created.includes('constant/turbulenceProperties')) {
-          created.push('constant/turbulenceProperties');
-        }
+  // Turbulence 0/ fields, model-driven: write EXACTLY the fields the chosen model
+  // reads (with the model-aware wall functions on the mesh's wall patches), and
+  // REMOVE the ones it does not — so a k-epsilon case ships k/epsilon/nut and no
+  // stale 0/omega, and switching model cleans up the previous model's fields (from
+  // both 0/ and the pristine 0.orig/).
+  for (const path of modelFields.map((field) => `0/${field}`)) {
+    if (await caseFileExists(projectId, path)) continue;
+    await writeCaseFile(projectId, path, renderSolverFile(solver, path, patches, model));
+    created.push(path);
+  }
+  for (const field of TURBULENCE_FIELD_NAMES) {
+    if (modelFields.includes(field)) continue;
+    for (const path of [`0/${field}`, `${ORIG_DIR}${field}`]) {
+      if (await caseFileExists(projectId, path)) {
+        await deleteCaseFile(projectId, path);
+        removed.push(path);
       }
     }
   }
@@ -541,7 +602,7 @@ export async function scaffoldSolver(
     computeRunnable(projectId),
     listCaseTree(projectId),
   ]);
-  return { created, runnable, entries };
+  return { created, removed, runnable, entries };
 }
 
 /** Result of syncing boundaryFields to the mesh: which files changed + the patches. */
@@ -591,6 +652,9 @@ export async function syncBoundaryFields(
     throw new AppError(409, 'NO_MESH', 'No polyMesh found for this project.');
   }
   const patches = parseBoundaryPatchesWithTypes(boundary.toString('utf8'));
+  // Apply the case's turbulence model so a wall patch gets the model's wall function
+  // (nutkWallFunction / kqRWallFunction / …) on every field, not a bare zeroGradient.
+  const model = await caseTurbulenceModel(projectId);
 
   // Seed 0/ from 0.orig/ first when needed, then sync the runnable fields and
   // leave 0.orig/ pristine.
@@ -610,8 +674,8 @@ export async function syncBoundaryFields(
     const fieldName = entry.path.split('/').pop() ?? entry.path;
     const next =
       mode === 'merge'
-        ? mergeFieldBoundary(text, fieldName, patches)
-        : rebuildFieldBoundary(text, fieldName, patches);
+        ? mergeFieldBoundary(text, fieldName, patches, model)
+        : rebuildFieldBoundary(text, fieldName, patches, model);
     if (next !== text) {
       await writeCaseFile(projectId, entry.path, next);
       updated.push(entry.path);

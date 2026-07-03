@@ -22,13 +22,16 @@ import {
   BOUNDARY_FILE,
   MESH_FILES,
   collapseBoundaryToSinglePatch,
+  fieldBcBody,
   getFieldPatchType,
   isValidPatchName,
   parseBoundaryPatches,
+  parseTurbulenceModel,
   removeEmptyBoundaryPatches,
   renameBoundaryPatch,
   renameFieldBoundaryPatch,
   setBoundaryPatchType,
+  setFieldPatchBc,
   setFieldPatchType,
 } from '../../lib/openfoamCase';
 import {
@@ -283,20 +286,47 @@ function isConstraintType(type: string): boolean {
   return (CONSTRAINT_PATCH_TYPES as readonly string[]).includes(type);
 }
 
+/** Is `bc` a wall-only field BC (a wall function or noSlip) that must be reset when
+ * a patch stops being a wall? */
+function isWallBc(bc: string): boolean {
+  return bc === 'noSlip' || bc.includes('WallFunction');
+}
+
+/** The case's turbulence model, read from constant/turbulenceProperties, or the
+ * k-omega default when absent — so a retyped wall gets a sensible wall function. */
+async function caseTurbulenceModel(projectId: string): Promise<string> {
+  const turb = await readCaseFile(projectId, 'constant/turbulenceProperties');
+  const parsed = turb ? parseTurbulenceModel(turb.toString('utf8')) : null;
+  return parsed ?? 'kOmegaSST';
+}
+
 /**
- * Reconcile one field file's boundaryField entry for `patch` with the patch's
- * new geometric `type`:
+ * Reconcile one field file's boundaryField entry for `patch` with the patch's new
+ * geometric `type`, for a case using turbulence `model`:
  *  - a constraint type forces the field BC to the SAME type (solver requires it);
- *  - a non-constraint type (patch / wall) resets a leftover constraint BC to a
- *    generic `zeroGradient`, otherwise keeps the user's BC untouched.
- * Returns the (possibly unchanged) text.
+ *  - `wall` writes the model-aware wall BC AUTOMATICALLY on every field — noSlip (U),
+ *    zeroGradient (p), the wall function (nut/k/epsilon/omega/…) — so setting a patch
+ *    to wall wires the whole boundary condition with no manual editing;
+ *  - a plain `patch` resets a leftover constraint OR wall BC to a generic
+ *    `zeroGradient`, otherwise keeps the user's BC untouched.
+ * `fieldName` is the field's object name (U, p, k, …). Returns the (possibly
+ * unchanged) text.
  */
-function propagateFieldType(text: string, patch: string, type: MeshPatchType): string {
+function propagateFieldType(
+  text: string,
+  patch: string,
+  type: MeshPatchType,
+  fieldName: string,
+  model: string,
+): string {
   if (isConstraintType(type)) {
     return setFieldPatchType(text, patch, type);
   }
+  if (type === 'wall') {
+    return setFieldPatchBc(text, patch, fieldBcBody(fieldName, 'wall', model));
+  }
   const current = getFieldPatchType(text, patch);
-  if (current && isConstraintType(current)) {
+  if (current && (isConstraintType(current) || isWallBc(current))) {
     return setFieldPatchType(text, patch, 'zeroGradient');
   }
   return text;
@@ -369,7 +399,9 @@ export async function setPatchType(
   const newBoundary = setBoundaryPatchType(content, patch, type);
   await writeCaseFile(projectId, BOUNDARY_FILE, newBoundary);
 
-  // 2) Propagate into the 0/ fields so the case stays valid.
+  // 2) Propagate into the 0/ fields so the case stays valid (a wall gets its
+  //    model-aware wall functions automatically).
+  const model = await caseTurbulenceModel(projectId);
   const entries = await listCaseTree(projectId);
   for (const entry of entries) {
     if (entry.type !== 'file') continue;
@@ -380,7 +412,8 @@ export async function setPatchType(
     const text = buffer.toString('utf8');
     if (!text.includes('boundaryField')) continue;
 
-    const updated = propagateFieldType(text, patch, type);
+    const fieldName = entry.path.split('/').pop() ?? entry.path;
+    const updated = propagateFieldType(text, patch, type, fieldName, model);
     if (updated !== text) {
       await writeCaseFile(projectId, entry.path, updated);
     }
@@ -468,7 +501,9 @@ export async function editMeshPatches(
   }
   await writeCaseFile(projectId, BOUNDARY_FILE, newBoundary);
 
-  // 2) Field files (0/...): same renames + type propagation, one read/write each.
+  // 2) Field files (0/...): same renames + type propagation, one read/write each
+  //    (a wall gets its model-aware wall functions automatically).
+  const model = await caseTurbulenceModel(projectId);
   const entries = await listCaseTree(projectId);
   for (const entry of entries) {
     if (entry.type !== 'file') continue;
@@ -479,9 +514,10 @@ export async function editMeshPatches(
     const text = buffer.toString('utf8');
     if (!text.includes('boundaryField')) continue;
 
+    const fieldName = entry.path.split('/').pop() ?? entry.path;
     let updated = applyRenames(text, renames, renameFieldBoundaryPatch);
     for (const edit of edits) {
-      updated = propagateFieldType(updated, edit.to, edit.type);
+      updated = propagateFieldType(updated, edit.to, edit.type, fieldName, model);
     }
     if (updated !== text) {
       await writeCaseFile(projectId, entry.path, updated);

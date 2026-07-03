@@ -365,19 +365,51 @@ describe('POST /projects/:id/mesh/patches/type', () => {
     expect(field).toMatch(/walls\s*\{[\s\S]*?noSlip/);
   });
 
-  it('resets a leftover constraint field BC when switching to wall', async () => {
+  it('applies the wall BC (noSlip for U) when switching a patch to wall', async () => {
     const { id, auth } = await makeProject('mesh-type-reset@dive-turbinen.test');
     await writePolyMesh(id);
     await writeCaseFile(id, '0/U', FIELD_U);
 
     await setType(id, auth, 'inlet', 'symmetry'); // field inlet BC -> symmetry
-    const res = await setType(id, auth, 'inlet', 'wall'); // -> reset to zeroGradient
+    const res = await setType(id, auth, 'inlet', 'wall'); // -> wall: U becomes noSlip
     expect(res.status).toBe(200);
 
     const boundary = (await readCaseFile(id, 'constant/polyMesh/boundary'))?.toString('utf8') ?? '';
     expect(boundary).toMatch(/inlet\s*\{[^}]*type\s+wall;/);
     const field = (await readCaseFile(id, '0/U'))?.toString('utf8') ?? '';
-    expect(field).toMatch(/inlet\s*\{\s*type\s+zeroGradient;\s*\}/);
+    // Switching to wall writes the wall BC automatically, with no leftover symmetry.
+    expect(field).toMatch(/inlet\s*\{\s*type\s+noSlip;\s*\}/);
+    expect(field).not.toMatch(/inlet\s*\{\s*type\s+symmetry/);
+  });
+
+  it('writes model-aware turbulence wall functions when a patch is set to wall (k-epsilon)', async () => {
+    const { id, auth } = await makeProject('mesh-type-wallfn@dive-turbinen.test');
+    await writePolyMesh(id);
+    // A k-epsilon case: nut/k/epsilon are the turbulence fields; inlet starts generic.
+    await writeCaseFile(
+      id,
+      'constant/turbulenceProperties',
+      'FoamFile { class dictionary; object turbulenceProperties; }\nsimulationType RAS;\nRAS { RASModel kEpsilon; turbulence on; }\n',
+    );
+    const generic = (name: string) =>
+      `FoamFile { class volScalarField; object ${name}; }\ninternalField uniform 0.1;\nboundaryField\n{\n    inlet { type zeroGradient; }\n    walls { type zeroGradient; }\n}\n`;
+    await writeCaseFile(id, '0/nut', generic('nut'));
+    await writeCaseFile(id, '0/k', generic('k'));
+    await writeCaseFile(id, '0/epsilon', generic('epsilon'));
+
+    const res = await setType(id, auth, 'inlet', 'wall');
+    expect(res.status).toBe(200);
+
+    // Each turbulence field gets its model-aware wall function on the new wall patch.
+    expect((await readCaseFile(id, '0/nut'))?.toString('utf8') ?? '').toMatch(
+      /inlet\s*\{[\s\S]*?nutkWallFunction/,
+    );
+    expect((await readCaseFile(id, '0/k'))?.toString('utf8') ?? '').toMatch(
+      /inlet\s*\{[\s\S]*?kqRWallFunction/,
+    );
+    expect((await readCaseFile(id, '0/epsilon'))?.toString('utf8') ?? '').toMatch(
+      /inlet\s*\{[\s\S]*?epsilonWallFunction/,
+    );
   });
 
   it('rejects an unsupported type with 422', async () => {
