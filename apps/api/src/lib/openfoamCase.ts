@@ -12,6 +12,7 @@
 import {
   CONSTRAINT_PATCH_TYPES,
   SOLVER_CATALOG,
+  turbulenceFieldsFor,
   turbulenceWallBc,
   type ConfigurableSolverId,
 } from '@dive/shared';
@@ -403,8 +404,56 @@ runTimeModifiable true;
 ${FOAM_FOOTER}`;
 }
 
-/** system/fvSchemes with concrete divergence schemes for simpleFoam + k-omega SST. */
-function simpleFoamFvSchemes(): string {
+// ---------------------------------------------------------------------------
+// Model-aware turbulence numerics.
+//
+// The turbulence model decides WHICH transport fields the solver actually solves
+// (k-epsilon -> k/epsilon, k-omega -> k/omega, Spalart-Allmaras -> nuTilda, RSM ->
+// R/k/epsilon, laminar / algebraic-LES -> none). Each transported field needs its
+// own div scheme in fvSchemes AND a linear solver (+ residual / relaxation entry)
+// in fvSolution, or the run aborts ("no div scheme for div(phi,epsilon)" / "no
+// solver for epsilon"). These helpers turn the model into those exact fragments so
+// that changing the turbulence model rewrites system/fvSchemes and system/fvSolution
+// to match — not only constant/turbulenceProperties.
+// ---------------------------------------------------------------------------
+
+/**
+ * The turbulence transport fields a model SOLVES: its 0/ fields minus `nut` (which
+ * the model derives, not transports). An undefined model falls back to the k-omega
+ * pair (the app default family); laminar and algebraic LES transport nothing ([]).
+ */
+function transportedTurbulenceFields(model?: string): string[] {
+  if (model === undefined) return ['k', 'omega'];
+  return turbulenceFieldsFor(model).filter((field) => field !== 'nut');
+}
+
+/** `(a|b|c)` regex-key body for a field list, e.g. `['U','k','epsilon']`. */
+function fieldRegexKey(fields: readonly string[]): string {
+  return `(${fields.join('|')})`;
+}
+
+/**
+ * The `div(phi,<field>) <scheme>;` lines for a model's transported turbulence
+ * fields, indented four spaces, each terminated by a newline so they slot between
+ * the momentum and stress div schemes. Empty when the model transports nothing
+ * (laminar / algebraic LES). `scheme` must include its trailing `;`.
+ */
+function turbulenceDivLines(model: string | undefined, scheme: string): string {
+  const fields = transportedTurbulenceFields(model);
+  if (fields.length === 0) return '';
+  return fields.map((field) => `    div(phi,${field})  ${scheme}`).join('\n') + '\n';
+}
+
+/** A keyed `"(k|epsilon)"  <value>` residual/relaxation line for the transported
+ *  turbulence fields (indented `indent`, leading newline), or '' for laminar. */
+function turbulenceKeyedLine(model: string | undefined, indent: string, value: string): string {
+  const fields = transportedTurbulenceFields(model);
+  if (fields.length === 0) return '';
+  return `\n${indent}"${fieldRegexKey(fields)}"     ${value}`;
+}
+
+/** system/fvSchemes with concrete divergence schemes for simpleFoam, model-aware. */
+function simpleFoamFvSchemes(model?: string): string {
   return `${foamHeader('dictionary', 'fvSchemes', 'system')}
 ddtSchemes
 {
@@ -420,9 +469,7 @@ divSchemes
 {
     default         none;
     div(phi,U)      bounded Gauss linearUpwind grad(U);
-    div(phi,k)      bounded Gauss upwind;
-    div(phi,omega)  bounded Gauss upwind;
-    div((nuEff*dev2(T(grad(U))))) Gauss linear;
+${turbulenceDivLines(model, 'bounded Gauss upwind;')}    div((nuEff*dev2(T(grad(U))))) Gauss linear;
 }
 
 laplacianSchemes
@@ -447,8 +494,11 @@ wallDist
 ${FOAM_FOOTER}`;
 }
 
-/** system/fvSolution with a real solver setup, residualControl and relaxation. */
-function simpleFoamFvSolution(): string {
+/** system/fvSolution with a real solver setup, residualControl and relaxation,
+ *  model-aware: the turbulence transport fields share U's smoothSolver and get their
+ *  own residual / relaxation entries (none for laminar). */
+function simpleFoamFvSolution(model?: string): string {
+  const turb = transportedTurbulenceFields(model);
   return `${foamHeader('dictionary', 'fvSolution', 'system')}
 solvers
 {
@@ -460,7 +510,7 @@ solvers
         relTol          0.1;
     }
 
-    "(U|k|omega)"
+    "${fieldRegexKey(['U', ...turb])}"
     {
         solver          smoothSolver;
         smoother        symGaussSeidel;
@@ -481,8 +531,7 @@ SIMPLE
     residualControl
     {
         p               1e-4;
-        U               1e-4;
-        "(k|omega)"     1e-4;
+        U               1e-4;${turbulenceKeyedLine(model, '        ', '1e-4;')}
     }
 }
 
@@ -494,8 +543,7 @@ relaxationFactors
     }
     equations
     {
-        U               0.7;
-        "(k|omega)"     0.7;
+        U               0.7;${turbulenceKeyedLine(model, '        ', '0.7;')}
     }
 }
 ${FOAM_FOOTER}`;
@@ -689,8 +737,9 @@ maxDeltaT       1;
 ${FOAM_FOOTER}`;
 }
 
-/** system/fvSchemes with a transient (Euler) time scheme and concrete div schemes. */
-function pimpleFoamFvSchemes(): string {
+/** system/fvSchemes with a transient (Euler) time scheme and concrete div schemes,
+ *  model-aware. */
+function pimpleFoamFvSchemes(model?: string): string {
   return `${foamHeader('dictionary', 'fvSchemes', 'system')}
 ddtSchemes
 {
@@ -706,9 +755,7 @@ divSchemes
 {
     default         none;
     div(phi,U)      Gauss linearUpwind grad(U);
-    div(phi,k)      Gauss limitedLinear 1;
-    div(phi,omega)  Gauss limitedLinear 1;
-    div((nuEff*dev2(T(grad(U))))) Gauss linear;
+${turbulenceDivLines(model, 'Gauss limitedLinear 1;')}    div((nuEff*dev2(T(grad(U))))) Gauss linear;
 }
 
 laplacianSchemes
@@ -733,8 +780,10 @@ wallDist
 ${FOAM_FOOTER}`;
 }
 
-/** system/fvSolution with the PIMPLE algorithm and per-field (incl. Final) solvers. */
-function pimpleFoamFvSolution(): string {
+/** system/fvSolution with the PIMPLE algorithm and per-field (incl. Final) solvers,
+ *  model-aware. */
+function pimpleFoamFvSolution(model?: string): string {
+  const turb = transportedTurbulenceFields(model);
   return `${foamHeader('dictionary', 'fvSolution', 'system')}
 solvers
 {
@@ -746,7 +795,7 @@ solvers
         relTol          0.05;
     }
 
-    "(U|k|omega).*"
+    "${fieldRegexKey(['U', ...turb])}.*"
     {
         solver          smoothSolver;
         smoother        symGaussSeidel;
@@ -884,8 +933,8 @@ runTimeModifiable true;
 ${FOAM_FOOTER}`;
 }
 
-/** system/fvSchemes for steady rhoSimpleFoam (energy + kinetic-energy terms). */
-function rhoSimpleFoamFvSchemes(): string {
+/** system/fvSchemes for steady rhoSimpleFoam (energy + kinetic-energy terms), model-aware. */
+function rhoSimpleFoamFvSchemes(model?: string): string {
   return `${foamHeader('dictionary', 'fvSchemes', 'system')}
 ddtSchemes
 {
@@ -903,9 +952,7 @@ divSchemes
     div(phi,U)      bounded Gauss linearUpwind grad(U);
     div(phi,e)      bounded Gauss upwind;
     div(phi,K)      bounded Gauss upwind;
-    div(phi,k)      bounded Gauss upwind;
-    div(phi,omega)  bounded Gauss upwind;
-    div(phiv,p)     bounded Gauss upwind;
+${turbulenceDivLines(model, 'bounded Gauss upwind;')}    div(phiv,p)     bounded Gauss upwind;
     div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;
 }
 
@@ -931,8 +978,9 @@ wallDist
 ${FOAM_FOOTER}`;
 }
 
-/** system/fvSolution for steady rhoSimpleFoam (SIMPLE + rho relaxation). */
-function rhoSimpleFoamFvSolution(): string {
+/** system/fvSolution for steady rhoSimpleFoam (SIMPLE + rho relaxation), model-aware. */
+function rhoSimpleFoamFvSolution(model?: string): string {
+  const turb = transportedTurbulenceFields(model);
   return `${foamHeader('dictionary', 'fvSolution', 'system')}
 solvers
 {
@@ -944,7 +992,7 @@ solvers
         relTol          0.1;
     }
 
-    "(U|e|k|omega)"
+    "${fieldRegexKey(['U', 'e', ...turb])}"
     {
         solver          PBiCGStab;
         preconditioner  DILU;
@@ -967,8 +1015,7 @@ SIMPLE
     {
         p               1e-3;
         U               1e-4;
-        e               1e-3;
-        "(k|omega)"     1e-3;
+        e               1e-3;${turbulenceKeyedLine(model, '        ', '1e-3;')}
     }
 }
 
@@ -982,8 +1029,7 @@ relaxationFactors
     equations
     {
         U               0.7;
-        e               0.7;
-        "(k|omega)"     0.7;
+        e               0.7;${turbulenceKeyedLine(model, '        ', '0.7;')}
     }
 }
 ${FOAM_FOOTER}`;
@@ -1022,8 +1068,8 @@ maxDeltaT       1;
 ${FOAM_FOOTER}`;
 }
 
-/** system/fvSchemes for transient rhoPimpleFoam (Euler time scheme). */
-function rhoPimpleFoamFvSchemes(): string {
+/** system/fvSchemes for transient rhoPimpleFoam (Euler time scheme), model-aware. */
+function rhoPimpleFoamFvSchemes(model?: string): string {
   return `${foamHeader('dictionary', 'fvSchemes', 'system')}
 ddtSchemes
 {
@@ -1041,9 +1087,7 @@ divSchemes
     div(phi,U)      Gauss linearUpwind grad(U);
     div(phi,e)      Gauss limitedLinear 1;
     div(phi,K)      Gauss limitedLinear 1;
-    div(phi,k)      Gauss limitedLinear 1;
-    div(phi,omega)  Gauss limitedLinear 1;
-    div(phiv,p)     Gauss linear;
+${turbulenceDivLines(model, 'Gauss limitedLinear 1;')}    div(phiv,p)     Gauss linear;
     div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;
 }
 
@@ -1069,8 +1113,9 @@ wallDist
 ${FOAM_FOOTER}`;
 }
 
-/** system/fvSolution for transient rhoPimpleFoam (PIMPLE + Final solvers). */
-function rhoPimpleFoamFvSolution(): string {
+/** system/fvSolution for transient rhoPimpleFoam (PIMPLE + Final solvers), model-aware. */
+function rhoPimpleFoamFvSolution(model?: string): string {
+  const turb = transportedTurbulenceFields(model);
   return `${foamHeader('dictionary', 'fvSolution', 'system')}
 solvers
 {
@@ -1087,7 +1132,7 @@ solvers
         solver          diagonal;
     }
 
-    "(U|e|k|omega).*"
+    "${fieldRegexKey(['U', 'e', ...turb])}.*"
     {
         solver          PBiCGStab;
         preconditioner  DILU;
@@ -1143,19 +1188,19 @@ export function renderSolverFile(
     case 'system/fvSchemes':
       return compressible
         ? transient
-          ? rhoPimpleFoamFvSchemes()
-          : rhoSimpleFoamFvSchemes()
+          ? rhoPimpleFoamFvSchemes(model)
+          : rhoSimpleFoamFvSchemes(model)
         : transient
-          ? pimpleFoamFvSchemes()
-          : simpleFoamFvSchemes();
+          ? pimpleFoamFvSchemes(model)
+          : simpleFoamFvSchemes(model);
     case 'system/fvSolution':
       return compressible
         ? transient
-          ? rhoPimpleFoamFvSolution()
-          : rhoSimpleFoamFvSolution()
+          ? rhoPimpleFoamFvSolution(model)
+          : rhoSimpleFoamFvSolution(model)
         : transient
-          ? pimpleFoamFvSolution()
-          : simpleFoamFvSolution();
+          ? pimpleFoamFvSolution(model)
+          : simpleFoamFvSolution(model);
     case 'constant/transportProperties':
       return transportProperties();
     case 'constant/thermophysicalProperties':

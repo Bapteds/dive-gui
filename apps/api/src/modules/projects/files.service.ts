@@ -355,7 +355,9 @@ export async function computeRunnable(projectId: string): Promise<RunnableCheck>
     const presence = await Promise.all(requiredFiles.map((file) => caseFileExists(projectId, file)));
     const missingFiles = requiredFiles.filter((_, i) => !presence[i]);
     const systemRepairs = await Promise.all(
-      [...SYSTEM_NUMERICS_FILES].map((file) => systemNumericsNeedsRepair(projectId, file, target)),
+      [...SYSTEM_NUMERICS_FILES].map((file) =>
+        systemNumericsNeedsRepair(projectId, file, target, model),
+      ),
     );
     const numericsReady = systemRepairs.every((needsRepair) => !needsRepair);
     return {
@@ -414,26 +416,48 @@ const SYSTEM_NUMERICS_FILES = new Set<string>([
   'system/fvSolution',
 ]);
 
+/** The turbulence transport fields a model SOLVES (its 0/ fields minus derived
+ *  `nut`): each needs a div scheme in fvSchemes and a linear solver in fvSolution. */
+function transportedTurbulenceFields(model: string): string[] {
+  return turbulenceFieldsFor(model).filter((field) => field !== 'nut');
+}
+
 /**
- * Does a system/ numerics file need to be (re)written for `solver`? True when it
- * is missing, still a generic placeholder, or written for the *other* solver's
- * algorithm — detected by markers that differ steady vs transient:
+ * Does fvSolution reference `field` as a linear-solver key? A turbulence field
+ * appears in a regex/plain key bounded by `(`, `|`, `)` or a quote (e.g.
+ * `"(U|k|epsilon)"` covers k and epsilon), so match it as a delimited token — this
+ * avoids substring false positives (a bare `k` inside `GaussSeidel`). Field names
+ * come from a fixed known set, never user input.
+ */
+function fvSolutionCoversField(content: string, field: string): boolean {
+  return new RegExp(`[("|]${field}[)|".]`).test(content);
+}
+
+/**
+ * Does a system/ numerics file need to be (re)written for `solver` + turbulence
+ * `model`? True when it is missing, still a generic placeholder, written for the
+ * *other* solver's algorithm, or written for a *different turbulence model* —
+ * detected by markers:
  *  - fvSolution: needs a pressure reference (pRefCell/pRefPoint — without it the
- *    solver aborts on a closed domain), AND the target algorithm dictionary
- *    (`SIMPLE` for steady, `PIMPLE` for transient).
+ *    solver aborts on a closed domain), the target algorithm dictionary (`SIMPLE`
+ *    for steady, `PIMPLE` for transient), the family's `rho` marker, AND a linear
+ *    solver for every transported turbulence field (k/epsilon, k/omega, nuTilda…).
  *  - fvSchemes: needs a real divergence scheme (the base scaffold writes
- *    `div none`), AND a regime-correct time scheme (steady = `steadyState`,
- *    transient must NOT be `steadyState`).
+ *    `div none`), a regime-correct time scheme (steady = `steadyState`, transient
+ *    NOT `steadyState`), the energy term for the family, AND a `div(phi,<field>)`
+ *    for every transported turbulence field (else the solver aborts on e.g.
+ *    `div(phi,epsilon)`).
  *  - controlDict: application must equal `solver`, with a regime-appropriate
  *    endTime (steady runs many iterations so `> 1`; transient any positive time).
- * Marker-guarded so a second "Make runnable" for the same solver is a no-op and a
- * real imported case is never overwritten, while switching solver re-renders the
- * trio for the new algorithm.
+ * Marker-guarded so a second "Make runnable" for the same solver + model is a no-op
+ * and a real imported case is never overwritten, while switching solver OR the
+ * turbulence model re-renders the trio to match.
  */
 async function systemNumericsNeedsRepair(
   projectId: string,
   file: string,
   solver: ConfigurableSolverId,
+  model: string,
 ): Promise<boolean> {
   const buffer = await readCaseFile(projectId, file);
   if (!buffer) return true;
@@ -441,6 +465,7 @@ async function systemNumericsNeedsRepair(
   const spec = SOLVER_CATALOG[solver];
   const transient = spec.regime === 'transient';
   const incompressible = spec.family === 'incompressible';
+  const transported = transportedTurbulenceFields(model);
 
   if (file === 'system/fvSolution') {
     // Incompressible closed domains need a pressure reference; compressible p is
@@ -450,7 +475,10 @@ async function systemNumericsNeedsRepair(
     // Family marker: a compressible setup carries a `rho` solver / relaxation entry.
     // Its presence/absence flips the trio when the family is switched.
     const hasRho = /\brho\b/.test(content);
-    return incompressible ? hasRho : !hasRho;
+    if (incompressible ? hasRho : !hasRho) return true;
+    // Turbulence coupling: every transported field needs a linear solver, or the run
+    // aborts ("no solver for epsilon"). A model switch (k-omega -> k-epsilon) trips this.
+    return transported.some((field) => !fvSolutionCoversField(content, field));
   }
   if (file === 'system/fvSchemes') {
     if (!/\bdiv\(phi,U\)/.test(content)) return true;
@@ -459,7 +487,10 @@ async function systemNumericsNeedsRepair(
     if (transient ? steadyDdt : !steadyDdt) return true;
     // Family marker: a compressible setup carries the energy convection term.
     const hasEnergy = /div\(phi,e\)/.test(content);
-    return incompressible ? hasEnergy : !hasEnergy;
+    if (incompressible ? hasEnergy : !hasEnergy) return true;
+    // Turbulence coupling: every transported field needs its div scheme, or the run
+    // aborts ("no div scheme for div(phi,epsilon)"). A model switch trips this.
+    return transported.some((field) => !content.includes(`div(phi,${field})`));
   }
   // system/controlDict
   if (parseApplication(content) !== solver) return true;
@@ -576,7 +607,7 @@ export async function scaffoldSolver(
     if (file === 'constant/turbulenceProperties') continue;
     if (TURBULENCE_FIELD_PATHS.includes(file)) continue;
     if (SYSTEM_NUMERICS_FILES.has(file)) {
-      if (await systemNumericsNeedsRepair(projectId, file, solver)) {
+      if (await systemNumericsNeedsRepair(projectId, file, solver, model)) {
         await writeCaseFile(projectId, file, renderSolverFile(solver, file, patches, model));
         created.push(file);
       }

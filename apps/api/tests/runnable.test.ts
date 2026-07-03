@@ -60,6 +60,42 @@ describe('renderSolverFile / parseApplication (unit)', () => {
     expect(renderSolverFile('simpleFoam', 'system/fvSchemes', [])).toContain('div(phi,U)');
   });
 
+  it('is turbulence-model-aware: k-epsilon gets div(phi,epsilon) + an epsilon solver, no omega', () => {
+    const schemes = renderSolverFile('simpleFoam', 'system/fvSchemes', [], 'kEpsilon');
+    expect(schemes).toContain('div(phi,epsilon)');
+    expect(schemes).not.toContain('div(phi,omega)');
+    const solution = renderSolverFile('simpleFoam', 'system/fvSolution', [], 'kEpsilon');
+    expect(solution).toContain('(U|k|epsilon)');
+    expect(solution).toMatch(/"\(k\|epsilon\)"\s+1e-4;/); // residualControl entry
+  });
+
+  it('is turbulence-model-aware: Spalart-Allmaras solves nuTilda (no k/epsilon/omega div)', () => {
+    const schemes = renderSolverFile('simpleFoam', 'system/fvSchemes', [], 'SpalartAllmaras');
+    expect(schemes).toContain('div(phi,nuTilda)');
+    expect(schemes).not.toContain('div(phi,k)');
+    expect(renderSolverFile('simpleFoam', 'system/fvSolution', [], 'SpalartAllmaras')).toContain(
+      '(U|nuTilda)',
+    );
+  });
+
+  it('laminar drops every turbulence div scheme and keyed solver', () => {
+    const schemes = renderSolverFile('simpleFoam', 'system/fvSchemes', [], 'laminar');
+    expect(schemes).not.toContain('div(phi,k)');
+    expect(schemes).not.toContain('div(phi,omega)');
+    const solution = renderSolverFile('simpleFoam', 'system/fvSolution', [], 'laminar');
+    expect(solution).toContain('"(U)"');
+    expect(solution).not.toMatch(/"\(k\|omega\)"/);
+  });
+
+  it('compressible rhoSimpleFoam keeps energy AND adds the model turbulence fields (k-epsilon)', () => {
+    const schemes = renderSolverFile('rhoSimpleFoam', 'system/fvSchemes', [], 'kEpsilon');
+    expect(schemes).toContain('div(phi,e)');
+    expect(schemes).toContain('div(phi,epsilon)');
+    expect(renderSolverFile('rhoSimpleFoam', 'system/fvSolution', [], 'kEpsilon')).toContain(
+      '(U|e|k|epsilon)',
+    );
+  });
+
   it('renders a transient pimpleFoam trio: PIMPLE algorithm, Euler ddt, adjustable dt', () => {
     const control = renderSolverFile('pimpleFoam', 'system/controlDict', []);
     expect(control).toContain('application     pimpleFoam;');
@@ -284,6 +320,35 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
     expect(eps).toContain('[0 2 -3 0 0 0 0]');
     expect(eps).toMatch(/walls\s*\{[\s\S]*?epsilonWallFunction/);
     expect(await readCaseFile(id, '0/omega')).toBeNull();
+  });
+
+  it('re-renders system/fvSchemes + fvSolution when the turbulence model changes (same solver)', async () => {
+    const { auth, id } = await makeProject('runnable-turb-trio@x.test');
+    await writeMesh(id);
+    // Default k-omega scaffold: the trio is written for k/omega.
+    await request(app).post(`/api/v1/projects/${id}/runnable/scaffold`).set('Authorization', auth);
+    expect((await readCaseFile(id, 'system/fvSchemes'))?.toString('utf8') ?? '').toContain(
+      'div(phi,omega)',
+    );
+
+    // Switch turbulence to k-epsilon on the SAME solver: the system trio must be
+    // re-rendered (this is exactly what used to be skipped), so fvSchemes gets
+    // div(phi,epsilon) and fvSolution solves epsilon — otherwise the run aborts.
+    const switched = await request(app)
+      .post(`/api/v1/projects/${id}/runnable/scaffold`)
+      .set('Authorization', auth)
+      .send({ solver: 'simpleFoam', turbulence: 'kEpsilon' });
+    expect(switched.status).toBe(201);
+    expect(switched.body.created).toEqual(
+      expect.arrayContaining(['system/fvSchemes', 'system/fvSolution']),
+    );
+    expect(switched.body.runnable.runnable).toBe(true);
+
+    const schemes = (await readCaseFile(id, 'system/fvSchemes'))?.toString('utf8') ?? '';
+    const solution = (await readCaseFile(id, 'system/fvSolution'))?.toString('utf8') ?? '';
+    expect(schemes).toContain('div(phi,epsilon)');
+    expect(schemes).not.toContain('div(phi,omega)');
+    expect(solution).toContain('(U|k|epsilon)');
   });
 
   it('scaffolds model-aware wall functions on wall patches (k-omega default)', async () => {
