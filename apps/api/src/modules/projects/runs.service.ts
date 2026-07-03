@@ -295,7 +295,11 @@ async function launchParallelRun(
       runId,
       `Decomposing the mesh into ${cores} subdomains (decomposePar)...\n`,
     );
-    await writeCaseFile(projectId, 'system/decomposeParDict', renderDecomposeParDict(cores));
+    await writeCaseFile(
+      projectId,
+      'system/decomposeParDict',
+      renderDecomposeParDict(cores, env.DECOMPOSE_METHOD),
+    );
 
     const decompose = await runCommand({
       ...planOpenfoamCommand('decomposePar', ['-case', caseDir, '-force'], caseDir),
@@ -322,11 +326,14 @@ async function launchParallelRun(
       return;
     }
 
-    // `mpirun --allow-run-as-root -np N <solver> -case <dir> -parallel` (the flag is a
-    // no-op unless the API runs as root, e.g. inside a container).
+    // `mpirun <MPI_RUN_FLAGS> -np N <solver> -case <dir> -parallel`. The configured
+    // flags (default --allow-run-as-root --use-hwthread-cpus --oversubscribe) make the
+    // requested core count map to MPI slots, avoiding the common "not enough slots"
+    // failure on a hyperthreaded host; adjust MPI_RUN_FLAGS for a non-OpenMPI launcher.
+    const mpiFlags = env.MPI_RUN_FLAGS.split(/\s+/).filter(Boolean);
     const plan = planOpenfoamCommand(
       env.MPI_BIN,
-      ['--allow-run-as-root', '-np', String(cores), solver, '-case', caseDir, '-parallel'],
+      [...mpiFlags, '-np', String(cores), solver, '-case', caseDir, '-parallel'],
       caseDir,
     );
     const handle = runStream({

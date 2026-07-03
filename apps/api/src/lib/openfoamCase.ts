@@ -607,16 +607,52 @@ ${FOAM_FOOTER}`;
 }
 
 /**
- * system/decomposeParDict for a parallel run: split the mesh into
- * `numberOfSubdomains` pieces with the `scotch` method (automatic, balanced, needs
- * no coefficients — valid on ESI OpenFOAM.com v2406). The run service writes this
- * when cores > 1, then `decomposePar` uses it before `mpirun -np N <solver> -parallel`.
+ * The most balanced (x·y·z = n) grid for a `simple`/`hierarchical` decomposition,
+ * so its mandatory `n (x y z)` coefficients always factor the core count exactly
+ * (an unbalanced or wrong-product grid makes decomposePar fail). Falls back to
+ * (n 1 1) for a prime n.
  */
-export function renderDecomposeParDict(numberOfSubdomains: number): string {
+function decompositionGrid(n: number): [number, number, number] {
+  let best: [number, number, number] = [n, 1, 1];
+  let bestSpread = Infinity;
+  for (let x = 1; x <= n; x += 1) {
+    if (n % x !== 0) continue;
+    const rest = n / x;
+    for (let y = 1; y <= rest; y += 1) {
+      if (rest % y !== 0) continue;
+      const z = rest / y;
+      const spread = Math.max(x, y, z) - Math.min(x, y, z);
+      if (spread < bestSpread) {
+        bestSpread = spread;
+        best = [x, y, z];
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * system/decomposeParDict for a parallel run: split the mesh into
+ * `numberOfSubdomains` pieces. `scotch` (default) is automatic and balanced and needs
+ * no coefficients (valid on ESI OpenFOAM.com v2406) but requires the scotch library
+ * in the build; `simple`/`hierarchical` are dependency-free fallbacks for which a
+ * balanced `n (x y z)` coefficient block is generated so the product equals the core
+ * count. The run service writes this when cores > 1, then `decomposePar` uses it
+ * before `mpirun -np N <solver> -parallel`.
+ */
+export function renderDecomposeParDict(numberOfSubdomains: number, method = 'scotch'): string {
+  let coeffs = '';
+  if (method === 'simple' || method === 'hierarchical') {
+    const [x, y, z] = decompositionGrid(numberOfSubdomains);
+    coeffs =
+      method === 'hierarchical'
+        ? `\n\nhierarchicalCoeffs\n{\n    n               (${x} ${y} ${z});\n    order           xyz;\n}`
+        : `\n\nsimpleCoeffs\n{\n    n               (${x} ${y} ${z});\n    delta           0.001;\n}`;
+  }
   return `${foamHeader('dictionary', 'decomposeParDict', 'system')}
 numberOfSubdomains ${numberOfSubdomains};
 
-method          scotch;
+method          ${method};${coeffs}
 ${FOAM_FOOTER}`;
 }
 

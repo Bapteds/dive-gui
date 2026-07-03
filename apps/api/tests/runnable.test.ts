@@ -7,7 +7,12 @@ import request from 'supertest';
 import { app, authHeader, createTestUser, resetDatabase } from './helpers';
 import { prisma } from '../src/lib/prisma';
 import { readCaseFile, writeCaseFile } from '../src/lib/caseStorage';
-import { parseApplication, renderSolverFile, setApplication } from '../src/lib/openfoamCase';
+import {
+  parseApplication,
+  renderDecomposeParDict,
+  renderSolverFile,
+  setApplication,
+} from '../src/lib/openfoamCase';
 
 const BOUNDARY = `FoamFile { class polyBoundaryMesh; object boundary; }
 2
@@ -156,6 +161,21 @@ describe('renderSolverFile / parseApplication (unit)', () => {
   it('parseApplication ignores comments and returns null when absent', () => {
     expect(parseApplication('// application foo;\nstartTime 0;')).toBeNull();
     expect(parseApplication('application   pimpleFoam ;')).toBe('pimpleFoam');
+  });
+
+  it('renders decomposeParDict: scotch needs no coeffs; simple/hierarchical get a balanced grid', () => {
+    const scotch = renderDecomposeParDict(4);
+    expect(scotch).toMatch(/numberOfSubdomains\s+4/);
+    expect(scotch).toContain('method          scotch;');
+    expect(scotch).not.toContain('Coeffs');
+
+    // A dependency-free fallback must carry an n (x y z) block whose product is N.
+    const hierarchical = renderDecomposeParDict(6, 'hierarchical');
+    expect(hierarchical).toContain('method          hierarchical;');
+    expect(hierarchical).toMatch(/n\s+\(1 2 3\)/); // balanced factorization of 6 (product 6)
+    const simple = renderDecomposeParDict(8, 'simple');
+    expect(simple).toContain('simpleCoeffs');
+    expect(simple).toMatch(/n\s+\(2 2 2\)/); // balanced factorization of 8
   });
 
   it('setApplication rewrites an existing application line and inserts a missing one', () => {

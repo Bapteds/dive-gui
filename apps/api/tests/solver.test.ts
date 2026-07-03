@@ -330,10 +330,12 @@ describe('parallel runs (cores)', () => {
     const dict = (await readCaseFile(id, 'system/decomposeParDict'))?.toString('utf8') ?? '';
     expect(dict).toMatch(/numberOfSubdomains\s+4/);
     expect(commands.some((c) => c.includes('decomposePar') && c.includes('-force'))).toBe(true);
-    // The solver launched under mpirun -np 4 ... -parallel.
+    // The solver launched under mpirun -np 4 ... -parallel, with the slot-policy flags
+    // that make the requested core count map to MPI slots (--oversubscribe).
     expect(solverCmd).toMatch(/mpirun/);
     expect(solverCmd).toMatch(/-np 4\b/);
     expect(solverCmd).toContain('-parallel');
+    expect(solverCmd).toContain('--oversubscribe');
     // reconstructPar ran (before the run was marked terminal).
     expect(commands.some((c) => c.includes('reconstructPar'))).toBe(true);
   });

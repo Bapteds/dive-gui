@@ -187,6 +187,25 @@ const envSchema = z
     // MPI launcher for the parallel path (decomposePar + mpirun -np N solver
     // -parallel + reconstructPar).
     MPI_BIN: z.string().min(1).default('mpirun'),
+    // Flags passed to mpirun BEFORE `-np N`, space-separated. The default makes a
+    // requested core count actually map to MPI slots, which is the usual cause of a
+    // parallel run failing with "There are not enough slots available in the system":
+    //  - --allow-run-as-root : no-op unless the API runs as root (e.g. a container).
+    //  - --use-hwthread-cpus : count hardware threads (hyperthreads) as slots, so the
+    //    slot count matches os.cpus().length (the budget the UI offers), not just the
+    //    physical-core count OpenMPI uses by default on a hyperthreaded host.
+    //  - --oversubscribe     : allow N ranks even when N exceeds the slot count, so the
+    //    user's chosen core count is always honoured (the app already caps it by budget).
+    // Override for a non-OpenMPI launcher (these flags are OpenMPI-specific).
+    MPI_RUN_FLAGS: z
+      .string()
+      .default('--allow-run-as-root --use-hwthread-cpus --oversubscribe'),
+    // Mesh decomposition method written to system/decomposeParDict for a parallel run.
+    // `scotch` (default) is automatic, balanced and needs no coefficients, but requires
+    // the scotch decomposition library in the OpenFOAM build. If that library is absent
+    // (every parallel run then fails at decomposePar), set `hierarchical` or `simple`:
+    // a valid n = (x y z) coefficient block is generated automatically from the core count.
+    DECOMPOSE_METHOD: z.string().min(1).default('scotch'),
     // Global core budget for parallel runs across ALL projects. A new run is
     // rejected (409 NOT_ENOUGH_CORES) when the sum of active runs' cores plus the
     // requested cores would exceed this — preventing oversubscription across
