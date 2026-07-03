@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BASE_FILE_PATHS,
   collapseBoundaryToSinglePatch,
+  fieldBcBody,
   parseBoundaryPatches,
   removeEmptyBoundaryPatches,
   renderBaseFile,
@@ -139,6 +140,35 @@ describe('renderBaseFile', () => {
     for (const path of BASE_FILE_PATHS) {
       expect(renderBaseFile(path, ['inlet']).length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('fieldBcBody (model-aware wall functions)', () => {
+  it('gives a wall the k-omega wall functions (with a value entry)', () => {
+    expect(fieldBcBody('U', 'wall')).toMatch(/type\s+noSlip;/);
+    expect(fieldBcBody('p', 'wall')).toMatch(/type\s+zeroGradient;/);
+    expect(fieldBcBody('nut', 'wall', 'kOmegaSST')).toContain('nutkWallFunction');
+    expect(fieldBcBody('k', 'wall', 'kOmegaSST')).toContain('kqRWallFunction');
+    expect(fieldBcBody('omega', 'wall', 'kOmegaSST')).toContain('omegaWallFunction');
+    expect(fieldBcBody('nut', 'wall', 'kOmegaSST')).toMatch(/value\s+\$internalField/);
+  });
+
+  it('is model-aware: k-epsilon uses epsilon, never an omega wall function', () => {
+    expect(fieldBcBody('epsilon', 'wall', 'kEpsilon')).toContain('epsilonWallFunction');
+    // omega is not a k-epsilon field -> generic, no wall function.
+    expect(fieldBcBody('omega', 'wall', 'kEpsilon')).toMatch(/type\s+zeroGradient;/);
+    expect(fieldBcBody('omega', 'wall', 'kEpsilon')).not.toContain('WallFunction');
+  });
+
+  it('uses a Spalding wall function for nut when the model has no k (Spalart-Allmaras)', () => {
+    expect(fieldBcBody('nut', 'wall', 'SpalartAllmaras')).toContain('nutUSpaldingWallFunction');
+  });
+
+  it('mirrors a constraint type and leaves plain patches / model-less walls generic', () => {
+    expect(fieldBcBody('k', 'symmetry')).toMatch(/type\s+symmetry;/);
+    expect(fieldBcBody('k', 'patch', 'kOmegaSST')).toMatch(/type\s+zeroGradient;/);
+    // Without a model we do not guess a wall function.
+    expect(fieldBcBody('nut', 'wall')).toMatch(/type\s+zeroGradient;/);
   });
 });
 

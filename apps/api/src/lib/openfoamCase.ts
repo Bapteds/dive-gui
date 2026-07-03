@@ -9,7 +9,12 @@
 // patches (the rule that 0/*.boundaryField must cover every polyMesh patch).
 //
 // See docs/openfoam-fichiers-obligatoires.md for the contract this encodes.
-import { CONSTRAINT_PATCH_TYPES, SOLVER_CATALOG, type ConfigurableSolverId } from '@dive/shared';
+import {
+  CONSTRAINT_PATCH_TYPES,
+  SOLVER_CATALOG,
+  turbulenceWallBc,
+  type ConfigurableSolverId,
+} from '@dive/shared';
 
 /**
  * The five files that make up the mesh, living under constant/polyMesh/. These
@@ -67,21 +72,74 @@ const FOAM_FOOTER = `
 // ************************************************************************* //
 `;
 
-/** Build a boundaryField block, one entry per discovered patch (zeroGradient).
- * Falls back to an editable placeholder when no patches are known. */
-function boundaryFieldBlock(patches: string[]): string {
-  if (patches.length === 0) {
+/** A boundary input: either a bare patch name (its geometric type defaults to
+ * `patch`) or a `{ name, type }` pair carrying the mesh's geometric type — the
+ * typed form is what lets the generator apply wall functions on `wall` patches. */
+export type PatchInput = string | BoundaryPatch;
+
+/** Normalize mixed name/typed patch inputs to `{ name, type }`, defaulting a bare
+ * name to the generic `patch` type (so name-only callers keep their old output). */
+function normalizePatches(patches: readonly PatchInput[]): BoundaryPatch[] {
+  return patches.map((patch) =>
+    typeof patch === 'string' ? { name: patch, type: 'patch' } : patch,
+  );
+}
+
+/**
+ * The inner body of a field's boundaryField entry (between the braces) for
+ * `fieldName` on a patch of `geometricType`, under the turbulence `model`. This is
+ * where a `wall` patch AUTOMATICALLY becomes the correct wall function, with no
+ * hand-wiring:
+ *  - a constraint type (empty/symmetry/symmetryPlane/wedge/cyclic*) mirrors the
+ *    geometric type exactly (the solver requires it);
+ *  - a wall gets `noSlip` (U), `zeroGradient` (p), the alphat wall function
+ *    (alphat), or the MODEL-AWARE turbulence wall function (nut → nutkWallFunction,
+ *    k → kqRWallFunction, epsilon → epsilonWallFunction, omega → omegaWallFunction,
+ *    …), each with a `value $internalField;`; any other field falls back to
+ *    zeroGradient;
+ *  - a plain patch gets zeroGradient (inlet/outlet specifics are set afterwards).
+ * Returns a single `type X;` line, or two lines (type + value) for a wall function.
+ */
+export function fieldBcBody(fieldName: string, geometricType: string, model?: string): string {
+  if ((CONSTRAINT_PATCH_TYPES as readonly string[]).includes(geometricType)) {
+    return `type            ${geometricType};`;
+  }
+  if (geometricType === 'wall') {
+    if (fieldName === 'U') return 'type            noSlip;';
+    if (fieldName === 'p') return 'type            zeroGradient;';
+    if (fieldName === 'alphat') {
+      return 'type            compressible::alphatWallFunction;\n        value           $internalField;';
+    }
+    const wallBc = model ? turbulenceWallBc(fieldName, model) : null;
+    if (wallBc) {
+      return `type            ${wallBc};\n        value           $internalField;`;
+    }
+    return 'type            zeroGradient;';
+  }
+  return 'type            zeroGradient;';
+}
+
+/** Build a boundaryField block, one entry per patch, with a valid BC for `fieldName`
+ * on each patch's geometric type (a wall gets the model's wall function). Falls back
+ * to an editable placeholder when no patches are known. */
+function boundaryFieldBlock(
+  fieldName: string,
+  patches: readonly PatchInput[],
+  model?: string,
+): string {
+  const list = normalizePatches(patches);
+  if (list.length === 0) {
     return `boundaryField
 {
     // No mesh patches detected yet. Import the mesh (constant/polyMesh/) and
     // regenerate, or add one entry per patch from constant/polyMesh/boundary.
 }`;
   }
-  const entries = patches
+  const entries = list
     .map(
-      (patch) => `    ${patch}
+      (patch) => `    ${patch.name}
     {
-        type            zeroGradient;
+        ${fieldBcBody(fieldName, patch.type, model)}
     }`,
     )
     .join('\n');
@@ -183,24 +241,24 @@ ${FOAM_FOOTER}`;
 }
 
 /** 0/U — velocity field; boundaryField covers every discovered patch. */
-function fieldU(patches: string[]): string {
+function fieldU(patches: readonly PatchInput[]): string {
   return `${foamHeader('volVectorField', 'U', '0')}
 dimensions      [0 1 -1 0 0 0 0];
 
 internalField   uniform (0 0 0);
 
-${boundaryFieldBlock(patches)}
+${boundaryFieldBlock('U', patches)}
 ${FOAM_FOOTER}`;
 }
 
 /** 0/p — pressure field; boundaryField covers every discovered patch. */
-function fieldP(patches: string[]): string {
+function fieldP(patches: readonly PatchInput[]): string {
   return `${foamHeader('volScalarField', 'p', '0')}
 dimensions      [0 2 -2 0 0 0 0];
 
 internalField   uniform 0;
 
-${boundaryFieldBlock(patches)}
+${boundaryFieldBlock('p', patches)}
 ${FOAM_FOOTER}`;
 }
 
@@ -208,7 +266,7 @@ ${FOAM_FOOTER}`;
  * Render the content of a single base file. `patches` is used only by the 0/
  * fields so their boundaryField references the imported mesh's patches.
  */
-export function renderBaseFile(path: BaseFilePath, patches: string[]): string {
+export function renderBaseFile(path: BaseFilePath, patches: readonly PatchInput[]): string {
   switch (path) {
     case 'system/controlDict':
       return controlDict();
@@ -447,68 +505,68 @@ function turbulenceProperties(): string {
 }
 
 /** 0/k — turbulent kinetic energy; boundaryField covers every discovered patch. */
-function fieldK(patches: string[]): string {
+function fieldK(patches: readonly PatchInput[], model?: string): string {
   return `${foamHeader('volScalarField', 'k', '0')}
 dimensions      [0 2 -2 0 0 0 0];
 
 internalField   uniform 0.1;
 
-${boundaryFieldBlock(patches)}
+${boundaryFieldBlock('k', patches, model)}
 ${FOAM_FOOTER}`;
 }
 
 /** 0/omega — specific dissipation rate; boundaryField covers every patch. */
-function fieldOmega(patches: string[]): string {
+function fieldOmega(patches: readonly PatchInput[], model?: string): string {
   return `${foamHeader('volScalarField', 'omega', '0')}
 dimensions      [0 0 -1 0 0 0 0];
 
 internalField   uniform 1;
 
-${boundaryFieldBlock(patches)}
+${boundaryFieldBlock('omega', patches, model)}
 ${FOAM_FOOTER}`;
 }
 
 /** 0/nut — turbulent viscosity (computed by the model); boundaryField per patch. */
-function fieldNut(patches: string[]): string {
+function fieldNut(patches: readonly PatchInput[], model?: string): string {
   return `${foamHeader('volScalarField', 'nut', '0')}
 dimensions      [0 2 -1 0 0 0 0];
 
 internalField   uniform 0;
 
-${boundaryFieldBlock(patches)}
+${boundaryFieldBlock('nut', patches, model)}
 ${FOAM_FOOTER}`;
 }
 
 /** 0/epsilon — turbulent dissipation rate (k-epsilon family); boundaryField per patch. */
-function fieldEpsilon(patches: string[]): string {
+function fieldEpsilon(patches: readonly PatchInput[], model?: string): string {
   return `${foamHeader('volScalarField', 'epsilon', '0')}
 dimensions      [0 2 -3 0 0 0 0];
 
 internalField   uniform 0.1;
 
-${boundaryFieldBlock(patches)}
+${boundaryFieldBlock('epsilon', patches, model)}
 ${FOAM_FOOTER}`;
 }
 
 /** 0/nuTilda — Spalart-Allmaras transported variable; boundaryField per patch. */
-function fieldNuTilda(patches: string[]): string {
+function fieldNuTilda(patches: readonly PatchInput[], model?: string): string {
   return `${foamHeader('volScalarField', 'nuTilda', '0')}
 dimensions      [0 2 -1 0 0 0 0];
 
 internalField   uniform 0;
 
-${boundaryFieldBlock(patches)}
+${boundaryFieldBlock('nuTilda', patches, model)}
 ${FOAM_FOOTER}`;
 }
 
 /** 0/R — Reynolds-stress tensor (RSM models: LRR, SSG); boundaryField per patch. */
-function fieldR(patches: string[]): string {
+function fieldR(patches: readonly PatchInput[], model?: string): string {
   return `${foamHeader('volSymmTensorField', 'R', '0')}
 dimensions      [0 2 -2 0 0 0 0];
 
 internalField   uniform (0 0 0 0 0 0);
 
-${boundaryFieldBlock(patches)}
+${boundaryFieldBlock('R', patches, model)}
 ${FOAM_FOOTER}`;
 }
 
@@ -692,35 +750,35 @@ ${FOAM_FOOTER}`;
 }
 
 /** 0/T - temperature field (K); boundaryField covers every discovered patch. */
-function fieldT(patches: string[]): string {
+function fieldT(patches: readonly PatchInput[]): string {
   return `${foamHeader('volScalarField', 'T', '0')}
 dimensions      [0 0 0 1 0 0 0];
 
 internalField   uniform 300;
 
-${boundaryFieldBlock(patches)}
+${boundaryFieldBlock('T', patches)}
 ${FOAM_FOOTER}`;
 }
 
 /** 0/p (compressible) - ABSOLUTE pressure in Pa; boundaryField per patch. */
-function fieldPCompressible(patches: string[]): string {
+function fieldPCompressible(patches: readonly PatchInput[]): string {
   return `${foamHeader('volScalarField', 'p', '0')}
 dimensions      [1 -1 -2 0 0 0 0];
 
 internalField   uniform 100000;
 
-${boundaryFieldBlock(patches)}
+${boundaryFieldBlock('p', patches)}
 ${FOAM_FOOTER}`;
 }
 
-/** 0/alphat - turbulent thermal diffusivity; boundaryField per patch. */
-function fieldAlphat(patches: string[]): string {
+/** 0/alphat - turbulent thermal diffusivity; boundaryField per patch (wall → alphat wall function). */
+function fieldAlphat(patches: readonly PatchInput[]): string {
   return `${foamHeader('volScalarField', 'alphat', '0')}
 dimensions      [1 -1 -1 0 0 0 0];
 
 internalField   uniform 0;
 
-${boundaryFieldBlock(patches)}
+${boundaryFieldBlock('alphat', patches)}
 ${FOAM_FOOTER}`;
 }
 
@@ -994,7 +1052,8 @@ ${FOAM_FOOTER}`;
 export function renderSolverFile(
   solver: ConfigurableSolverId,
   path: string,
-  patches: string[],
+  patches: readonly PatchInput[],
+  model?: string,
 ): string {
   const spec = SOLVER_CATALOG[solver];
   const transient = spec.regime === 'transient';
@@ -1037,17 +1096,17 @@ export function renderSolverFile(
     case '0/T':
       return fieldT(patches);
     case '0/k':
-      return fieldK(patches);
+      return fieldK(patches, model);
     case '0/omega':
-      return fieldOmega(patches);
+      return fieldOmega(patches, model);
     case '0/nut':
-      return fieldNut(patches);
+      return fieldNut(patches, model);
     case '0/epsilon':
-      return fieldEpsilon(patches);
+      return fieldEpsilon(patches, model);
     case '0/nuTilda':
-      return fieldNuTilda(patches);
+      return fieldNuTilda(patches, model);
     case '0/R':
-      return fieldR(patches);
+      return fieldR(patches, model);
     case '0/alphat':
       return fieldAlphat(patches);
     default:
@@ -1065,6 +1124,23 @@ export function parseApplication(controlDictContent: string): string | null {
     .replace(/\/\/.*$/gm, '');
   const match = cleaned.match(/\bapplication\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/);
   return match ? match[1] : null;
+}
+
+/**
+ * Read the turbulence model from a constant/turbulenceProperties text: the
+ * RAS.RASModel or LES.LESModel token, or 'laminar' when simulationType is laminar.
+ * Null when unparseable. Tolerant of comments. Lets the generator recover the case's
+ * current model (e.g. on a "change solver" call that carries no explicit model) so
+ * it writes exactly the right 0/ turbulence fields and wall functions.
+ */
+export function parseTurbulenceModel(content: string): string | null {
+  const cleaned = content.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  if (/\bsimulationType\s+laminar\s*;/.test(cleaned)) return 'laminar';
+  const ras = cleaned.match(/\bRASModel\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/);
+  if (ras) return ras[1];
+  const les = cleaned.match(/\bLESModel\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/);
+  if (les) return les[1];
+  return null;
 }
 
 /**
@@ -1100,8 +1176,9 @@ export function setApplication(content: string, solver: string): string {
 // its own patch names; the scaffold ignores the geometric type). This rebuilds
 // every field's boundaryField to cover exactly the mesh patches, with a valid BC
 // per geometric type: a constraint type (empty/symmetry/symmetryPlane/wedge) is
-// mirrored (required), a wall gets noSlip for U else zeroGradient, a plain patch
-// gets zeroGradient (the user sets inlet/outlet specifics afterwards).
+// mirrored (required), a wall gets noSlip (U), zeroGradient (p) or the turbulence
+// model's wall function (nut/k/epsilon/omega, …), and a plain patch gets
+// zeroGradient (the user sets inlet/outlet specifics afterwards).
 // ---------------------------------------------------------------------------
 
 /** One mesh boundary patch with its geometric type, read from the boundary file. */
@@ -1176,24 +1253,19 @@ export function parseBoundaryPatchDetails(content: string): BoundaryPatchDetail[
   return result;
 }
 
-/** A valid boundary-field BC for a field on a patch of the given geometric type. */
-function defaultFieldBc(fieldName: string, geometricType: string): string {
-  if ((CONSTRAINT_PATCH_TYPES as readonly string[]).includes(geometricType)) {
-    // Constraint patches require the field BC to be exactly the geometric type.
-    return geometricType;
-  }
-  if (geometricType === 'wall' && fieldName === 'U') return 'noSlip';
-  return 'zeroGradient';
-}
-
-/** Render a fresh boundaryField block covering exactly `patches` for `fieldName`. */
-function renderBoundaryFieldFor(fieldName: string, patches: BoundaryPatch[]): string {
+/** Render a fresh boundaryField block covering exactly `patches` for `fieldName`,
+ * with the model-aware wall function on any `wall` patch (see fieldBcBody). */
+function renderBoundaryFieldFor(
+  fieldName: string,
+  patches: BoundaryPatch[],
+  model?: string,
+): string {
   if (patches.length === 0) return 'boundaryField\n{\n}';
   const entries = patches
     .map(
       (patch) => `    ${patch.name}
     {
-        type            ${defaultFieldBc(fieldName, patch.type)};
+        ${fieldBcBody(fieldName, patch.type, model)}
     }`,
     )
     .join('\n');
@@ -1212,11 +1284,16 @@ export function rebuildFieldBoundary(
   content: string,
   fieldName: string,
   patches: BoundaryPatch[],
+  model?: string,
 ): string {
   const span = boundaryFieldSpan(content);
   const keyword = content.search(/\bboundaryField\b/);
   if (!span || keyword < 0) return content;
-  return content.slice(0, keyword) + renderBoundaryFieldFor(fieldName, patches) + content.slice(span.close + 1);
+  return (
+    content.slice(0, keyword) +
+    renderBoundaryFieldFor(fieldName, patches, model) +
+    content.slice(span.close + 1)
+  );
 }
 
 /**
@@ -1256,8 +1333,8 @@ function parseFieldBoundaryEntries(inner: string): FieldBoundaryEntry[] {
  * (so e.g. an `inlet { type fixedValue; … }` survives), a stale plain entry whose
  * patch is gone is dropped, a quoted/regex group entry is always kept (it may
  * match several patches), and a generic default entry is ADDED only for a mesh
- * patch that has no matching entry yet — constraint types resolved via
- * defaultFieldBc. A kept entry whose patch is now a CONSTRAINT type (e.g. a base
+ * patch that has no matching entry yet — constraint types and wall functions
+ * resolved via fieldBcBody. A kept entry whose patch is now a CONSTRAINT type (e.g. a base
  * `outlet` the Assembly non-conformal couple retyped in place to cyclicAMI) has
  * its field BC RESET to that exact type, because the solver requires a constraint
  * patch's field BC to match its geometric type — a stale non-matching BC (like a
@@ -1270,6 +1347,7 @@ export function mergeFieldBoundary(
   content: string,
   fieldName: string,
   patches: BoundaryPatch[],
+  model?: string,
 ): string {
   const span = boundaryFieldSpan(content);
   const keyword = content.search(/\bboundaryField\b/);
@@ -1294,7 +1372,7 @@ export function mergeFieldBoundary(
         // BC must match it exactly, so reset the kept entry to the constraint type.
         kept.push(`${entry.name}
     {
-        type            ${defaultFieldBc(fieldName, geometricType)};
+        ${fieldBcBody(fieldName, geometricType, model)}
     }`);
       } else {
         kept.push(entry.text);
@@ -1310,7 +1388,7 @@ export function mergeFieldBoundary(
     .map(
       (patch) => `${patch.name}
     {
-        type            ${defaultFieldBc(fieldName, patch.type)};
+        ${fieldBcBody(fieldName, patch.type, model)}
     }`,
     );
 
@@ -1580,6 +1658,29 @@ export function setFieldPatchType(content: string, patch: string, bcType: string
   const close = matchBrace(block, open);
   if (close < 0) return content;
   const entry = `{\n        type            ${bcType};\n    }`;
+  const newBlock = block.slice(0, open) + entry + block.slice(close + 1);
+  return content.slice(0, span.open) + newBlock + content.slice(span.close + 1);
+}
+
+/**
+ * Replace a patch entry inside a field's boundaryField with a multi-line `body`
+ * (the `type …;` plus any `value …;` a wall function carries). Like setFieldPatchType
+ * but for bodies richer than a bare type — used to propagate a wall patch's
+ * model-aware wall function (see fieldBcBody) into the 0/ fields when the user
+ * retypes a patch to `wall`. Returns content unchanged when the field has no
+ * boundaryField or no such patch entry.
+ */
+export function setFieldPatchBc(content: string, patch: string, body: string): string {
+  const span = boundaryFieldSpan(content);
+  if (!span) return content;
+  const block = content.slice(span.open, span.close + 1);
+  const header = new RegExp(`(?:^|[\\s])${escapeRegExp(patch)}\\s*\\{`, 'm');
+  const match = header.exec(block);
+  if (!match) return content;
+  const open = block.indexOf('{', match.index);
+  const close = matchBrace(block, open);
+  if (close < 0) return content;
+  const entry = `{\n        ${body}\n    }`;
   const newBlock = block.slice(0, open) + entry + block.slice(close + 1);
   return content.slice(0, span.open) + newBlock + content.slice(span.close + 1);
 }
