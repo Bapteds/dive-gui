@@ -22,6 +22,7 @@ import type {
   MeshManifest,
   MeshPatch,
   MeshPatchEdit,
+  MeshPatchSetting,
   MeshPatchType,
   MeshSource,
   ResidualSample,
@@ -562,7 +563,7 @@ export interface MergePlanResponse {
 // ---- 3D mesh viewer ("Visualize" tab) ----
 
 /** Re-export of the shared mesh shapes (one patch; the full manifest). */
-export type { MeshPatch, MeshManifest, MeshPatchType, MeshPatchEdit, MeshBackupInfo };
+export type { MeshPatch, MeshManifest, MeshPatchType, MeshPatchSetting, MeshPatchEdit, MeshBackupInfo };
 
 /** `GET /projects/:id/mesh/manifest` and `POST /projects/:id/mesh/rebuild` response. */
 export interface MeshManifestResponse {

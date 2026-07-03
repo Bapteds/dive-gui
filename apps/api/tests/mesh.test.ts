@@ -412,6 +412,45 @@ describe('POST /projects/:id/mesh/patches/type', () => {
     );
   });
 
+  it('applies the inlet BC preset when a patch is set to the inlet role (type stays patch)', async () => {
+    const { id, auth } = await makeProject('mesh-role-inlet@dive-turbinen.test');
+    await writePolyMesh(id);
+    await writeCaseFile(id, '0/U', FIELD_U);
+
+    const res = await setType(id, auth, 'inlet', 'inlet');
+    expect(res.status).toBe(200);
+
+    // inlet is a field-BC ROLE: the mesh geometric type stays `patch`.
+    const boundary = (await readCaseFile(id, 'constant/polyMesh/boundary'))?.toString('utf8') ?? '';
+    expect(boundary).toMatch(/inlet\s*\{[^}]*type\s+patch;/);
+    // 0/U inlet gets the fixedValue inlet preset (value reset for the user to edit).
+    const u = (await readCaseFile(id, '0/U'))?.toString('utf8') ?? '';
+    expect(u).toMatch(/inlet\s*\{\s*type\s+fixedValue;\s*value\s+uniform \(0 0 0\);\s*\}/);
+  });
+
+  it('applies the outlet BC preset (inletOutlet velocity, fixedValue pressure)', async () => {
+    const { id, auth } = await makeProject('mesh-role-outlet@dive-turbinen.test');
+    await writePolyMesh(id);
+    await writeCaseFile(id, '0/U', FIELD_U);
+    await writeCaseFile(
+      id,
+      '0/p',
+      'FoamFile { class volScalarField; object p; }\ninternalField uniform 0;\nboundaryField\n{\n    inlet { type zeroGradient; }\n    walls { type zeroGradient; }\n}\n',
+    );
+
+    const res = await setType(id, auth, 'inlet', 'outlet');
+    expect(res.status).toBe(200);
+
+    const boundary = (await readCaseFile(id, 'constant/polyMesh/boundary'))?.toString('utf8') ?? '';
+    expect(boundary).toMatch(/inlet\s*\{[^}]*type\s+patch;/); // a role, not a geometric type
+    expect((await readCaseFile(id, '0/U'))?.toString('utf8') ?? '').toMatch(
+      /inlet\s*\{[\s\S]*?type\s+inletOutlet;/,
+    );
+    expect((await readCaseFile(id, '0/p'))?.toString('utf8') ?? '').toMatch(
+      /inlet\s*\{[\s\S]*?type\s+fixedValue;/,
+    );
+  });
+
   it('rejects an unsupported type with 422', async () => {
     const { id, auth } = await makeProject('mesh-type-bad@dive-turbinen.test');
     await writePolyMesh(id);

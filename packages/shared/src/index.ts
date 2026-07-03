@@ -139,8 +139,8 @@ export interface MeshPatchEdit {
   from: string;
   /** New patch name (a valid OpenFOAM word; equal to `from` to keep the name). */
   to: string;
-  /** New geometric type (propagated into the 0/ fields for constraint types). */
-  type: MeshPatchType;
+  /** New geometric type OR flow role (inlet/outlet); propagated into the 0/ fields. */
+  type: MeshPatchSetting;
 }
 
 /**
@@ -174,6 +174,30 @@ export const MESH_PATCH_TYPES = [
   'wedge',
 ] as const;
 export type MeshPatchType = (typeof MESH_PATCH_TYPES)[number];
+
+/**
+ * Semantic flow ROLES a user can assign to a boundary patch in the Visualize tab.
+ * Unlike MESH_PATCH_TYPES these are NOT OpenFOAM geometric types (the polyMesh
+ * `type` stays `patch`): assigning a role applies a standard field-BC preset to the
+ * 0/ fields (inlet = fixedValue on the transported fields + zeroGradient pressure;
+ * outlet = inletOutlet + fixedValue pressure), so the user does not wire inlet/outlet
+ * boundary conditions by hand.
+ */
+export const PATCH_ROLES = ['inlet', 'outlet'] as const;
+export type PatchRole = (typeof PATCH_ROLES)[number];
+
+/**
+ * Everything a patch can be SET to from the Visualize tab: a geometric type OR a
+ * flow role. A role writes geometric `type patch;` and applies its field preset.
+ * Used by the patch-edit UI and the setPatchType / editMeshPatches schemas.
+ */
+export const MESH_PATCH_SETTINGS = [...MESH_PATCH_TYPES, ...PATCH_ROLES] as const;
+export type MeshPatchSetting = (typeof MESH_PATCH_SETTINGS)[number];
+
+/** Is `value` a flow role (inlet/outlet), rather than a geometric patch type? */
+export function isPatchRole(value: string): value is PatchRole {
+  return (PATCH_ROLES as readonly string[]).includes(value);
+}
 
 /**
  * Patch types whose field boundaryField BC must match the geometric type exactly

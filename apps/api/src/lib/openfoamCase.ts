@@ -86,10 +86,67 @@ function normalizePatches(patches: readonly PatchInput[]): BoundaryPatch[] {
 }
 
 /**
+ * Inlet preset field BC (the flow role, not a geometric type — the polyMesh `type`
+ * stays `patch`): fixedValue on the transported fields (velocity + turbulence), a
+ * zeroGradient pressure, and a `calculated` nut/alphat. The user edits the actual
+ * inlet values afterwards. `$internalField` seeds the turbulence values from the
+ * field's internalField so the case runs without further edits.
+ */
+function inletFieldBc(fieldName: string): string {
+  switch (fieldName) {
+    case 'U':
+      return 'type            fixedValue;\n        value           uniform (0 0 0);';
+    case 'p':
+    case 'p_rgh':
+      return 'type            zeroGradient;';
+    case 'nut':
+    case 'alphat':
+      return 'type            calculated;\n        value           uniform 0;';
+    case 'k':
+    case 'epsilon':
+    case 'omega':
+    case 'nuTilda':
+    case 'R':
+    case 'T':
+      return 'type            fixedValue;\n        value           $internalField;';
+    default:
+      return 'type            zeroGradient;';
+  }
+}
+
+/**
+ * Outlet preset field BC: `inletOutlet` on the transported fields (zeroGradient on
+ * outflow, a fixed inletValue on any backflow), a fixedValue (0) pressure, and a
+ * `calculated` nut/alphat. This is the standard, robust incompressible/compressible
+ * outlet.
+ */
+function outletFieldBc(fieldName: string): string {
+  switch (fieldName) {
+    case 'U':
+      return 'type            inletOutlet;\n        inletValue      uniform (0 0 0);\n        value           uniform (0 0 0);';
+    case 'p':
+    case 'p_rgh':
+      return 'type            fixedValue;\n        value           uniform 0;';
+    case 'nut':
+    case 'alphat':
+      return 'type            calculated;\n        value           uniform 0;';
+    case 'k':
+    case 'epsilon':
+    case 'omega':
+    case 'nuTilda':
+    case 'R':
+    case 'T':
+      return 'type            inletOutlet;\n        inletValue      $internalField;\n        value           $internalField;';
+    default:
+      return 'type            zeroGradient;';
+  }
+}
+
+/**
  * The inner body of a field's boundaryField entry (between the braces) for
  * `fieldName` on a patch of `geometricType`, under the turbulence `model`. This is
- * where a `wall` patch AUTOMATICALLY becomes the correct wall function, with no
- * hand-wiring:
+ * where a `wall` patch AUTOMATICALLY becomes the correct wall function, and an
+ * `inlet` / `outlet` role becomes its standard BC preset, with no hand-wiring:
  *  - a constraint type (empty/symmetry/symmetryPlane/wedge/cyclic*) mirrors the
  *    geometric type exactly (the solver requires it);
  *  - a wall gets `noSlip` (U), `zeroGradient` (p), the alphat wall function
@@ -104,6 +161,8 @@ export function fieldBcBody(fieldName: string, geometricType: string, model?: st
   if ((CONSTRAINT_PATCH_TYPES as readonly string[]).includes(geometricType)) {
     return `type            ${geometricType};`;
   }
+  if (geometricType === 'inlet') return inletFieldBc(fieldName);
+  if (geometricType === 'outlet') return outletFieldBc(fieldName);
   if (geometricType === 'wall') {
     if (fieldName === 'U') return 'type            noSlip;';
     if (fieldName === 'p') return 'type            zeroGradient;';

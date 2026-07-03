@@ -36,11 +36,12 @@ import {
 } from '../../lib/openfoamCase';
 import {
   CONSTRAINT_PATCH_TYPES,
-  MESH_PATCH_TYPES,
+  MESH_PATCH_SETTINGS,
+  isPatchRole,
   type MeshBackupInfo,
   type MeshManifest,
   type MeshPatchEdit,
-  type MeshPatchType,
+  type MeshPatchSetting,
 } from '@dive/shared';
 import { env } from '../../config/env';
 import { AppError } from '../../lib/AppError';
@@ -307,6 +308,8 @@ async function caseTurbulenceModel(projectId: string): Promise<string> {
  *  - `wall` writes the model-aware wall BC AUTOMATICALLY on every field — noSlip (U),
  *    zeroGradient (p), the wall function (nut/k/epsilon/omega/…) — so setting a patch
  *    to wall wires the whole boundary condition with no manual editing;
+ *  - a role (`inlet` / `outlet`) applies its standard field-BC preset (fixedValue /
+ *    inletOutlet / calculated), so marking a patch as inlet/outlet wires its BCs;
  *  - a plain `patch` resets a leftover constraint OR wall BC to a generic
  *    `zeroGradient`, otherwise keeps the user's BC untouched.
  * `fieldName` is the field's object name (U, p, k, …). Returns the (possibly
@@ -315,12 +318,16 @@ async function caseTurbulenceModel(projectId: string): Promise<string> {
 function propagateFieldType(
   text: string,
   patch: string,
-  type: MeshPatchType,
+  type: MeshPatchSetting,
   fieldName: string,
   model: string,
 ): string {
   if (isConstraintType(type)) {
     return setFieldPatchType(text, patch, type);
+  }
+  if (isPatchRole(type)) {
+    // inlet/outlet: apply the role's field-BC preset (the geometric type stays `patch`).
+    return setFieldPatchBc(text, patch, fieldBcBody(fieldName, type));
   }
   if (type === 'wall') {
     return setFieldPatchBc(text, patch, fieldBcBody(fieldName, 'wall', model));
@@ -378,11 +385,11 @@ export async function setPatchType(
   viewer: Viewer,
   projectId: string,
   patch: string,
-  type: MeshPatchType,
+  type: MeshPatchSetting,
 ): Promise<{ patches: string[] }> {
   await assertProjectVisible(viewer, projectId);
 
-  if (!(MESH_PATCH_TYPES as readonly string[]).includes(type)) {
+  if (!(MESH_PATCH_SETTINGS as readonly string[]).includes(type)) {
     throw new AppError(422, 'VALIDATION_ERROR', `Unsupported patch type "${type}".`);
   }
 
@@ -395,8 +402,9 @@ export async function setPatchType(
     throw new AppError(404, 'NOT_FOUND', `Patch "${patch}" was not found in the mesh.`);
   }
 
-  // 1) The mesh boundary file (the geometric type, source of truth).
-  const newBoundary = setBoundaryPatchType(content, patch, type);
+  // 1) The mesh boundary file. A flow role (inlet/outlet) is stored as the geometric
+  //    `patch` type; the role only drives the field-BC presets below.
+  const newBoundary = setBoundaryPatchType(content, patch, isPatchRole(type) ? 'patch' : type);
   await writeCaseFile(projectId, BOUNDARY_FILE, newBoundary);
 
   // 2) Propagate into the 0/ fields so the case stays valid (a wall gets its
@@ -472,7 +480,7 @@ export async function editMeshPatches(
         `"${edit.to}" is not a valid patch name (a single word: letters, digits, underscore).`,
       );
     }
-    if (!(MESH_PATCH_TYPES as readonly string[]).includes(edit.type)) {
+    if (!(MESH_PATCH_SETTINGS as readonly string[]).includes(edit.type)) {
       throw new AppError(422, 'VALIDATION_ERROR', `Unsupported patch type "${edit.type}".`);
     }
   }
@@ -497,7 +505,7 @@ export async function editMeshPatches(
   // 1) Boundary file: renames first (collision-free), then types on final names.
   let newBoundary = applyRenames(content, renames, renameBoundaryPatch);
   for (const edit of edits) {
-    newBoundary = setBoundaryPatchType(newBoundary, edit.to, edit.type);
+    newBoundary = setBoundaryPatchType(newBoundary, edit.to, isPatchRole(edit.type) ? 'patch' : edit.type);
   }
   await writeCaseFile(projectId, BOUNDARY_FILE, newBoundary);
 

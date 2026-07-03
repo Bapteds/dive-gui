@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { MESH_PATCH_TYPES } from '@dive/shared';
+import { MESH_PATCH_SETTINGS, MESH_PATCH_TYPES, PATCH_ROLES } from '@dive/shared';
 import {
   Dialog,
   DialogContent,
@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/sonner';
 import { ApiError } from '@/lib/api/client';
-import type { MeshPatch, MeshPatchEdit, MeshPatchType } from '@/lib/api/types';
+import type { MeshPatch, MeshPatchEdit, MeshPatchSetting } from '@/lib/api/types';
 import { useEditMeshSourcePatches } from '@/features/projects/useMeshes';
 import { useEditPatches } from './useMesh';
 import type { MeshTarget } from './MeshViewer';
@@ -115,7 +115,7 @@ export function EditPatchesDialog({
 
     const edits: MeshPatchEdit[] = rows
       .filter((row) => row.name.trim() !== row.from || row.type !== row.originalType)
-      .map((row) => ({ from: row.from, to: row.name.trim(), type: row.type as MeshPatchType }));
+      .map((row) => ({ from: row.from, to: row.name.trim(), type: row.type as MeshPatchSetting }));
 
     if (edits.length === 0) {
       onClose();
@@ -158,8 +158,9 @@ export function EditPatchesDialog({
         <DialogHeader>
           <DialogTitle>Edit names &amp; types</DialogTitle>
           <DialogDescription>
-            Rename patches and set their geometric type. Changes are written to the mesh boundary
-            and every field&rsquo;s boundaryField, then the 3D preview rebuilds.
+            Rename patches, set their geometric type, or apply an inlet/outlet BC preset. Changes
+            are written to the mesh boundary and every field&rsquo;s boundaryField, then the 3D
+            preview rebuilds.
           </DialogDescription>
         </DialogHeader>
 
@@ -202,6 +203,7 @@ export function EditPatchesDialog({
                         value={row.type}
                         from={row.from}
                         disabled={pending}
+                        allowRoles={target.kind === 'case'}
                         onChange={(type) => setType(index, type)}
                       />
                     </div>
@@ -231,23 +233,26 @@ export function EditPatchesDialog({
 }
 
 /**
- * Native type select, matching the patch table's styling. A type not in the
- * settable set (e.g. cyclic / processor) is still shown as the current option so
- * it is never silently dropped.
+ * Native type select, matching the patch table's styling. Geometric types and (for
+ * the case mesh only) inlet/outlet flow roles are grouped separately. A value not in
+ * the settable set (e.g. cyclic / processor from a merge) is still shown as the
+ * current option so it is never silently dropped. Roles are hidden for a library
+ * source, which has no 0/ fields to apply a preset to.
  */
 function TypeSelect({
   value,
   from,
   disabled,
+  allowRoles,
   onChange,
 }: {
   value: string;
   from: string;
   disabled: boolean;
+  allowRoles: boolean;
   onChange: (type: string) => void;
 }) {
-  const known = (MESH_PATCH_TYPES as readonly string[]).includes(value);
-  const options = known ? [...MESH_PATCH_TYPES] : [value, ...MESH_PATCH_TYPES];
+  const inSettings = (MESH_PATCH_SETTINGS as readonly string[]).includes(value);
   return (
     <select
       aria-label={`Type for ${from}`}
@@ -256,11 +261,23 @@ function TypeSelect({
       onChange={(event) => onChange(event.target.value)}
       className="w-full rounded-sm border border-border bg-surface px-2 py-2 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-60"
     >
-      {options.map((type) => (
-        <option key={type} value={type}>
-          {type}
-        </option>
-      ))}
+      {!inSettings && <option value={value}>{value}</option>}
+      <optgroup label="Geometric type">
+        {MESH_PATCH_TYPES.map((type) => (
+          <option key={type} value={type}>
+            {type}
+          </option>
+        ))}
+      </optgroup>
+      {allowRoles && (
+        <optgroup label="Flow role — applies a BC preset">
+          {PATCH_ROLES.map((role) => (
+            <option key={role} value={role}>
+              {role}
+            </option>
+          ))}
+        </optgroup>
+      )}
     </select>
   );
 }
