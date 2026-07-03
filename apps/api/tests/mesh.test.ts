@@ -141,6 +141,36 @@ describe('GET /projects/:id/mesh/manifest', () => {
     expect(runCount).toBe(1);
   });
 
+  it('corrects a manifest patch type from the boundary file (extractor may mislabel long names as "?")', async () => {
+    const { id, auth } = await makeProject('mesh-type-enrich@dive-turbinen.test');
+    const longName = 'velocity-inlet-with-a-very-long-fluent-zone-name';
+    for (const name of ['points', 'faces', 'owner', 'neighbour']) {
+      await writeCaseFile(id, `constant/polyMesh/${name}`, `${name}-data`);
+    }
+    // The boundary file is the source of truth: the long-named patch is a `patch`.
+    await writeCaseFile(
+      id,
+      'constant/polyMesh/boundary',
+      `FoamFile { class polyBoundaryMesh; object boundary; }\n1\n(\n    ${longName} { type patch; nFaces 10; startFace 100; }\n)\n`,
+    );
+    // The extractor mislabels the long-named patch's type as "?".
+    setCommandRunner(async (spec) => {
+      const [, , glbPath, manifestPath] = spec.args;
+      await fs.writeFile(glbPath, FAKE_GLB);
+      await fs.writeFile(
+        manifestPath,
+        JSON.stringify([{ name: longName, type: '?', nFaces: 10, edgeOffset: 0, edgeCount: 8 }]),
+      );
+      await fs.writeFile(path.join(path.dirname(glbPath), 'edges.bin'), FAKE_EDGES);
+      return ok(spec, 'OK');
+    });
+
+    const res = await request(app).get(`/api/v1/projects/${id}/mesh/manifest`).set('Authorization', auth);
+    expect(res.status).toBe(200);
+    expect(res.body.manifest.patches[0].name).toBe(longName);
+    expect(res.body.manifest.patches[0].type).toBe('patch'); // corrected from "?" via the boundary file
+  });
+
   it('reuses the cached render on a second call (does not re-run the extractor)', async () => {
     const { id, auth } = await makeProject('mesh-cache@dive-turbinen.test');
     await writePolyMesh(id);

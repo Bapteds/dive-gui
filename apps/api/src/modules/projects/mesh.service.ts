@@ -25,6 +25,7 @@ import {
   fieldBcBody,
   getFieldPatchType,
   isValidPatchName,
+  parseBoundaryPatchDetails,
   parseBoundaryPatches,
   parseTurbulenceModel,
   removeEmptyBoundaryPatches,
@@ -158,6 +159,29 @@ async function buildViz(projectId: string): Promise<void> {
 }
 
 /**
+ * The offline extractor writes each patch's `type` in the manifest, but it can
+ * mislabel one (observed: a `?` for a very long patch name). The OpenFOAM boundary
+ * file is the AUTHORITATIVE source of the geometric type, and the app's own parser
+ * reads it regardless of name length, so override each manifest patch's type with
+ * the type parsed from constant/polyMesh/boundary (matched by name). A patch absent
+ * from the boundary keeps the manifest's own type.
+ */
+async function enrichPatchTypes<T extends { name: string; type: string }>(
+  projectId: string,
+  patches: T[],
+): Promise<T[]> {
+  const boundary = await readCaseFile(projectId, BOUNDARY_FILE);
+  if (!boundary) return patches;
+  const typeByName = new Map(
+    parseBoundaryPatchDetails(boundary.toString('utf8')).map((patch) => [patch.name, patch.type] as const),
+  );
+  return patches.map((patch) => {
+    const type = typeByName.get(patch.name);
+    return type ? { ...patch, type } : patch;
+  });
+}
+
+/**
  * Return the patch manifest for a project's mesh, building the render on demand
  * if it is missing or stale. This is the call the client makes first; it may
  * trigger the (bounded) synchronous build.
@@ -183,7 +207,7 @@ export async function getMeshManifest(viewer: Viewer, projectId: string): Promis
     // build failure rather than an empty render.
     throw new AppError(502, 'MESH_BUILD_FAILED', 'The mesh manifest could not be read after build.');
   }
-  return { patches: stored.patches, generatedAt: stored.generatedAt };
+  return { patches: await enrichPatchTypes(projectId, stored.patches), generatedAt: stored.generatedAt };
 }
 
 /**
@@ -585,7 +609,7 @@ export async function restoreMeshBackup(viewer: Viewer, projectId: string): Prom
   if (!stored) {
     throw new AppError(502, 'MESH_BUILD_FAILED', 'The mesh manifest could not be read after restore.');
   }
-  return { patches: stored.patches, generatedAt: stored.generatedAt };
+  return { patches: await enrichPatchTypes(projectId, stored.patches), generatedAt: stored.generatedAt };
 }
 
 /**
@@ -604,7 +628,7 @@ export async function rebuildMesh(viewer: Viewer, projectId: string): Promise<Me
   if (!stored) {
     throw new AppError(502, 'MESH_BUILD_FAILED', 'The mesh manifest could not be read after build.');
   }
-  return { patches: stored.patches, generatedAt: stored.generatedAt };
+  return { patches: await enrichPatchTypes(projectId, stored.patches), generatedAt: stored.generatedAt };
 }
 
 /** Outcome of an autoPatch run on a project's mesh. */
