@@ -60,6 +60,7 @@ import {
 import { CaseFilesSection } from '@/features/projects/CaseFilesSection';
 import { useCaseFilesQuery } from '@/features/projects/useCaseFiles';
 import { useMeshesQuery } from '@/features/projects/useMeshes';
+import { ProjectTerminalButton } from '@/features/terminal/ProjectTerminalButton';
 
 /**
  * The Visualize panel (mesh picker + the three.js viewer) is code-split and only
@@ -160,7 +161,12 @@ export function ProjectDetailPage() {
       <PageHeader
         title={project.title}
         subtitle={`Created ${formatDateTime(project.createdAt)}`}
-        action={<ProjectSettingsMenu project={project} canManage={canManage} />}
+        action={
+          <div className="flex items-center gap-2">
+            <ProjectTerminalButton projectId={project.id} projectTitle={project.title} />
+            <ProjectSettingsMenu project={project} canManage={canManage} />
+          </div>
+        }
       />
 
       <ProjectTabs project={project} />

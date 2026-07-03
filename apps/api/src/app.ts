@@ -49,6 +49,12 @@ export function createApp(): Express {
     res.json({ status: 'ok' });
   });
 
+  // Public feature flags the web client reads at load (no auth: only booleans). Lets
+  // the client hide the Terminal button when the shell endpoint is disabled server-side.
+  app.get('/api/v1/config', (_req: Request, res: Response) => {
+    res.json({ terminalEnabled: env.TERMINAL_ENABLED === 'true' });
+  });
+
   // API routers mounted under /api/v1 (auth, users, audit, projects).
   app.use('/api/v1/auth', createAuthRouter());
   app.use('/api/v1/users', createUsersRouter());

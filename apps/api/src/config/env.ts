@@ -219,6 +219,24 @@ const envSchema = z
     // single proxy/load balancer so the login rate-limiter keys on the real
     // client IP (X-Forwarded-For) instead of the proxy address.
     TRUST_PROXY: z.coerce.number().int().min(0).default(0),
+    // --- Project terminal (Terminal button) -----------------------------------
+    // A per-project interactive shell over WebSocket, scoped to the project directory
+    // (its working directory). DISABLED BY DEFAULT: it runs a real shell as the API's
+    // OS user, and while its cwd is the project dir, a shell can still read outside it
+    // — this is a deliberate exception to the app's otherwise shell-free, path-confined
+    // model. Enable ONLY on a trusted, single-tenant deployment, and remember any
+    // project collaborator would get a shell too. When 'false', the WebSocket endpoint
+    // refuses every upgrade and the web client hides the Terminal button.
+    TERMINAL_ENABLED: z.enum(['true', 'false']).default('false'),
+    // Shell launched for a project terminal. Empty => platform default: an interactive
+    // `bash -i` on Linux/macOS (falls back to `sh` if bash is absent via the shell
+    // itself), `powershell.exe` on Windows. Set to e.g. /bin/bash to override.
+    TERMINAL_SHELL: z.string().default(''),
+    // Idle timeout (ms): a terminal with no client activity for this long is killed.
+    // Default 15 min. Bounds abandoned shells so they do not accumulate.
+    TERMINAL_IDLE_TIMEOUT_MS: z.coerce.number().int().positive().default(900000),
+    // Hard cap on concurrent terminal sessions across the whole server (backpressure).
+    TERMINAL_MAX_SESSIONS: z.coerce.number().int().positive().default(20),
     SEED_ADMIN_EMAIL: z.string().email(),
     SEED_ADMIN_PASSWORD: z.string().min(1, 'SEED_ADMIN_PASSWORD is required'),
     SEED_ADMIN_NAME: z.string().min(1, 'SEED_ADMIN_NAME is required'),

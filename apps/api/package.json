@@ -30,6 +30,7 @@
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.2.0",
+    "ws": "^8.21.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
@@ -41,10 +42,14 @@
     "@types/multer": "^1.4.13",
     "@types/node": "^22.0.0",
     "@types/supertest": "^6.0.2",
+    "@types/ws": "^8.18.1",
     "prisma": "^5.18.0",
     "supertest": "^7.0.0",
     "tsx": "^4.16.0",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.1.0"
   }
 }

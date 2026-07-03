@@ -3,6 +3,7 @@ import { createApp } from './app';
 import { env } from './config/env';
 import { logger } from './lib/logger';
 import { reconcileOrphanRuns } from './modules/projects/runs.service';
+import { attachTerminalGateway } from './modules/projects/terminal.gateway';
 
 const app = createApp();
 
@@ -14,6 +15,11 @@ reconcileOrphanRuns()
   })
   .catch((err) => logger.error('Run reconciliation failed', err));
 
-app.listen(env.PORT, () => {
+const server = app.listen(env.PORT, () => {
   logger.info(`API listening on http://localhost:${env.PORT}`);
 });
+
+// The project terminal (opt-in via TERMINAL_ENABLED) attaches to the HTTP server's
+// upgrade event; a no-op when disabled. Lives here, not in createApp, so supertest
+// (which imports createApp without listening) is unaffected.
+attachTerminalGateway(server);

@@ -8,6 +8,7 @@
 // lands under `constant/polyMesh/`, and a wrapping directory — the selected
 // folder name or a case folder — is stripped). The generic I/O, sanitization
 // and zip-slip confinement live in fileTreeStorage.
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
   assertSafeId,
@@ -50,6 +51,28 @@ function caseRootFor(projectId: string): string {
  */
 export function caseDirAbsolute(projectId: string): string {
   return caseRootFor(projectId);
+}
+
+/** Absolute path to a project's storage root (holds case/, meshes/, runs/, …). */
+function projectRootFor(projectId: string): string {
+  assertSafeId(projectId);
+  return path.join(storageRoot(), 'projects', projectId);
+}
+
+/**
+ * Absolute path to a project's storage root, used as the project terminal's working
+ * directory so the user can navigate the whole project (case/, meshes/, runs/, …).
+ * The id is validated; the directory may not exist yet (use ensureProjectDir first).
+ */
+export function projectDirAbsolute(projectId: string): string {
+  return projectRootFor(projectId);
+}
+
+/** Ensure a project's storage root exists (it is otherwise created lazily on first write). */
+export async function ensureProjectDir(projectId: string): Promise<string> {
+  const dir = projectRootFor(projectId);
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
 }
 
 /**
