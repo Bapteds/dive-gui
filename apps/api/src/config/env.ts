@@ -125,6 +125,16 @@ const envSchema = z
     // Wall-clock timeout (ms) for a single mesh-extraction run. The one-time VTK
     // read of a large ASCII mesh dominates; generous, like the conversion above.
     MESH_BUILD_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
+    // --- Draft-tube inlet profile (boundary-condition overlay) ----------------
+    // The DraftTube object type maps a runner-exit velocity profile onto its inlet
+    // via timeVaryingMappedFixedValue, which reads constant/boundaryData (NOT a CSV
+    // directly). csv_to_boundaryData.py converts an uploaded CSV into that format.
+    // Pure Python (csv + pathlib only, no VTK) so it runs under MESH_PYTHON_BIN; an
+    // absent interpreter on a Windows dev box yields a clean "not found" step, like
+    // the other bundled scripts. Empty CSV_TO_BOUNDARY_DATA_SCRIPT => the script
+    // bundled at apps/api/scripts/csv_to_boundaryData.py (resolved cwd-independent).
+    CSV_TO_BOUNDARY_DATA_SCRIPT: z.string().default(''),
+    CSV_TO_BOUNDARY_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
     // --- OpenFOAM -> CGNS export for CFD-Post (Export tab) ---------------------
     // Writing CGNS is a ParaView-only capability (core VTK has a CGNS reader but
     // NO writer), so the convert step runs under ParaView's `pvbatch`. The reader
