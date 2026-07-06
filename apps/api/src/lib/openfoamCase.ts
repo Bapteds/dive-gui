@@ -11,10 +11,15 @@
 // See docs/openfoam-fichiers-obligatoires.md for the contract this encodes.
 import {
   CONSTRAINT_PATCH_TYPES,
+  GRAVITY,
+  OBJECT_TYPE_TURBULENCE,
   SOLVER_CATALOG,
   turbulenceFieldsFor,
   turbulenceWallBc,
+  type BoundaryConditionValues,
   type ConfigurableSolverId,
+  type DrivingMode,
+  type ObjectType,
 } from '@dive/shared';
 
 /**
@@ -177,6 +182,239 @@ export function fieldBcBody(fieldName: string, geometricType: string, model?: st
     return 'type            zeroGradient;';
   }
   return 'type            zeroGradient;';
+}
+
+// ---------------------------------------------------------------------------
+// Component boundary-condition presets (the post-import "what is this?" overlay).
+//
+// componentInletBc / componentOutletBc render the exact BC body a chosen
+// component (Turbine / Pipe / DraftTube / Chamber) + driving mode wants on the
+// inlet / outlet patch of a 0/ field, straight from the DIVE turbine templates
+// (documents/*_BCs*.txt). They cover U, p and the turbulence fields the templates
+// speak to (k, omega, epsilon, nut) and delegate any other field (nuTilda, R, T,
+// alphat, p_rgh) to the generic inlet/outlet preset, so a Spalart-Allmaras / RSM /
+// compressible case still gets a valid entry. Walls are unchanged: the caller
+// reuses fieldBcBody(field, 'wall', model).
+//
+// Contract (validated with the client, mirrors the templates):
+//  - pressure inlet: totalPressure with p0 = GRAVITY * head (kinematic); `gamma 1`
+//    on Turbine + Chamber only, never on Pipe.
+//  - flow-rate inlet: flowRateInletVelocity (`extrapolateProfile false` on the
+//    Chamber, per template 4).
+//  - draft-tube inlet: timeVaryingMappedFixedValue mapped from boundaryData; k /
+//    omega are mapped only when the CSV carried that column, else they fall back
+//    to the intensity / mixing-length inlet.
+//  - the outlet is the SINGLE static-pressure anchor: fixedValue p=0 (a draft tube
+//    uses fixedMeanValue to tolerate the swirl). Pipe pressure-driven is the only
+//    case whose outlet velocity is pressureInletOutletVelocity (both ends).
+// ---------------------------------------------------------------------------
+
+/** Format a number for an OpenFOAM entry, trimming float noise (490.5 not 490.500001). */
+function fmtFoamNumber(value: number): string {
+  return String(Number(value.toFixed(6)));
+}
+
+/** One `keyword    value;` line, padded to this file's 16-column value gutter. */
+function bcKeywordLine(keyword: string, value: string): string {
+  const gutter = keyword.length >= 16 ? `${keyword} ` : keyword.padEnd(16);
+  return `${gutter}${value};`;
+}
+
+/**
+ * Assemble a boundaryField entry body from `[keyword, value]` lines, indented like
+ * the rest of this file (8-space continuation; setFieldPatchBc supplies the leading
+ * indent of the first line).
+ */
+function assembleBcBody(lines: ReadonlyArray<readonly [string, string]>): string {
+  return lines.map(([keyword, value]) => bcKeywordLine(keyword, value)).join('\n        ');
+}
+
+/** Options describing the chosen component + operating point for an inlet BC. */
+export interface ComponentInletOptions {
+  objectType: ObjectType;
+  mode: DrivingMode;
+  values: BoundaryConditionValues;
+  /** Turbulence model id (drives k/omega vs epsilon; unknown -> the k-omega family). */
+  model?: string;
+  /**
+   * For the draft-tube CSV path: the field names the uploaded profile actually
+   * carries in boundaryData (always 'U'; 'k' / 'omega' only if the CSV had those
+   * columns). A turbulence field NOT listed falls back to the intensity /
+   * mixing-length inlet instead of a mapped one.
+   */
+  csvFields?: readonly string[];
+}
+
+/** Options for an outlet BC (the single static-pressure anchor of the case). */
+export interface ComponentOutletOptions {
+  objectType: ObjectType;
+  mode: DrivingMode;
+  model?: string;
+}
+
+/** Inlet turbulent intensity: the user's override, else the component default. */
+function inletIntensity(opts: ComponentInletOptions): number {
+  return opts.values.intensity ?? OBJECT_TYPE_TURBULENCE[opts.objectType].intensity;
+}
+
+/** Inlet mixing length [m]: the user's override, else the component default. */
+function inletMixingLength(opts: ComponentInletOptions): number {
+  return opts.values.mixingLength ?? OBJECT_TYPE_TURBULENCE[opts.objectType].mixingLength;
+}
+
+/** The mapped (timeVaryingMappedFixedValue) inlet body for a draft-tube field. */
+function mappedInletBody(fieldName: string, seed: string): string {
+  if (fieldName === 'U') {
+    return assembleBcBody([
+      ['type', 'timeVaryingMappedFixedValue'],
+      ['setAverage', 'false'],
+      ['perturb', '1e-5'],
+      ['mapMethod', 'planarInterpolation'],
+      ['offset', '(0 0 0)'],
+      ['value', 'uniform (0 0 0)'],
+    ]);
+  }
+  return assembleBcBody([
+    ['type', 'timeVaryingMappedFixedValue'],
+    ['setAverage', 'false'],
+    ['mapMethod', 'planarInterpolation'],
+    ['value', `uniform ${seed}`],
+  ]);
+}
+
+/**
+ * The inlet boundaryField body for `fieldName` under the chosen component + mode.
+ * See the section header for the full contract. Falls back to the generic inlet
+ * preset for fields the templates do not cover.
+ */
+export function componentInletBc(fieldName: string, opts: ComponentInletOptions): string {
+  const turb = OBJECT_TYPE_TURBULENCE[opts.objectType];
+  switch (fieldName) {
+    case 'U': {
+      if (opts.mode === 'csvProfile') return mappedInletBody('U', '');
+      if (opts.mode === 'flowRate') {
+        const q = fmtFoamNumber(opts.values.flowRate ?? 0);
+        const lines: Array<[string, string]> = [
+          ['type', 'flowRateInletVelocity'],
+          ['volumetricFlowRate', `constant ${q}`],
+        ];
+        if (opts.objectType === 'chamber') lines.push(['extrapolateProfile', 'false']);
+        lines.push(['value', 'uniform (0 0 0)']);
+        return assembleBcBody(lines);
+      }
+      // pressure-driven: velocity floats where p0 drives the patch
+      return assembleBcBody([
+        ['type', 'pressureInletOutletVelocity'],
+        ['value', 'uniform (0 0 0)'],
+      ]);
+    }
+    case 'p': {
+      if (opts.mode === 'pressure') {
+        const p0 = fmtFoamNumber(GRAVITY * (opts.values.head ?? 0));
+        const lines: Array<[string, string]> = [
+          ['type', 'totalPressure'],
+          ['p0', `uniform ${p0}`],
+        ];
+        if (opts.objectType === 'turbine' || opts.objectType === 'chamber') {
+          lines.push(['gamma', '1']);
+        }
+        lines.push(['value', `uniform ${p0}`]);
+        return assembleBcBody(lines);
+      }
+      // flow-rate or csv: the velocity is fixed, so pressure is free at the inlet
+      return 'type            zeroGradient;';
+    }
+    case 'k': {
+      const seed = fmtFoamNumber(turb.kSeed);
+      if (opts.mode === 'csvProfile' && opts.csvFields?.includes('k')) {
+        return mappedInletBody('k', seed);
+      }
+      return assembleBcBody([
+        ['type', 'turbulentIntensityKineticEnergyInlet'],
+        ['intensity', fmtFoamNumber(inletIntensity(opts))],
+        ['value', `uniform ${seed}`],
+      ]);
+    }
+    case 'omega': {
+      const seed = fmtFoamNumber(turb.omegaSeed);
+      if (opts.mode === 'csvProfile' && opts.csvFields?.includes('omega')) {
+        return mappedInletBody('omega', seed);
+      }
+      return assembleBcBody([
+        ['type', 'turbulentMixingLengthFrequencyInlet'],
+        ['mixingLength', fmtFoamNumber(inletMixingLength(opts))],
+        ['value', `uniform ${seed}`],
+      ]);
+    }
+    case 'epsilon': {
+      // Not in the (k-omega) templates: the k-epsilon analogue of the omega inlet.
+      return assembleBcBody([
+        ['type', 'turbulentMixingLengthDissipationRateInlet'],
+        ['mixingLength', fmtFoamNumber(inletMixingLength(opts))],
+        ['value', 'uniform 0.1'],
+      ]);
+    }
+    default:
+      // nut (calculated), nuTilda / R / T / alphat / p_rgh: keep the generic preset.
+      return inletFieldBc(fieldName);
+  }
+}
+
+/**
+ * The outlet boundaryField body for `fieldName` under the chosen component. The
+ * outlet is the case's single static-pressure anchor (fixedValue p=0; a draft tube
+ * uses fixedMeanValue to tolerate the swirling outflow). Falls back to the generic
+ * outlet preset for fields the templates do not cover.
+ */
+export function componentOutletBc(fieldName: string, opts: ComponentOutletOptions): string {
+  const turb = OBJECT_TYPE_TURBULENCE[opts.objectType];
+  switch (fieldName) {
+    case 'U': {
+      if (opts.objectType === 'pipe' && opts.mode === 'pressure') {
+        return assembleBcBody([
+          ['type', 'pressureInletOutletVelocity'],
+          ['value', 'uniform (0 0 0)'],
+        ]);
+      }
+      return assembleBcBody([
+        ['type', 'inletOutlet'],
+        ['inletValue', 'uniform (0 0 0)'],
+        ['value', 'uniform (0 0 0)'],
+      ]);
+    }
+    case 'p': {
+      if (opts.objectType === 'draftTube') {
+        return assembleBcBody([
+          ['type', 'fixedMeanValue'],
+          ['meanValue', '0'],
+          ['value', 'uniform 0'],
+        ]);
+      }
+      return assembleBcBody([
+        ['type', 'fixedValue'],
+        ['value', 'uniform 0'],
+      ]);
+    }
+    case 'k': {
+      const seed = fmtFoamNumber(turb.kSeed);
+      return assembleBcBody([
+        ['type', 'inletOutlet'],
+        ['inletValue', `uniform ${seed}`],
+        ['value', `uniform ${seed}`],
+      ]);
+    }
+    case 'omega': {
+      const seed = fmtFoamNumber(turb.omegaSeed);
+      return assembleBcBody([
+        ['type', 'inletOutlet'],
+        ['inletValue', `uniform ${seed}`],
+        ['value', `uniform ${seed}`],
+      ]);
+    }
+    default:
+      // epsilon / nuTilda / R / T (inletOutlet $internalField), nut (calculated).
+      return outletFieldBc(fieldName);
+  }
 }
 
 /** Build a boundaryField block, one entry per patch, with a valid BC for `fieldName`
