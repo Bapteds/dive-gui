@@ -1,0 +1,118 @@
+// ============================================================
+// TEMPLATE 3: DRAFT TUBE (standalone, inlet profile from runner
+// exit imported from CSV). simpleFoam or pimpleFoam, kOmegaSST.
+//
+// KEY POINT: a spatially varying inlet from data uses
+//   timeVaryingMappedFixedValue
+// which does NOT read CSV directly. It reads the boundaryData
+// format:
+//   constant/boundaryData/inlet/points        (list of (x y z))
+//   constant/boundaryData/inlet/0/U           (list of (ux uy uz))
+//   constant/boundaryData/inlet/0/k           (optional, scalars)
+//   constant/boundaryData/inlet/0/omega       (optional, scalars)
+// -> convert your CSV once with csv_to_boundaryData.py (included).
+//
+// The points do NOT need to match your mesh faces; the BC
+// interpolates (mapMethod planarInterpolation).
+//
+// Do NOT forget the swirl components — a draft tube without the
+// runner-exit swirl gives a completely different pressure recovery.
+// ============================================================
+
+// ---------------- 0/U ----------------
+inlet
+{
+    type            timeVaryingMappedFixedValue;
+    // steady profile: put data in constant/boundaryData/inlet/0/
+    // and it is held constant for all times
+    setAverage      false;      // true forces the average given in the data header
+    perturb         1e-5;       // tiny perturbation avoids degenerate triangulation
+    mapMethod       planarInterpolation;   // or "nearest"
+    offset          (0 0 0);
+    value           uniform (0 0 0);       // fallback / initial
+}
+
+outlet
+{
+    type            inletOutlet;    // draft tube outlets often recirculate
+    inletValue      uniform (0 0 0);
+    value           uniform (0 0 0);
+}
+
+walls   { type noSlip; }
+
+// If only a TIME series of a UNIFORM velocity lives in the CSV
+// (not a spatial profile), use instead:
+// inlet
+// {
+//     type            uniformFixedValue;
+//     uniformValue
+//     {
+//         type        csvFile;
+//         nHeaderLine 1;
+//         refColumn   0;              // time column
+//         componentColumns (1 2 3);   // ux uy uz columns
+//         separator   ",";
+//         mergeSeparators no;
+//         file        "<constant>/Uinlet.csv";
+//     }
+// }
+
+// ---------------- 0/p (kinematic) ----------------
+inlet   { type zeroGradient; }
+outlet  { type fixedMeanValue; meanValue 0; value uniform 0; }
+// fixedMeanValue tolerates the non-uniform pressure a swirling
+// outflow produces; plain fixedValue also works if outlet is far enough
+walls   { type zeroGradient; }
+
+// ---------------- 0/k ----------------
+inlet
+{
+    // best: map from data (constant/boundaryData/inlet/0/k)
+    type            timeVaryingMappedFixedValue;
+    setAverage      false;
+    mapMethod       planarInterpolation;
+    value           uniform 0.1;
+    // fallback if you have no k data:
+    // type turbulentIntensityKineticEnergyInlet; intensity 0.08; value uniform 0.1;
+    // (runner exit turbulence is high, I = 5-10%)
+}
+outlet  { type inletOutlet; inletValue uniform 0.1; value uniform 0.1; }
+walls   { type kqRWallFunction; value uniform 0.1; }
+
+// ---------------- 0/omega ----------------
+inlet
+{
+    type            timeVaryingMappedFixedValue;
+    setAverage      false;
+    mapMethod       planarInterpolation;
+    value           uniform 50;
+    // fallback: turbulentMixingLengthFrequencyInlet; mixingLength <~0.02*D_runner>;
+}
+outlet  { type inletOutlet; inletValue uniform 50; value uniform 50; }
+walls   { type omegaWallFunction; value uniform 50; }
+
+// ---------------- 0/nut ----------------
+"(inlet|outlet)" { type calculated; value uniform 0; }
+walls            { type nutUSpaldingWallFunction; value uniform 0; }
+
+// ------------------------------------------------------------
+// boundaryData file format reference (what the converter writes):
+//
+// constant/boundaryData/inlet/points :
+//   (
+//   (0.1 0.02 0.0)
+//   (0.1 0.03 0.0)
+//   ...
+//   )
+//
+// constant/boundaryData/inlet/0/U :
+//   (
+//   (2.1 0.4 -6.0)
+//   (2.2 0.5 -6.1)
+//   ...
+//   )
+//
+// (an "average" header line before the list is optional; only used
+//  when setAverage is true)
+// ------------------------------------------------------------

@@ -1,0 +1,75 @@
+// ============================================================
+// TEMPLATE 2: PIPE FLOW (incompressible, simpleFoam, kOmegaSST)
+// Two standard variants:
+//   A) velocity/flow-rate driven (you know Q)  <-- most robust
+//   B) pressure driven (you know dp)
+// ============================================================
+
+// ================= VARIANT A: FLOW-RATE DRIVEN ==============
+
+// ---------------- 0/U ----------------
+inlet
+{
+    type            flowRateInletVelocity;
+    volumetricFlowRate constant 14;      // [m3/s]
+    value           uniform (0 0 0);
+    // or the simplest:
+    // type fixedValue; value uniform (4.2 0 0);
+}
+outlet
+{
+    type            inletOutlet;
+    inletValue      uniform (0 0 0);
+    value           uniform (0 0 0);
+}
+walls   { type noSlip; }
+
+// ---------------- 0/p (kinematic, m2/s2) ----------------
+inlet   { type zeroGradient; }
+outlet  { type fixedValue; value uniform 0; }
+walls   { type zeroGradient; }
+
+// ================= VARIANT B: PRESSURE DRIVEN ===============
+// Use when dp between reservoirs is known, Q is a result.
+
+// ---------------- 0/U ----------------
+inlet
+{
+    type            pressureInletOutletVelocity;
+    value           uniform (0 0 0);
+}
+outlet
+{
+    type            pressureInletOutletVelocity;
+    value           uniform (0 0 0);
+}
+
+// ---------------- 0/p ----------------
+inlet
+{
+    type            totalPressure;
+    p0              uniform 50;          // total kinematic pressure [m2/s2] = p_Pa/rho
+    value           uniform 50;
+}
+outlet  { type fixedValue; value uniform 0; }
+
+// ================= TURBULENCE (both variants) ===============
+// 0/k
+inlet   { type turbulentIntensityKineticEnergyInlet; intensity 0.05; value uniform 0.06; }
+outlet  { type inletOutlet; inletValue uniform 0.06; value uniform 0.06; }
+walls   { type kqRWallFunction; value uniform 0.06; }
+
+// 0/omega
+inlet   { type turbulentMixingLengthFrequencyInlet; mixingLength 0.07; value uniform 10; } // 0.07*D
+outlet  { type inletOutlet; inletValue uniform 10; value uniform 10; }
+walls   { type omegaWallFunction; value uniform 10; }
+
+// 0/nut
+"(inlet|outlet)" { type calculated; value uniform 0; }
+walls            { type nutUSpaldingWallFunction; value uniform 0; }
+
+// NOTE: if inlet is too close to the region of interest and you need a
+// fully developed profile without a long entry length, either
+//  - extend the pipe by ~10 D upstream, or
+//  - map a profile: see draft-tube template (timeVaryingMappedFixedValue),
+//    or use "mapped" patch recycling from a downstream plane.

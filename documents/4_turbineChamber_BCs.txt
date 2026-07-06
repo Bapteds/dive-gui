@@ -1,0 +1,136 @@
+// ============================================================
+// TEMPLATE 4: TURBINE CHAMBER (spiral / semi-spiral casing with
+// stay vanes + guide vanes, upstream of the runner).
+// simpleFoam, kOmegaSST, water. NO rotation -> no MRF, all walls
+// are plain stationary walls (guide vanes included).
+//
+// Patches assumed:
+//   inlet       - penstock connection
+//   outlet      - annular plane feeding the runner
+//   casing      - spiral casing walls
+//   stayVanes   - stay vane surfaces
+//   guideVanes  - guide vane surfaces (mesh per opening angle)
+//
+// TWO VARIANTS - pick ONE, do not mix:
+//   A) Q-DRIVEN:        flow-rate inlet + static-pressure outlet
+//      (operating point fully imposed; most robust)
+//   B) PRESSURE-DRIVEN: total-pressure inlet + static-pressure outlet
+//      (head imposed, Q is a result; iterate p0 for a target Q)
+// Both have exactly ONE static-pressure anchor: the outlet.
+//
+// NOTE: the chamber outlet feeds the runner, so this case is the
+// natural PROFILE GENERATOR for downstream cases: sample U, k,
+// omega on the outlet plane, export CSV, convert with
+// csv_to_boundaryData.py -> timeVaryingMappedFixedValue inlet of
+// the runner/draft-tube case (see template 3). The guide vanes
+// generate the swirl - keep all three velocity components.
+// ============================================================
+
+
+// ##################### VARIANT A: Q-DRIVEN ##################
+
+// ---------------- 0/U ----------------
+inlet
+{
+    type            flowRateInletVelocity;
+    volumetricFlowRate constant 14;      // [m3/s] <-- your Q
+    extrapolateProfile false;
+    value           uniform (0 0 0);
+}
+outlet
+{
+    type            inletOutlet;
+    inletValue      uniform (0 0 0);
+    value           uniform (0 0 0);
+}
+"(casing|stayVanes|guideVanes)" { type noSlip; }
+
+// ---------------- 0/p (kinematic, m2/s2) ----------------
+inlet   { type zeroGradient; }                       // U fixed -> p free
+outlet  { type fixedValue; value uniform 0; }        // anchor (exactly one)
+"(casing|stayVanes|guideVanes)" { type zeroGradient; }
+
+
+// ################# VARIANT B: PRESSURE-DRIVEN ###############
+
+// ---------------- 0/U ----------------
+inlet
+{
+    type            pressureInletOutletVelocity;     // U free where p0 drives
+    value           uniform (0 0 0);
+    // penstock direction known? ->
+    // type pressureDirectedInletOutletVelocity;
+    // inletDirection uniform (1 0 0);
+}
+outlet
+{
+    type            inletOutlet;
+    inletValue      uniform (0 0 0);
+    value           uniform (0 0 0);
+}
+"(casing|stayVanes|guideVanes)" { type noSlip; }
+
+// ---------------- 0/p ----------------
+inlet
+{
+    type            totalPressure;
+    p0              uniform 500;         // p_total[Pa]/rho; from net head: ~ 9.81*H
+    gamma           1;
+    value           uniform 500;
+}
+outlet  { type fixedValue; value uniform 0; }        // anchor (exactly one)
+"(casing|stayVanes|guideVanes)" { type zeroGradient; }
+
+// (If instead you want head AND a guaranteed Q in one run:
+//  totalPressure inlet + flowRateOutletVelocity on outlet U,
+//  with outlet p -> zeroGradient and pRefCell/pRefValue set in
+//  fvSolution, since no patch anchors static p then.)
+
+
+// ############ TURBULENCE (identical for A and B) ############
+
+// ---------------- 0/k ----------------
+inlet
+{
+    type            turbulentIntensityKineticEnergyInlet;
+    intensity       0.05;                // penstock flow: 3-5% typical
+    value           uniform 0.06;
+}
+outlet  { type inletOutlet; inletValue uniform 0.06; value uniform 0.06; }
+"(casing|stayVanes|guideVanes)" { type kqRWallFunction; value uniform 0.06; }
+
+// ---------------- 0/omega ----------------
+inlet
+{
+    type            turbulentMixingLengthFrequencyInlet;
+    mixingLength    0.07;                // 0.07 * D_penstock [m]
+    value           uniform 10;
+}
+outlet  { type inletOutlet; inletValue uniform 10; value uniform 10; }
+"(casing|stayVanes|guideVanes)" { type omegaWallFunction; value uniform 10; }
+
+// ---------------- 0/nut ----------------
+"(inlet|outlet)" { type calculated; value uniform 0; }
+"(casing|stayVanes|guideVanes)"
+{
+    type            nutUSpaldingWallFunction;   // guide vane y+ often varies widely
+    value           uniform 0;
+}
+
+// PRACTICAL NOTES
+// - Guide vane opening: mesh one geometry per opening angle; the BCs
+//   above are identical across openings - only Q or p0 and the
+//   geometry change. Good candidate for a parameterized case template.
+// - The outlet plane sits close to strong swirl from the guide vanes.
+//   If plain fixedValue p causes stripes/oscillation at the outlet,
+//   switch the anchor to:  type fixedMeanValue; meanValue 0;
+//   (still counts as the one static anchor - it pins the average)
+//   or extend the outlet domain a short distance toward the runner.
+// - Sampling the outlet profile for downstream cases:
+//   postProcess -func 'surfaces' with a plane/patch surface writing
+//   raw/csv of U, k, omega -> csv_to_boundaryData.py.
+//
+// AUDIT:
+//   Variant A: inlet U Dirichlet + p Neumann; outlet p Dirichlet + U Neumann -> OK
+//   Variant B: inlet p0-driven (static p floats) + U free; outlet anchors static p -> OK
+//   Static anchors per case: exactly 1 in both variants -> OK

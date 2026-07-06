@@ -1,0 +1,118 @@
+// ============================================================
+// TEMPLATE 1: FULL TURBINE (incompressible, simpleFoam + MRF,
+// kOmegaSST, water). Copy blocks into 0/U, 0/p, 0/k, 0/omega, 0/nut
+//
+// Pairing: TOTAL PRESSURE INLET + STATIC PRESSURE OUTLET
+//   - head is imposed, flow rate Q is a RESULT
+//   - to hit a target Q, iterate on p0 (Q rises with p0)
+//   - exactly ONE static-pressure anchor in the case: the outlet.
+//     totalPressure does NOT count as a static anchor (it fixes
+//     p + 0.5|U|^2; static p on that patch floats with U).
+// ============================================================
+
+// ---------------- 0/U  [m/s] ----------------
+inlet
+{
+    // U must stay free where total pressure drives the patch:
+    type            pressureInletOutletVelocity;
+    value           uniform (0 0 0);
+    // to impose an approach flow direction (e.g. penstock axis):
+    // type pressureDirectedInletOutletVelocity;
+    // inletDirection uniform (1 0 0);
+}
+
+outlet
+{
+    type            inletOutlet;         // Neumann on outflow, guarded on backflow
+    inletValue      uniform (0 0 0);
+    value           uniform (0 0 0);
+}
+
+// Walls that ROTATE WITH the MRF zone (runner blades, rotating hub):
+runnerBlades
+{
+    type            noSlip;              // correct inside MRF zone
+}
+
+// Stationary walls INSIDE the MRF cell zone (e.g. shroud ring):
+shroudInMRF
+{
+    type            MRFnoSlip;           // v2412: removes frame rotation on this wall
+}
+
+// All stationary walls outside MRF zone (casing, guide vanes, spiral):
+statWalls
+{
+    type            noSlip;
+}
+
+// If using AMI (sliding mesh with pimpleFoam) instead of MRF:
+// AMI patch pairs: type cyclicAMI in constant/polyMesh/boundary and in all 0/* fields.
+// Rotating walls then: type movingWallVelocity; value uniform (0 0 0);
+
+// ---------------- 0/p  [m2/s2, kinematic!] ----------------
+inlet
+{
+    type            totalPressure;
+    p0              uniform 500;         // p_total[Pa] / rho  <-- your head:
+                                         // p0 = g*H_net (kinematic), e.g. 9.81*H
+    gamma           1;                   // incompressible
+    value           uniform 500;
+}
+
+outlet
+{
+    type            fixedValue;          // THE static-pressure anchor (exactly one!)
+    value           uniform 0;
+}
+
+"(runnerBlades|shroudInMRF|statWalls)" { type zeroGradient; }
+
+// Convergence note: this pairing lets Q "breathe" during startup.
+// If it oscillates, ramp p0:
+//   p0  table ((0 50) (2000 500));     // ramp over first 2000 iterations (simpleFoam
+//                                      // interprets "time" as iterations here)
+// and/or start from a converged flow-rate-driven solution.
+
+// ---------------- 0/k  [m2/s2] ----------------
+// k = 1.5 (I*Umean)^2 ; I ~ 0.05 typical for hydro intakes
+inlet
+{
+    type            turbulentIntensityKineticEnergyInlet;
+    intensity       0.05;
+    value           uniform 0.06;        // placeholder, recompute with expected Umean
+}
+outlet  { type inletOutlet; inletValue uniform 0.06; value uniform 0.06; }
+"(runnerBlades|shroudInMRF|statWalls)"
+{
+    type            kqRWallFunction;
+    value           uniform 0.06;
+}
+
+// ---------------- 0/omega  [1/s] ----------------
+// omega = sqrt(k)/(Cmu^0.25 * L), L ~ 0.07 * D_hydraulic
+inlet
+{
+    type            turbulentMixingLengthFrequencyInlet;
+    mixingLength    0.07;                // <-- 0.07 * D_h [m]
+    value           uniform 10;
+}
+outlet  { type inletOutlet; inletValue uniform 10; value uniform 10; }
+"(runnerBlades|shroudInMRF|statWalls)"
+{
+    type            omegaWallFunction;
+    value           uniform 10;
+}
+
+// ---------------- 0/nut  [m2/s] ----------------
+"(inlet|outlet)" { type calculated; value uniform 0; }
+"(runnerBlades|shroudInMRF|statWalls)"
+{
+    type            nutUSpaldingWallFunction;  // safe for mixed y+ (1..300)
+    value           uniform 0;
+}
+
+// AUDIT (per the pairing rules):
+//   inlet:  p total-driven, U free            -> not double-specified: OK
+//   outlet: p Dirichlet (anchor #1), U Neumann -> OK
+//   static-pressure anchors in case: exactly 1 -> OK
