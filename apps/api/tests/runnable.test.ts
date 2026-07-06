@@ -658,6 +658,57 @@ describe('syncBoundaryFields (POST /files/sync-boundaries)', () => {
     expect(u).toContain('internalField uniform (0 0 0)');
   });
 
+  it('preserves a user-set inlet/outlet BC on a patch that still exists (merge, not rebuild)', async () => {
+    const { auth, id } = await makeProject('sync-preserve@x.test');
+    const boundary = `FoamFile { class polyBoundaryMesh; object boundary; }
+3
+(
+    inlet { type patch; nFaces 10; startFace 100; }
+    outlet { type patch; nFaces 10; startFace 110; }
+    walls { type wall; nFaces 20; startFace 120; }
+)
+`;
+    // A case that already carries the "boundary conditions" overlay's BCs.
+    const p = `FoamFile { class volScalarField; object p; }
+dimensions [0 2 -2 0 0 0 0];
+internalField uniform 0;
+boundaryField
+{
+    inlet
+    {
+        type            totalPressure;
+        p0              uniform 39.24;
+        gamma           1;
+        value           uniform 39.24;
+    }
+    outlet
+    {
+        type            fixedValue;
+        value           uniform 0;
+    }
+    walls
+    {
+        type            zeroGradient;
+    }
+}
+`;
+    await writeCaseFile(id, 'constant/polyMesh/boundary', boundary);
+    await writeCaseFile(id, '0/p', p);
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/files/sync-boundaries`)
+      .set('Authorization', auth);
+    expect(res.status).toBe(200);
+
+    const synced = (await readCaseFile(id, '0/p'))?.toString('utf8') ?? '';
+    // The inlet keeps totalPressure (NOT reset to zeroGradient) and the outlet keeps
+    // being the single static-pressure anchor.
+    expect(synced).toContain('totalPressure');
+    expect(synced).toContain('p0');
+    expect(synced).toMatch(/outlet\s*\{\s*type\s+fixedValue;/);
+    expect((synced.match(/fixedValue/g) ?? []).length).toBe(1);
+  });
+
   it('returns 409 when there is no mesh boundary', async () => {
     const { auth, id } = await makeProject('sync-nomesh@x.test');
     const res = await request(app)

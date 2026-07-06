@@ -131,9 +131,16 @@ export async function scaffoldSolverController(req: Request, res: Response): Pro
   res.status(201).json(result);
 }
 
-/** POST /projects/:id/files/sync-boundaries — align 0/ boundaryFields to the mesh. */
+/**
+ * POST /projects/:id/files/sync-boundaries — align 0/ boundaryFields to the mesh
+ * in MERGE mode: every patch that still exists KEEPS its boundary condition, stale
+ * entries are dropped, and new mesh patches get a generic per-type default. Merge
+ * (not rebuild) so a user's inlet/outlet BCs set via the "boundary conditions"
+ * overlay (e.g. an inlet totalPressure, the single outlet fixedValue anchor) are
+ * NOT reset to generic zeroGradient when the solver setup "apply boundaries" runs.
+ */
 export async function syncBoundariesController(req: Request, res: Response): Promise<void> {
-  const result = await syncBoundaryFields(requireViewer(req), req.params.id);
+  const result = await syncBoundaryFields(requireViewer(req), req.params.id, { mode: 'merge' });
   res.status(200).json(result);
 }
 
