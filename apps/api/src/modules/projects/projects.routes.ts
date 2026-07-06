@@ -67,6 +67,7 @@ import {
   saveMeshBackupController,
   setMeshPatchTypeController,
 } from './mesh.controller';
+import { applyBoundaryConditionsController, parseBoundaryUpload } from './boundary.controller';
 import {
   getRunController,
   getRunLogController,
@@ -403,6 +404,15 @@ export function createProjectsRouter(): Router {
     '/:id/mesh/patches',
     validate({ params: projectIdParamSchema, body: editPatchesSchema }),
     asyncHandler(editMeshPatchesController),
+  );
+  // "Boundary conditions" overlay: apply a component BC preset (Turbine / Pipe /
+  // DraftTube / Chamber + driving mode) to the case's 0/ fields. Multipart: a JSON
+  // `payload` + an optional CSV (the draft-tube inlet profile). Backs up the case.
+  router.post(
+    '/:id/boundary-conditions/apply',
+    validate({ params: projectIdParamSchema }),
+    parseBoundaryUpload,
+    asyncHandler(applyBoundaryConditionsController),
   );
   // Single-slot mesh backup: read its status, overwrite it with the current
   // case, or restore the case (mesh + 0/ fields) from it.
