@@ -223,6 +223,190 @@ export const CONSTRAINT_PATCH_TYPES = [
 ] as const;
 
 // ---------------------------------------------------------------------------
+// Boundary-condition presets by hydraulic component (the post-import overlay).
+//
+// When a mesh is imported the user is asked "what is this?" — a Turbine, Pipe,
+// DraftTube or Chamber — and, per type, how the flow is driven. That choice
+// rewrites the inlet / outlet / wall boundaryField entries of the 0/ fields with
+// the physically correct recipe drawn from the DIVE turbine BC templates
+// (documents/*_BCs*.txt). Shared so the API writes exactly the recipe the web
+// overlay names, and both agree on which driving modes each type offers.
+// ---------------------------------------------------------------------------
+
+/** The kind of hydraulic component an imported mesh represents. */
+export const OBJECT_TYPES = ['turbine', 'pipe', 'draftTube', 'chamber'] as const;
+export type ObjectType = (typeof OBJECT_TYPES)[number];
+
+/**
+ * How the flow through the component is driven:
+ *  - pressure   : total-pressure inlet (net head imposed; the flow rate Q is a
+ *                 RESULT). p0 = GRAVITY * head (kinematic).
+ *  - flowRate   : volumetric-flow-rate inlet (Q imposed; the head is a result).
+ *  - csvProfile : spatially-varying mapped inlet from a runner-exit CSV profile
+ *                 (draft tube only) — timeVaryingMappedFixedValue + boundaryData.
+ */
+export const DRIVING_MODES = ['pressure', 'flowRate', 'csvProfile'] as const;
+export type DrivingMode = (typeof DRIVING_MODES)[number];
+
+/**
+ * The driving modes each object type offers, in UI order. Mirrors the templates:
+ * a turbine is head-driven only; a pipe or chamber can be driven by head or by
+ * flow rate; a draft tube's inlet is always the mapped runner-exit profile.
+ */
+export const OBJECT_TYPE_MODES: Record<ObjectType, readonly DrivingMode[]> = {
+  turbine: ['pressure'],
+  pipe: ['pressure', 'flowRate'],
+  draftTube: ['csvProfile'],
+  chamber: ['flowRate', 'pressure'],
+};
+
+/** Display metadata for an object type (overlay step 1). */
+export interface ObjectTypeInfo {
+  id: ObjectType;
+  label: string;
+  summary: string;
+}
+
+/** The four components, in overlay order, each with a one-line "what it is". */
+export const OBJECT_TYPE_LIBRARY: ObjectTypeInfo[] = [
+  {
+    id: 'turbine',
+    label: 'Turbine (full machine)',
+    summary: 'Complete machine, head-driven. Total-pressure inlet, static-pressure outlet.',
+  },
+  {
+    id: 'pipe',
+    label: 'Pipe',
+    summary: 'Duct flow, driven by flow rate or by pressure drop.',
+  },
+  {
+    id: 'draftTube',
+    label: 'Draft tube',
+    summary: 'Standalone draft tube fed by the runner-exit profile from a CSV (keeps the swirl).',
+  },
+  {
+    id: 'chamber',
+    label: 'Turbine chamber',
+    summary: 'Spiral casing with stay / guide vanes, driven by flow rate or by pressure.',
+  },
+];
+
+/** Display metadata for a driving mode (overlay step 2). */
+export interface DrivingModeInfo {
+  id: DrivingMode;
+  label: string;
+  summary: string;
+}
+
+/** Human labels for the driving modes, keyed by id. */
+export const DRIVING_MODE_LIBRARY: Record<DrivingMode, DrivingModeInfo> = {
+  pressure: {
+    id: 'pressure',
+    label: 'Pressure-driven',
+    summary: 'Net head imposed at the inlet (total pressure); the flow rate is a result.',
+  },
+  flowRate: {
+    id: 'flowRate',
+    label: 'Flow-rate-driven',
+    summary: 'Volumetric flow rate Q imposed at the inlet; the head is a result.',
+  },
+  csvProfile: {
+    id: 'csvProfile',
+    label: 'Mapped inlet profile (CSV)',
+    summary: 'Runner-exit velocity profile mapped from an uploaded CSV.',
+  },
+};
+
+/** Standard gravity [m/s^2], converting net head H [m] to kinematic total pressure p0 = g*H. */
+export const GRAVITY = 9.81;
+
+/**
+ * Per-object-type turbulence defaults for the inlet BCs. Most components share the
+ * template defaults (intensity 5 %, mixing length ~0.07*D_h, seed k=0.06 /
+ * omega=10). The draft tube is different: the runner exit is highly turbulent, so
+ * the template recommends a higher intensity (~8 %), a shorter mixing length
+ * (~0.02*D_runner) and larger seed values (k=0.1 / omega=50). The user can
+ * override intensity and mixing length in the overlay; the seeds are internal.
+ */
+export interface TurbulenceDefaults {
+  /** Turbulent intensity as a fraction (0.05 = 5 %). */
+  intensity: number;
+  /** Turbulence mixing length [m] (~0.07*D_h; ~0.02*D_runner for a draft tube). */
+  mixingLength: number;
+  /** Seed value written to k (initial internal field + inletOutlet value). */
+  kSeed: number;
+  /** Seed value written to omega. */
+  omegaSeed: number;
+}
+
+/** Inlet-turbulence defaults per component (the draft tube runs hotter). */
+export const OBJECT_TYPE_TURBULENCE: Record<ObjectType, TurbulenceDefaults> = {
+  turbine: { intensity: 0.05, mixingLength: 0.07, kSeed: 0.06, omegaSeed: 10 },
+  pipe: { intensity: 0.05, mixingLength: 0.07, kSeed: 0.06, omegaSeed: 10 },
+  chamber: { intensity: 0.05, mixingLength: 0.07, kSeed: 0.06, omegaSeed: 10 },
+  draftTube: { intensity: 0.08, mixingLength: 0.02, kSeed: 0.1, omegaSeed: 50 },
+};
+
+/**
+ * Operating-point values the overlay collects. Which ones are required depends on
+ * the driving mode: `head` for pressure-driven, `flowRate` for flow-rate-driven;
+ * `intensity` / `mixingLength` are always optional (they fall back to the object
+ * type's TurbulenceDefaults). All strictly positive.
+ */
+export interface BoundaryConditionValues {
+  /** Net head H [m]. Kinematic total pressure p0 = GRAVITY * head. */
+  head?: number;
+  /** Volumetric flow rate Q [m^3/s]. */
+  flowRate?: number;
+  /** Turbulent intensity (fraction, e.g. 0.05). */
+  intensity?: number;
+  /** Turbulence mixing length [m]. */
+  mixingLength?: number;
+}
+
+/**
+ * A request to apply a component BC preset to a project case. `inlet` / `outlet`
+ * are the single inlet / outlet patch names the user assigned from the mesh; the
+ * remaining assigned patches are `walls` (no-slip + wall functions). For a draft
+ * tube (csvProfile) the CSV file rides alongside as multipart, not in this body.
+ */
+export interface ApplyBoundaryConditionsRequest {
+  objectType: ObjectType;
+  mode: DrivingMode;
+  inlet: string;
+  outlet: string;
+  walls: string[];
+  values: BoundaryConditionValues;
+}
+
+/** What the apply actually wrote, echoed back for the UI summary. */
+export interface AppliedBoundaryConditions {
+  objectType: ObjectType;
+  mode: DrivingMode;
+  inlet: string;
+  outlet: string;
+  walls: string[];
+  /** 0/ field files touched, e.g. ['0/U','0/p','0/k','0/omega','0/nut']. */
+  fields: string[];
+  /** Kinematic total pressure p0 = GRAVITY*head written to the inlet, when pressure-driven. */
+  p0?: number;
+}
+
+/**
+ * Result of applying a component BC preset. `success` is false only on a hard
+ * failure. For a draft tube, `csvSteps` carries the CSV -> boundaryData conversion
+ * report (never throws; a missing Python/toolchain degrades to a failed step, like
+ * the CGNS pipeline). `notes` surfaces advisories (e.g. the CSV lacked a k/omega
+ * column so the intensity fallback was used).
+ */
+export interface ApplyBoundaryConditionsResult {
+  success: boolean;
+  applied: AppliedBoundaryConditions;
+  csvSteps?: ImportStep[];
+  notes: string[];
+}
+
+// ---------------------------------------------------------------------------
 // Multi-mesh import & merge (mergeMeshes / stitchMesh).
 //
 // A project can hold a LIBRARY of imported polyMesh sources, kept apart from the
@@ -1420,6 +1604,9 @@ export const SERVER_ERROR_CODES = [
   'MESH_MERGE_FAILED',
   'SCRIPT_MISSING',
   'PATCH_EXISTS',
+  'INVALID_BC_PLAN',
+  'BC_CSV_REQUIRED',
+  'BC_APPLY_FAILED',
   'NOT_RUNNABLE',
   'RUN_IN_PROGRESS',
   'RUN_NOT_FOUND',
