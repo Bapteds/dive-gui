@@ -11,6 +11,7 @@ import {
   ListChecks,
   Loader2,
   RotateCcw,
+  SlidersHorizontal,
   SquarePen,
   TableProperties,
   Workflow,
@@ -44,6 +45,7 @@ import {
 import { CaseSummary } from '@/features/projects/CaseSummary';
 import { ConvertToFoamFlow } from '@/features/projects/ConvertToFoamFlow';
 import { MergeMeshesFlow } from '@/features/projects/MergeMeshesFlow';
+import { BoundaryConditionDialog } from '@/features/projects/BoundaryConditionDialog';
 import { ApplyTemplateFlow } from '@/features/templates/ApplyTemplateFlow';
 
 /**
@@ -132,8 +134,13 @@ export function CaseFilesSection({
   const [convertOpen, setConvertOpen] = useState(false);
   // Whether the guided multi-mesh merge dialog is open.
   const [mergeOpen, setMergeOpen] = useState(false);
+  // Whether the "boundary conditions" overlay is open (post-import setup).
+  const [bcOpen, setBcOpen] = useState(false);
 
   const hasFiles = !!entries && entries.some((entry) => entry.type === 'file');
+  const hasPolyMesh =
+    !!entries &&
+    entries.some((entry) => entry.type === 'file' && entry.path.startsWith('constant/polyMesh/'));
 
   const handleImport = async (kind: 'folder' | 'zip', files: File[]) => {
     if (files.length === 0) return;
@@ -146,6 +153,10 @@ export function CaseFilesSection({
       toast.success(
         `Imported ${result.written.length} file${result.written.length === 1 ? '' : 's'}.`,
       );
+      // A freshly imported mesh: offer to set its boundary conditions right away.
+      if (result.written.some((path) => path.includes('polyMesh/'))) {
+        setBcOpen(true);
+      }
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Import failed. Please try again.');
     } finally {
@@ -320,6 +331,17 @@ export function CaseFilesSection({
                   <Combine strokeWidth={1.75} aria-hidden="true" />
                   Merge meshes
                 </Button>
+                {hasPolyMesh && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setBcOpen(true)}
+                  >
+                    <SlidersHorizontal strokeWidth={1.75} aria-hidden="true" />
+                    Boundary conditions
+                  </Button>
+                )}
                 <Button asChild variant="secondary" size="sm">
                   <Link to={`/projects/${projectId}/edit`}>
                     <SquarePen strokeWidth={1.75} aria-hidden="true" />
@@ -380,6 +402,10 @@ export function CaseFilesSection({
 
       {mergeOpen && (
         <MergeMeshesFlow projectId={projectId} onClose={() => setMergeOpen(false)} />
+      )}
+
+      {bcOpen && (
+        <BoundaryConditionDialog projectId={projectId} onClose={() => setBcOpen(false)} />
       )}
     </section>
   );
