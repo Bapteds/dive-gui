@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -123,7 +123,7 @@ export function BoundaryConditionDialog({ projectId, onClose }: BoundaryConditio
   const [result, setResult] = useState<ApplyBoundaryConditionsResult | null>(null);
 
   const manifest = useMeshManifestQuery(projectId);
-  const patches = manifest.data?.patches ?? [];
+  const patches = useMemo(() => manifest.data?.patches ?? [], [manifest.data]);
   const apply = useApplyBoundaryConditions(projectId);
   const applying = apply.isPending;
 
@@ -142,14 +142,15 @@ export function BoundaryConditionDialog({ projectId, onClose }: BoundaryConditio
     setStep(OBJECT_TYPE_MODES[objectType].length === 1 ? 'patches' : 'mode');
   };
 
-  // Default the inlet / outlet from patch names when the assignment step opens.
-  const goToPatches = () => {
-    if (patches.length > 0 && (!inlet || !outlet)) {
+  // Default the inlet / outlet from the patch names once the manifest loads, so the
+  // assignment step opens pre-filled whichever way the user reaches it (a
+  // single-mode type skips the driving step and lands here directly).
+  useEffect(() => {
+    if (patches.length > 0 && !inlet && !outlet) {
       setInlet(guessPatch(patches, /inlet|in$/i, 0));
       setOutlet(guessPatch(patches, /outlet|out$/i, patches.length - 1));
     }
-    setStep('patches');
-  };
+  }, [patches, inlet, outlet]);
 
   const wallNames = patches
     .map((patch) => patch.name)
@@ -207,7 +208,7 @@ export function BoundaryConditionDialog({ projectId, onClose }: BoundaryConditio
           mode={mode}
           onPick={setMode}
           onBack={() => setStep('type')}
-          onContinue={goToPatches}
+          onContinue={() => setStep('patches')}
         />
       )}
 
