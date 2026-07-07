@@ -50,4 +50,19 @@ describe('solver catalog (all solvers guided)', () => {
     expect(interFoam.easyParams.map((p) => p.key)).toContain('rasModel');
     expect(interFoam.easyParams.map((p) => p.key)).not.toContain('nu');
   });
+
+  it('offers the SIMPLEC (consistent) toggle only on full steady templates', () => {
+    // simpleFoam / rhoSimpleFoam are steady full templates: their SIMPLE block
+    // carries `consistent`, so the toggle writes into an existing key.
+    const consistent = (id: string) =>
+      SOLVER_CATALOG[id].easyParams.some(
+        (p) => p.key === 'consistent' && p.file === 'system/fvSolution',
+      );
+    expect(consistent('simpleFoam')).toBe(true);
+    expect(consistent('rhoSimpleFoam')).toBe(true);
+    // Not on a transient full template (PIMPLE has no `consistent`)...
+    expect(consistent('pimpleFoam')).toBe(false);
+    // ...nor on a base-tier flow solver (universal knobs only).
+    expect(consistent('interFoam')).toBe(false);
+  });
 });

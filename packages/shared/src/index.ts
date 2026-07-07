@@ -1110,6 +1110,27 @@ const maxCoParam: SolverParamDef = {
   file: 'system/controlDict',
   path: ['maxCo'],
 };
+/**
+ * Steady-solver toggle for SIMPLEC (SIMPLE-Consistent). Writes `consistent yes|no;`
+ * into the SIMPLE block of system/fvSolution. Exposed only on the full steady
+ * templates (simpleFoam / rhoSimpleFoam), whose SIMPLE block already carries this key.
+ */
+const consistentParam: SolverParamDef = {
+  key: 'consistent',
+  label: 'Consistent (SIMPLEC)',
+  help:
+    'Switches the steady SIMPLE loop to its SIMPLEC (SIMPLE-Consistent) variant by writing ' +
+    '`consistent yes;` in the SIMPLE block of fvSolution. SIMPLEC folds the neighbour-coefficient ' +
+    'term into the pressure correction, so pressure no longer needs heavy under-relaxation ' +
+    '(you can raise the pressure relaxation toward 1) and a steady run usually converges in ' +
+    'noticeably fewer iterations. A safe default for steady internal flow such as turbine ' +
+    'passages; if a run turns unstable, switch it off and lower the pressure relaxation instead.',
+  kind: 'bool',
+  options: ['yes', 'no'],
+  example: 'yes',
+  file: 'system/fvSolution',
+  path: ['SIMPLE', 'consistent'],
+};
 
 /**
  * Files a compressible RANS case needs beyond the mesh: like the incompressible
@@ -1161,7 +1182,7 @@ function buildSolverSpec(info: SolverInfo): SolverSpec {
   if (full && compressible) easyParams.push(initialTParam, initialPParam);
   easyParams.push(endTimeParam, writeIntervalParam);
   if (regime === 'transient') easyParams.push(deltaTParam, adjustTimeStepParam, maxCoParam);
-  else if (full) easyParams.push(residualPParam, relaxPParam);
+  else if (full) easyParams.push(residualPParam, relaxPParam, consistentParam);
 
   return {
     id: info.id,

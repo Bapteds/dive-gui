@@ -573,6 +573,19 @@ function SolverEasyForm({
         }
         const content = contentByFile[param.file];
         const value = content != null ? getFoamValue(parseFoamModel(content), param.path) ?? '' : '';
+        // A yes/no flag reads best as a real checkbox (click the whole label to
+        // toggle), not a two-option dropdown.
+        if (param.kind === 'bool' && param.options) {
+          return (
+            <BoolRow
+              key={param.key}
+              param={param}
+              value={value}
+              disabled={disabled}
+              onCommit={(next) => commit(param, next)}
+            />
+          );
+        }
         return (
           <ParamRow
             key={param.key}
@@ -742,6 +755,71 @@ function ParamRow({
           />
         )}
         {param.help && <p className="text-xs text-text-secondary">{param.help}</p>}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A yes/no solver flag rendered as a real checkbox. `param.options[0]` is the
+ * "on" token (e.g. `yes`), `[1]` the "off" token — so the box is checked when the
+ * file's value equals the on-token, and toggling commits the matching token. The
+ * whole label is the click target; the keyword and full help sit alongside it.
+ */
+function BoolRow({
+  param,
+  value,
+  disabled,
+  onCommit,
+}: {
+  param: SolverParamDef;
+  value: string;
+  disabled: boolean;
+  onCommit: (value: string) => void;
+}) {
+  const id = `solver-${param.key}`;
+  const keyword = param.path[param.path.length - 1];
+  const options = param.options as string[];
+  const onToken = options[0];
+  const offToken = options[1] ?? 'no';
+  const checked = value === onToken;
+
+  return (
+    <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)] sm:items-start sm:gap-3">
+      <div className="flex flex-col pt-0.5">
+        <label htmlFor={id} className="text-sm font-medium text-text">
+          {param.label}
+        </label>
+        <span className="font-mono text-xs text-text-secondary" translate="no">
+          {keyword}
+        </span>
+      </div>
+      <div className="flex flex-col gap-1">
+        <label
+          htmlFor={id}
+          className={cn(
+            'inline-flex items-center gap-2 self-start text-sm text-text',
+            disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
+          )}
+        >
+          <input
+            id={id}
+            name={param.key}
+            type="checkbox"
+            checked={checked}
+            disabled={disabled}
+            onChange={(event) => onCommit(event.target.checked ? onToken : offToken)}
+            className={cn(
+              'size-4 shrink-0 rounded-[4px] border-border accent-primary',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
+              'disabled:cursor-not-allowed',
+            )}
+          />
+          <span>
+            Enabled <span className="font-mono text-xs text-text-secondary" translate="no">({onToken})</span>
+          </span>
+        </label>
+        {param.help && <p className="max-w-prose text-xs text-text-secondary">{param.help}</p>}
       </div>
     </div>
   );
