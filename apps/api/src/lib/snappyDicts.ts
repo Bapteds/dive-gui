@@ -248,12 +248,19 @@ export function renderSnappyHexMeshDict(
   domain: SnappyDomain,
   config: SnappyConfig,
 ): string {
-  const regions = stlNames.map((name) => ({ file: name, region: regionNameFor(name) }));
+  // `region` is the snappy name (a valid word); `emesh` is the feature file the
+  // extractor actually wrote — its basename is the STL stem VERBATIM (hyphens and
+  // all), so it must be referenced by the stem, not the sanitized region name.
+  const regions = stlNames.map((name) => ({
+    file: name,
+    region: regionNameFor(name),
+    emesh: `${name.replace(/\.[^.]+$/, '')}.eMesh`,
+  }));
   const geometry = regions
     .map((r) => `    ${r.file} { type triSurfaceMesh; name ${r.region}; }`)
     .join('\n');
   const features = regions
-    .map((r) => `        { file "${r.region}.eMesh"; level ${config.featureLevel}; }`)
+    .map((r) => `        { file "${r.emesh}"; level ${config.featureLevel}; }`)
     .join('\n');
   const refinementSurfaces = regions
     .map(

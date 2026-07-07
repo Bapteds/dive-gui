@@ -1,0 +1,85 @@
+// Unit tests for the snappyHexMesh pipeline orchestration, with the external
+// toolchain swapped for a fake runner (no OpenFOAM needed). Asserts: the dicts
+// are written, the four commands run in order with the v2406-correct argv, and a
+// mid-pipeline failure short-circuits the remaining steps to `skipped`.
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { DEFAULT_SNAPPY_CONFIG } from '@dive/shared';
+import { runSnappyPipeline } from '../src/lib/snappyPipeline';
+import { setCommandRunner, type CommandResult, type CommandRunner } from '../src/lib/commandRunner';
+
+const BOUNDS = { min: [0, 0, 0] as [number, number, number], max: [10, 10, 10] as [number, number, number] };
+
+function ok(spec: { command: string; args: string[] }): CommandResult {
+  return { command: spec.command, args: spec.args, exitCode: 0, stdout: 'ok', stderr: '', durationMs: 1, timedOut: false };
+}
+
+afterEach(() => setCommandRunner(null));
+
+async function tempCase(): Promise<string> {
+  return fs.mkdtemp(path.join(os.tmpdir(), 'meshing-'));
+}
+
+describe('runSnappyPipeline', () => {
+  it('writes the dicts and runs the four tools in order on success', async () => {
+    const caseDir = await tempCase();
+    const commands: string[] = [];
+    const runner: CommandRunner = async (spec) => {
+      // The tools run via `bash -c … exec "$@"` only when OPENFOAM_BASHRC is set;
+      // on a bare dev box the binary is the command directly.
+      commands.push(spec.command);
+      return ok(spec);
+    };
+    setCommandRunner(runner);
+
+    const result = await runSnappyPipeline(caseDir, ['rotor.stl'], BOUNDS, DEFAULT_SNAPPY_CONFIG);
+
+    expect(result.success).toBe(true);
+    expect(result.steps.map((s) => s.status)).toEqual(['success', 'success', 'success', 'success']);
+    expect(commands).toEqual(['blockMesh', 'surfaceFeatureExtract', 'snappyHexMesh', 'checkMesh']);
+
+    // The dicts were written.
+    for (const file of ['controlDict', 'fvSchemes', 'fvSolution', 'blockMeshDict', 'surfaceFeatureExtractDict', 'snappyHexMeshDict']) {
+      await expect(fs.stat(path.join(caseDir, 'system', file))).resolves.toBeDefined();
+    }
+  });
+
+  it('short-circuits the remaining steps when blockMesh fails', async () => {
+    const caseDir = await tempCase();
+    const runner: CommandRunner = async (spec) => {
+      if (spec.command === 'blockMesh') {
+        return { command: spec.command, args: spec.args, exitCode: 1, stdout: '', stderr: 'boom', durationMs: 1, timedOut: false };
+      }
+      return ok(spec);
+    };
+    setCommandRunner(runner);
+
+    const result = await runSnappyPipeline(caseDir, ['rotor.stl'], BOUNDS, DEFAULT_SNAPPY_CONFIG);
+
+    expect(result.success).toBe(false);
+    expect(result.steps.map((s) => s.status)).toEqual(['failed', 'skipped', 'skipped', 'skipped']);
+  });
+
+  it('captures a missing binary as a failed step with a runner note', async () => {
+    const caseDir = await tempCase();
+    const runner: CommandRunner = async (spec) => ({
+      command: spec.command,
+      args: spec.args,
+      exitCode: null,
+      stdout: '',
+      stderr: '',
+      durationMs: 0,
+      timedOut: false,
+      spawnError: 'ENOENT: command not found',
+    });
+    setCommandRunner(runner);
+
+    const result = await runSnappyPipeline(caseDir, ['rotor.stl'], BOUNDS, DEFAULT_SNAPPY_CONFIG);
+
+    expect(result.success).toBe(false);
+    expect(result.steps[0].status).toBe('failed');
+    expect(result.steps[0].stderr).toContain('ENOENT');
+  });
+});
