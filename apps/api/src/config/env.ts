@@ -67,6 +67,23 @@ const envSchema = z
     // autoPatch: divides the external boundary faces into patches by feature
     // angle, used by the "Auto-patch boundaries" action on the Visualize tab.
     AUTO_PATCH_BIN: z.string().min(1).default('autoPatch'),
+    // --- Meshing sessions (STL -> snappyHexMesh -> polyMesh) -------------------
+    // The standalone "Meshing" page runs a classic OpenFOAM meshing pipeline on
+    // uploaded STL surfaces: blockMesh (background box) -> surfaceFeatureExtract
+    // (feature edges) -> snappyHexMesh -overwrite (castellate+snap+layers) ->
+    // checkMesh. Same operational model as every other OpenFOAM tool here
+    // (configurable, sourced via OPENFOAM_BASHRC, absent on a Windows dev box ->
+    // a clean per-step "not found" rather than a crash).
+    BLOCK_MESH_BIN: z.string().min(1).default('blockMesh'),
+    // ESI v2406 ships BOTH surfaceFeatureExtract (reads system/surfaceFeatureExtractDict)
+    // and the newer surfaceFeatures (reads system/surfaceFeaturesDict). The classic
+    // name is the snappy-tutorial pairing and the default here; swapping to
+    // surfaceFeatures means also changing the generated dict (kept in snappyDicts.ts).
+    SURFACE_FEATURE_BIN: z.string().min(1).default('surfaceFeatureExtract'),
+    SNAPPY_HEX_MESH_BIN: z.string().min(1).default('snappyHexMesh'),
+    // Per-step wall-clock timeout (ms). snappyHexMesh on a fine STL is slow, so this
+    // is generous (30 min/step), like the merge/conversion pipelines.
+    SNAPPY_STEP_TIMEOUT_MS: z.coerce.number().int().positive().default(1800000),
     // --- Multi-mesh merge (Merge meshes flow) ---------------------------------
     // mergeMeshes combines several imported polyMesh sources into one master
     // mesh; stitchMesh then conformally fuses chosen patch pairs (e.g. one part's

@@ -797,6 +797,107 @@ export interface MeshImportConversion {
   steps: ImportStep[];
 }
 
+// ---------------------------------------------------------------------------
+// Meshing sessions (STL surface -> snappyHexMesh -> constant/polyMesh).
+//
+// A standalone workspace (NOT project-scoped): a session holds one or more STL
+// surface files and a snappyHexMesh configuration, and produces a volume mesh
+// the user can visualize and download. Shared so the API and the web client
+// agree on the config shape, the session shape, and the per-step run report
+// (which reuses the mesh-import ImportStep / MeshImportConversion above).
+// ---------------------------------------------------------------------------
+
+/** Root directory (under STORAGE_DIR) holding every meshing session. */
+export const MESHING_DIRNAME = 'meshing';
+
+/** File extension a meshing session accepts as an input surface. */
+export const STL_EXTENSION = '.stl';
+
+/**
+ * Which side of the surface the volume mesh keeps — the single knob that flips a
+ * snappyHexMesh run between the two flow regimes:
+ *  - internal : the fluid is INSIDE the geometry (e.g. the bore of a pipe /
+ *    chamber). locationInMesh sits inside the surface; snappy keeps the interior.
+ *  - external : the fluid is AROUND the geometry (flow past a body). locationInMesh
+ *    sits in the background box but outside the surface; snappy keeps the exterior.
+ */
+export const DOMAIN_TYPES = ['internal', 'external'] as const;
+export type DomainType = (typeof DOMAIN_TYPES)[number];
+
+/** Axis-aligned bounding box (metres) — the union of a session's STL surfaces. */
+export interface MeshBounds {
+  min: [number, number, number];
+  max: [number, number, number];
+}
+
+/**
+ * The snappyHexMesh tunables for one run. Sensible auto defaults
+ * (DEFAULT_SNAPPY_CONFIG) drive the simple path; the Advanced section exposes the
+ * rest. `baseCellSize` null and `locationInMesh` null mean "derive from the STL
+ * bounds server-side" (background cell ≈ bbox diagonal / 40; keep-point = the
+ * bbox centre for internal, a background-box corner for external).
+ */
+export interface SnappyConfig {
+  domainType: DomainType;
+  /** Background (blockMesh) cell edge length in metres; null => derive from bounds. */
+  baseCellSize: number | null;
+  /** Background-box padding as a fraction of the STL bbox diagonal (e.g. 0.1). */
+  marginFactor: number;
+  /** Surface refinement level range applied to every STL region (min <= max). */
+  surfaceRefinement: { min: number; max: number };
+  /** Feature-edge (eMesh) refinement level. */
+  featureLevel: number;
+  /** Explicit keep-point; null => derive from bounds + domainType. */
+  locationInMesh: [number, number, number] | null;
+  /** Optional boundary-layer (prism) growth on the surfaces. */
+  addLayers: { enabled: boolean; nLayers: number };
+}
+
+/** The auto/minimal defaults the config form starts from. */
+export const DEFAULT_SNAPPY_CONFIG: SnappyConfig = {
+  domainType: 'internal',
+  baseCellSize: null,
+  marginFactor: 0.1,
+  surfaceRefinement: { min: 1, max: 2 },
+  featureLevel: 2,
+  locationInMesh: null,
+  addLayers: { enabled: false, nLayers: 3 },
+};
+
+/** One uploaded input surface of a meshing session. */
+export interface StlFile {
+  /** File name within the session's constant/triSurface directory. */
+  name: string;
+  sizeBytes: number;
+}
+
+/** The last snappyHexMesh run of a session: the config used and its per-step report. */
+export interface MeshingRun {
+  config: SnappyConfig;
+  result: MeshImportConversion;
+  /** ISO 8601 timestamp of the run. */
+  at: string;
+}
+
+/** A meshing session as shown in the list (no STL/run detail). */
+export interface MeshingSessionSummary {
+  id: string;
+  name: string;
+  /** ISO 8601 creation timestamp. */
+  createdAt: string;
+  stlCount: number;
+  /** True once a run has produced constant/polyMesh. */
+  hasMesh: boolean;
+}
+
+/** A full meshing session: summary + its surfaces, bounds, and last run. */
+export interface MeshingSession extends MeshingSessionSummary {
+  stls: StlFile[];
+  /** Union bounding box of the STLs (null when none uploaded / unparseable). */
+  bounds: MeshBounds | null;
+  lastRun: MeshingRun | null;
+}
+
 /**
  * Directory name (under a project's storage subtree, sibling of `case/`,
  * `cgns/`, `viz/`) holding solver-run logs and artifacts. Kept apart from the
@@ -1767,6 +1868,8 @@ export const SERVER_ERROR_CODES = [
   'NOT_RUNNABLE',
   'RUN_IN_PROGRESS',
   'RUN_NOT_FOUND',
+  'NO_STL',
+  'INVALID_STL',
   'PAYLOAD_TOO_LARGE',
   'FILE_TOO_LARGE',
   'FILE_EXISTS',
