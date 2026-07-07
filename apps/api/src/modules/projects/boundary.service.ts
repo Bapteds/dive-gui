@@ -11,6 +11,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  CONSTRAINT_PATCH_TYPES,
   GRAVITY,
   OBJECT_TYPE_MODES,
   isConfigurableSolver,
@@ -29,6 +30,7 @@ import {
   fieldBcBody,
   parseApplication,
   parseBoundaryPatches,
+  parseBoundaryPatchesWithTypes,
   parseTurbulenceModel,
   renderDynamicMeshDict,
   renderMrfProperties,
@@ -157,10 +159,25 @@ export async function applyBoundaryConditions(
     }
   }
 
+  // Geometric type of every mesh patch, so a "leftover" (wall) patch that is
+  // actually a CONSTRAINT type (empty / symmetry / symmetryPlane / wedge /
+  // cyclic / cyclicAMI / processor) is preserved and mirrored, NOT forced into a
+  // noSlip wall (which would corrupt a 2D `empty` case or a symmetry plane).
+  const patchTypes = new Map(
+    parseBoundaryPatchesWithTypes(boundaryText).map((patch) => [patch.name, patch.type]),
+  );
+  const isConstraintPatch = (name: string) =>
+    (CONSTRAINT_PATCH_TYPES as readonly string[]).includes(patchTypes.get(name) ?? '');
+  // The geometric type to write a leftover patch as: keep a constraint's own type
+  // (so fieldBcBody mirrors it), otherwise treat it as a `wall`.
+  const wallGeoType = (name: string) => (isConstraintPatch(name) ? patchTypes.get(name)! : 'wall');
+
   // Walls: set the geometric type to `wall` in the boundary file so the wall
   // functions are physically correct (nut/k/omega wall functions expect a wall).
+  // Constraint patches keep their own geometric type untouched.
   let newBoundary = boundaryText;
   for (const wall of request.walls) {
+    if (isConstraintPatch(wall)) continue;
     newBoundary = setBoundaryPatchType(newBoundary, wall, 'wall');
   }
   if (newBoundary !== boundaryText) {
@@ -192,7 +209,8 @@ export async function applyBoundaryConditions(
     let updated = setFieldPatchBc(text, request.inlet, componentInletBc(fieldName, inletOpts));
     updated = setFieldPatchBc(updated, request.outlet, componentOutletBc(fieldName, outletOpts));
     for (const wall of request.walls) {
-      updated = setFieldPatchBc(updated, wall, fieldBcBody(fieldName, 'wall', model));
+      // A real wall gets noSlip / wall functions; a constraint patch is mirrored.
+      updated = setFieldPatchBc(updated, wall, fieldBcBody(fieldName, wallGeoType(wall), model));
     }
     if (updated !== text) {
       await writeCaseFile(projectId, entry.path, updated);

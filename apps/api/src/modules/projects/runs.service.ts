@@ -203,16 +203,19 @@ function classifyExit(
 }
 
 /**
- * After a parallel run finishes, reassemble the decomposed time directories with
- * `reconstructPar -latestTime`, then drop the processor* directories on success
- * (kept on failure for debugging). Best-effort: a reconstruct failure is logged,
- * never thrown — the run's terminal status already stands.
+ * After a parallel run finishes, reassemble ALL decomposed time directories with
+ * `reconstructPar`, then drop the processor* directories on success (kept on
+ * failure for debugging). We reconstruct every written time, not just the latest,
+ * because the processor* dirs are deleted right after — reconstructing only the
+ * latest would throw away all the intermediate time steps the user wrote. Best-
+ * effort: a reconstruct failure is logged, never thrown — the run's terminal
+ * status already stands.
  */
 async function reconstructParallel(projectId: string, cores: number): Promise<void> {
   const caseDir = caseDirAbsolute(projectId);
   try {
     const result = await runCommand({
-      ...planOpenfoamCommand('reconstructPar', ['-case', caseDir, '-latestTime'], caseDir),
+      ...planOpenfoamCommand('reconstructPar', ['-case', caseDir], caseDir),
       timeoutMs: env.SOLVER_MAX_RUNTIME_MS,
     });
     if (commandFailed(result)) {

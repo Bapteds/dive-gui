@@ -204,9 +204,9 @@ export function fieldBcBody(fieldName: string, geometricType: string, model?: st
 //  - draft-tube inlet: timeVaryingMappedFixedValue mapped from boundaryData; k /
 //    omega are mapped only when the CSV carried that column, else they fall back
 //    to the intensity / mixing-length inlet.
-//  - the outlet is the SINGLE static-pressure anchor: fixedValue p=0 (a draft tube
-//    uses fixedMeanValue to tolerate the swirl). Pipe pressure-driven is the only
-//    case whose outlet velocity is pressureInletOutletVelocity (both ends).
+//  - the outlet is the SINGLE static-pressure anchor: fixedValue p=0 for every
+//    component (including the draft tube). Pipe pressure-driven is the only case
+//    whose outlet velocity is pressureInletOutletVelocity (both ends).
 // ---------------------------------------------------------------------------
 
 /** Format a number for an OpenFOAM entry, trimming float noise (490.5 not 490.500001). */
@@ -362,9 +362,9 @@ export function componentInletBc(fieldName: string, opts: ComponentInletOptions)
 
 /**
  * The outlet boundaryField body for `fieldName` under the chosen component. The
- * outlet is the case's single static-pressure anchor (fixedValue p=0; a draft tube
- * uses fixedMeanValue to tolerate the swirling outflow). Falls back to the generic
- * outlet preset for fields the templates do not cover.
+ * outlet is the case's single static-pressure anchor (fixedValue p=0 for every
+ * component). Falls back to the generic outlet preset for fields the templates do
+ * not cover.
  */
 export function componentOutletBc(fieldName: string, opts: ComponentOutletOptions): string {
   const turb = OBJECT_TYPE_TURBULENCE[opts.objectType];
@@ -383,13 +383,8 @@ export function componentOutletBc(fieldName: string, opts: ComponentOutletOption
       ]);
     }
     case 'p': {
-      if (opts.objectType === 'draftTube') {
-        return assembleBcBody([
-          ['type', 'fixedMeanValue'],
-          ['meanValue', '0'],
-          ['value', 'uniform 0'],
-        ]);
-      }
+      // The outlet is the single static-pressure anchor for every component
+      // (including the draft tube): a plain fixedValue 0, per the templates.
       return assembleBcBody([
         ['type', 'fixedValue'],
         ['value', 'uniform 0'],
@@ -1565,32 +1560,34 @@ ${FOAM_FOOTER}`;
 }
 
 /**
- * constant/dynamicMeshDict for a Moving Rotor (rigid-body rotation). The rotor
- * `cellZone` is rotated each time step at `omega` (rad/s) about `axis` through
- * `origin`. Requires a transient solver (pimpleFoam) and a cyclicAMI interface
- * between the moving and static regions.
+ * constant/dynamicMeshDict for a Moving Rotor (forced rigid-body rotation). The
+ * rotor `cellZone` is rotated each time step at `omega` (rad/s) about `axis`
+ * through `origin`. Requires a transient solver (pimpleFoam) and a cyclicAMI
+ * interface between the moving and static regions. Follows the forced-rotation
+ * template (documents/dynamicMeshDict.forcedRotation): solidBodyMotionFvMesh with
+ * a solidBodyMotionFvMeshCoeffs block wrapping rotatingMotion.
  */
 export function renderDynamicMeshDict(opts: Omit<RotorZoneOptions, 'nonRotatingPatches'>): string {
   return `${foamHeader('dictionary', 'dynamicMeshDict', 'constant')}
-// Moving Rotor (rigid-body rotation / sliding mesh): the rotor cell zone is
+// Moving Rotor (forced rigid-body rotation / sliding mesh): the rotor cell zone is
 // physically rotated each time step about the axis at a constant omega. Needs a
 // transient solver (e.g. pimpleFoam) and a cyclicAMI interface between the moving
 // and static regions. omega is in rad/s; axis need not be a unit vector.
-dynamicFvMesh   dynamicMotionSolverFvMesh;
+dynamicFvMesh   solidBodyMotionFvMesh;
 
-motionSolverLibs (fvMotionSolvers);
+motionSolverLibs ( "libfvMotionSolvers.so" );
 
-motionSolver    solidBody;
-
-cellZone        ${opts.cellZone};
-
-solidBodyMotionFunction rotatingMotion;
-
-rotatingMotionCoeffs
+solidBodyMotionFvMeshCoeffs
 {
-    origin      ${fmtFoamVector(opts.origin)};
-    axis        ${fmtFoamVector(opts.axis)};
-    omega       ${fmtFoamNumber(opts.omega)};
+    cellZone        ${opts.cellZone};
+
+    solidBodyMotionFunction  rotatingMotion;
+    rotatingMotionCoeffs
+    {
+        origin        ${fmtFoamVector(opts.origin)};
+        axis          ${fmtFoamVector(opts.axis)};
+        omega         ${fmtFoamNumber(opts.omega)}; // rad/s
+    }
 }
 ${FOAM_FOOTER}`;
 }

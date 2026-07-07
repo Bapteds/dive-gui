@@ -131,12 +131,13 @@ describe('componentInletBc / componentOutletBc', () => {
     expect(kFallback).toContain('turbulentIntensityKineticEnergyInlet');
   });
 
-  it('outlet pressure anchor: fixedValue 0 in general, fixedMeanValue for a draft tube', () => {
+  it('outlet pressure anchor: fixedValue 0 for every component (including the draft tube)', () => {
     const turbP = componentOutletBc('p', { objectType: 'turbine', mode: 'pressure', model: 'kOmegaSST' });
     expect(turbP).toContain('fixedValue');
     expect(turbP).not.toContain('fixedMeanValue');
     const draftP = componentOutletBc('p', { objectType: 'draftTube', mode: 'csvProfile', model: 'kOmegaSST' });
-    expect(draftP).toContain('fixedMeanValue');
+    expect(draftP).toContain('fixedValue');
+    expect(draftP).not.toContain('fixedMeanValue');
   });
 
   it('is turbulence-model aware: a k-epsilon inlet uses the dissipation-rate inlet', () => {
@@ -181,15 +182,16 @@ describe('renderMrfProperties / renderDynamicMeshDict', () => {
     expect(mrf).toContain('nonRotatingPatches ();');
   });
 
-  it('dynamicMeshDict: dynamicMotionSolverFvMesh + solidBody + rotatingMotion coeffs', () => {
+  it('dynamicMeshDict: solidBodyMotionFvMesh wrapper + rotatingMotion coeffs (forcedRotation template)', () => {
     const dyn = renderDynamicMeshDict({ cellZone: 'rotor', origin: [0, 0, 0], axis: [0, 0, 1], omega: 62.8319 });
     expect(dyn).toContain('object      dynamicMeshDict;');
-    expect(dyn).toContain('dynamicFvMesh   dynamicMotionSolverFvMesh;');
-    expect(dyn).toContain('motionSolver    solidBody;');
+    expect(dyn).toContain('dynamicFvMesh   solidBodyMotionFvMesh;');
+    expect(dyn).toContain('motionSolverLibs ( "libfvMotionSolvers.so" );');
+    expect(dyn).toContain('solidBodyMotionFvMeshCoeffs');
     expect(dyn).toContain('cellZone        rotor;');
-    expect(dyn).toContain('solidBodyMotionFunction rotatingMotion;');
+    expect(dyn).toContain('solidBodyMotionFunction  rotatingMotion;');
     expect(dyn).toContain('rotatingMotionCoeffs');
-    expect(dyn).toContain('omega       62.8319;');
+    expect(dyn).toMatch(/omega\s+62\.8319; \/\/ rad\/s/);
   });
 });
 
@@ -388,11 +390,52 @@ describe('POST /projects/:id/boundary-conditions/apply', () => {
     expect(res.status).toBe(200);
     expect(res.body.result.applied.rotor.file).toBe('constant/dynamicMeshDict');
     const dyn = (await readCaseFile(id, 'constant/dynamicMeshDict'))!.toString('utf8');
-    expect(dyn).toContain('dynamicMotionSolverFvMesh');
+    expect(dyn).toContain('solidBodyMotionFvMesh');
     expect(dyn).toContain('rotatingMotion');
     expect(res.body.result.notes.some((n: string) => /pimpleFoam/.test(n))).toBe(true);
     // A moving rotor writes no MRF dictionary.
     expect(await readCaseFile(id, 'constant/MRFProperties')).toBeNull();
+  });
+
+  it('preserves a constraint leftover patch (symmetryPlane), not forcing it into a wall', async () => {
+    const boundaryWithSymmetry = `FoamFile { class polyBoundaryMesh; object boundary; }
+4
+(
+    inlet { type patch; nFaces 10; startFace 100; }
+    outlet { type patch; nFaces 10; startFace 110; }
+    blade { type wall; nFaces 20; startFace 120; }
+    sym { type symmetryPlane; nFaces 20; startFace 140; }
+)
+`;
+    const { id, auth } = await makeProject('bc-constraint@dive-turbinen.test');
+    for (const file of MESH_FILES) {
+      await writeCaseFile(id, file, file.endsWith('boundary') ? boundaryWithSymmetry : `${file}-data`);
+    }
+    const res = await request(app)
+      .post(applyUrl(id))
+      .set('Authorization', auth)
+      .field(
+        'payload',
+        JSON.stringify({
+          objectType: 'turbine',
+          mode: 'pressure',
+          inlet: 'inlet',
+          outlet: 'outlet',
+          walls: ['blade', 'sym'],
+          values: { head: 10 },
+        }),
+      );
+
+    expect(res.status).toBe(200);
+    // The symmetry plane keeps its geometric type; the real wall becomes `wall`.
+    const boundary = (await readCaseFile(id, 'constant/polyMesh/boundary'))!.toString('utf8');
+    const types = parseBoundaryPatchesWithTypes(boundary);
+    expect(types.find((t) => t.name === 'sym')?.type).toBe('symmetryPlane');
+    expect(types.find((t) => t.name === 'blade')?.type).toBe('wall');
+    // The symmetry plane is mirrored in the fields, not turned into a noSlip wall.
+    const u = (await readCaseFile(id, '0/U'))!.toString('utf8');
+    expect(u).toContain('symmetryPlane');
+    expect(u).toContain('noSlip'); // the real wall (blade)
   });
 
   it('rejects a rotor non-rotating patch that is not in the mesh (422)', async () => {
@@ -461,7 +504,7 @@ describe('POST /projects/:id/boundary-conditions/apply', () => {
     expect(res.body.error.code).toBe('BC_CSV_REQUIRED');
   });
 
-  it('draft tube CSV: maps U + k, falls back for the absent omega, uses fixedMeanValue outlet', async () => {
+  it('draft tube CSV: maps U + k, falls back for the absent omega, uses fixedValue outlet', async () => {
     setCommandRunner(csvOkRunner);
     const { id, auth } = await makeProject('bc-draft@dive-turbinen.test');
     await writePolyMesh(id);
@@ -482,7 +525,8 @@ describe('POST /projects/:id/boundary-conditions/apply', () => {
     const omega = (await readCaseFile(id, '0/omega'))!.toString('utf8');
     expect(omega).toContain('turbulentMixingLengthFrequencyInlet'); // no omega column -> fallback
     const p = (await readCaseFile(id, '0/p'))!.toString('utf8');
-    expect(p).toContain('fixedMeanValue'); // draft-tube outlet tolerates the swirl
+    expect(p).toContain('fixedValue'); // single static-pressure anchor at the outlet
+    expect(p).not.toContain('fixedMeanValue');
     expect(res.body.result.notes.join(' ')).toMatch(/omega/);
   });
 
