@@ -1,4 +1,4 @@
-import { FolderKanban, Home, LayoutTemplate, Users, type LucideIcon } from 'lucide-react';
+import { Boxes, FolderKanban, Home, LayoutTemplate, Users, type LucideIcon } from 'lucide-react';
 import type { Role } from '@/lib/api/types';
 
 /**
@@ -21,6 +21,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Home', to: '/', icon: Home },
   { label: 'Projects', to: '/projects', icon: FolderKanban },
   { label: 'Templates', to: '/templates', icon: LayoutTemplate },
+  { label: 'Meshing', to: '/meshing', icon: Boxes },
   { label: 'Administration', to: '/admin', icon: Users, requiredRole: 'SUPER_ADMIN' },
 ];
 

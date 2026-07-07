@@ -28,6 +28,12 @@ const TemplatesPage = lazy(() =>
 const TemplateEditPage = lazy(() =>
   import('@/pages/TemplateEditPage').then((m) => ({ default: m.TemplateEditPage })),
 );
+const MeshingPage = lazy(() =>
+  import('@/pages/MeshingPage').then((m) => ({ default: m.MeshingPage })),
+);
+const MeshingSessionPage = lazy(() =>
+  import('@/pages/MeshingSessionPage').then((m) => ({ default: m.MeshingSessionPage })),
+);
 
 /**
  * router.tsx - application route tree.
@@ -63,6 +69,8 @@ export const router = createBrowserRouter([
       { path: 'projects/:id/edit', element: <ProjectEditPage /> },
       { path: 'templates', element: <TemplatesPage /> },
       { path: 'templates/:id/edit', element: <TemplateEditPage /> },
+      { path: 'meshing', element: <MeshingPage /> },
+      { path: 'meshing/:id', element: <MeshingSessionPage /> },
       { path: 'account', element: <AccountPage /> },
       {
         path: 'admin',

@@ -597,7 +597,13 @@ function buildEdgeGeometry(
   return null;
 }
 
-function MeshScene({
+/**
+ * MeshScene - the interactive three.js render of a set of boundary patches.
+ * Data-in / callbacks-out and independent of any project, so it is exported and
+ * reused verbatim by the Meshing result viewer (features/meshing) as well as the
+ * Visualize tab. Everything project-specific stays in the surrounding CanvasArea.
+ */
+export function MeshScene({
   geometry,
   edges,
   patches,

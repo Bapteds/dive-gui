@@ -769,3 +769,36 @@ export type {
   TurbulenceModelSpec,
   TurbulenceApproach,
 } from '@dive/shared';
+
+// ---- Meshing sessions (STL -> snappyHexMesh -> polyMesh) ----
+
+export {
+  DOMAIN_TYPES,
+  DEFAULT_SNAPPY_CONFIG,
+  STL_EXTENSION,
+} from '@dive/shared';
+export type {
+  DomainType,
+  MeshBounds,
+  SnappyConfig,
+  StlFile,
+  MeshingRun,
+  MeshingSession,
+  MeshingSessionSummary,
+} from '@dive/shared';
+
+/** `GET /meshing` — the session list. */
+export interface MeshingSessionsResponse {
+  sessions: import('@dive/shared').MeshingSessionSummary[];
+}
+
+/** `GET /meshing/:id`, `POST /meshing/:id/stl`, `DELETE …/stl` — a full session. */
+export interface MeshingSessionResponse {
+  session: import('@dive/shared').MeshingSession;
+}
+
+/** `POST /meshing/:id/run` — the refreshed session plus the per-step run report. */
+export interface RunSnappyResponse {
+  session: import('@dive/shared').MeshingSession;
+  result: MeshImportConversion;
+}
