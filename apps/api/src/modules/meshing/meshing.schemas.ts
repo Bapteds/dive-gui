@@ -24,26 +24,43 @@ export type StlNameQuery = z.infer<typeof stlNameQuerySchema>;
  * shared `SnappyConfig`. `baseCellSize` / `locationInMesh` null means "derive
  * from the STL bounds server-side"; `surfaceRefinement.max` must be >= min.
  */
+/** A refinement level range with min <= max. */
+const refinementSchema = z
+  .object({
+    min: z.number().int().min(0).max(10),
+    max: z.number().int().min(0).max(10),
+  })
+  .refine((r) => r.max >= r.min, {
+    message: 'The maximum refinement level must be >= the minimum',
+    path: ['max'],
+  });
+
 export const runSnappySchema = z.object({
   domainType: z.enum(DOMAIN_TYPES),
   baseCellSize: z.number().positive().nullable().default(null),
   marginFactor: z.number().min(0).max(10).default(0.1),
-  surfaceRefinement: z
-    .object({
-      min: z.number().int().min(0).max(10),
-      max: z.number().int().min(0).max(10),
-    })
-    .refine((r) => r.max >= r.min, {
-      message: 'The maximum refinement level must be >= the minimum',
-      path: ['max'],
-    }),
+  surfaceRefinement: refinementSchema,
+  // Per-surface overrides keyed by STL file name; each must also be min <= max.
+  surfaceRefinements: z.record(z.string(), refinementSchema).optional(),
   featureLevel: z.number().int().min(0).max(10).default(2),
   locationInMesh: z
     .tuple([z.number().finite(), z.number().finite(), z.number().finite()])
     .nullable()
     .default(null),
   addLayers: z
-    .object({ enabled: z.boolean(), nLayers: z.number().int().min(1).max(20) })
-    .default({ enabled: false, nLayers: 3 }),
+    .object({
+      enabled: z.boolean(),
+      nLayers: z.number().int().min(1).max(20),
+      relativeSizes: z.boolean().default(true),
+      finalLayerThickness: z.number().positive().default(0.5),
+      expansionRatio: z.number().min(1).max(5).default(1.2),
+    })
+    .default({
+      enabled: false,
+      nLayers: 3,
+      relativeSizes: true,
+      finalLayerThickness: 0.5,
+      expansionRatio: 1.2,
+    }),
 });
 export type RunSnappyInput = z.infer<typeof runSnappySchema>;

@@ -781,6 +781,8 @@ export type {
   DomainType,
   MeshBounds,
   SnappyConfig,
+  SurfaceRefinement,
+  AddLayersConfig,
   StlFile,
   MeshingRun,
   MeshingSession,

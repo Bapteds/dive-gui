@@ -837,20 +837,44 @@ export interface MeshBounds {
  * bounds server-side" (background cell ≈ bbox diagonal / 40; keep-point = the
  * bbox centre for internal, a background-box corner for external).
  */
+/** A surface refinement level range (min <= max). */
+export interface SurfaceRefinement {
+  min: number;
+  max: number;
+}
+
+/** Boundary-layer (prism) growth controls for the surfaces. */
+export interface AddLayersConfig {
+  enabled: boolean;
+  /** Number of prism layers grown on the surfaces. */
+  nLayers: number;
+  /**
+   * When true, `finalLayerThickness` is a fraction of the local cell size;
+   * when false it is an absolute length (metres). Maps to snappy `relativeSizes`.
+   */
+  relativeSizes: boolean;
+  /** Thickness of the layer nearest the surface (relative or absolute per `relativeSizes`). */
+  finalLayerThickness: number;
+  /** Growth ratio between successive layers (>= 1). */
+  expansionRatio: number;
+}
+
 export interface SnappyConfig {
   domainType: DomainType;
   /** Background (blockMesh) cell edge length in metres; null => derive from bounds. */
   baseCellSize: number | null;
   /** Background-box padding as a fraction of the STL bbox diagonal (e.g. 0.1). */
   marginFactor: number;
-  /** Surface refinement level range applied to every STL region (min <= max). */
-  surfaceRefinement: { min: number; max: number };
+  /** Default surface refinement applied to a region with no per-surface override. */
+  surfaceRefinement: SurfaceRefinement;
+  /** Per-surface refinement keyed by STL file name; falls back to `surfaceRefinement`. */
+  surfaceRefinements?: Record<string, SurfaceRefinement>;
   /** Feature-edge (eMesh) refinement level. */
   featureLevel: number;
   /** Explicit keep-point; null => derive from bounds + domainType. */
   locationInMesh: [number, number, number] | null;
-  /** Optional boundary-layer (prism) growth on the surfaces. */
-  addLayers: { enabled: boolean; nLayers: number };
+  /** Boundary-layer (prism) growth on the surfaces. */
+  addLayers: AddLayersConfig;
 }
 
 /** The auto/minimal defaults the config form starts from. */
@@ -861,7 +885,13 @@ export const DEFAULT_SNAPPY_CONFIG: SnappyConfig = {
   surfaceRefinement: { min: 1, max: 2 },
   featureLevel: 2,
   locationInMesh: null,
-  addLayers: { enabled: false, nLayers: 3 },
+  addLayers: {
+    enabled: false,
+    nLayers: 3,
+    relativeSizes: true,
+    finalLayerThickness: 0.5,
+    expansionRatio: 1.2,
+  },
 };
 
 /** One uploaded input surface of a meshing session. */

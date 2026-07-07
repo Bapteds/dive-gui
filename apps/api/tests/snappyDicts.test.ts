@@ -84,13 +84,40 @@ describe('dict renderers', () => {
     expect(dict).toContain('file "draft-tube.eMesh"');
   });
 
-  it('enables layers when requested', () => {
+  it('enables layers with the given options', () => {
     const dict = renderSnappyHexMeshDict(
       ['rotor.stl'],
       domain,
-      config({ addLayers: { enabled: true, nLayers: 4 } }),
+      config({
+        addLayers: {
+          enabled: true,
+          nLayers: 4,
+          relativeSizes: false,
+          finalLayerThickness: 0.3,
+          expansionRatio: 1.3,
+        },
+      }),
     );
     expect(dict).toContain('addLayers       true;');
     expect(dict).toContain('nSurfaceLayers 4;');
+    expect(dict).toContain('relativeSizes       false;');
+    expect(dict).toContain('finalLayerThickness 0.3;');
+    expect(dict).toContain('expansionRatio      1.3;');
+    // v2406 keyword is minMedialAxisAngle (not minMedianAxisAngle).
+    expect(dict).toContain('minMedialAxisAngle');
+    expect(dict).not.toContain('minMedianAxisAngle');
+  });
+
+  it('applies per-surface refinement overrides keyed by STL name', () => {
+    const dict = renderSnappyHexMeshDict(
+      ['rotor.stl', 'stator.stl'],
+      domain,
+      config({
+        surfaceRefinement: { min: 1, max: 2 },
+        surfaceRefinements: { 'rotor.stl': { min: 2, max: 4 }, 'stator.stl': { min: 0, max: 1 } },
+      }),
+    );
+    expect(dict).toContain('rotor { level (2 4); }');
+    expect(dict).toContain('stator { level (0 1); }');
   });
 });

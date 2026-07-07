@@ -164,11 +164,14 @@ export function MeshingSessionPage() {
         <StlViewer sessionId={id} stls={data.stls} />
       </section>
 
-      {/* snappyHexMesh configuration + run. */}
+      {/* snappyHexMesh configuration + run. Seeds from the last run so settings
+          (including a manual keep-point) persist across reloads. */}
       <SnappyConfigForm
+        stls={data.stls}
         bounds={data.bounds}
         disabled={data.stls.length === 0}
         running={running}
+        initialConfig={data.lastRun?.config ?? null}
         onGenerate={handleGenerate}
       />
 

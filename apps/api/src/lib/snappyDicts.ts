@@ -6,7 +6,16 @@
 // surfaceFeatureExtractDict, and the snappyHexMeshDict itself. Everything is a
 // pure function of the STL bounds + the user's SnappyConfig, so the whole set is
 // computed (and unit-tested) with no OpenFOAM toolchain present.
-import type { DomainType, MeshBounds, SnappyConfig } from '@dive/shared';
+import type { AddLayersConfig, DomainType, MeshBounds, SnappyConfig } from '@dive/shared';
+
+/**
+ * A sensible `minThickness` for the layer controls: a quarter of the final layer
+ * thickness. In relative mode that is a small fraction of the cell; in absolute
+ * mode a small length — either way below the layer that must be grown.
+ */
+function minLayerThickness(layers: AddLayersConfig): number {
+  return Math.max(layers.finalLayerThickness * 0.25, 1e-6);
+}
 
 /** Standard OpenFOAM dictionary banner + FoamFile header. */
 function foamHeader(className: string, object: string, location: string): string {
@@ -263,10 +272,11 @@ export function renderSnappyHexMeshDict(
     .map((r) => `        { file "${r.emesh}"; level ${config.featureLevel}; }`)
     .join('\n');
   const refinementSurfaces = regions
-    .map(
-      (r) =>
-        `        ${r.region} { level (${config.surfaceRefinement.min} ${config.surfaceRefinement.max}); }`,
-    )
+    .map((r) => {
+      // Per-surface refinement (keyed by the STL file name) overrides the default.
+      const level = config.surfaceRefinements?.[r.file] ?? config.surfaceRefinement;
+      return `        ${r.region} { level (${level.min} ${level.max}); }`;
+    })
     .join('\n');
   const layers = regions
     .map((r) => `        ${r.region} { nSurfaceLayers ${config.addLayers.nLayers}; }`)
@@ -322,14 +332,14 @@ snapControls
 
 addLayersControls
 {
-    relativeSizes       true;
+    relativeSizes       ${config.addLayers.relativeSizes ? 'true' : 'false'};
     layers
     {
 ${layers}
     }
-    expansionRatio      1.2;
-    finalLayerThickness 0.5;
-    minThickness        0.1;
+    expansionRatio      ${fmt(config.addLayers.expansionRatio)};
+    finalLayerThickness ${fmt(config.addLayers.finalLayerThickness)};
+    minThickness        ${fmt(minLayerThickness(config.addLayers))};
     nGrow               0;
     featureAngle        60;
     slipFeatureAngle    30;
@@ -339,7 +349,7 @@ ${layers}
     nSmoothThickness    10;
     maxFaceThicknessRatio 0.5;
     maxThicknessToMedialRatio 0.3;
-    minMedianAxisAngle  90;
+    minMedialAxisAngle  90;
     nBufferCellsNoExtrude 0;
     nLayerIter          50;
 }
