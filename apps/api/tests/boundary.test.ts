@@ -16,6 +16,7 @@ import {
   fieldBcBody,
   parseBoundaryPatchesWithTypes,
   renderDynamicMeshDict,
+  renderDynamicMeshDictFree,
   renderMrfProperties,
 } from '../src/lib/openfoamCase';
 
@@ -192,6 +193,30 @@ describe('renderMrfProperties / renderDynamicMeshDict', () => {
     expect(dyn).toContain('solidBodyMotionFunction  rotatingMotion;');
     expect(dyn).toContain('rotatingMotionCoeffs');
     expect(dyn).toMatch(/omega\s+62\.8319; \/\/ rad\/s/);
+  });
+
+  it('dynamicMeshDict (free): sixDoFRigidBodyMotion with mass, inertia, axis constraint, damper', () => {
+    const dyn = renderDynamicMeshDictFree({
+      patches: ['kaplan'],
+      axis: [0, 1, 0],
+      centreOfMass: [0, 0.45, 0],
+      mass: 0.11934,
+      momentOfInertia: [8.5e-4, 2.9e-4, 8.5e-4],
+      rhoInf: 1000,
+      innerDistance: 0.2,
+      outerDistance: 0.5,
+      damperCoeff: 0.85,
+    });
+    expect(dyn).toContain('dynamicFvMesh       dynamicMotionSolverFvMesh;');
+    expect(dyn).toContain('motionSolver        sixDoFRigidBodyMotion;');
+    expect(dyn).toContain('patches         (kaplan);');
+    expect(dyn).toContain('rhoInf          1000;');
+    expect(dyn).toContain('mass            0.11934;');
+    expect(dyn).toContain('momentOfInertia (0.00085 0.00029 0.00085);');
+    expect(dyn).toContain('sixDoFRigidBodyMotionConstraint axis;');
+    expect(dyn).toContain('axis    (0 1 0);');
+    expect(dyn).toContain('sphericalAngularDamper');
+    expect(dyn).toContain('coeff   0.85;');
   });
 });
 
@@ -395,6 +420,90 @@ describe('POST /projects/:id/boundary-conditions/apply', () => {
     expect(res.body.result.notes.some((n: string) => /pimpleFoam/.test(n))).toBe(true);
     // A moving rotor writes no MRF dictionary.
     expect(await readCaseFile(id, 'constant/MRFProperties')).toBeNull();
+  });
+
+  it('turbine free (fluid-driven) Moving Rotor writes a sixDoF dynamicMeshDict', async () => {
+    const { id, auth } = await makeProject('bc-free@dive-turbinen.test');
+    await writePolyMesh(id);
+    const res = await request(app)
+      .post(applyUrl(id))
+      .set('Authorization', auth)
+      .field(
+        'payload',
+        JSON.stringify({
+          objectType: 'turbine',
+          mode: 'pressure',
+          inlet: 'inlet',
+          outlet: 'outlet',
+          walls: ['wall1', 'wall2'],
+          values: { head: 50 },
+          rotor: {
+            mode: 'movingRotor',
+            cellZone: 'rotor',
+            origin: [0, 0, 0],
+            axis: [0, 0, 1],
+            omega: 0,
+            movingKind: 'free',
+            sixDof: {
+              patches: ['wall1'],
+              axis: [0, 0, 1],
+              centreOfMass: [0, 0, 0],
+              mass: 0.12,
+              momentOfInertia: [1e-3, 1e-3, 1e-3],
+              rhoInf: 1000,
+              innerDistance: 0.2,
+              outerDistance: 0.5,
+              damperCoeff: 0.85,
+            },
+          },
+        }),
+      );
+
+    expect(res.status).toBe(200);
+    expect(res.body.result.applied.rotor.movingKind).toBe('free');
+    const dyn = (await readCaseFile(id, 'constant/dynamicMeshDict'))!.toString('utf8');
+    expect(dyn).toContain('sixDoFRigidBodyMotion');
+    expect(dyn).toContain('patches         (wall1);');
+  });
+
+  it('rejects a free moving rotor whose moving patch is not in the mesh (422)', async () => {
+    const { id, auth } = await makeProject('bc-free-bad@dive-turbinen.test');
+    await writePolyMesh(id);
+    const res = await request(app)
+      .post(applyUrl(id))
+      .set('Authorization', auth)
+      .field(
+        'payload',
+        JSON.stringify({
+          objectType: 'turbine',
+          mode: 'pressure',
+          inlet: 'inlet',
+          outlet: 'outlet',
+          walls: ['wall1', 'wall2'],
+          values: { head: 50 },
+          rotor: {
+            mode: 'movingRotor',
+            cellZone: 'rotor',
+            origin: [0, 0, 0],
+            axis: [0, 0, 1],
+            omega: 0,
+            movingKind: 'free',
+            sixDof: {
+              patches: ['ghost'],
+              axis: [0, 0, 1],
+              centreOfMass: [0, 0, 0],
+              mass: 0.12,
+              momentOfInertia: [1e-3, 1e-3, 1e-3],
+              rhoInf: 1000,
+              innerDistance: 0.2,
+              outerDistance: 0.5,
+              damperCoeff: 0.85,
+            },
+          },
+        }),
+      );
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe('INVALID_BC_PLAN');
   });
 
   it('preserves a constraint leftover patch (symmetryPlane), not forcing it into a wall', async () => {

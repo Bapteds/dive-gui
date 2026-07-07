@@ -26,13 +26,17 @@ import {
   OBJECT_TYPE_LIBRARY,
   OBJECT_TYPE_MODES,
   OBJECT_TYPE_TURBULENCE,
+  MOVING_ROTOR_KIND_LIBRARY,
+  MOVING_ROTOR_KINDS,
   ROTOR_MODE_LIBRARY,
   ROTOR_MODES,
   type ApplyBoundaryConditionsRequest,
   type ApplyBoundaryConditionsResult,
   type DrivingMode,
   type ImportStep,
+  type MovingRotorKind,
   type ObjectType,
+  type RotorConfig,
   type RotorMode,
 } from '@dive/shared';
 import {
@@ -100,6 +104,30 @@ function toOmega(speed: string, unit: SpeedUnit): number {
   return unit === 'rpm' ? (n * Math.PI) / 30 : n;
 }
 
+/** Free (6-DoF) moving-rotor form state (strings; parsed on apply). */
+interface FreeParams {
+  patches: string[];
+  centreOfMass: [string, string, string];
+  mass: string;
+  inertia: [string, string, string];
+  rhoInf: string;
+  innerDistance: string;
+  outerDistance: string;
+  damperCoeff: string;
+}
+
+/** Defaults for the free-rotor form: water density, template morphing distances/damper. */
+const FREE_DEFAULTS: FreeParams = {
+  patches: [],
+  centreOfMass: ['0', '0', '0'],
+  mass: '',
+  inertia: ['', '', ''],
+  rhoInf: '1000',
+  innerDistance: '0.2',
+  outerDistance: '0.5',
+  damperCoeff: '0.85',
+};
+
 /** Format a number without trailing float noise (490.5, not 490.500001). */
 function fmt(value: number): string {
   return String(Number(value.toFixed(4)));
@@ -143,12 +171,14 @@ export function BoundaryConditionDialog({ projectId, onClose }: BoundaryConditio
   // Turbine rotor (rotating region). Sensible defaults: a Frozen Rotor (MRF) about
   // the z-axis through the origin, in a cell zone named "rotor".
   const [rotorMode, setRotorMode] = useState<RotorMode>('frozenRotor');
+  const [movingKind, setMovingKind] = useState<MovingRotorKind>('forced');
   const [cellZone, setCellZone] = useState('rotor');
   const [speed, setSpeed] = useState('');
   const [speedUnit, setSpeedUnit] = useState<SpeedUnit>('rpm');
   const [axis, setAxis] = useState<[string, string, string]>(['0', '0', '1']);
   const [origin, setOrigin] = useState<[string, string, string]>(['0', '0', '0']);
   const [nonRotatingPatches, setNonRotatingPatches] = useState<string[]>([]);
+  const [free, setFree] = useState<FreeParams>(FREE_DEFAULTS);
   const [result, setResult] = useState<ApplyBoundaryConditionsResult | null>(null);
 
   const manifest = useMeshManifestQuery(projectId);
@@ -207,7 +237,7 @@ export function BoundaryConditionDialog({ projectId, onClose }: BoundaryConditio
     // Turbine: attach the rotor (Frozen Rotor -> MRFProperties, Moving Rotor ->
     // dynamicMeshDict). nonRotatingPatches only apply to the MRF path.
     if (isTurbine) {
-      request.rotor = {
+      const rotor: RotorConfig = {
         mode: rotorMode,
         cellZone: cellZone.trim() || 'rotor',
         origin: origin.map(Number) as [number, number, number],
@@ -215,6 +245,23 @@ export function BoundaryConditionDialog({ projectId, onClose }: BoundaryConditio
         omega: toOmega(speed, speedUnit),
         nonRotatingPatches: rotorMode === 'frozenRotor' ? nonRotatingPatches : [],
       };
+      if (rotorMode === 'movingRotor') {
+        rotor.movingKind = movingKind;
+        if (movingKind === 'free') {
+          rotor.sixDof = {
+            patches: free.patches,
+            axis: axis.map(Number) as [number, number, number],
+            centreOfMass: free.centreOfMass.map(Number) as [number, number, number],
+            mass: Number(free.mass),
+            momentOfInertia: free.inertia.map(Number) as [number, number, number],
+            rhoInf: Number(free.rhoInf),
+            innerDistance: Number(free.innerDistance),
+            outerDistance: Number(free.outerDistance),
+            damperCoeff: Number(free.damperCoeff),
+          };
+        }
+      }
+      request.rotor = rotor;
     }
 
     setResult(null);
@@ -273,6 +320,7 @@ export function BoundaryConditionDialog({ projectId, onClose }: BoundaryConditio
       {step === 'rotor' && isTurbine && (
         <RotorStep
           rotorMode={rotorMode}
+          movingKind={movingKind}
           cellZone={cellZone}
           speed={speed}
           speedUnit={speedUnit}
@@ -280,13 +328,16 @@ export function BoundaryConditionDialog({ projectId, onClose }: BoundaryConditio
           origin={origin}
           wallNames={wallNames}
           nonRotatingPatches={nonRotatingPatches}
+          free={free}
           onRotorModeChange={setRotorMode}
+          onMovingKindChange={setMovingKind}
           onCellZoneChange={setCellZone}
           onSpeedChange={setSpeed}
           onSpeedUnitChange={setSpeedUnit}
           onAxisChange={setAxis}
           onOriginChange={setOrigin}
           onNonRotatingPatchesChange={setNonRotatingPatches}
+          onFreeChange={(patch) => setFree((current) => ({ ...current, ...patch }))}
           onBack={() => setStep('patches')}
           onContinue={() => setStep('values')}
         />
@@ -749,9 +800,58 @@ function VectorField({
   );
 }
 
+/** A wrap of patch names as toggleable checkbox chips (blue when selected). */
+function PatchCheckboxChips({
+  names,
+  selected,
+  onToggle,
+  emptyText,
+}: {
+  names: string[];
+  selected: string[];
+  onToggle: (name: string) => void;
+  emptyText: string;
+}) {
+  if (names.length === 0) {
+    return <p className="text-xs text-text-secondary">{emptyText}</p>;
+  }
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {names.map((name) => {
+        const on = selected.includes(name);
+        return (
+          <label
+            key={name}
+            className={cn(
+              'inline-flex cursor-pointer items-center gap-1.5 rounded-sm border px-2 py-1 font-mono text-xs transition-colors duration-fast ease-out',
+              'focus-within:outline-none focus-within:ring-2 focus-within:ring-focus-ring',
+              on ? 'border-primary bg-primary-tint text-primary' : 'border-border text-text-secondary hover:bg-bg',
+            )}
+            translate="no"
+          >
+            <input
+              type="checkbox"
+              checked={on}
+              onChange={() => onToggle(name)}
+              className="size-3.5 accent-primary"
+            />
+            {name}
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+const MOVING_KIND_ICON: Record<MovingRotorKind, LucideIcon> = {
+  forced: RotateCw,
+  free: Waves,
+};
+
 /** Step 3b (turbine only) - the rotating region: MRF vs moving mesh + rotation. */
 function RotorStep({
   rotorMode,
+  movingKind,
   cellZone,
   speed,
   speedUnit,
@@ -759,17 +859,21 @@ function RotorStep({
   origin,
   wallNames,
   nonRotatingPatches,
+  free,
   onRotorModeChange,
+  onMovingKindChange,
   onCellZoneChange,
   onSpeedChange,
   onSpeedUnitChange,
   onAxisChange,
   onOriginChange,
   onNonRotatingPatchesChange,
+  onFreeChange,
   onBack,
   onContinue,
 }: {
   rotorMode: RotorMode;
+  movingKind: MovingRotorKind;
   cellZone: string;
   speed: string;
   speedUnit: SpeedUnit;
@@ -777,35 +881,43 @@ function RotorStep({
   origin: [string, string, string];
   wallNames: string[];
   nonRotatingPatches: string[];
+  free: FreeParams;
   onRotorModeChange: (mode: RotorMode) => void;
+  onMovingKindChange: (kind: MovingRotorKind) => void;
   onCellZoneChange: (value: string) => void;
   onSpeedChange: (value: string) => void;
   onSpeedUnitChange: (unit: SpeedUnit) => void;
   onAxisChange: (value: [string, string, string]) => void;
   onOriginChange: (value: [string, string, string]) => void;
   onNonRotatingPatchesChange: (value: string[]) => void;
+  onFreeChange: (patch: Partial<FreeParams>) => void;
   onBack: () => void;
   onContinue: () => void;
 }) {
+  const isFrozen = rotorMode === 'frozenRotor';
+  const isMoving = rotorMode === 'movingRotor';
+  const isFree = isMoving && movingKind === 'free';
+  const solidBody = isFrozen || (isMoving && movingKind === 'forced');
+
   const omega = toOmega(speed, speedUnit);
   const axisIsZero = axis.every((component) => Number(component) === 0);
-  const ready = cellZone.trim().length > 0 && Number(speed) > 0 && !axisIsZero;
+  const inertiaOk = free.inertia.every((value) => Number(value) > 0);
+  const ready =
+    !axisIsZero &&
+    (isFree
+      ? free.patches.length > 0 && Number(free.mass) > 0 && inertiaOk
+      : cellZone.trim().length > 0 && Number(speed) > 0);
 
-  const toggleNonRotating = (name: string) => {
-    onNonRotatingPatchesChange(
-      nonRotatingPatches.includes(name)
-        ? nonRotatingPatches.filter((patch) => patch !== name)
-        : [...nonRotatingPatches, name],
-    );
-  };
+  const toggleInList = (list: string[], name: string) =>
+    list.includes(name) ? list.filter((patch) => patch !== name) : [...list, name];
 
   return (
     <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto overscroll-contain">
       <DialogHeader>
         <DialogTitle>Rotor model</DialogTitle>
         <DialogDescription>
-          Choose how the turbine&rsquo;s rotating region is handled, then set its cell zone and
-          rotation. This writes the{' '}
+          Choose how the turbine&rsquo;s rotating region is handled, then set the rotation. This
+          writes the{' '}
           <code className="font-mono text-[0.8125rem]" translate="no">
             {ROTOR_MODE_LIBRARY[rotorMode].file}
           </code>{' '}
@@ -835,132 +947,225 @@ function RotorStep({
           </div>
         </fieldset>
 
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor="rotor-cellzone" className="text-xs font-medium text-text-secondary">
-            Rotor cell zone
-          </label>
-          <Input
-            id="rotor-cellzone"
-            type="text"
-            autoComplete="off"
-            spellCheck={false}
-            translate="no"
-            value={cellZone}
-            onChange={(event) => onCellZoneChange(event.currentTarget.value)}
-            aria-describedby="rotor-cellzone-help"
-            className="font-mono"
-          />
-          <p id="rotor-cellzone-help" className="text-xs text-text-secondary">
-            The mesh cell zone that rotates. It must exist in{' '}
-            <code className="font-mono" translate="no">
-              constant/polyMesh/cellZones
-            </code>{' '}
-            (create it with topoSet if needed).
-          </p>
-        </div>
+        {/* Moving rotor: forced (imposed omega) vs free (fluid-driven 6-DoF). */}
+        {isMoving && (
+          <fieldset className="min-w-0">
+            <legend className="mb-1.5 text-xs font-medium text-text-secondary">Rotation drive</legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {MOVING_ROTOR_KINDS.map((id) => {
+                const info = MOVING_ROTOR_KIND_LIBRARY[id];
+                return (
+                  <OptionCard
+                    key={id}
+                    name="movingKind"
+                    value={id}
+                    checked={movingKind === id}
+                    icon={MOVING_KIND_ICON[id]}
+                    label={info.label}
+                    description={info.summary}
+                    onSelect={() => onMovingKindChange(id)}
+                  />
+                );
+              })}
+            </div>
+          </fieldset>
+        )}
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="rotor-speed" className="text-xs font-medium text-text-secondary">
-              Rotational speed
-            </label>
-            <div className="flex items-stretch gap-2">
+        {/* Solid-body rotation (Frozen Rotor, or a forced Moving Rotor). */}
+        {solidBody && (
+          <>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="rotor-cellzone" className="text-xs font-medium text-text-secondary">
+                Rotor cell zone
+              </label>
               <Input
-                id="rotor-speed"
-                type="number"
-                inputMode="decimal"
-                min="0"
-                step="any"
+                id="rotor-cellzone"
+                type="text"
                 autoComplete="off"
-                value={speed}
-                onChange={(event) => onSpeedChange(event.currentTarget.value)}
-                aria-describedby="rotor-speed-help"
-                className="font-mono tabular-nums"
+                spellCheck={false}
+                translate="no"
+                value={cellZone}
+                onChange={(event) => onCellZoneChange(event.currentTarget.value)}
+                aria-describedby="rotor-cellzone-help"
+                className="font-mono"
               />
-              <div
-                role="group"
-                aria-label="Speed unit"
-                className="inline-flex shrink-0 items-center rounded-md border border-border bg-bg p-0.5"
-              >
-                {(['rpm', 'radps'] as const).map((unit) => (
-                  <button
-                    key={unit}
-                    type="button"
-                    aria-pressed={speedUnit === unit}
-                    onClick={() => onSpeedUnitChange(unit)}
-                    className={cn(
-                      'rounded-[6px] px-2.5 py-1 text-xs font-medium transition-colors duration-fast ease-out',
-                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring',
-                      speedUnit === unit
-                        ? 'bg-surface text-primary shadow-sm'
-                        : 'text-text-secondary hover:text-text',
-                    )}
+              <p id="rotor-cellzone-help" className="text-xs text-text-secondary">
+                The mesh cell zone that rotates. It must exist in{' '}
+                <code className="font-mono" translate="no">
+                  constant/polyMesh/cellZones
+                </code>{' '}
+                (create it with topoSet if needed).
+              </p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="rotor-speed" className="text-xs font-medium text-text-secondary">
+                  Rotational speed
+                </label>
+                <div className="flex items-stretch gap-2">
+                  <Input
+                    id="rotor-speed"
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    step="any"
+                    autoComplete="off"
+                    value={speed}
+                    onChange={(event) => onSpeedChange(event.currentTarget.value)}
+                    aria-describedby="rotor-speed-help"
+                    className="font-mono tabular-nums"
+                  />
+                  <div
+                    role="group"
+                    aria-label="Speed unit"
+                    className="inline-flex shrink-0 items-center rounded-md border border-border bg-bg p-0.5"
                   >
-                    {unit === 'rpm' ? 'rpm' : 'rad/s'}
-                  </button>
-                ))}
+                    {(['rpm', 'radps'] as const).map((unit) => (
+                      <button
+                        key={unit}
+                        type="button"
+                        aria-pressed={speedUnit === unit}
+                        onClick={() => onSpeedUnitChange(unit)}
+                        className={cn(
+                          'rounded-[6px] px-2.5 py-1 text-xs font-medium transition-colors duration-fast ease-out',
+                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring',
+                          speedUnit === unit
+                            ? 'bg-surface text-primary shadow-sm'
+                            : 'text-text-secondary hover:text-text',
+                        )}
+                      >
+                        {unit === 'rpm' ? 'rpm' : 'rad/s'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <p id="rotor-speed-help" className="text-xs text-text-secondary">
+                  omega = {fmt(omega)} rad/s{speedUnit === 'rpm' && ' (written to the file)'}
+                </p>
               </div>
             </div>
-            <p id="rotor-speed-help" className="text-xs text-text-secondary">
-              omega = {fmt(omega)} rad/s{speedUnit === 'rpm' && ' (written to the file)'}
-            </p>
-          </div>
-        </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <VectorField
-            label="Rotation axis"
-            value={axis}
-            onChange={onAxisChange}
-            helper="Direction of the axis, e.g. (0 0 1) for z."
-          />
-          <VectorField
-            label="Axis origin"
-            value={origin}
-            onChange={onOriginChange}
-            helper="Any point on the axis, in metres."
-          />
-        </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <VectorField
+                label="Rotation axis"
+                value={axis}
+                onChange={onAxisChange}
+                helper="Direction of the axis, e.g. (0 0 1) for z."
+              />
+              <VectorField
+                label="Axis origin"
+                value={origin}
+                onChange={onOriginChange}
+                helper="Any point on the axis, in metres."
+              />
+            </div>
+          </>
+        )}
 
-        {rotorMode === 'frozenRotor' ? (
+        {/* Free 6-DoF rotation (fluid-driven): mass + inertia, no cell zone / omega. */}
+        {isFree && (
+          <>
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-text-secondary">
+                Moving patches ({free.patches.length})
+              </span>
+              <PatchCheckboxChips
+                names={wallNames}
+                selected={free.patches}
+                onToggle={(name) => onFreeChange({ patches: toggleInList(free.patches, name) })}
+                emptyText="No wall patches to form the rigid body."
+              />
+              <p className="text-xs text-text-secondary">
+                The wall patch(es) that make up the spinning body (e.g. the runner blades).
+              </p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <VectorField
+                label="Rotation axis"
+                value={axis}
+                onChange={onAxisChange}
+                helper="The body is free to rotate only about this axis."
+              />
+              <VectorField
+                label="Centre of rotation"
+                value={free.centreOfMass}
+                onChange={(value) => onFreeChange({ centreOfMass: value })}
+                helper="Centre of mass = the fixed point, in metres."
+              />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <NumberField
+                id="free-mass"
+                label="Mass"
+                unit="kg"
+                value={free.mass}
+                onChange={(value) => onFreeChange({ mass: value })}
+              />
+              <NumberField
+                id="free-rhoinf"
+                label="Fluid density (rhoInf)"
+                unit="kg/m3"
+                value={free.rhoInf}
+                onChange={(value) => onFreeChange({ rhoInf: value })}
+                helper="Water ~ 1000."
+              />
+            </div>
+
+            <VectorField
+              label="Moment of inertia [kg m2]"
+              value={free.inertia}
+              onChange={(value) => onFreeChange({ inertia: value })}
+              helper="About (x, y, z); all three must be positive."
+            />
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <NumberField
+                id="free-inner"
+                label="Inner distance"
+                unit="m"
+                value={free.innerDistance}
+                onChange={(value) => onFreeChange({ innerDistance: value })}
+              />
+              <NumberField
+                id="free-outer"
+                label="Outer distance"
+                unit="m"
+                value={free.outerDistance}
+                onChange={(value) => onFreeChange({ outerDistance: value })}
+              />
+              <NumberField
+                id="free-damper"
+                label="Angular damper"
+                value={free.damperCoeff}
+                onChange={(value) => onFreeChange({ damperCoeff: value })}
+                helper="N m s/rad."
+              />
+            </div>
+          </>
+        )}
+
+        {isFrozen && (
           <div className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-text-secondary">
               Non-rotating patches ({nonRotatingPatches.length})
             </span>
-            {wallNames.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5">
-                {wallNames.map((name) => {
-                  const on = nonRotatingPatches.includes(name);
-                  return (
-                    <label
-                      key={name}
-                      className={cn(
-                        'inline-flex cursor-pointer items-center gap-1.5 rounded-sm border px-2 py-1 font-mono text-xs transition-colors duration-fast ease-out',
-                        'focus-within:outline-none focus-within:ring-2 focus-within:ring-focus-ring',
-                        on ? 'border-primary bg-primary-tint text-primary' : 'border-border text-text-secondary hover:bg-bg',
-                      )}
-                      translate="no"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={on}
-                        onChange={() => toggleNonRotating(name)}
-                        className="size-3.5 accent-primary"
-                      />
-                      {name}
-                    </label>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="text-xs text-text-secondary">No wall patches to hold stationary.</p>
-            )}
+            <PatchCheckboxChips
+              names={wallNames}
+              selected={nonRotatingPatches}
+              onToggle={(name) => onNonRotatingPatchesChange(toggleInList(nonRotatingPatches, name))}
+              emptyText="No wall patches to hold stationary."
+            />
             <p className="text-xs text-text-secondary">
               Walls inside the zone that stay still (e.g. the casing). Leave empty if the whole zone
               rotates.
             </p>
           </div>
-        ) : (
+        )}
+
+        {isMoving && (
           <div className="flex items-start gap-2 rounded-md border border-accent/40 bg-accent-tint px-3 py-2.5">
             <Diamond size={10} className="mt-1 text-accent" />
             <p className="text-xs text-text">
@@ -1223,9 +1428,20 @@ function RunStep({
         )}
         {applied.rotor && (
           <>
-            <SummaryRow term="Rotor" value={ROTOR_MODE_LIBRARY[applied.rotor.mode].label} />
-            <SummaryRow term="Cell zone" value={applied.rotor.cellZone} mono />
-            <SummaryRow term="Rotation omega" value={`${fmt(applied.rotor.omega)} rad/s`} />
+            <SummaryRow
+              term="Rotor"
+              value={
+                applied.rotor.movingKind
+                  ? `${ROTOR_MODE_LIBRARY[applied.rotor.mode].label} (${MOVING_ROTOR_KIND_LIBRARY[applied.rotor.movingKind].label})`
+                  : ROTOR_MODE_LIBRARY[applied.rotor.mode].label
+              }
+            />
+            {applied.rotor.movingKind !== 'free' && (
+              <>
+                <SummaryRow term="Cell zone" value={applied.rotor.cellZone} mono />
+                <SummaryRow term="Rotation omega" value={`${fmt(applied.rotor.omega)} rad/s`} />
+              </>
+            )}
           </>
         )}
       </dl>

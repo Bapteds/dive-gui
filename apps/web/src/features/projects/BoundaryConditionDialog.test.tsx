@@ -117,6 +117,47 @@ describe('BoundaryConditionDialog', () => {
     expect(await screen.findByText('Boundary conditions applied')).toBeInTheDocument();
   });
 
+  it('turbine free Moving Rotor posts the sixDoF block (moving -> free -> patches + mass + inertia)', async () => {
+    renderDialog();
+
+    const typeRadios = await screen.findAllByRole('radio');
+    fireEvent.click(typeRadios[0]); // turbine
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+    // Patches step -> rotor step.
+    expect(await screen.findByText('Assign the boundary patches')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: /continue/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+    // Rotor step: pick Moving Rotor, then the Free (fluid-driven) sub-kind.
+    expect(await screen.findByText('Rotor model')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: /moving rotor/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /free/i }));
+
+    // Moving patch (shroud), mass and the three inertia components.
+    fireEvent.click(screen.getByRole('checkbox', { name: 'shroud' }));
+    fireEvent.change(screen.getByLabelText(/^mass/i), { target: { value: '0.12' } });
+    fireEvent.change(screen.getByLabelText(/moment of inertia.*x/i), { target: { value: '0.001' } });
+    fireEvent.change(screen.getByLabelText(/moment of inertia.*y/i), { target: { value: '0.001' } });
+    fireEvent.change(screen.getByLabelText(/moment of inertia.*z/i), { target: { value: '0.001' } });
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+    // Values -> apply.
+    expect(await screen.findByText('Operating point')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/net head/i), { target: { value: '50' } });
+    fireEvent.click(screen.getByRole('button', { name: /apply boundary conditions/i }));
+
+    await waitFor(() => expect(boundaryApi.applyBoundaryConditions).toHaveBeenCalled());
+    const [, request] = vi.mocked(boundaryApi.applyBoundaryConditions).mock.calls[0];
+    expect(request.rotor?.mode).toBe('movingRotor');
+    expect(request.rotor?.movingKind).toBe('free');
+    expect(request.rotor?.sixDof).toMatchObject({
+      patches: ['shroud'],
+      mass: 0.12,
+      momentOfInertia: [0.001, 0.001, 0.001],
+    });
+  });
+
   it('shows the driving-mode step for a pipe (two modes)', async () => {
     renderDialog();
 

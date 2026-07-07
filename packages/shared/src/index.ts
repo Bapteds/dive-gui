@@ -404,12 +404,71 @@ export const ROTOR_MODE_LIBRARY: Record<RotorMode, RotorModeInfo> = {
 };
 
 /**
+ * A moving rotor is either driven at an imposed speed ('forced', solidBodyMotion /
+ * rotatingMotion) or spins freely under the flow forces ('free', a 6-DoF rigid
+ * body). Only meaningful when the rotor mode is 'movingRotor'.
+ */
+export const MOVING_ROTOR_KINDS = ['forced', 'free'] as const;
+export type MovingRotorKind = (typeof MOVING_ROTOR_KINDS)[number];
+
+/** Display metadata for a moving-rotor sub-kind (forced vs free). */
+export interface MovingRotorKindInfo {
+  id: MovingRotorKind;
+  label: string;
+  summary: string;
+}
+
+export const MOVING_ROTOR_KIND_LIBRARY: Record<MovingRotorKind, MovingRotorKindInfo> = {
+  forced: {
+    id: 'forced',
+    label: 'Forced rotation',
+    summary:
+      'The rotor spins at an imposed constant speed (omega). solidBodyMotionFvMesh + rotatingMotion.',
+  },
+  free: {
+    id: 'free',
+    label: 'Free (fluid-driven)',
+    summary:
+      'The rotor spins freely under the flow forces: a 6-DoF rigid body about one axis. Needs mass and inertia.',
+  },
+};
+
+/**
+ * Free (6-DoF) rotor parameters, used when a moving rotor is fluid-driven
+ * (movingKind === 'free'). Mirrors documents/dynamicMeshDict.notforced: the moving
+ * wall `patches` form a rigid body constrained to rotate about `axis` through its
+ * `centreOfMass` (the fixed point), with `mass` and `momentOfInertia`, morphing
+ * between `innerDistance`/`outerDistance`, an `rhoInf` density and an angular damper.
+ */
+export interface SixDofRotorConfig {
+  /** The moving wall patch(es) that form the rigid body (e.g. the runner blades). */
+  patches: string[];
+  /** Free rotation axis (the sixDoF `axis` constraint). */
+  axis: [number, number, number];
+  /** Centre of mass = centre of rotation (the fixed point). */
+  centreOfMass: [number, number, number];
+  /** Rigid-body mass [kg]. */
+  mass: number;
+  /** Moment of inertia [kg m^2] about (x, y, z). */
+  momentOfInertia: [number, number, number];
+  /** Fluid density for the incompressible rhoInf handling [kg/m^3]. */
+  rhoInf: number;
+  /** Inner morphing distance (solid-body region limit) [m]. */
+  innerDistance: number;
+  /** Outer morphing distance (interpolation region limit) [m]. */
+  outerDistance: number;
+  /** Spherical angular damper coefficient [N m s/rad]. */
+  damperCoeff: number;
+}
+
+/**
  * The rotation setup for a turbine's rotor. `omega` is the angular velocity in
  * rad/s (the UI may collect rpm and convert). `origin` is any point on the axis of
  * rotation; `axis` is its direction (need not be a unit vector). `cellZone` is the
  * mesh cell zone that rotates. For frozenRotor, `nonRotatingPatches` lists patches
  * inside that zone that stay stationary (e.g. the casing walls); it is ignored for
- * movingRotor.
+ * movingRotor. For a movingRotor, `movingKind` picks forced (imposed omega) vs free
+ * (6-DoF, `sixDof` required); it defaults to 'forced'.
  */
 export interface RotorConfig {
   mode: RotorMode;
@@ -418,6 +477,10 @@ export interface RotorConfig {
   axis: [number, number, number];
   omega: number;
   nonRotatingPatches?: string[];
+  /** Moving-rotor sub-kind: imposed speed ('forced', default) or fluid-driven ('free'). */
+  movingKind?: MovingRotorKind;
+  /** 6-DoF parameters, required when mode === 'movingRotor' && movingKind === 'free'. */
+  sixDof?: SixDofRotorConfig;
 }
 
 /**
@@ -442,10 +505,12 @@ export interface ApplyBoundaryConditionsRequest {
 export interface AppliedRotor {
   mode: RotorMode;
   cellZone: string;
-  /** Angular velocity written, in rad/s. */
+  /** Angular velocity written, in rad/s (0 for a free/fluid-driven moving rotor). */
   omega: number;
   /** The constant/ file written (MRFProperties or dynamicMeshDict). */
   file: string;
+  /** For a moving rotor: forced (imposed omega) vs free (6-DoF). */
+  movingKind?: MovingRotorKind;
 }
 
 /** What the apply actually wrote, echoed back for the UI summary. */

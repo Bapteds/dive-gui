@@ -1592,6 +1592,104 @@ solidBodyMotionFvMeshCoeffs
 ${FOAM_FOOTER}`;
 }
 
+/** Free (6-DoF) moving-rotor parameters (fluid-driven rotation). */
+export interface SixDofRotorOptions {
+  patches: readonly string[];
+  axis: readonly [number, number, number];
+  centreOfMass: readonly [number, number, number];
+  mass: number;
+  momentOfInertia: readonly [number, number, number];
+  rhoInf: number;
+  innerDistance: number;
+  outerDistance: number;
+  damperCoeff: number;
+}
+
+/**
+ * constant/dynamicMeshDict for a FREE (fluid-driven) Moving Rotor: a 6-DoF rigid
+ * body that spins under the flow forces, constrained to rotate about a single
+ * `axis` through its `centreOfMass` (the fixed point). Mirrors the ESI v2412
+ * template documents/dynamicMeshDict.notforced (dynamicMotionSolverFvMesh +
+ * sixDoFRigidBodyMotion). Orientation / velocity / torque start from rest. Requires
+ * a transient solver (pimpleFoam) and a cyclicAMI interface.
+ */
+export function renderDynamicMeshDictFree(opts: SixDofRotorOptions): string {
+  const centre = fmtFoamVector(opts.centreOfMass);
+  return `${foamHeader('dictionary', 'dynamicMeshDict', 'constant')}
+// Free (fluid-driven) Moving Rotor: a 6-DoF rigid body that spins under the flow
+// forces, constrained to rotate about one axis through its centre of mass. Needs a
+// transient solver (e.g. pimpleFoam) and a cyclicAMI interface. Orientation,
+// velocity and torque start from rest.
+dynamicFvMesh       dynamicMotionSolverFvMesh;
+
+motionSolverLibs    (sixDoFRigidBodyMotion);
+
+motionSolver        sixDoFRigidBodyMotion;
+
+// Moving wall patch(es) that form the rigid body.
+patches         (${opts.patches.join(' ')});
+
+// Morphing distances: solid-body region, then linear interpolation region [m].
+innerDistance   ${fmtFoamNumber(opts.innerDistance)};
+outerDistance   ${fmtFoamNumber(opts.outerDistance)};
+
+// Incompressible density handling [kg/m^3].
+rho             rhoInf;
+rhoInf          ${fmtFoamNumber(opts.rhoInf)};
+
+mass            ${fmtFoamNumber(opts.mass)};
+momentOfInertia ${fmtFoamVector(opts.momentOfInertia)};
+centreOfMass    ${centre};
+
+orientation
+(
+    1 0 0
+    0 1 0
+    0 0 1
+);
+
+velocity        (0 0 0);
+acceleration    (0 0 0);
+angularMomentum (0 0 0);
+torque          (0 0 0);
+
+report          on;
+accelerationRelaxation 0.9;
+
+solver
+{
+    type    Newmark;
+}
+
+constraints
+{
+    // Rotation only about this axis.
+    rotationAxis
+    {
+        sixDoFRigidBodyMotionConstraint axis;
+        axis    ${fmtFoamVector(opts.axis)};
+    }
+
+    // Fix the centre of rotation (translation fully constrained).
+    fixedPoint
+    {
+        sixDoFRigidBodyMotionConstraint point;
+        point   ${centre};
+    }
+}
+
+restraints
+{
+    // Angular damper, acts against motion like friction [N m s/rad].
+    angularDamper
+    {
+        sixDoFRigidBodyMotionRestraint  sphericalAngularDamper;
+        coeff   ${fmtFoamNumber(opts.damperCoeff)};
+    }
+}
+${FOAM_FOOTER}`;
+}
+
 /**
  * Read the solver name from a controlDict's `application` keyword, or null when
  * absent/unparseable. Tolerant: ignores comments before the keyword.

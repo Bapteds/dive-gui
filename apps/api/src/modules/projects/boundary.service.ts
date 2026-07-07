@@ -33,6 +33,7 @@ import {
   parseBoundaryPatchesWithTypes,
   parseTurbulenceModel,
   renderDynamicMeshDict,
+  renderDynamicMeshDictFree,
   renderMrfProperties,
   setBoundaryPatchType,
   setFieldPatchBc,
@@ -260,22 +261,58 @@ export async function applyBoundaryConditions(
         file: 'constant/MRFProperties',
       };
     } else {
-      await writeCaseFile(
-        projectId,
-        'constant/dynamicMeshDict',
-        renderDynamicMeshDict({
+      const movingKind = rotor.movingKind ?? 'forced';
+      if (movingKind === 'free' && rotor.sixDof) {
+        for (const patch of rotor.sixDof.patches) {
+          if (!patchNames.includes(patch)) {
+            throw new AppError(
+              422,
+              'INVALID_BC_PLAN',
+              `Moving patch "${patch}" was not found in the mesh.`,
+            );
+          }
+        }
+        await writeCaseFile(
+          projectId,
+          'constant/dynamicMeshDict',
+          renderDynamicMeshDictFree({
+            patches: rotor.sixDof.patches,
+            axis: rotor.sixDof.axis,
+            centreOfMass: rotor.sixDof.centreOfMass,
+            mass: rotor.sixDof.mass,
+            momentOfInertia: rotor.sixDof.momentOfInertia,
+            rhoInf: rotor.sixDof.rhoInf,
+            innerDistance: rotor.sixDof.innerDistance,
+            outerDistance: rotor.sixDof.outerDistance,
+            damperCoeff: rotor.sixDof.damperCoeff,
+          }),
+        );
+        appliedRotor = {
+          mode: rotor.mode,
           cellZone: rotor.cellZone,
-          origin: rotor.origin,
-          axis: rotor.axis,
+          omega: 0,
+          file: 'constant/dynamicMeshDict',
+          movingKind: 'free',
+        };
+      } else {
+        await writeCaseFile(
+          projectId,
+          'constant/dynamicMeshDict',
+          renderDynamicMeshDict({
+            cellZone: rotor.cellZone,
+            origin: rotor.origin,
+            axis: rotor.axis,
+            omega: rotor.omega,
+          }),
+        );
+        appliedRotor = {
+          mode: rotor.mode,
+          cellZone: rotor.cellZone,
           omega: rotor.omega,
-        }),
-      );
-      appliedRotor = {
-        mode: rotor.mode,
-        cellZone: rotor.cellZone,
-        omega: rotor.omega,
-        file: 'constant/dynamicMeshDict',
-      };
+          file: 'constant/dynamicMeshDict',
+          movingKind: 'forced',
+        };
+      }
       notes.push(
         'Moving Rotor wrote constant/dynamicMeshDict, but it needs a transient solver: set the solver to pimpleFoam in the Solver tab and make the rotor interface a cyclicAMI couple, otherwise the run will not rotate.',
       );

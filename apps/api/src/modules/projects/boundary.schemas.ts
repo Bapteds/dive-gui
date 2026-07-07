@@ -3,7 +3,7 @@
 // mode-vs-type, value-required-per-mode) live in boundary.service, which throws
 // INVALID_BC_PLAN / BC_CSV_REQUIRED with an actionable message.
 import { z } from 'zod';
-import { DRIVING_MODES, OBJECT_TYPES, ROTOR_MODES } from '@dive/shared';
+import { DRIVING_MODES, MOVING_ROTOR_KINDS, OBJECT_TYPES, ROTOR_MODES } from '@dive/shared';
 
 /** Operating-point values collected by the overlay (all strictly positive). */
 export const boundaryConditionValuesSchema = z.object({
@@ -20,22 +20,49 @@ const vector3Schema = z.tuple([
   z.number().finite(),
 ]);
 
+/** Non-zero direction vector (an axis). */
+const axisSchema = vector3Schema.refine(
+  ([x, y, z]) => x !== 0 || y !== 0 || z !== 0,
+  'The rotation axis cannot be the zero vector',
+);
+
+/** Free (6-DoF) rotor parameters, required when a moving rotor is fluid-driven. */
+export const sixDofRotorSchema = z.object({
+  patches: z.array(z.string().trim().min(1)).min(1, 'At least one moving patch is required'),
+  axis: axisSchema,
+  centreOfMass: vector3Schema,
+  mass: z.number().finite().positive('The mass must be positive'),
+  momentOfInertia: vector3Schema.refine(
+    ([x, y, z]) => x > 0 && y > 0 && z > 0,
+    'The moment of inertia must be positive on each axis',
+  ),
+  rhoInf: z.number().finite().positive(),
+  innerDistance: z.number().finite().positive(),
+  outerDistance: z.number().finite().positive(),
+  damperCoeff: z.number().finite().nonnegative(),
+});
+
 /**
  * The turbine rotor rotation setup (optional). `omega` is in rad/s; the `axis`
  * must not be the zero vector (it is a direction). Patch existence for
- * `nonRotatingPatches` is checked against the real mesh in boundary.service.
+ * `nonRotatingPatches` / `sixDof.patches` is checked against the real mesh in
+ * boundary.service. A free (fluid-driven) moving rotor requires the `sixDof` block.
  */
-export const rotorConfigSchema = z.object({
-  mode: z.enum(ROTOR_MODES),
-  cellZone: z.string().trim().min(1, 'A rotor cell zone is required'),
-  origin: vector3Schema,
-  axis: vector3Schema.refine(
-    ([x, y, z]) => x !== 0 || y !== 0 || z !== 0,
-    'The rotation axis cannot be the zero vector',
-  ),
-  omega: z.number().finite(),
-  nonRotatingPatches: z.array(z.string().trim().min(1)).default([]),
-});
+export const rotorConfigSchema = z
+  .object({
+    mode: z.enum(ROTOR_MODES),
+    cellZone: z.string().trim().min(1, 'A rotor cell zone is required'),
+    origin: vector3Schema,
+    axis: axisSchema,
+    omega: z.number().finite(),
+    nonRotatingPatches: z.array(z.string().trim().min(1)).default([]),
+    movingKind: z.enum(MOVING_ROTOR_KINDS).optional(),
+    sixDof: sixDofRotorSchema.optional(),
+  })
+  .refine(
+    (rotor) => !(rotor.mode === 'movingRotor' && rotor.movingKind === 'free') || rotor.sixDof,
+    { message: 'A free moving rotor requires the sixDof parameters', path: ['sixDof'] },
+  );
 
 /**
  * The JSON payload of POST /:id/boundary-conditions/apply, sent as the multipart
