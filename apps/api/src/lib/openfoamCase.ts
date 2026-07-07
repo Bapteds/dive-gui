@@ -2265,6 +2265,60 @@ export function setFieldPatchBc(content: string, patch: string, body: string): s
 }
 
 /**
+ * The second-turbulence-quantity fields whose inlet is a mixing-length BC, and the
+ * exact inlet type each uses (from the templates): omega uses a FREQUENCY inlet,
+ * epsilon a DISSIPATION-RATE inlet. Both carry a `mixingLength`, which is what makes
+ * translating between them meaningful.
+ */
+export const MIXING_LENGTH_INLET_FIELDS = ['omega', 'epsilon'] as const;
+export type MixingLengthInletField = (typeof MIXING_LENGTH_INLET_FIELDS)[number];
+const MIXING_LENGTH_INLET_TYPE: Record<MixingLengthInletField, string> = {
+  omega: 'turbulentMixingLengthFrequencyInlet',
+  epsilon: 'turbulentMixingLengthDissipationRateInlet',
+};
+
+/**
+ * Carry a mixing-length inlet across a k-omega <-> k-epsilon model switch. When the
+ * turbulence model changes, the second turbulence quantity changes too (omega <->
+ * epsilon) and the new field is generated with a generic inlet. This rewrites, on
+ * the NEW field's `content`, every patch that carried the SIBLING's mixing-length
+ * inlet (read from `siblingContent`) to the new field's own mixing-length inlet
+ * TYPE, preserving the user's `mixingLength`. So an inlet configured as
+ * turbulentMixingLengthFrequencyInlet (omega) becomes
+ * turbulentMixingLengthDissipationRateInlet (epsilon) and vice versa. Any patch
+ * whose sibling BC is not a mixing-length inlet is left as the generic default.
+ */
+export function carryTurbulenceInlet(
+  content: string,
+  newField: MixingLengthInletField,
+  siblingContent: string,
+  siblingField: MixingLengthInletField,
+): string {
+  const sourceType = MIXING_LENGTH_INLET_TYPE[siblingField];
+  const targetType = MIXING_LENGTH_INLET_TYPE[newField];
+  const span = boundaryFieldSpan(siblingContent);
+  if (!span) return content;
+  const entries = parseFieldBoundaryEntries(siblingContent.slice(span.open + 1, span.close));
+  // The new field's own internalField seed for the entry's `value`.
+  const seed = newField === 'omega' ? '1' : '0.1';
+  let next = content;
+  for (const entry of entries) {
+    if (!entry.plain) continue;
+    const typeMatch = entry.text.match(/\btype\s+([A-Za-z_][A-Za-z0-9_:]*)\s*;/);
+    if (!typeMatch || typeMatch[1] !== sourceType) continue;
+    const mlMatch = entry.text.match(/\bmixingLength\s+([^;]+);/);
+    const mixingLength = mlMatch ? mlMatch[1].trim() : '0.01';
+    const body = assembleBcBody([
+      ['type', targetType],
+      ['mixingLength', mixingLength],
+      ['value', `uniform ${seed}`],
+    ]);
+    next = setFieldPatchBc(next, entry.name, body);
+  }
+  return next;
+}
+
+/**
  * Parse the names of the boundary patches from a constant/polyMesh/boundary
  * file. Tolerant by design: strips comments, then collects every `name { ... }`
  * block in the file (excluding the FoamFile header). De-duplicated, order

@@ -648,7 +648,9 @@ function MeshScene({
 
     const neutral = new THREE.Color(readToken('--color-neutral', '#bcbdbf'));
     const accent = new THREE.Color(readToken('--color-accent', '#ee7f00'));
-    const edgeColor = new THREE.Color(readToken('--color-text-secondary', '#5b6676'));
+    // Mesh lines in the very dark brand text colour so the grid reads clearly
+    // against the light surfaces (a mid grey washed out on pale patches).
+    const edgeColor = new THREE.Color(readToken('--color-text', '#1a2230'));
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 10000);

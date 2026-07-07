@@ -39,6 +39,8 @@ import {
   BASE_FILE_PATHS,
   BOUNDARY_FILE,
   MESH_FILES,
+  MIXING_LENGTH_INLET_FIELDS,
+  carryTurbulenceInlet,
   fieldBcBody,
   getFieldPatchType,
   mergeFieldBoundary,
@@ -659,7 +661,24 @@ export async function scaffoldSolver(
   for (const field of modelFields) {
     const path = `0/${field}`;
     if (!(await caseFileExists(projectId, path))) {
-      await writeCaseFile(projectId, path, renderSolverFile(solver, path, patches, model));
+      let rendered = renderSolverFile(solver, path, patches, model);
+      // Carry the user's mixing-length inlet across a k-omega <-> k-epsilon switch:
+      // a NEW omega/epsilon inherits its sibling's inlet patches + mixingLength,
+      // translated to its own inlet type (frequency <-> dissipation rate). The
+      // sibling is still on disk here (the stale-field removal runs afterwards).
+      if ((MIXING_LENGTH_INLET_FIELDS as readonly string[]).includes(field)) {
+        const sibling = field === 'omega' ? 'epsilon' : 'omega';
+        const siblingBuffer = await readCaseFile(projectId, `0/${sibling}`);
+        if (siblingBuffer) {
+          rendered = carryTurbulenceInlet(
+            rendered,
+            field as (typeof MIXING_LENGTH_INLET_FIELDS)[number],
+            siblingBuffer.toString('utf8'),
+            sibling,
+          );
+        }
+      }
+      await writeCaseFile(projectId, path, rendered);
       created.push(path);
       continue;
     }

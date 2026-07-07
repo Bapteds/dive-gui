@@ -8,10 +8,12 @@ import { app, authHeader, createTestUser, resetDatabase } from './helpers';
 import { prisma } from '../src/lib/prisma';
 import { readCaseFile, writeCaseFile } from '../src/lib/caseStorage';
 import {
+  carryTurbulenceInlet,
   parseApplication,
   renderDecomposeParDict,
   renderSolverFile,
   setApplication,
+  setFieldPatchBc,
 } from '../src/lib/openfoamCase';
 
 const BOUNDARY = `FoamFile { class polyBoundaryMesh; object boundary; }
@@ -192,6 +194,28 @@ describe('renderSolverFile / parseApplication (unit)', () => {
   });
 });
 
+describe('carryTurbulenceInlet (unit)', () => {
+  it('translates an omega mixing-length inlet into the epsilon one, keeping mixingLength', () => {
+    const omega = renderSolverFile('simpleFoam', '0/omega', ['inlet', 'walls'], 'kOmegaSST');
+    const omegaConfigured = setFieldPatchBc(
+      omega,
+      'inlet',
+      'type            turbulentMixingLengthFrequencyInlet;\n        mixingLength    0.03;\n        value           uniform 1;',
+    );
+    const epsilon = renderSolverFile('simpleFoam', '0/epsilon', ['inlet', 'walls'], 'kEpsilon');
+    const carried = carryTurbulenceInlet(epsilon, 'epsilon', omegaConfigured, 'omega');
+    expect(carried).toMatch(/inlet\s*\{\s*type\s+turbulentMixingLengthDissipationRateInlet;/);
+    expect(carried).toMatch(/mixingLength\s+0\.03;/);
+  });
+
+  it('leaves a non-mixing-length sibling inlet alone (generic default kept)', () => {
+    const omega = renderSolverFile('simpleFoam', '0/omega', ['inlet', 'walls'], 'kOmegaSST');
+    const epsilon = renderSolverFile('simpleFoam', '0/epsilon', ['inlet', 'walls'], 'kEpsilon');
+    // The scaffolded omega inlet is a plain zeroGradient, not a mixing-length inlet.
+    expect(carryTurbulenceInlet(epsilon, 'epsilon', omega, 'omega')).toBe(epsilon);
+  });
+});
+
 describe('runnable gate + scaffoldSolver (integration)', () => {
   it('reports not runnable for a polyMesh-only case, listing the missing files', async () => {
     const { auth, id } = await makeProject('runnable-1@x.test');
@@ -340,6 +364,43 @@ describe('runnable gate + scaffoldSolver (integration)', () => {
     expect(eps).toContain('[0 2 -3 0 0 0 0]');
     expect(eps).toMatch(/walls\s*\{[\s\S]*?epsilonWallFunction/);
     expect(await readCaseFile(id, '0/omega')).toBeNull();
+  });
+
+  it('carries the mixing-length inlet across a k-omega <-> k-epsilon switch', async () => {
+    const { auth, id } = await makeProject('runnable-turb-inlet@x.test');
+    await writeMesh(id);
+    // Default k-omega scaffold, then configure the inlet omega as the mixing-length
+    // frequency inlet (what the boundary-conditions overlay writes).
+    await request(app).post(`/api/v1/projects/${id}/runnable/scaffold`).set('Authorization', auth);
+    const omega0 = (await readCaseFile(id, '0/omega'))!.toString('utf8');
+    await writeCaseFile(
+      id,
+      '0/omega',
+      setFieldPatchBc(
+        omega0,
+        'inlet',
+        'type            turbulentMixingLengthFrequencyInlet;\n        mixingLength    0.02;\n        value           uniform 1;',
+      ),
+    );
+
+    // Switch to k-epsilon: the new epsilon inlet must become the dissipation-rate
+    // inlet, keeping the mixingLength.
+    await request(app)
+      .post(`/api/v1/projects/${id}/runnable/scaffold`)
+      .set('Authorization', auth)
+      .send({ solver: 'simpleFoam', turbulence: 'kEpsilon' });
+    const eps = (await readCaseFile(id, '0/epsilon'))!.toString('utf8');
+    expect(eps).toMatch(/inlet\s*\{\s*type\s+turbulentMixingLengthDissipationRateInlet;/);
+    expect(eps).toMatch(/mixingLength\s+0\.02;/);
+
+    // And back to k-omega: the omega inlet becomes the frequency inlet again.
+    await request(app)
+      .post(`/api/v1/projects/${id}/runnable/scaffold`)
+      .set('Authorization', auth)
+      .send({ solver: 'simpleFoam', turbulence: 'kOmegaSST' });
+    const omega = (await readCaseFile(id, '0/omega'))!.toString('utf8');
+    expect(omega).toMatch(/inlet\s*\{\s*type\s+turbulentMixingLengthFrequencyInlet;/);
+    expect(omega).toMatch(/mixingLength\s+0\.02;/);
   });
 
   it('re-renders system/fvSchemes + fvSolution when the turbulence model changes (same solver)', async () => {
