@@ -62,7 +62,7 @@ beforeEach(() => {
 });
 
 describe('BoundaryConditionDialog', () => {
-  it('applies a turbine pressure preset (type -> patches -> values -> apply)', async () => {
+  it('applies a turbine pressure preset (type -> patches -> rotor -> values -> apply)', async () => {
     renderDialog();
 
     // Step 1: object type (turbine is first). It has a single mode, so Continue
@@ -77,6 +77,12 @@ describe('BoundaryConditionDialog', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /continue/i })).toBeEnabled(),
     );
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+    // Step 3b (turbine only): the rotor. Default Frozen Rotor + cell zone "rotor"
+    // + axis (0 0 1); a positive speed enables Continue. 600 rpm -> omega ~62.83.
+    expect(await screen.findByText('Rotor model')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/rotational speed/i), { target: { value: '600' } });
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
 
     // Step 4: the operating point. Enter the head, then apply.
@@ -94,10 +100,20 @@ describe('BoundaryConditionDialog', () => {
           outlet: 'outlet',
           walls: ['shroud'],
           values: expect.objectContaining({ head: 50 }),
+          rotor: expect.objectContaining({
+            mode: 'frozenRotor',
+            cellZone: 'rotor',
+            axis: [0, 0, 1],
+            origin: [0, 0, 0],
+            nonRotatingPatches: [],
+          }),
         }),
         null,
       ),
     );
+    // omega is converted from rpm to rad/s: 600 * pi / 30 ~= 62.83.
+    const [, request] = vi.mocked(boundaryApi.applyBoundaryConditions).mock.calls[0];
+    expect(request.rotor?.omega).toBeCloseTo((600 * Math.PI) / 30, 3);
     expect(await screen.findByText('Boundary conditions applied')).toBeInTheDocument();
   });
 

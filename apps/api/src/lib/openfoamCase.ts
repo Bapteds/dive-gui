@@ -1506,6 +1506,95 @@ export function renderSolverFile(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Rotating machinery: MRF (Frozen Rotor) and dynamic mesh (Moving Rotor).
+//
+// A turbine has a rotating region (a cell zone in the mesh). Two ways to couple
+// it to the static flow, mirrored from the OpenFOAM tutorials:
+//  - Frozen Rotor => constant/MRFProperties: the zone is solved in a rotating
+//    reference frame at a constant omega, the mesh does not move (steady, works
+//    with simpleFoam). Verified against the mixerVessel2D tutorial.
+//  - Moving Rotor => constant/dynamicMeshDict: the zone is physically rotated
+//    each step (dynamicMotionSolverFvMesh + solidBody + rotatingMotion). Needs a
+//    transient solver (pimpleFoam) and a cyclicAMI interface. Verified against
+//    the ESI rotating-fan / mixerVesselAMI tutorials.
+// omega is in rad/s; axis need not be a unit vector; origin is any point on it.
+// ---------------------------------------------------------------------------
+
+/** Format an OpenFOAM vector `(x y z)`, trimming float noise on each component. */
+function fmtFoamVector(v: readonly [number, number, number]): string {
+  return `(${v.map((component) => fmtFoamNumber(component)).join(' ')})`;
+}
+
+/** Shared rotation parameters for a rotor cell zone. */
+export interface RotorZoneOptions {
+  cellZone: string;
+  origin: readonly [number, number, number];
+  axis: readonly [number, number, number];
+  /** Angular velocity in rad/s. */
+  omega: number;
+  /** Frozen-rotor only: patches inside the zone that do not rotate. */
+  nonRotatingPatches?: readonly string[];
+}
+
+/**
+ * constant/MRFProperties for a Frozen Rotor (steady MRF). The rotor `cellZone`
+ * rotates at `omega` (rad/s) about `axis` through `origin`; `nonRotatingPatches`
+ * are patches within the zone that stay stationary (casing / shroud walls).
+ */
+export function renderMrfProperties(opts: RotorZoneOptions): string {
+  const patches = (opts.nonRotatingPatches ?? []).join(' ');
+  return `${foamHeader('dictionary', 'MRFProperties', 'constant')}
+// Frozen Rotor (Multiple Reference Frame): the rotor cell zone is solved in a
+// rotating frame at a constant omega; the mesh itself does not move. Runs with the
+// steady simpleFoam solver. omega is in rad/s; axis need not be a unit vector.
+MRF1
+{
+    cellZone        ${opts.cellZone};
+    active          yes;
+
+    // Patches inside the cell zone that do NOT rotate (stationary casing / shroud
+    // walls). Empty means the whole zone rotates.
+    nonRotatingPatches (${patches});
+
+    origin          ${fmtFoamVector(opts.origin)};
+    axis            ${fmtFoamVector(opts.axis)};
+    omega           ${fmtFoamNumber(opts.omega)};
+}
+${FOAM_FOOTER}`;
+}
+
+/**
+ * constant/dynamicMeshDict for a Moving Rotor (rigid-body rotation). The rotor
+ * `cellZone` is rotated each time step at `omega` (rad/s) about `axis` through
+ * `origin`. Requires a transient solver (pimpleFoam) and a cyclicAMI interface
+ * between the moving and static regions.
+ */
+export function renderDynamicMeshDict(opts: Omit<RotorZoneOptions, 'nonRotatingPatches'>): string {
+  return `${foamHeader('dictionary', 'dynamicMeshDict', 'constant')}
+// Moving Rotor (rigid-body rotation / sliding mesh): the rotor cell zone is
+// physically rotated each time step about the axis at a constant omega. Needs a
+// transient solver (e.g. pimpleFoam) and a cyclicAMI interface between the moving
+// and static regions. omega is in rad/s; axis need not be a unit vector.
+dynamicFvMesh   dynamicMotionSolverFvMesh;
+
+motionSolverLibs (fvMotionSolvers);
+
+motionSolver    solidBody;
+
+cellZone        ${opts.cellZone};
+
+solidBodyMotionFunction rotatingMotion;
+
+rotatingMotionCoeffs
+{
+    origin      ${fmtFoamVector(opts.origin)};
+    axis        ${fmtFoamVector(opts.axis)};
+    omega       ${fmtFoamNumber(opts.omega)};
+}
+${FOAM_FOOTER}`;
+}
+
 /**
  * Read the solver name from a controlDict's `application` keyword, or null when
  * absent/unparseable. Tolerant: ignores comments before the keyword.

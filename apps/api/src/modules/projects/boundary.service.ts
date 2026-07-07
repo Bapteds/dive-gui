@@ -14,6 +14,7 @@ import {
   GRAVITY,
   OBJECT_TYPE_MODES,
   isConfigurableSolver,
+  type AppliedRotor,
   type ApplyBoundaryConditionsRequest,
   type ApplyBoundaryConditionsResult,
   type ImportStep,
@@ -29,6 +30,8 @@ import {
   parseApplication,
   parseBoundaryPatches,
   parseTurbulenceModel,
+  renderDynamicMeshDict,
+  renderMrfProperties,
   setBoundaryPatchType,
   setFieldPatchBc,
 } from '../../lib/openfoamCase';
@@ -197,6 +200,70 @@ export async function applyBoundaryConditions(
     }
   }
 
+  // Turbine rotor: write the MRF (Frozen Rotor) or dynamic-mesh (Moving Rotor)
+  // dictionary in addition to the 0/ fields. Only for a turbine — the other
+  // component types have no rotating region.
+  let appliedRotor: AppliedRotor | undefined;
+  if (request.objectType === 'turbine' && request.rotor) {
+    const rotor = request.rotor;
+    for (const patch of rotor.nonRotatingPatches ?? []) {
+      if (!patchNames.includes(patch)) {
+        throw new AppError(
+          422,
+          'INVALID_BC_PLAN',
+          `Non-rotating patch "${patch}" was not found in the mesh.`,
+        );
+      }
+    }
+    // The rotor needs a cell zone; we cannot create one, only warn if the mesh
+    // has none defined yet (it must be made with topoSet before the run).
+    const cellZones = await readCaseFile(projectId, 'constant/polyMesh/cellZones');
+    if (!cellZones) {
+      notes.push(
+        `The mesh has no cellZones, so the rotor zone "${rotor.cellZone}" must be created (e.g. with topoSet) before the run.`,
+      );
+    }
+    if (rotor.mode === 'frozenRotor') {
+      await writeCaseFile(
+        projectId,
+        'constant/MRFProperties',
+        renderMrfProperties({
+          cellZone: rotor.cellZone,
+          origin: rotor.origin,
+          axis: rotor.axis,
+          omega: rotor.omega,
+          nonRotatingPatches: rotor.nonRotatingPatches,
+        }),
+      );
+      appliedRotor = {
+        mode: rotor.mode,
+        cellZone: rotor.cellZone,
+        omega: rotor.omega,
+        file: 'constant/MRFProperties',
+      };
+    } else {
+      await writeCaseFile(
+        projectId,
+        'constant/dynamicMeshDict',
+        renderDynamicMeshDict({
+          cellZone: rotor.cellZone,
+          origin: rotor.origin,
+          axis: rotor.axis,
+          omega: rotor.omega,
+        }),
+      );
+      appliedRotor = {
+        mode: rotor.mode,
+        cellZone: rotor.cellZone,
+        omega: rotor.omega,
+        file: 'constant/dynamicMeshDict',
+      };
+      notes.push(
+        'Moving Rotor wrote constant/dynamicMeshDict, but it needs a transient solver: set the solver to pimpleFoam in the Solver tab and make the rotor interface a cyclicAMI couple, otherwise the run will not rotate.',
+      );
+    }
+  }
+
   const p0 =
     request.mode === 'pressure' && request.values.head !== undefined
       ? Number((GRAVITY * request.values.head).toFixed(6))
@@ -212,6 +279,7 @@ export async function applyBoundaryConditions(
       walls: request.walls,
       fields,
       ...(p0 !== undefined ? { p0 } : {}),
+      ...(appliedRotor ? { rotor: appliedRotor } : {}),
     },
     csvSteps,
     notes,

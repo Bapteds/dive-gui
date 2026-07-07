@@ -15,6 +15,8 @@ import {
   componentOutletBc,
   fieldBcBody,
   parseBoundaryPatchesWithTypes,
+  renderDynamicMeshDict,
+  renderMrfProperties,
 } from '../src/lib/openfoamCase';
 
 // ---------------------------------------------------------------------------
@@ -154,6 +156,44 @@ describe('componentInletBc / componentOutletBc', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Rotor dictionaries: MRFProperties (Frozen Rotor) and dynamicMeshDict (Moving).
+// ---------------------------------------------------------------------------
+describe('renderMrfProperties / renderDynamicMeshDict', () => {
+  it('MRFProperties: cellZone, active, nonRotatingPatches, origin/axis, omega (rad/s)', () => {
+    const mrf = renderMrfProperties({
+      cellZone: 'rotor',
+      origin: [0, 0, 0],
+      axis: [0, 0, 1],
+      omega: 104.72,
+      nonRotatingPatches: ['shroud', 'hub'],
+    });
+    expect(mrf).toContain('object      MRFProperties;');
+    expect(mrf).toContain('cellZone        rotor;');
+    expect(mrf).toContain('active          yes;');
+    expect(mrf).toContain('nonRotatingPatches (shroud hub);');
+    expect(mrf).toContain('origin          (0 0 0);');
+    expect(mrf).toContain('axis            (0 0 1);');
+    expect(mrf).toContain('omega           104.72;');
+  });
+
+  it('MRFProperties: empty nonRotatingPatches renders ()', () => {
+    const mrf = renderMrfProperties({ cellZone: 'rotor', origin: [0, 0, 0], axis: [0, 0, 1], omega: 50 });
+    expect(mrf).toContain('nonRotatingPatches ();');
+  });
+
+  it('dynamicMeshDict: dynamicMotionSolverFvMesh + solidBody + rotatingMotion coeffs', () => {
+    const dyn = renderDynamicMeshDict({ cellZone: 'rotor', origin: [0, 0, 0], axis: [0, 0, 1], omega: 62.8319 });
+    expect(dyn).toContain('object      dynamicMeshDict;');
+    expect(dyn).toContain('dynamicFvMesh   dynamicMotionSolverFvMesh;');
+    expect(dyn).toContain('motionSolver    solidBody;');
+    expect(dyn).toContain('cellZone        rotor;');
+    expect(dyn).toContain('solidBodyMotionFunction rotatingMotion;');
+    expect(dyn).toContain('rotatingMotionCoeffs');
+    expect(dyn).toContain('omega       62.8319;');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The apply endpoint (integration).
 // ---------------------------------------------------------------------------
 const BOUNDARY = `FoamFile { class polyBoundaryMesh; object boundary; }
@@ -284,6 +324,104 @@ describe('POST /projects/:id/boundary-conditions/apply', () => {
     const types = parseBoundaryPatchesWithTypes(boundary);
     expect(types.find((t) => t.name === 'wall1')?.type).toBe('wall');
     expect(types.find((t) => t.name === 'wall2')?.type).toBe('wall');
+  });
+
+  it('turbine Frozen Rotor writes constant/MRFProperties and echoes the rotor', async () => {
+    const { id, auth } = await makeProject('bc-mrf@dive-turbinen.test');
+    await writePolyMesh(id);
+    const res = await request(app)
+      .post(applyUrl(id))
+      .set('Authorization', auth)
+      .field(
+        'payload',
+        JSON.stringify({
+          objectType: 'turbine',
+          mode: 'pressure',
+          inlet: 'inlet',
+          outlet: 'outlet',
+          walls: ['wall1', 'wall2'],
+          values: { head: 50 },
+          rotor: {
+            mode: 'frozenRotor',
+            cellZone: 'rotor',
+            origin: [0, 0, 0],
+            axis: [0, 0, 1],
+            omega: 104.72,
+            nonRotatingPatches: ['wall1'],
+          },
+        }),
+      );
+
+    expect(res.status).toBe(200);
+    expect(res.body.result.applied.rotor).toMatchObject({
+      mode: 'frozenRotor',
+      cellZone: 'rotor',
+      file: 'constant/MRFProperties',
+    });
+    const mrf = (await readCaseFile(id, 'constant/MRFProperties'))!.toString('utf8');
+    expect(mrf).toContain('cellZone        rotor;');
+    expect(mrf).toContain('nonRotatingPatches (wall1);');
+    expect(mrf).toContain('omega           104.72;');
+    // A frozen rotor writes no dynamic mesh dictionary.
+    expect(await readCaseFile(id, 'constant/dynamicMeshDict')).toBeNull();
+  });
+
+  it('turbine Moving Rotor writes constant/dynamicMeshDict and warns about the transient solver', async () => {
+    const { id, auth } = await makeProject('bc-dyn@dive-turbinen.test');
+    await writePolyMesh(id);
+    const res = await request(app)
+      .post(applyUrl(id))
+      .set('Authorization', auth)
+      .field(
+        'payload',
+        JSON.stringify({
+          objectType: 'turbine',
+          mode: 'pressure',
+          inlet: 'inlet',
+          outlet: 'outlet',
+          walls: ['wall1', 'wall2'],
+          values: { head: 50 },
+          rotor: { mode: 'movingRotor', cellZone: 'rotor', origin: [0, 0, 0], axis: [0, 0, 1], omega: 62.83 },
+        }),
+      );
+
+    expect(res.status).toBe(200);
+    expect(res.body.result.applied.rotor.file).toBe('constant/dynamicMeshDict');
+    const dyn = (await readCaseFile(id, 'constant/dynamicMeshDict'))!.toString('utf8');
+    expect(dyn).toContain('dynamicMotionSolverFvMesh');
+    expect(dyn).toContain('rotatingMotion');
+    expect(res.body.result.notes.some((n: string) => /pimpleFoam/.test(n))).toBe(true);
+    // A moving rotor writes no MRF dictionary.
+    expect(await readCaseFile(id, 'constant/MRFProperties')).toBeNull();
+  });
+
+  it('rejects a rotor non-rotating patch that is not in the mesh (422)', async () => {
+    const { id, auth } = await makeProject('bc-rotor-bad@dive-turbinen.test');
+    await writePolyMesh(id);
+    const res = await request(app)
+      .post(applyUrl(id))
+      .set('Authorization', auth)
+      .field(
+        'payload',
+        JSON.stringify({
+          objectType: 'turbine',
+          mode: 'pressure',
+          inlet: 'inlet',
+          outlet: 'outlet',
+          walls: ['wall1', 'wall2'],
+          values: { head: 50 },
+          rotor: {
+            mode: 'frozenRotor',
+            cellZone: 'rotor',
+            origin: [0, 0, 0],
+            axis: [0, 0, 1],
+            omega: 100,
+            nonRotatingPatches: ['ghost'],
+          },
+        }),
+      );
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe('INVALID_BC_PLAN');
   });
 
   it('rejects an unknown patch, an inlet == outlet, and a missing driving value', async () => {

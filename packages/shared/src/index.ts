@@ -365,10 +365,68 @@ export interface BoundaryConditionValues {
 }
 
 /**
+ * How a turbine's rotating region is coupled to the stationary flow:
+ *  - 'frozenRotor': steady Multiple Reference Frame (MRF). The rotor cell zone is
+ *    solved in a rotating frame at a constant omega; the mesh does NOT move. Fast,
+ *    runs with the steady simpleFoam solver. Writes constant/MRFProperties.
+ *  - 'movingRotor': transient rigid-body rotation (sliding mesh). The rotor cell
+ *    zone is physically rotated each time step. Physically accurate but needs a
+ *    transient solver (pimpleFoam) and a cyclicAMI interface. Writes
+ *    constant/dynamicMeshDict.
+ */
+export const ROTOR_MODES = ['frozenRotor', 'movingRotor'] as const;
+export type RotorMode = (typeof ROTOR_MODES)[number];
+
+/** Display metadata for a rotor mode (picker card + which constant/ file it writes). */
+export interface RotorModeInfo {
+  id: RotorMode;
+  label: string;
+  summary: string;
+  /** The OpenFOAM constant/ dictionary written for this mode. */
+  file: 'constant/MRFProperties' | 'constant/dynamicMeshDict';
+}
+
+export const ROTOR_MODE_LIBRARY: Record<RotorMode, RotorModeInfo> = {
+  frozenRotor: {
+    id: 'frozenRotor',
+    label: 'Frozen Rotor (MRF)',
+    summary:
+      'Steady multiple reference frame. The rotor zone is solved in a rotating frame; the mesh stays put. Fast, works with simpleFoam.',
+    file: 'constant/MRFProperties',
+  },
+  movingRotor: {
+    id: 'movingRotor',
+    label: 'Moving Rotor (sliding mesh)',
+    summary:
+      'Transient rigid-body rotation of the rotor zone. Most accurate, but needs a transient solver (pimpleFoam) and a cyclicAMI interface.',
+    file: 'constant/dynamicMeshDict',
+  },
+};
+
+/**
+ * The rotation setup for a turbine's rotor. `omega` is the angular velocity in
+ * rad/s (the UI may collect rpm and convert). `origin` is any point on the axis of
+ * rotation; `axis` is its direction (need not be a unit vector). `cellZone` is the
+ * mesh cell zone that rotates. For frozenRotor, `nonRotatingPatches` lists patches
+ * inside that zone that stay stationary (e.g. the casing walls); it is ignored for
+ * movingRotor.
+ */
+export interface RotorConfig {
+  mode: RotorMode;
+  cellZone: string;
+  origin: [number, number, number];
+  axis: [number, number, number];
+  omega: number;
+  nonRotatingPatches?: string[];
+}
+
+/**
  * A request to apply a component BC preset to a project case. `inlet` / `outlet`
  * are the single inlet / outlet patch names the user assigned from the mesh; the
  * remaining assigned patches are `walls` (no-slip + wall functions). For a draft
  * tube (csvProfile) the CSV file rides alongside as multipart, not in this body.
+ * `rotor` is only meaningful for a turbine (its rotating region); it writes the
+ * MRF or dynamic-mesh dictionary in addition to the 0/ boundary conditions.
  */
 export interface ApplyBoundaryConditionsRequest {
   objectType: ObjectType;
@@ -377,6 +435,17 @@ export interface ApplyBoundaryConditionsRequest {
   outlet: string;
   walls: string[];
   values: BoundaryConditionValues;
+  rotor?: RotorConfig;
+}
+
+/** The rotor dictionary written, echoed back for the UI summary. */
+export interface AppliedRotor {
+  mode: RotorMode;
+  cellZone: string;
+  /** Angular velocity written, in rad/s. */
+  omega: number;
+  /** The constant/ file written (MRFProperties or dynamicMeshDict). */
+  file: string;
 }
 
 /** What the apply actually wrote, echoed back for the UI summary. */
@@ -390,6 +459,8 @@ export interface AppliedBoundaryConditions {
   fields: string[];
   /** Kinematic total pressure p0 = GRAVITY*head written to the inlet, when pressure-driven. */
   p0?: number;
+  /** The rotor dictionary written (turbine with a rotor config), when applicable. */
+  rotor?: AppliedRotor;
 }
 
 /**
