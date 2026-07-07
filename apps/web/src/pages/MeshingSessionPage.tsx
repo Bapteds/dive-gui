@@ -296,6 +296,7 @@ function StlManager({ sessionId, stls }: { sessionId: string; stls: StlFile[] })
         type="file"
         accept=".stl,model/stl,application/sla"
         multiple
+        aria-label="Upload STL surface files"
         className="sr-only"
         onChange={(e) => void handleFiles(e.target.files)}
       />
