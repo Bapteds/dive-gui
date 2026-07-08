@@ -76,6 +76,31 @@ describe('runSnappyPipeline', () => {
     expect(decompose).toContain('numberOfSubdomains 4;');
   });
 
+  it('clears a previous run mesh, decomposition, and stale level fields first', async () => {
+    const caseDir = await tempCase();
+    // Simulate a case left behind by an earlier, differently-sized run.
+    await fs.mkdir(path.join(caseDir, 'constant', 'polyMesh'), { recursive: true });
+    await fs.writeFile(path.join(caseDir, 'constant', 'polyMesh', 'points'), 'stale', 'utf8');
+    await fs.mkdir(path.join(caseDir, '0'), { recursive: true });
+    await fs.writeFile(path.join(caseDir, '0', 'cellLevel'), 'stale', 'utf8');
+    await fs.mkdir(path.join(caseDir, 'processor0'), { recursive: true });
+    // An input that must survive the clean.
+    await fs.mkdir(path.join(caseDir, 'constant', 'triSurface'), { recursive: true });
+    await fs.writeFile(path.join(caseDir, 'constant', 'triSurface', 'rotor.stl'), 'solid', 'utf8');
+
+    setCommandRunner(async (spec) => ok(spec)); // tools succeed but write nothing
+
+    await runSnappyPipeline(caseDir, ['rotor.stl'], BOUNDS, DEFAULT_SNAPPY_CONFIG);
+
+    // Prior mesh output is gone; the STL input is kept.
+    await expect(fs.stat(path.join(caseDir, 'constant', 'polyMesh', 'points'))).rejects.toThrow();
+    await expect(fs.stat(path.join(caseDir, '0', 'cellLevel'))).rejects.toThrow();
+    await expect(fs.stat(path.join(caseDir, 'processor0'))).rejects.toThrow();
+    await expect(
+      fs.stat(path.join(caseDir, 'constant', 'triSurface', 'rotor.stl')),
+    ).resolves.toBeDefined();
+  });
+
   it('short-circuits the remaining steps when blockMesh fails', async () => {
     const caseDir = await tempCase();
     const runner: CommandRunner = async (spec) => {

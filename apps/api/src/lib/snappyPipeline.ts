@@ -202,6 +202,31 @@ async function cleanupProcessors(caseDir: string, cores: number): Promise<void> 
 }
 
 /**
+ * Clear a previous run's mesh output so each run starts from a clean slate — the
+ * OpenFOAM `Allclean` rule. Without this, blockMesh rewrites the background mesh
+ * geometry but leaves stale refinement fields (constant/polyMesh/cellLevel,
+ * pointLevel, refinementHistory, …) from an earlier, differently-sized mesh; the
+ * next decomposePar then reads the new coarse mesh against the old cellLevel and
+ * dies with "Size N is not equal to the expected length M". Removes the mesh, any
+ * prior decomposition (processor*), and every numeric time directory (0, 1, 2, 3 —
+ * snappy's intermediate outputs and any stale level fields under 0/). Deliberately
+ * keeps the inputs: system/ and constant/triSurface/ (STLs + extracted features).
+ */
+async function cleanPriorMeshArtifacts(caseDir: string): Promise<void> {
+  const removals: Promise<unknown>[] = [
+    fs.rm(path.join(caseDir, 'constant', 'polyMesh'), { recursive: true, force: true }),
+  ];
+  const entries = await fs.readdir(caseDir).catch(() => [] as string[]);
+  for (const name of entries) {
+    // processorN decompositions and pure-numeric time dirs (0, 1, 2, …).
+    if (/^processor\d+$/.test(name) || /^\d+$/.test(name)) {
+      removals.push(fs.rm(path.join(caseDir, name), { recursive: true, force: true }));
+    }
+  }
+  await Promise.all(removals.map((p) => Promise.resolve(p).catch(() => undefined)));
+}
+
+/**
  * Generate the dicts, then run the meshing pipeline in `caseDir`, returning the
  * per-step report. `config.cores` selects the serial or MPI-parallel path. Never
  * throws on a tool failure — resolves `success: false` with the captured logs;
@@ -215,6 +240,10 @@ export async function runSnappyPipeline(
 ): Promise<MeshImportConversion> {
   const cores = Math.max(1, Math.floor(config.cores || 1));
   const domain = computeDomain(bounds, config);
+  // Start from a clean slate: drop any prior mesh, decomposition, and stale
+  // refinement fields, so decomposePar never reads a new mesh against an old
+  // cellLevel (the "Size N != expected length M" failure).
+  await cleanPriorMeshArtifacts(caseDir);
   await writeDicts(caseDir, stlNames, domain, config, cores);
 
   const steps = await runSteps(planSteps(caseDir, cores), env.SNAPPY_STEP_TIMEOUT_MS);
