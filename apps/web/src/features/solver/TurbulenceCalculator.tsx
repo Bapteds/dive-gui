@@ -2,14 +2,14 @@ import { useId, useMemo, useState } from 'react';
 import { Calculator, Check, ChevronDown, Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
-import { TURBULENCE_MODELS } from '@/lib/api/types';
+import { TURBULENCE_APPROACHES, TURBULENCE_MODELS } from '@/lib/api/types';
 
 /**
- * TurbulenceCalculator - estimates the RANS seed values (k, epsilon, omega) from
- * three flow inputs (velocity U, characteristic length Dh, kinematic viscosity nu)
- * plus a turbulent intensity I. It computes, it does not write: the values are
- * shown with copy buttons so they can be pasted into the matching 0/ field
- * (internalField / inlet) in the Files step that follows.
+ * TurbulenceCalculator - a standalone tab tool that estimates the RANS seed values
+ * (k, epsilon, omega) from three flow inputs (velocity U, characteristic length Dh,
+ * kinematic viscosity nu) plus a turbulent intensity I. It computes, it does not
+ * write: each value carries a copy button so it can be pasted into the matching 0/
+ * field (internalField / inlet) when configuring the solver.
  *
  * Formulas (see documents/calculator/turbulence_cfd_notes.md):
  *   Re      = U * Dh / nu
@@ -18,8 +18,8 @@ import { TURBULENCE_MODELS } from '@/lib/api/types';
  *   epsilon = k^1.5 / (Cmu^0.75 * L)          with Cmu = 0.09
  *   omega   = k^0.5 / (Cmu^0.75 * L) = epsilon / k
  *
- * The panel ties itself to the picked model: it highlights the fields that model
- * actually reads (kOmegaSST -> k, omega; kEpsilon -> k, epsilon) and dims the rest.
+ * A turbulence-model selector highlights the fields that model actually reads
+ * (kOmegaSST -> k, omega; kEpsilon -> k, epsilon) and dims the rest.
  */
 
 /** Cmu^0.75 - the coefficient shared by the epsilon and omega length-scale terms. */
@@ -69,154 +69,146 @@ function formatNumber(value: number, sig: number): string {
   return trimZeros(value.toPrecision(sig));
 }
 
-export function TurbulenceCalculator({
-  turbulence,
-  disabled = false,
-}: {
-  /** The picked model id, so the panel can highlight the fields it reads. */
-  turbulence: string;
-  disabled?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
+export function TurbulenceCalculator() {
   const [u, setU] = useState('2');
   const [dh, setDh] = useState('0.1');
   // Water at ~20 C. DIVE runs hydro turbines, so water is the sensible default.
   const [nu, setNu] = useState('1e-6');
   const [intensity, setIntensity] = useState('5');
+  const [model, setModel] = useState('kOmegaSST');
 
-  const panelId = useId();
+  const baseId = useId();
   const seeds = useMemo(() => computeSeeds(u, dh, nu, intensity), [u, dh, nu, intensity]);
 
-  const fields = TURBULENCE_MODELS.find((m) => m.id === turbulence)?.fields ?? [];
+  const fields = TURBULENCE_MODELS.find((m) => m.id === model)?.fields ?? [];
   const usesEpsilon = fields.includes('epsilon');
   const usesOmega = fields.includes('omega');
   const usesNone = fields.length === 0;
 
   return (
-    <section className="overflow-hidden rounded-md border border-border bg-bg/40">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-controls={panelId}
-        className={cn(
-          'flex w-full items-center gap-3 px-3 py-2.5 text-left',
-          'transition-colors duration-fast ease-out hover:bg-bg',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-inset',
-        )}
-      >
+    <div className="flex w-full flex-col overflow-hidden rounded-md border border-border bg-surface shadow-sm lg:min-h-0 lg:flex-1">
+      <header className="flex shrink-0 items-center gap-3 border-b border-border p-6 pb-4">
         <span
-          className="grid size-8 shrink-0 place-items-center rounded-md bg-primary-tint text-primary"
+          className="grid size-9 shrink-0 place-items-center rounded-md bg-primary-tint text-primary"
           aria-hidden="true"
         >
-          <Calculator className="size-4" strokeWidth={1.75} />
+          <Calculator className="size-5" strokeWidth={1.75} />
         </span>
-        <span className="flex min-w-0 flex-col">
-          <span className="text-sm font-medium text-text">Turbulence value calculator</span>
-          <span className="text-xs text-text-secondary">
-            Estimate k, epsilon and omega from the inlet flow
-          </span>
-        </span>
-        <ChevronDown
-          className={cn(
-            'ml-auto size-4 shrink-0 text-text-secondary transition-transform duration-fast ease-out',
-            open && 'rotate-180',
-          )}
-          strokeWidth={1.75}
-          aria-hidden="true"
-        />
-      </button>
-
-      {open && (
-        <div id={panelId} className="flex flex-col gap-4 border-t border-border p-3">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <NumberField
-              id={`${panelId}-u`}
-              label="Velocity"
-              symbol="U"
-              unit="m/s"
-              value={u}
-              onChange={setU}
-              disabled={disabled}
-            />
-            <NumberField
-              id={`${panelId}-dh`}
-              label="Characteristic length"
-              symbol="Dh"
-              unit="m"
-              value={dh}
-              onChange={setDh}
-              disabled={disabled}
-            />
-            <NumberField
-              id={`${panelId}-nu`}
-              label="Kinematic viscosity"
-              symbol="ν"
-              unit="m²/s"
-              value={nu}
-              onChange={setNu}
-              disabled={disabled}
-            />
-            <NumberField
-              id={`${panelId}-i`}
-              label="Turbulent intensity"
-              symbol="I"
-              unit="%"
-              value={intensity}
-              onChange={setIntensity}
-              disabled={disabled}
-              helper="Typically around 5%."
-            />
-          </div>
-
-          {seeds ? (
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-wrap gap-x-6 gap-y-1.5">
-                <Derived symbol="Re" label="Reynolds" value={formatNumber(seeds.re, 4)} />
-                <Derived symbol="L" label="Length scale" value={formatNumber(seeds.length, 4)} unit="m" />
-              </div>
-
-              <dl className="flex flex-col divide-y divide-border rounded-md border border-border bg-surface">
-                <SeedRow
-                  symbol="k"
-                  name="Turbulent kinetic energy"
-                  unit="m²/s²"
-                  value={seeds.k}
-                  used={!usesNone}
-                  disabled={disabled}
-                />
-                <SeedRow
-                  symbol="ε"
-                  name="Dissipation rate"
-                  unit="m²/s³"
-                  value={seeds.epsilon}
-                  used={usesEpsilon}
-                  disabled={disabled}
-                />
-                <SeedRow
-                  symbol="ω"
-                  name="Specific dissipation rate"
-                  unit="1/s"
-                  value={seeds.omega}
-                  used={usesOmega}
-                  disabled={disabled}
-                />
-              </dl>
-
-              <p className="text-xs text-text-secondary">
-                {usesNone
-                  ? 'Laminar uses no turbulence fields. These values apply once you pick a RANS model.'
-                  : 'Copy each value into its 0/ field (internalField and the inlet) in the Files step.'}
-              </p>
-            </div>
-          ) : (
-            <p className="rounded-md border border-dashed border-border px-3 py-4 text-center text-xs text-text-secondary">
-              Enter a positive velocity, length and viscosity to compute the seed values.
-            </p>
-          )}
+        <div className="flex flex-col">
+          <h2 className="text-base font-semibold text-text">Turbulence calculator</h2>
+          <p className="text-sm text-text-secondary">
+            Estimate the k, epsilon and omega seed values from the inlet flow.
+          </p>
         </div>
-      )}
-    </section>
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-6">
+        <div className="mx-auto grid max-w-4xl grid-cols-1 gap-x-8 gap-y-6 lg:grid-cols-2">
+          {/* Inputs */}
+          <section aria-labelledby={`${baseId}-inputs`} className="flex flex-col gap-4">
+            <h3 id={`${baseId}-inputs`} className="text-sm font-semibold text-text">
+              Flow inputs
+            </h3>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <NumberField
+                id={`${baseId}-u`}
+                label="Velocity"
+                symbol="U"
+                unit="m/s"
+                value={u}
+                onChange={setU}
+              />
+              <NumberField
+                id={`${baseId}-dh`}
+                label="Characteristic length"
+                symbol="Dh"
+                unit="m"
+                value={dh}
+                onChange={setDh}
+              />
+              <NumberField
+                id={`${baseId}-nu`}
+                label="Kinematic viscosity"
+                symbol="ν"
+                unit="m²/s"
+                value={nu}
+                onChange={setNu}
+                helper="Water ~1e-6, air ~1.5e-5."
+              />
+              <NumberField
+                id={`${baseId}-i`}
+                label="Turbulent intensity"
+                symbol="I"
+                unit="%"
+                value={intensity}
+                onChange={setIntensity}
+                helper="Typically around 5%."
+              />
+            </div>
+
+            <ModelSelect id={`${baseId}-model`} value={model} onChange={setModel} />
+          </section>
+
+          {/* Results */}
+          <section aria-labelledby={`${baseId}-results`} className="flex flex-col gap-4">
+            <h3 id={`${baseId}-results`} className="text-sm font-semibold text-text">
+              Computed values
+            </h3>
+
+            {seeds ? (
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-wrap gap-x-6 gap-y-1.5">
+                  <Derived symbol="Re" label="Reynolds number" value={formatNumber(seeds.re, 4)} />
+                  <Derived
+                    symbol="L"
+                    label="Turbulent length scale"
+                    value={formatNumber(seeds.length, 4)}
+                    unit="m"
+                  />
+                </div>
+
+                <dl className="flex flex-col divide-y divide-border rounded-md border border-border bg-bg/40">
+                  <SeedRow
+                    symbol="k"
+                    name="Turbulent kinetic energy"
+                    unit="m²/s²"
+                    value={seeds.k}
+                    used={!usesNone}
+                  />
+                  <SeedRow
+                    symbol="ε"
+                    name="Dissipation rate"
+                    unit="m²/s³"
+                    value={seeds.epsilon}
+                    used={usesEpsilon}
+                  />
+                  <SeedRow
+                    symbol="ω"
+                    name="Specific dissipation rate"
+                    unit="1/s"
+                    value={seeds.omega}
+                    used={usesOmega}
+                  />
+                </dl>
+
+                <p className="text-xs text-text-secondary">
+                  {usesNone
+                    ? 'Laminar uses no turbulence fields. These values apply once you pick a RANS model.'
+                    : 'Copy each value into its 0/ field (internalField and the inlet) on the Solver tab.'}
+                </p>
+              </div>
+            ) : (
+              <p className="rounded-md border border-dashed border-border px-3 py-8 text-center text-sm text-text-secondary">
+                Enter a positive velocity, length and viscosity to compute the seed values.
+              </p>
+            )}
+
+            <FormulaReference />
+          </section>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -228,7 +220,6 @@ function NumberField({
   unit,
   value,
   onChange,
-  disabled,
   helper,
 }: {
   id: string;
@@ -237,7 +228,6 @@ function NumberField({
   unit: string;
   value: string;
   onChange: (value: string) => void;
-  disabled: boolean;
   helper?: string;
 }) {
   const invalid = value.trim() !== '' && !(Number.parseFloat(value) >= 0);
@@ -259,7 +249,6 @@ function NumberField({
         step="any"
         autoComplete="off"
         value={value}
-        disabled={disabled}
         aria-invalid={invalid || undefined}
         aria-describedby={helper ? `${id}-help` : undefined}
         onChange={(event) => onChange(event.currentTarget.value)}
@@ -270,6 +259,53 @@ function NumberField({
           {helper}
         </p>
       )}
+    </div>
+  );
+}
+
+/** The turbulence-model selector - drives which seed fields are highlighted as "used". */
+function ModelSelect({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor={id} className="text-xs font-medium text-text-secondary">
+        Turbulence model
+      </label>
+      <div className="relative">
+        <select
+          id={id}
+          value={value}
+          onChange={(event) => onChange(event.currentTarget.value)}
+          className={cn(
+            'h-10 w-full appearance-none rounded-sm border border-border bg-surface pl-3 pr-9 text-sm text-text',
+            'transition-colors duration-fast ease-out hover:border-border-strong',
+            'focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2',
+          )}
+        >
+          {TURBULENCE_APPROACHES.map((approach) => (
+            <optgroup key={approach.id} label={approach.label}>
+              {TURBULENCE_MODELS.filter((m) => m.simulationType === approach.id).map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+        <ChevronDown
+          className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-text-secondary"
+          strokeWidth={1.75}
+          aria-hidden="true"
+        />
+      </div>
+      <p className="text-xs text-text-secondary">Highlights the fields this model needs.</p>
     </div>
   );
 }
@@ -311,14 +347,12 @@ function SeedRow({
   unit,
   value,
   used,
-  disabled,
 }: {
   symbol: string;
   name: string;
   unit: string;
   value: number;
   used: boolean;
-  disabled: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const display = formatNumber(value, 4);
@@ -336,7 +370,7 @@ function SeedRow({
   };
 
   return (
-    <div className={cn('flex items-center gap-3 px-3 py-2', !used && 'opacity-55')}>
+    <div className={cn('flex items-center gap-3 px-3 py-2.5', !used && 'opacity-55')}>
       <div className="flex min-w-0 items-baseline gap-2">
         <span
           className={cn('w-4 font-mono text-sm font-semibold', used ? 'text-primary' : 'text-text-secondary')}
@@ -355,18 +389,16 @@ function SeedRow({
         <span className="font-mono text-sm tabular-nums text-text" translate="no">
           {display}
         </span>
-        <span className="font-mono text-xs text-text-secondary" translate="no">
+        <span className="w-12 font-mono text-xs text-text-secondary" translate="no">
           {unit}
         </span>
         <button
           type="button"
           onClick={() => void copy()}
-          disabled={disabled}
           className={cn(
-            'grid size-7 shrink-0 place-items-center rounded-sm text-text-secondary',
+            'grid size-8 shrink-0 place-items-center rounded-sm text-text-secondary',
             'transition-colors duration-fast ease-out hover:bg-bg hover:text-text',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
-            'disabled:cursor-not-allowed disabled:opacity-50',
           )}
           aria-label={copied ? `Copied ${symbol}` : `Copy ${symbol} value ${copyValue}`}
         >
@@ -381,5 +413,33 @@ function SeedRow({
         {copied ? `${symbol} value copied` : ''}
       </span>
     </div>
+  );
+}
+
+/** A collapsible reference of the equations behind the numbers. */
+function FormulaReference() {
+  return (
+    <details className="group rounded-md border border-border bg-bg/40">
+      <summary
+        className={cn(
+          'flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-text-secondary',
+          'rounded-md hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-inset',
+        )}
+      >
+        <ChevronDown
+          className="size-4 shrink-0 transition-transform duration-fast ease-out group-open:rotate-180"
+          strokeWidth={1.75}
+          aria-hidden="true"
+        />
+        Formulas
+      </summary>
+      <div className="flex flex-col gap-1 border-t border-border px-3 py-2.5 font-mono text-xs text-text-secondary">
+        <span translate="no">Re = U · Dh / ν</span>
+        <span translate="no">k = 3/2 · (U · I)²</span>
+        <span translate="no">L = 0.07 · Dh</span>
+        <span translate="no">ε = k^1.5 / (0.09^0.75 · L)</span>
+        <span translate="no">ω = k^0.5 / (0.09^0.75 · L) = ε / k</span>
+      </div>
+    </details>
   );
 }

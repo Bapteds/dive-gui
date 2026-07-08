@@ -14,7 +14,6 @@ import {
 import { useSyncBoundaries } from '@/features/projects/useCaseFiles';
 import { SolverBrowserDialog } from './SolverBrowserDialog';
 import { SolverFilesStep } from './SolverFilesStep';
-import { TurbulenceCalculator } from './TurbulenceCalculator';
 import { TurbulencePicker } from './TurbulencePicker';
 import { useScaffoldSolver } from './useRuns';
 
@@ -193,8 +192,6 @@ export function SolverSetupWizard({
                 </span>
               </span>
             </label>
-
-            <TurbulenceCalculator turbulence={turbulence} disabled={pending} />
 
             <p className="text-xs text-text-secondary">
               After generating you can fine-tune the values and run the solver.
