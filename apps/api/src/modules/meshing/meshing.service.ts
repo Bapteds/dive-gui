@@ -15,11 +15,13 @@ import type {
   MeshBounds,
   MeshImportConversion,
   MeshManifest,
+  MeshingConfig,
+  MeshingEngine,
   MeshingRun,
   MeshingSession,
   MeshingSessionSummary,
-  SnappyConfig,
 } from '@dive/shared';
+import { FMS_EXTENSION, STL_EXTENSION } from '@dive/shared';
 import { env } from '../../config/env';
 import { AppError } from '../../lib/AppError';
 import { coreBudget } from '../../lib/cores';
@@ -27,6 +29,7 @@ import { runCommand, type CommandResult } from '../../lib/commandRunner';
 import { zipTreeAt } from '../../lib/fileTreeStorage';
 import { parseStlBounds, unionBounds } from '../../lib/stlBounds';
 import { runSnappyPipeline } from '../../lib/snappyPipeline';
+import { runCfMeshPipeline } from '../../lib/cfMeshPipeline';
 import {
   createSession as createSessionDir,
   deleteSession,
@@ -94,6 +97,7 @@ async function assembleSession(meta: MeshingMeta): Promise<MeshingSession> {
   return {
     id: meta.id,
     name: meta.name,
+    engine: meta.engine,
     createdAt: meta.createdAt,
     stlCount: stls.length,
     hasMesh,
@@ -112,6 +116,7 @@ export async function listMeshingSessions(): Promise<MeshingSessionSummary[]> {
     metas.map(async (meta) => ({
       id: meta.id,
       name: meta.name,
+      engine: meta.engine,
       createdAt: meta.createdAt,
       stlCount: (await listStl(meta.id)).length,
       hasMesh: await hasResultMesh(meta.id),
@@ -119,9 +124,12 @@ export async function listMeshingSessions(): Promise<MeshingSessionSummary[]> {
   );
 }
 
-/** Create a new empty session. */
-export async function createMeshingSession(name: string): Promise<MeshingSession> {
-  const meta = await createSessionDir(name);
+/** Create a new empty session with the chosen engine (fixed for its life). */
+export async function createMeshingSession(
+  name: string,
+  engine: MeshingEngine,
+): Promise<MeshingSession> {
+  const meta = await createSessionDir(name, engine);
   return assembleSession(meta);
 }
 
@@ -137,28 +145,63 @@ export async function removeMeshingSession(sessionId: string): Promise<void> {
   await deleteSession(sessionId);
 }
 
+/** Does a filename look like an STL / an FMS? */
+function isStl(name: string): boolean {
+  return name.toLowerCase().endsWith(STL_EXTENSION);
+}
+function isFms(name: string): boolean {
+  return name.toLowerCase().endsWith(FMS_EXTENSION);
+}
+
 /**
- * Add one or more STL surfaces to a session. Each upload must be a .stl and must
- * parse to a non-empty bounding box; a malformed one is rejected before anything
- * is written for it. Returns the refreshed session.
+ * Add one or more input surfaces to a session, validated for its engine:
+ *  - snappy: only .stl, each parseable to a non-empty bounding box.
+ *  - cfmesh: .stl (parseable) OR a single .fms. A session holds EITHER STLs OR one
+ *    FMS — never both, and never two FMS — since cfMesh meshes one surfaceFile.
+ * A malformed / disallowed upload is rejected before anything is written.
  *
  * @throws 404 when the session is absent.
  * @throws 400 NO_STL when no files were provided.
- * @throws 422 INVALID_STL when a file is not a parseable STL.
+ * @throws 422 INVALID_STL for a wrong type / unparseable STL / a disallowed mix.
  */
 export async function addStlFiles(sessionId: string, uploads: StlUpload[]): Promise<MeshingSession> {
   const meta = await requireSession(sessionId);
   if (uploads.length === 0) {
-    throw new AppError(400, 'NO_STL', 'No STL files were uploaded.');
+    throw new AppError(400, 'NO_STL', 'No files were uploaded.');
   }
+
+  const existing = await listStl(sessionId);
+  const hasFms = existing.some((f) => isFms(f.name));
+  const hasStl = existing.some((f) => isStl(f.name));
+
   for (const upload of uploads) {
-    if (!upload.name.toLowerCase().endsWith('.stl')) {
-      throw new AppError(422, 'INVALID_STL', `"${upload.name}" is not an .stl file.`);
+    const stl = isStl(upload.name);
+    const fms = meta.engine === 'cfmesh' && isFms(upload.name);
+    if (!stl && !fms) {
+      const allowed = meta.engine === 'cfmesh' ? 'an .stl or .fms' : 'an .stl';
+      throw new AppError(422, 'INVALID_STL', `"${upload.name}" is not ${allowed} file.`);
     }
-    if (!parseStlBounds(upload.data).valid) {
+    if (stl && !parseStlBounds(upload.data).valid) {
       throw new AppError(422, 'INVALID_STL', `"${upload.name}" could not be read as an STL surface.`);
     }
   }
+
+  // cfMesh: enforce "one surfaceFile" — STLs and an FMS are mutually exclusive.
+  if (meta.engine === 'cfmesh') {
+    const addingFms = uploads.filter((u) => isFms(u.name)).length;
+    const addingStl = uploads.some((u) => isStl(u.name));
+    if (addingFms + (hasFms ? 1 : 0) > 1) {
+      throw new AppError(422, 'INVALID_STL', 'A cfMesh session takes a single .fms file.');
+    }
+    if ((addingFms > 0 && (hasStl || addingStl)) || (addingStl && hasFms)) {
+      throw new AppError(
+        422,
+        'INVALID_STL',
+        'Use either STL surfaces or one FMS file — not both. Remove the others first.',
+      );
+    }
+  }
+
   for (const upload of uploads) {
     await writeStl(sessionId, upload.name, upload.data);
   }
@@ -185,41 +228,59 @@ export async function removeStlFile(sessionId: string, name: string): Promise<Me
   return assembleSession(meta);
 }
 
+/** Clamp a config's cores to the machine budget (a direct API call could exceed it). */
+function clampCores<T extends MeshingConfig>(config: T): T {
+  return { ...config, cores: Math.min(Math.max(1, Math.floor(config.cores || 1)), coreBudget()) };
+}
+
+/** The config's engine must match the session's (chosen at creation, fixed). */
+function assertEngineMatches(meta: MeshingMeta, config: MeshingConfig): void {
+  if (config.engine !== meta.engine) {
+    throw new AppError(
+      400,
+      'ENGINE_MISMATCH',
+      `This session uses ${meta.engine}; the config is for ${config.engine}.`,
+    );
+  }
+}
+
 /**
- * Run the snappyHexMesh pipeline with the given config. Requires at least one
- * parseable STL. Resolves with the refreshed session and the per-step report
- * even when a tool fails (result.success === false) — only access / missing-STL
- * problems throw. On success the cached render is invalidated (mtime bump), so
- * the next manifest fetch rebuilds it.
+ * Run the session's mesher (snappyHexMesh or cfMesh, per its engine) with the given
+ * config. Requires at least one input surface. Resolves with the refreshed session
+ * and the per-step report even when a tool fails (result.success === false) — only
+ * access / missing-surface / engine-mismatch problems throw. On success the cached
+ * render is invalidated so the next manifest fetch rebuilds it.
  *
  * @throws 404 when the session is absent.
- * @throws 400 NO_STL when the session has no usable STL surface.
+ * @throws 400 ENGINE_MISMATCH when the config engine differs from the session's.
+ * @throws 400 NO_STL when the session has no usable input surface.
  */
-export async function runSnappy(
+export async function runMeshing(
   sessionId: string,
-  config: SnappyConfig,
+  config: MeshingConfig,
 ): Promise<{ session: MeshingSession; result: MeshImportConversion }> {
   const meta = await requireSession(sessionId);
+  assertEngineMatches(meta, config);
 
-  const stls = await listStl(sessionId);
-  if (stls.length === 0) {
-    throw new AppError(400, 'NO_STL', 'Add at least one STL surface before meshing.');
+  const surfaces = await listStl(sessionId);
+  if (surfaces.length === 0) {
+    throw new AppError(400, 'NO_STL', 'Add at least one input surface before meshing.');
   }
   const bounds = await sessionBounds(sessionId);
-  if (!bounds) {
-    throw new AppError(400, 'NO_STL', 'The uploaded STL surfaces could not be read.');
-  }
-
-  // Clamp the requested cores to the machine budget: a run must never ask for more
-  // MPI ranks than the host can offer (the UI already caps it, but a direct API
-  // call could exceed it). cores <= 1 keeps the serial path.
-  const effectiveConfig: SnappyConfig = {
-    ...config,
-    cores: Math.min(Math.max(1, Math.floor(config.cores || 1)), coreBudget()),
-  };
-
   const caseDir = sessionCaseDir(sessionId);
-  const result = await runSnappyPipeline(caseDir, stls.map((s) => s.name), bounds, effectiveConfig);
+  const effectiveConfig = clampCores(config);
+
+  let result: MeshImportConversion;
+  if (effectiveConfig.engine === 'cfmesh') {
+    // cfMesh takes one surfaceFile (merged STLs or an FMS); bounds may be null (FMS).
+    result = await runCfMeshPipeline(caseDir, surfaces.map((s) => s.name), bounds, effectiveConfig);
+  } else {
+    // snappyHexMesh needs a readable STL bounding box to size the background mesh.
+    if (!bounds) {
+      throw new AppError(400, 'NO_STL', 'The uploaded STL surfaces could not be read.');
+    }
+    result = await runSnappyPipeline(caseDir, surfaces.map((s) => s.name), bounds, effectiveConfig);
+  }
 
   // Persist the run report + config so the UI can show the last outcome on reload,
   // and mirror the config into the autosave sidecar so the two stay in sync.
@@ -237,18 +298,18 @@ export async function runSnappy(
  * Persist the session's edited config (autosaved from the form), independent of a
  * run, so manual settings survive a reload even before the mesh is generated. The
  * cores are clamped to the machine budget, exactly as a run would. Returns the
- * refreshed session. @throws 404 when the session is absent.
+ * refreshed session.
+ *
+ * @throws 404 when the session is absent.
+ * @throws 400 ENGINE_MISMATCH when the config engine differs from the session's.
  */
 export async function saveMeshingConfig(
   sessionId: string,
-  config: SnappyConfig,
+  config: MeshingConfig,
 ): Promise<MeshingSession> {
   const meta = await requireSession(sessionId);
-  const clamped: SnappyConfig = {
-    ...config,
-    cores: Math.min(Math.max(1, Math.floor(config.cores || 1)), coreBudget()),
-  };
-  await writeConfig(sessionId, clamped);
+  assertEngineMatches(meta, config);
+  await writeConfig(sessionId, clampCores(config));
   return assembleSession(meta);
 }
 

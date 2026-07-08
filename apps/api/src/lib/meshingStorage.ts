@@ -18,8 +18,8 @@
 // pinned to the meshing root. Mirrors meshStorage.ts (the per-project analogue).
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { MeshingRun, SnappyConfig, StlFile } from '@dive/shared';
-import { STL_EXTENSION } from '@dive/shared';
+import type { MeshingConfig, MeshingEngine, MeshingRun, StlFile } from '@dive/shared';
+import { FMS_EXTENSION, MESHING_ENGINES, STL_EXTENSION } from '@dive/shared';
 import {
   assertSafeId,
   confineJoin,
@@ -31,6 +31,8 @@ import {
 export interface MeshingMeta {
   id: string;
   name: string;
+  /** The mesh generator this session uses (fixed at creation; legacy => 'snappy'). */
+  engine: MeshingEngine;
   /** ISO 8601 creation timestamp. */
   createdAt: string;
 }
@@ -108,10 +110,10 @@ async function writeMeta(meta: MeshingMeta): Promise<void> {
   await fs.writeFile(file, JSON.stringify(meta), 'utf8');
 }
 
-/** Create a new empty session, returning its metadata. */
-export async function createSession(name: string): Promise<MeshingMeta> {
+/** Create a new empty session with the chosen engine, returning its metadata. */
+export async function createSession(name: string, engine: MeshingEngine): Promise<MeshingMeta> {
   const id = await uniqueSessionId(name);
-  const meta: MeshingMeta = { id, name: name.trim(), createdAt: new Date().toISOString() };
+  const meta: MeshingMeta = { id, name: name.trim(), engine, createdAt: new Date().toISOString() };
   await writeMeta(meta);
   return meta;
 }
@@ -123,7 +125,11 @@ export async function readMeta(sessionId: string): Promise<MeshingMeta | null> {
     const file = path.join(sessionDirAbsolute(sessionId), 'meta.json');
     const parsed = JSON.parse(await fs.readFile(file, 'utf8')) as Partial<MeshingMeta>;
     if (!parsed.id || !parsed.name || !parsed.createdAt) return null;
-    return { id: parsed.id, name: parsed.name, createdAt: parsed.createdAt };
+    // A session created before the engine choice existed is a snappy session.
+    const engine = MESHING_ENGINES.includes(parsed.engine as MeshingEngine)
+      ? (parsed.engine as MeshingEngine)
+      : 'snappy';
+    return { id: parsed.id, name: parsed.name, engine, createdAt: parsed.createdAt };
   } catch {
     return null;
   }
@@ -158,18 +164,22 @@ export async function deleteSession(sessionId: string): Promise<void> {
 }
 
 /**
- * Reduce an uploaded filename to a safe STL basename inside triSurface/: strip
- * any directory, keep a conservative charset, and force the .stl extension.
+ * Reduce an uploaded filename to a safe surface basename inside triSurface/: strip
+ * any directory, keep a conservative charset, and keep an .stl or .fms extension
+ * (lower-cased) — any other extension is forced to .stl (the common case). Kept as
+ * `sanitizeStlName` for callers/tests; it now also preserves cfMesh's .fms.
  */
 export function sanitizeStlName(rawName: string): string {
   const base = rawName.replace(/\\/g, '/').split('/').pop() ?? rawName;
+  const ext = (base.match(/\.[^.]+$/)?.[0] ?? '').toLowerCase();
+  const keptExt = ext === FMS_EXTENSION ? FMS_EXTENSION : STL_EXTENSION;
   const stem = base.replace(/\.[^.]+$/, '');
   const safe = stem
     .normalize('NFKD')
     .replace(/\p{Diacritic}/gu, '')
     .replace(/[^A-Za-z0-9._-]+/g, '_')
     .replace(/^[._]+|[._]+$/g, '');
-  return `${safe || 'surface'}${STL_EXTENSION}`;
+  return `${safe || 'surface'}${keptExt}`;
 }
 
 /** Write one uploaded STL into the session (overwriting a same-named one). Returns its stored name. */
@@ -193,7 +203,8 @@ export async function listStl(sessionId: string): Promise<StlFile[]> {
   const files: StlFile[] = [];
   for (const dirent of dirents) {
     if (!dirent.isFile()) continue;
-    if (!dirent.name.toLowerCase().endsWith(STL_EXTENSION)) continue;
+    const lower = dirent.name.toLowerCase();
+    if (!lower.endsWith(STL_EXTENSION) && !lower.endsWith(FMS_EXTENSION)) continue;
     const stat = await fs.stat(path.join(triSurfaceDir(sessionId), dirent.name));
     files.push({ name: dirent.name, sizeBytes: stat.size });
   }
@@ -257,17 +268,17 @@ export async function readRun(sessionId: string): Promise<MeshingRun | null> {
  * so manual settings survive a reload even before the mesh is generated. A run
  * also refreshes this via the same writer, keeping the two in sync.
  */
-export async function writeConfig(sessionId: string, config: SnappyConfig): Promise<void> {
+export async function writeConfig(sessionId: string, config: MeshingConfig): Promise<void> {
   const file = path.join(sessionDirAbsolute(sessionId), 'config.json');
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, JSON.stringify(config), 'utf8');
 }
 
 /** Read the last-edited config, or null when the session was never configured. */
-export async function readConfig(sessionId: string): Promise<SnappyConfig | null> {
+export async function readConfig(sessionId: string): Promise<MeshingConfig | null> {
   try {
     const file = path.join(sessionDirAbsolute(sessionId), 'config.json');
-    return JSON.parse(await fs.readFile(file, 'utf8')) as SnappyConfig;
+    return JSON.parse(await fs.readFile(file, 'utf8')) as MeshingConfig;
   } catch {
     return null;
   }

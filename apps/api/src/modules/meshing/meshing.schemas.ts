@@ -1,10 +1,11 @@
-// Zod schemas for the standalone Meshing endpoints (STL -> snappyHexMesh).
+// Zod schemas for the standalone Meshing endpoints (snappyHexMesh / cfMesh).
 import { z } from 'zod';
-import { DOMAIN_TYPES } from '@dive/shared';
+import { DOMAIN_TYPES, MESHING_ENGINES } from '@dive/shared';
 
-/** Body for POST /meshing — create a session. */
+/** Body for POST /meshing — create a session with its (fixed) engine. */
 export const createSessionSchema = z.object({
   name: z.string().trim().min(1, 'A name is required').max(120, 'Name is too long'),
+  engine: z.enum(MESHING_ENGINES).default('snappy'),
 });
 export type CreateSessionInput = z.infer<typeof createSessionSchema>;
 
@@ -36,6 +37,7 @@ const refinementSchema = z
   });
 
 export const runSnappySchema = z.object({
+  engine: z.literal('snappy'),
   domainType: z.enum(DOMAIN_TYPES),
   baseCellSize: z.number().positive().nullable().default(null),
   marginFactor: z.number().min(0).max(10).default(0.1),
@@ -69,3 +71,32 @@ export const runSnappySchema = z.object({
   cores: z.number().int().min(1).max(1024).default(1),
 });
 export type RunSnappyInput = z.infer<typeof runSnappySchema>;
+
+/**
+ * Body shape for a cfMesh (cartesianMesh) run — matches the shared `CfMeshConfig`.
+ * Sizes are absolute metres; `maxCellSize` null means "derive from the STL bounds"
+ * (rejected server-side for an FMS input, which has no bounds). `cores` maps to
+ * OMP threads, clamped to the host budget by the service.
+ */
+export const runCfMeshSchema = z.object({
+  engine: z.literal('cfmesh'),
+  maxCellSize: z.number().positive().nullable().default(null),
+  minCellSize: z.number().positive().nullable().default(null),
+  boundaryCellSize: z.number().positive().nullable().default(null),
+  extractFeatures: z.boolean().default(true),
+  featureAngle: z.number().min(0).max(180).default(45),
+  addLayers: z
+    .object({
+      enabled: z.boolean(),
+      nLayers: z.number().int().min(1).max(20),
+      thicknessRatio: z.number().min(1).max(5).default(1.2),
+      maxFirstLayerThickness: z.number().positive().nullable().default(null),
+    })
+    .default({ enabled: false, nLayers: 3, thicknessRatio: 1.2, maxFirstLayerThickness: null }),
+  cores: z.number().int().min(1).max(1024).default(1),
+});
+export type RunCfMeshInput = z.infer<typeof runCfMeshSchema>;
+
+/** A run/config body for either engine, discriminated by `engine`. */
+export const meshingConfigSchema = z.discriminatedUnion('engine', [runSnappySchema, runCfMeshSchema]);
+export type MeshingConfigInput = z.infer<typeof meshingConfigSchema>;

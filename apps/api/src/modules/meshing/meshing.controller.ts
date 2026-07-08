@@ -16,11 +16,11 @@ import {
   readStlBytes,
   removeMeshingSession,
   removeStlFile,
-  runSnappy,
+  runMeshing,
   saveMeshingConfig,
   type StlUpload,
 } from './meshing.service';
-import type { CreateSessionInput, RunSnappyInput, StlNameQuery } from './meshing.schemas';
+import type { CreateSessionInput, MeshingConfigInput, StlNameQuery } from './meshing.schemas';
 
 /** GET /meshing — list all sessions (summaries). */
 export async function listSessionsController(_req: Request, res: Response): Promise<void> {
@@ -28,10 +28,10 @@ export async function listSessionsController(_req: Request, res: Response): Prom
   res.status(200).json({ sessions });
 }
 
-/** POST /meshing — create a session. */
+/** POST /meshing — create a session with its engine. */
 export async function createSessionController(req: Request, res: Response): Promise<void> {
-  const { name } = req.body as CreateSessionInput;
-  const session = await createMeshingSession(name);
+  const { name, engine } = req.body as CreateSessionInput;
+  const session = await createMeshingSession(name, engine);
   res.status(201).json({ session });
 }
 
@@ -76,16 +76,16 @@ export async function deleteStlController(req: Request, res: Response): Promise<
   res.status(200).json({ session });
 }
 
-/** POST /meshing/:id/run — run the snappyHexMesh pipeline. */
+/** POST /meshing/:id/run — run the session's mesher (snappyHexMesh or cfMesh). */
 export async function runSnappyController(req: Request, res: Response): Promise<void> {
-  const config = req.body as RunSnappyInput;
-  const { session, result } = await runSnappy(req.params.id, config);
+  const config = req.body as MeshingConfigInput;
+  const { session, result } = await runMeshing(req.params.id, config);
   res.status(200).json({ session, result });
 }
 
 /** PUT /meshing/:id/config — autosave the edited config (no run). */
 export async function saveConfigController(req: Request, res: Response): Promise<void> {
-  const config = req.body as RunSnappyInput;
+  const config = req.body as MeshingConfigInput;
   const session = await saveMeshingConfig(req.params.id, config);
   res.status(200).json({ session });
 }

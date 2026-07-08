@@ -208,6 +208,7 @@ export function SnappyConfigForm({
       (firstName && surfaceRefinements[firstName]) || DEFAULT_SNAPPY_CONFIG.surfaceRefinement;
 
     return {
+      engine: 'snappy',
       domainType,
       baseCellSize: parsedCell && parsedCell > 0 ? parsedCell : null,
       marginFactor: margin,

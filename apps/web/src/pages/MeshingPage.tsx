@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -8,6 +9,8 @@ import { EmptyState } from '@/components/common/EmptyState';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
+import { SegmentedRadioGroup } from '@/components/ui/segmented';
+import type { MeshingEngine } from '@/lib/api/types';
 import {
   Table,
   TableBody,
@@ -52,7 +55,7 @@ export function MeshingPage() {
     <div className="flex flex-col gap-8">
       <PageHeader
         title="Meshing"
-        subtitle="Turn STL surfaces into an OpenFOAM mesh with snappyHexMesh."
+        subtitle="Turn surfaces into an OpenFOAM mesh with snappyHexMesh or cfMesh."
       />
 
       <CreateSessionForm />
@@ -97,9 +100,10 @@ export function MeshingPage() {
   );
 }
 
-/** The create-session form: a single name field and one orange CTA. */
+/** The create-session form: a name, an engine choice, and one orange CTA. */
 function CreateSessionForm() {
   const create = useCreateMeshingSession();
+  const [engine, setEngine] = useState<MeshingEngine>('snappy');
 
   const {
     register,
@@ -118,7 +122,7 @@ function CreateSessionForm() {
 
   const onSubmit = handleSubmit(async (values) => {
     try {
-      await create.mutateAsync(values.name.trim());
+      await create.mutateAsync({ name: values.name.trim(), engine });
       toast.success('Session created.');
       reset({ name: '' });
       setFocus('name');
@@ -138,7 +142,7 @@ function CreateSessionForm() {
     <form
       onSubmit={onSubmit}
       noValidate
-      className="rounded-md border border-border bg-surface p-5 shadow-sm sm:p-6"
+      className="flex flex-col gap-4 rounded-md border border-border bg-surface p-5 shadow-sm sm:p-6"
     >
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
         <Field label="Session name" error={errors.name?.message} className="flex-1">
@@ -154,6 +158,24 @@ function CreateSessionForm() {
           New session
         </Button>
       </div>
+      <fieldset className="flex flex-col gap-2">
+        <legend className="text-sm font-medium text-text">Mesh engine</legend>
+        <SegmentedRadioGroup
+          name="engine"
+          value={engine}
+          onChange={(value) => setEngine(value)}
+          ariaLabel="Mesh engine"
+          options={[
+            { value: 'snappy', label: 'snappyHexMesh' },
+            { value: 'cfmesh', label: 'cfMesh' },
+          ]}
+        />
+        <p className="text-xs text-text-secondary">
+          {engine === 'snappy'
+            ? 'Hex-dominant mesh from STL surface(s). Runs in parallel (MPI).'
+            : 'Hex-dominant cartesianMesh from merged STL(s) or a single FMS. Multithreaded.'}
+        </p>
+      </fieldset>
     </form>
   );
 }
@@ -166,6 +188,7 @@ function SessionsTable({ sessions }: { sessions: MeshingSessionSummary[] }) {
         <TableHeader>
           <TableRow className="hover:bg-bg">
             <TableHead scope="col">Name</TableHead>
+            <TableHead scope="col">Engine</TableHead>
             <TableHead scope="col" className="hidden text-right sm:table-cell">
               Surfaces
             </TableHead>
@@ -188,6 +211,11 @@ function SessionsTable({ sessions }: { sessions: MeshingSessionSummary[] }) {
                   {session.name}
                   <ChevronRight className="size-4 text-neutral" strokeWidth={1.75} aria-hidden="true" />
                 </Link>
+              </TableCell>
+              <TableCell>
+                <span className="inline-flex items-center rounded-sm bg-primary-tint px-1.5 py-0.5 text-xs font-medium text-primary">
+                  {session.engine === 'cfmesh' ? 'cfMesh' : 'snappyHexMesh'}
+                </span>
               </TableCell>
               <TableCell className="hidden text-right text-text-secondary tabular-nums sm:table-cell">
                 {session.stlCount}
@@ -224,6 +252,7 @@ function SessionsSkeleton({ rows = 4 }: { rows?: number }) {
         <TableHeader>
           <TableRow className="hover:bg-bg">
             <TableHead scope="col">Name</TableHead>
+            <TableHead scope="col">Engine</TableHead>
             <TableHead scope="col" className="hidden text-right sm:table-cell">
               Surfaces
             </TableHead>
@@ -240,6 +269,9 @@ function SessionsSkeleton({ rows = 4 }: { rows?: number }) {
             <TableRow key={index} className="hover:bg-transparent">
               <TableCell>
                 <Skeleton className="h-4 w-48" />
+              </TableCell>
+              <TableCell>
+                <Skeleton className="h-4 w-24" />
               </TableCell>
               <TableCell className="hidden sm:table-cell">
                 <div className="flex justify-end">

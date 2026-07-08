@@ -52,9 +52,9 @@ function caseDirOf(args: string[]): string {
   return i >= 0 ? args[i + 1] : '';
 }
 
-/** Fake runner: every tool succeeds; snappyHexMesh writes constant/polyMesh. */
+/** Fake runner: every tool succeeds; the mesher writes constant/polyMesh. */
 const successRunner: CommandRunner = async (spec) => {
-  if (spec.command === 'snappyHexMesh') {
+  if (spec.command === 'snappyHexMesh' || spec.command === 'cartesianMesh') {
     const dir = path.join(caseDirOf(spec.args), 'constant', 'polyMesh');
     await fs.mkdir(dir, { recursive: true });
     for (const name of POLYMESH_FILES) {
@@ -77,6 +77,7 @@ const notFoundRunner: CommandRunner = async (spec) => ({
 });
 
 const CONFIG = {
+  engine: 'snappy',
   domainType: 'internal',
   baseCellSize: 0.2,
   marginFactor: 0.1,
@@ -84,6 +85,16 @@ const CONFIG = {
   featureLevel: 2,
   locationInMesh: null,
   addLayers: { enabled: false, nLayers: 3 },
+};
+
+/** A minimal cfMesh run body (cartesianMesh writes the polyMesh in the fake runner). */
+const CFMESH_CONFIG = {
+  engine: 'cfmesh',
+  maxCellSize: 0.2,
+  extractFeatures: true,
+  featureAngle: 45,
+  addLayers: { enabled: false, nLayers: 3 },
+  cores: 1,
 };
 
 beforeEach(async () => {
@@ -174,6 +185,65 @@ describe('Meshing sessions', () => {
       .set('Authorization', auth)
       .expect(200);
     expect(zip.headers['content-type']).toContain('application/zip');
+  });
+
+  it('runs a cfMesh session (cartesianMesh) and produces a mesh', async () => {
+    const commands: string[] = [];
+    setCommandRunner(async (spec) => {
+      commands.push(spec.command);
+      return successRunner(spec);
+    });
+    const user = await createTestUser();
+    const auth = authHeader(user);
+
+    const { body: c } = await request(app)
+      .post('/api/v1/meshing')
+      .set('Authorization', auth)
+      .send({ name: 'cfMesh runnable', engine: 'cfmesh' })
+      .expect(201);
+    expect(c.session.engine).toBe('cfmesh');
+    const id = c.session.id as string;
+    await request(app)
+      .post(`/api/v1/meshing/${id}/stl`)
+      .set('Authorization', auth)
+      .attach('files', CUBE_STL, 'cube.stl')
+      .expect(201);
+
+    const run = await request(app)
+      .post(`/api/v1/meshing/${id}/run`)
+      .set('Authorization', auth)
+      .send(CFMESH_CONFIG)
+      .expect(200);
+    expect(run.body.result.success).toBe(true);
+    expect(run.body.session.hasMesh).toBe(true);
+    // One STL + feature extraction -> surfaceFeatureEdges then cartesianMesh + checkMesh.
+    expect(commands).toEqual(['surfaceFeatureEdges', 'cartesianMesh', 'checkMesh']);
+  });
+
+  it('rejects a config whose engine differs from the session', async () => {
+    setCommandRunner(successRunner);
+    const user = await createTestUser();
+    const auth = authHeader(user);
+
+    const { body: c } = await request(app)
+      .post('/api/v1/meshing')
+      .set('Authorization', auth)
+      .send({ name: 'Snappy session' })
+      .expect(201);
+    const id = c.session.id as string;
+    await request(app)
+      .post(`/api/v1/meshing/${id}/stl`)
+      .set('Authorization', auth)
+      .attach('files', CUBE_STL, 'cube.stl')
+      .expect(201);
+
+    // A cfMesh config on a snappy session is a 400 ENGINE_MISMATCH.
+    const run = await request(app)
+      .post(`/api/v1/meshing/${id}/run`)
+      .set('Authorization', auth)
+      .send(CFMESH_CONFIG)
+      .expect(400);
+    expect(run.body.error.code).toBe('ENGINE_MISMATCH');
   });
 
   it('reports a clean per-step failure when the toolchain is missing', async () => {

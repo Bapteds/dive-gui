@@ -22,7 +22,7 @@ import {
 } from './meshing.controller';
 import {
   createSessionSchema,
-  runSnappySchema,
+  meshingConfigSchema,
   sessionIdParamSchema,
   stlNameQuerySchema,
 } from './meshing.schemas';
@@ -66,14 +66,14 @@ export function createMeshingRouter(): Router {
   // Run the snappyHexMesh pipeline.
   router.post(
     '/:id/run',
-    validate({ params: sessionIdParamSchema, body: runSnappySchema }),
+    validate({ params: sessionIdParamSchema, body: meshingConfigSchema }),
     asyncHandler(runSnappyController),
   );
 
   // Autosave the edited config (persist without running).
   router.put(
     '/:id/config',
-    validate({ params: sessionIdParamSchema, body: runSnappySchema }),
+    validate({ params: sessionIdParamSchema, body: meshingConfigSchema }),
     asyncHandler(saveConfigController),
   );
 

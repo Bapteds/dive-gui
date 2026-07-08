@@ -15,9 +15,10 @@ import {
 import type {
   MeshImportConversion,
   MeshManifest,
+  MeshingConfig,
+  MeshingEngine,
   MeshingSession,
   MeshingSessionSummary,
-  SnappyConfig,
 } from '@/lib/api/types';
 
 /**
@@ -54,11 +55,12 @@ export function useMeshingSession(id: string) {
   });
 }
 
-/** Create a session, then refresh the list. */
+/** Create a session (with its engine), then refresh the list. */
 export function useCreateMeshingSession() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (name: string) => createMeshingSession(name),
+    mutationFn: ({ name, engine }: { name: string; engine: MeshingEngine }) =>
+      createMeshingSession(name, engine),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: meshingSessionsKey });
     },
@@ -107,7 +109,7 @@ export function useDeleteStl(id: string) {
  */
 export function useRunSnappy(id: string) {
   const queryClient = useQueryClient();
-  return useMutation<{ session: MeshingSession; result: MeshImportConversion }, Error, SnappyConfig>({
+  return useMutation<{ session: MeshingSession; result: MeshImportConversion }, Error, MeshingConfig>({
     mutationFn: (config) => runSnappy(id, config),
     onSuccess: ({ session, result }) => {
       queryClient.setQueryData(meshingSessionKey(id), session);
@@ -128,7 +130,7 @@ export function useRunSnappy(id: string) {
  */
 export function useSaveMeshingConfig(id: string) {
   const queryClient = useQueryClient();
-  return useMutation<MeshingSession, Error, SnappyConfig>({
+  return useMutation<MeshingSession, Error, MeshingConfig>({
     mutationFn: (config) => saveMeshingConfig(id, config),
     onSuccess: (session) => {
       queryClient.setQueryData(meshingSessionKey(id), session);

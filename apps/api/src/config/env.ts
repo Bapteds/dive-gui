@@ -94,6 +94,20 @@ const envSchema = z
     // Windows dev box -> a clean per-step "not found" rather than a crash).
     DECOMPOSE_PAR_BIN: z.string().min(1).default('decomposePar'),
     RECONSTRUCT_PAR_MESH_BIN: z.string().min(1).default('reconstructParMesh'),
+    // --- Meshing engine: cfMesh (cartesianMesh) ------------------------------
+    // Alternative to snappyHexMesh, bundled with ESI OpenFOAM.com v2406. Reads
+    // system/meshDict and meshes the volume bounded by a single surfaceFile (a
+    // merged STL or an FMS) into constant/polyMesh. It is MULTITHREADED (OpenMP),
+    // not MPI-decomposed, so the run's core count is passed as OMP_NUM_THREADS
+    // rather than through decomposePar. surfaceAdd folds several STLs into one
+    // surface; surfaceFeatureEdges extracts feature edges into an FMS. Same
+    // operational model as every other OpenFOAM tool (configurable, sourced via
+    // OPENFOAM_BASHRC, absent on a Windows dev box -> clean per-step "not found").
+    CARTESIAN_MESH_BIN: z.string().min(1).default('cartesianMesh'),
+    SURFACE_FEATURE_EDGES_BIN: z.string().min(1).default('surfaceFeatureEdges'),
+    SURFACE_ADD_BIN: z.string().min(1).default('surfaceAdd'),
+    // Per-step wall-clock timeout (ms) for a cfMesh step. Generous (30 min), like snappy.
+    CFMESH_STEP_TIMEOUT_MS: z.coerce.number().int().positive().default(1800000),
     // --- Multi-mesh merge (Merge meshes flow) ---------------------------------
     // mergeMeshes combines several imported polyMesh sources into one master
     // mesh; stitchMesh then conformally fuses chosen patch pairs (e.g. one part's

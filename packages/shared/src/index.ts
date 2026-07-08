@@ -810,8 +810,20 @@ export interface MeshImportConversion {
 /** Root directory (under STORAGE_DIR) holding every meshing session. */
 export const MESHING_DIRNAME = 'meshing';
 
-/** File extension a meshing session accepts as an input surface. */
+/** File extensions a meshing session accepts as an input surface. */
 export const STL_EXTENSION = '.stl';
+/** cfMesh's native surface format (geometry + feature edges + patches in one file). */
+export const FMS_EXTENSION = '.fms';
+
+/**
+ * The mesh generator a session uses, chosen at creation and fixed for its life:
+ *  - snappy : snappyHexMesh on STL surface(s) (the original flow).
+ *  - cfmesh : cfMesh cartesianMesh (hex-dominant) on merged STL(s) or a single FMS.
+ * The two take DIFFERENT settings (SnappyConfig vs CfMeshConfig) and DIFFERENT
+ * inputs (snappy: STL only; cfmesh: STL(s) or one FMS).
+ */
+export const MESHING_ENGINES = ['snappy', 'cfmesh'] as const;
+export type MeshingEngine = (typeof MESHING_ENGINES)[number];
 
 /**
  * Which side of the surface the volume mesh keeps — the single knob that flips a
@@ -866,6 +878,8 @@ export interface AddLayersConfig {
 }
 
 export interface SnappyConfig {
+  /** Discriminates the meshing-config union; always 'snappy' here. */
+  engine: 'snappy';
   domainType: DomainType;
   /** Background (blockMesh) cell edge length in metres; null => derive from bounds. */
   baseCellSize: number | null;
@@ -893,6 +907,7 @@ export interface SnappyConfig {
 
 /** The auto/minimal defaults the config form starts from. */
 export const DEFAULT_SNAPPY_CONFIG: SnappyConfig = {
+  engine: 'snappy',
   domainType: 'internal',
   baseCellSize: null,
   marginFactor: 0.1,
@@ -909,6 +924,69 @@ export const DEFAULT_SNAPPY_CONFIG: SnappyConfig = {
   cores: 1,
 };
 
+/**
+ * cfMesh (cartesianMesh) boundary-layer controls. cfMesh sizes are ABSOLUTE
+ * lengths and use a different vocabulary from snappy: growth is `thicknessRatio`
+ * and the near-wall layer is capped by `maxFirstLayerThickness` (rather than
+ * snappy's relativeSizes / finalLayerThickness / expansionRatio). Applied to all
+ * boundaries (per-patch layers are a later refinement).
+ */
+export interface CfMeshLayersConfig {
+  enabled: boolean;
+  /** Number of prism layers. */
+  nLayers: number;
+  /** Growth ratio between successive layers (>= 1). Maps to cfMesh thicknessRatio. */
+  thicknessRatio: number;
+  /** Cap on the first (near-wall) layer thickness in metres; null => cfMesh decides. */
+  maxFirstLayerThickness: number | null;
+}
+
+/**
+ * cfMesh cartesianMesh tunables. Writes system/meshDict. cfMesh meshes the volume
+ * bounded by the (closed) surface — INTERNAL flow — so there is no domain-type /
+ * keep-point knob like snappy. Sizes are absolute metres; `maxCellSize` null means
+ * "derive from the STL bounds" (diag/40), which requires known bounds — a raw FMS
+ * has none, so `maxCellSize` must be set for an FMS input.
+ */
+export interface CfMeshConfig {
+  /** Discriminates the meshing-config union; always 'cfmesh' here. */
+  engine: 'cfmesh';
+  /** Base (max) cell size in metres. null => derive from the STL bounds (diag/40). */
+  maxCellSize: number | null;
+  /** Optional refinement floor (min cell size, m); null => no size-based refinement. */
+  minCellSize: number | null;
+  /** Optional cell size at the boundary (m); null => same as maxCellSize. */
+  boundaryCellSize: number | null;
+  /** STL input: extract feature edges (surfaceFeatureEdges) into an FMS first. */
+  extractFeatures: boolean;
+  /** Feature angle (deg) for the edge extraction. */
+  featureAngle: number;
+  /** Boundary (prism) layers, applied to all boundaries. */
+  addLayers: CfMeshLayersConfig;
+  /** OpenMP threads for cartesianMesh (cfMesh is multithreaded, not MPI-decomposed). */
+  cores: number;
+}
+
+/** The config a run/session carries; its `engine` selects the shape. */
+export type MeshingConfig = SnappyConfig | CfMeshConfig;
+
+/** The auto/minimal cfMesh defaults the config form starts from. */
+export const DEFAULT_CFMESH_CONFIG: CfMeshConfig = {
+  engine: 'cfmesh',
+  maxCellSize: null,
+  minCellSize: null,
+  boundaryCellSize: null,
+  extractFeatures: true,
+  featureAngle: 45,
+  addLayers: { enabled: false, nLayers: 3, thicknessRatio: 1.2, maxFirstLayerThickness: null },
+  cores: 1,
+};
+
+/** The default config for a given engine. */
+export function defaultMeshingConfig(engine: MeshingEngine): MeshingConfig {
+  return engine === 'cfmesh' ? DEFAULT_CFMESH_CONFIG : DEFAULT_SNAPPY_CONFIG;
+}
+
 /** One uploaded input surface of a meshing session. */
 export interface StlFile {
   /** File name within the session's constant/triSurface directory. */
@@ -916,18 +994,20 @@ export interface StlFile {
   sizeBytes: number;
 }
 
-/** The last snappyHexMesh run of a session: the config used and its per-step report. */
+/** The last meshing run of a session: the config used and its per-step report. */
 export interface MeshingRun {
-  config: SnappyConfig;
+  config: MeshingConfig;
   result: MeshImportConversion;
   /** ISO 8601 timestamp of the run. */
   at: string;
 }
 
-/** A meshing session as shown in the list (no STL/run detail). */
+/** A meshing session as shown in the list (no surface/run detail). */
 export interface MeshingSessionSummary {
   id: string;
   name: string;
+  /** The mesh generator this session uses (fixed at creation). */
+  engine: MeshingEngine;
   /** ISO 8601 creation timestamp. */
   createdAt: string;
   stlCount: number;
@@ -945,8 +1025,9 @@ export interface MeshingSession extends MeshingSessionSummary {
    * The last config the user edited (autosaved), independent of a run — so manual
    * settings survive a reload even before the mesh is generated. Null when the
    * session has never been configured; the form then seeds from `lastRun.config`.
+   * Its `engine` always matches the session's engine.
    */
-  savedConfig: SnappyConfig | null;
+  savedConfig: MeshingConfig | null;
   /** Max cores a run may request (the machine's core budget). */
   maxCores: number;
 }

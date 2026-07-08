@@ -3,12 +3,13 @@ import type {
   MeshManifest,
   MeshManifestResponse,
   MeshImportConversion,
+  MeshingConfig,
+  MeshingEngine,
   MeshingSession,
   MeshingSessionResponse,
   MeshingSessionSummary,
   MeshingSessionsResponse,
   RunSnappyResponse,
-  SnappyConfig,
 } from './types';
 
 /**
@@ -23,9 +24,12 @@ export async function listMeshingSessions(): Promise<MeshingSessionSummary[]> {
   return data.sessions;
 }
 
-/** Create a new session. */
-export async function createMeshingSession(name: string): Promise<MeshingSession> {
-  const data = await apiClient.post<MeshingSessionResponse>('/meshing', { name });
+/** Create a new session with its (fixed) engine. */
+export async function createMeshingSession(
+  name: string,
+  engine: MeshingEngine,
+): Promise<MeshingSession> {
+  const data = await apiClient.post<MeshingSessionResponse>('/meshing', { name, engine });
   return data.session;
 }
 
@@ -40,7 +44,7 @@ export async function deleteMeshingSession(id: string): Promise<void> {
   await apiClient.delete(`/meshing/${id}`);
 }
 
-/** Upload one or more STL surfaces into a session (multipart, `files` field). */
+/** Upload one or more surfaces (STL, or FMS for cfMesh) into a session. */
 export async function uploadStl(id: string, files: File[]): Promise<MeshingSession> {
   const form = new FormData();
   for (const file of files) form.append('files', file, file.name);
@@ -69,7 +73,7 @@ export async function getStlBuffer(id: string, name: string): Promise<ArrayBuffe
  */
 export async function runSnappy(
   id: string,
-  config: SnappyConfig,
+  config: MeshingConfig,
 ): Promise<{ session: MeshingSession; result: MeshImportConversion }> {
   return apiClient.post<RunSnappyResponse>(`/meshing/${id}/run`, config);
 }
@@ -78,7 +82,7 @@ export async function runSnappy(
  * Autosave the edited config (persist without running). Returns the refreshed
  * session so `savedConfig` in the cache stays current.
  */
-export async function saveMeshingConfig(id: string, config: SnappyConfig): Promise<MeshingSession> {
+export async function saveMeshingConfig(id: string, config: MeshingConfig): Promise<MeshingSession> {
   const data = await apiClient.put<MeshingSessionResponse>(`/meshing/${id}/config`, config);
   return data.session;
 }

@@ -24,7 +24,7 @@ import {
 import { toast } from '@/components/ui/sonner';
 import { ApiError } from '@/lib/api/client';
 import { getSessionZip } from '@/lib/api/meshing';
-import type { SnappyConfig, StlFile } from '@/lib/api/types';
+import type { MeshingConfig, MeshingEngine, StlFile } from '@/lib/api/types';
 import { ImportReport } from '@/features/projects/ImportReport';
 import {
   useDeleteMeshingSession,
@@ -36,6 +36,7 @@ import {
 } from '@/features/meshing/useMeshing';
 import { StlViewer } from '@/features/meshing/StlViewer';
 import { SnappyConfigForm } from '@/features/meshing/SnappyConfigForm';
+import { CfMeshConfigForm } from '@/features/meshing/CfMeshConfigForm';
 import { MeshResultViewer } from '@/features/meshing/MeshResultViewer';
 
 /**
@@ -58,11 +59,11 @@ export function MeshingSessionPage() {
   // Autosave the edited config (debounced in the form). Best-effort: a lost save
   // is non-fatal, so a failure is swallowed rather than surfaced as a toast.
   const handleConfigChange = useCallback(
-    (config: SnappyConfig) => saveConfig(config),
+    (config: MeshingConfig) => saveConfig(config),
     [saveConfig],
   );
 
-  const handleGenerate = async (config: SnappyConfig) => {
+  const handleGenerate = async (config: MeshingConfig) => {
     try {
       const { result } = await runSnappy.mutateAsync(config);
       if (result.success) {
@@ -132,6 +133,9 @@ export function MeshingSessionPage() {
 
   const data = session.data;
   const running = runSnappy.isPending;
+  const engineLabel = data.engine === 'cfmesh' ? 'cfMesh' : 'snappyHexMesh';
+  // The saved (or last-run) config to seed the form; its engine matches the session.
+  const seededConfig = data.savedConfig ?? data.lastRun?.config ?? null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -143,6 +147,7 @@ export function MeshingSessionPage() {
           <div className="flex flex-col gap-0.5">
             <h1 className="text-2xl font-semibold text-text">{data.name}</h1>
             <p className="text-sm text-text-secondary">
+              <span className="font-medium text-text">{engineLabel}</span> ·{' '}
               {data.stls.length} surface{data.stls.length === 1 ? '' : 's'} ·{' '}
               {data.hasMesh ? 'mesh ready' : 'not meshed yet'}
             </p>
@@ -167,25 +172,39 @@ export function MeshingSessionPage() {
         </div>
       </header>
 
-      {/* Surfaces: manager (left) + client-side preview (right). */}
+      {/* Surfaces: manager (left) + client-side preview (right). The viewer only
+          renders STL (an FMS cannot be previewed client-side). */}
       <section className="grid gap-4 lg:grid-cols-[minmax(0,22rem)_1fr]">
-        <StlManager sessionId={id} stls={data.stls} />
-        <StlViewer sessionId={id} stls={data.stls} />
+        <StlManager sessionId={id} stls={data.stls} engine={data.engine} />
+        <StlViewer sessionId={id} stls={data.stls.filter((s) => !s.name.toLowerCase().endsWith('.fms'))} />
       </section>
 
-      {/* snappyHexMesh configuration + run. Seeds from the autosaved config (else
+      {/* Engine-specific configuration + run. Seeds from the autosaved config (else
           the last run) so every setting persists across reloads, and autosaves any
           edit so manual values survive even before a run. */}
-      <SnappyConfigForm
-        stls={data.stls}
-        bounds={data.bounds}
-        disabled={data.stls.length === 0}
-        running={running}
-        initialConfig={data.savedConfig ?? data.lastRun?.config ?? null}
-        maxCores={data.maxCores}
-        onGenerate={handleGenerate}
-        onConfigChange={handleConfigChange}
-      />
+      {data.engine === 'cfmesh' ? (
+        <CfMeshConfigForm
+          stls={data.stls}
+          bounds={data.bounds}
+          disabled={data.stls.length === 0}
+          running={running}
+          initialConfig={seededConfig?.engine === 'cfmesh' ? seededConfig : null}
+          maxCores={data.maxCores}
+          onGenerate={handleGenerate}
+          onConfigChange={handleConfigChange}
+        />
+      ) : (
+        <SnappyConfigForm
+          stls={data.stls}
+          bounds={data.bounds}
+          disabled={data.stls.length === 0}
+          running={running}
+          initialConfig={seededConfig?.engine === 'snappy' ? seededConfig : null}
+          maxCores={data.maxCores}
+          onGenerate={handleGenerate}
+          onConfigChange={handleConfigChange}
+        />
+      )}
 
       {/* The last run's per-step report. */}
       {data.lastRun && (
@@ -261,21 +280,35 @@ function StatusPill({ success }: { success: boolean }) {
 }
 
 /**
- * StlManager - upload STL surfaces and list / remove them. The upload is a hidden
- * file input driven by a labelled button (accepts multiple .stl). Each row has a
- * remove control. Renders an empty hint when no surface is present.
+ * StlManager - upload input surfaces and list / remove them. The upload is a hidden
+ * file input driven by a labelled button; snappy accepts .stl, cfMesh accepts .stl
+ * or a single .fms. Each row has a remove control; an empty hint when none present.
  */
-function StlManager({ sessionId, stls }: { sessionId: string; stls: StlFile[] }) {
+function StlManager({
+  sessionId,
+  stls,
+  engine,
+}: {
+  sessionId: string;
+  stls: StlFile[];
+  engine: MeshingEngine;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const upload = useUploadStl(sessionId);
   const remove = useDeleteStl(sessionId);
   const [removingName, setRemovingName] = useState<string | null>(null);
 
+  const cfmesh = engine === 'cfmesh';
+  const accept = cfmesh ? '.stl,.fms,model/stl,application/sla' : '.stl,model/stl,application/sla';
+
   const handleFiles = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
-    const files = Array.from(fileList).filter((f) => f.name.toLowerCase().endsWith('.stl'));
+    const files = Array.from(fileList).filter((f) => {
+      const lower = f.name.toLowerCase();
+      return lower.endsWith('.stl') || (cfmesh && lower.endsWith('.fms'));
+    });
     if (files.length === 0) {
-      toast.error('Please choose one or more .stl files.');
+      toast.error(cfmesh ? 'Please choose .stl or .fms files.' : 'Please choose one or more .stl files.');
       return;
     }
     try {
@@ -302,16 +335,18 @@ function StlManager({ sessionId, stls }: { sessionId: string; stls: StlFile[] })
   return (
     <div className="flex flex-col gap-4 rounded-md border border-border bg-surface p-5 shadow-sm">
       <div className="flex flex-col gap-1">
-        <h2 className="text-sm font-semibold text-text">STL surfaces</h2>
-        <p className="text-sm text-text-secondary">The geometry snappyHexMesh snaps to.</p>
+        <h2 className="text-sm font-semibold text-text">Input surfaces</h2>
+        <p className="text-sm text-text-secondary">
+          {cfmesh ? 'STL surface(s) or a single FMS file.' : 'The geometry snappyHexMesh snaps to.'}
+        </p>
       </div>
 
       <input
         ref={inputRef}
         type="file"
-        accept=".stl,model/stl,application/sla"
+        accept={accept}
         multiple
-        aria-label="Upload STL surface files"
+        aria-label={cfmesh ? 'Upload STL or FMS surface files' : 'Upload STL surface files'}
         className="sr-only"
         onChange={(e) => void handleFiles(e.target.files)}
       />
@@ -323,13 +358,13 @@ function StlManager({ sessionId, stls }: { sessionId: string; stls: StlFile[] })
         onClick={() => inputRef.current?.click()}
       >
         <FileUp strokeWidth={1.75} aria-hidden="true" />
-        Upload STL
+        {cfmesh ? 'Upload surface' : 'Upload STL'}
       </Button>
 
       {stls.length === 0 ? (
         <div className="flex items-center gap-2 rounded-md border border-dashed border-border bg-bg px-3 py-4 text-sm text-text-secondary">
           <AlertTriangle className="size-4 shrink-0 text-neutral" strokeWidth={1.75} aria-hidden="true" />
-          No surface yet. Upload an .stl to begin.
+          {cfmesh ? 'No surface yet. Upload an .stl or .fms to begin.' : 'No surface yet. Upload an .stl to begin.'}
         </div>
       ) : (
         <ul className="flex flex-col divide-y divide-border overflow-hidden rounded-md border border-border">

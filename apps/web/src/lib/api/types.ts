@@ -775,12 +775,20 @@ export type {
 export {
   DOMAIN_TYPES,
   DEFAULT_SNAPPY_CONFIG,
+  DEFAULT_CFMESH_CONFIG,
+  defaultMeshingConfig,
+  MESHING_ENGINES,
   STL_EXTENSION,
+  FMS_EXTENSION,
 } from '@dive/shared';
 export type {
   DomainType,
   MeshBounds,
+  MeshingEngine,
+  MeshingConfig,
   SnappyConfig,
+  CfMeshConfig,
+  CfMeshLayersConfig,
   SurfaceRefinement,
   AddLayersConfig,
   StlFile,
