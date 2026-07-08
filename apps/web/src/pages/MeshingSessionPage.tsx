@@ -335,9 +335,9 @@ function StlManager({
   return (
     <div className="flex flex-col gap-4 rounded-md border border-border bg-surface p-5 shadow-sm">
       <div className="flex flex-col gap-1">
-        <h2 className="text-sm font-semibold text-text">Input surface{cfmesh ? '' : 's'}</h2>
+        <h2 className="text-sm font-semibold text-text">Input surfaces</h2>
         <p className="text-sm text-text-secondary">
-          {cfmesh ? 'A single STL or FMS file.' : 'The geometry snappyHexMesh snaps to.'}
+          {cfmesh ? 'STL surface(s) or a single FMS file.' : 'The geometry snappyHexMesh snaps to.'}
         </p>
       </div>
 
@@ -345,8 +345,8 @@ function StlManager({
         ref={inputRef}
         type="file"
         accept={accept}
-        multiple={!cfmesh}
-        aria-label={cfmesh ? 'Upload an STL or FMS surface file' : 'Upload STL surface files'}
+        multiple
+        aria-label={cfmesh ? 'Upload STL or FMS surface files' : 'Upload STL surface files'}
         className="sr-only"
         onChange={(e) => void handleFiles(e.target.files)}
       />
@@ -355,15 +355,11 @@ function StlManager({
         variant="secondary"
         className="w-full"
         loading={upload.isPending}
-        disabled={cfmesh && stls.length > 0}
         onClick={() => inputRef.current?.click()}
       >
         <FileUp strokeWidth={1.75} aria-hidden="true" />
         {cfmesh ? 'Upload surface' : 'Upload STL'}
       </Button>
-      {cfmesh && stls.length > 0 && (
-        <p className="text-xs text-text-secondary">Remove the current file to upload another.</p>
-      )}
 
       {stls.length === 0 ? (
         <div className="flex items-center gap-2 rounded-md border border-dashed border-border bg-bg px-3 py-4 text-sm text-text-secondary">

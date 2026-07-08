@@ -173,7 +173,7 @@ function CreateSessionForm() {
         <p className="text-xs text-text-secondary">
           {engine === 'snappy'
             ? 'Hex-dominant mesh from STL surface(s). Runs in parallel (MPI).'
-            : 'Hex-dominant cartesianMesh from a single STL or FMS file. Multithreaded.'}
+            : 'Hex-dominant cartesianMesh from merged STL(s) or a single FMS. Multithreaded.'}
         </p>
       </fieldset>
     </form>
