@@ -278,7 +278,12 @@ export function renderSnappyHexMeshDict(
       return `        ${r.region} { level (${level.min} ${level.max}); }`;
     })
     .join('\n');
-  const layers = regions
+  // Layers grow only on the chosen surfaces (the selected boundaries); an omitted
+  // or empty list means every surface, so a legacy config still layers all walls.
+  const chosen = config.addLayers.surfaces;
+  const layerRegions =
+    chosen && chosen.length > 0 ? regions.filter((r) => chosen.includes(r.file)) : regions;
+  const layers = layerRegions
     .map((r) => `        ${r.region} { nSurfaceLayers ${config.addLayers.nLayers}; }`)
     .join('\n');
   const [lx, ly, lz] = domain.locationInMesh;

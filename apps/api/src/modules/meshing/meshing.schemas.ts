@@ -50,6 +50,8 @@ export const runSnappySchema = z.object({
   addLayers: z
     .object({
       enabled: z.boolean(),
+      // Surfaces (STL file names) to grow layers on; omitted/empty ⇒ every surface.
+      surfaces: z.array(z.string()).optional(),
       nLayers: z.number().int().min(1).max(20),
       relativeSizes: z.boolean().default(true),
       finalLayerThickness: z.number().positive().default(0.5),

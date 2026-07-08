@@ -846,6 +846,12 @@ export interface SurfaceRefinement {
 /** Boundary-layer (prism) growth controls for the surfaces. */
 export interface AddLayersConfig {
   enabled: boolean;
+  /**
+   * The STL surfaces (by file name) on which to grow layers — the boundaries the
+   * prism layers attach to. Omitted or empty means every surface (legacy default),
+   * so an old config keeps working; the UI lists one checkbox per surface.
+   */
+  surfaces?: string[];
   /** Number of prism layers grown on the surfaces. */
   nLayers: number;
   /**

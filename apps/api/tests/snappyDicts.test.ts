@@ -108,6 +108,44 @@ describe('dict renderers', () => {
     expect(dict).not.toContain('minMedianAxisAngle');
   });
 
+  it('grows layers only on the chosen surfaces (boundaries)', () => {
+    const dict = renderSnappyHexMeshDict(
+      ['rotor.stl', 'stator.stl'],
+      domain,
+      config({
+        addLayers: {
+          enabled: true,
+          surfaces: ['rotor.stl'],
+          nLayers: 3,
+          relativeSizes: true,
+          finalLayerThickness: 0.5,
+          expansionRatio: 1.2,
+        },
+      }),
+    );
+    // The layers block names only rotor; stator gets no nSurfaceLayers entry.
+    expect(dict).toContain('rotor { nSurfaceLayers 3; }');
+    expect(dict).not.toContain('stator { nSurfaceLayers');
+  });
+
+  it('layers every surface when no surface list is given (legacy default)', () => {
+    const dict = renderSnappyHexMeshDict(
+      ['rotor.stl', 'stator.stl'],
+      domain,
+      config({
+        addLayers: {
+          enabled: true,
+          nLayers: 2,
+          relativeSizes: true,
+          finalLayerThickness: 0.5,
+          expansionRatio: 1.2,
+        },
+      }),
+    );
+    expect(dict).toContain('rotor { nSurfaceLayers 2; }');
+    expect(dict).toContain('stator { nSurfaceLayers 2; }');
+  });
+
   it('applies per-surface refinement overrides keyed by STL name', () => {
     const dict = renderSnappyHexMeshDict(
       ['rotor.stl', 'stator.stl'],

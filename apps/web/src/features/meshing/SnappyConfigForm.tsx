@@ -74,6 +74,19 @@ function seedRefinements(stls: StlFile[], initial: SnappyConfig | null): Refinem
   return map;
 }
 
+/**
+ * Which surfaces grow boundary layers, one flag per STL. Seeds from the saved
+ * `addLayers.surfaces` (a legacy config with none means every surface is on).
+ */
+function seedLayerSurfaces(stls: StlFile[], initial: SnappyConfig | null): Record<string, boolean> {
+  const chosen = initial?.addLayers.surfaces;
+  const map: Record<string, boolean> = {};
+  for (const stl of stls) {
+    map[stl.name] = chosen ? chosen.includes(stl.name) : true;
+  }
+  return map;
+}
+
 export function SnappyConfigForm({
   stls,
   bounds,
@@ -103,6 +116,9 @@ export function SnappyConfigForm({
   const [marginFactor, setMarginFactor] = useState(String(init.marginFactor));
   const [featureLevel, setFeatureLevel] = useState(String(init.featureLevel));
   const [layersOn, setLayersOn] = useState(init.addLayers.enabled);
+  const [layerSurfaceOn, setLayerSurfaceOn] = useState<Record<string, boolean>>(() =>
+    seedLayerSurfaces(stls, initialConfig),
+  );
   const [nLayers, setNLayers] = useState(String(init.addLayers.nLayers));
   const [relativeSizes, setRelativeSizes] = useState(init.addLayers.relativeSizes);
   const [finalThickness, setFinalThickness] = useState(String(init.addLayers.finalLayerThickness));
@@ -136,6 +152,15 @@ export function SnappyConfigForm({
         Object.keys(next).length === Object.keys(prev).length &&
         Object.keys(next).every((k) => prev[k] === next[k]);
       return sameKeys ? prev : next;
+    });
+    // Same sync for the per-surface layer flags: a new surface defaults to "on".
+    setLayerSurfaceOn((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const stl of stls) next[stl.name] = prev[stl.name] ?? true;
+      const same =
+        Object.keys(next).length === Object.keys(prev).length &&
+        Object.keys(next).every((k) => prev[k] === next[k]);
+      return same ? prev : next;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stlKey]);
@@ -192,6 +217,8 @@ export function SnappyConfigForm({
       locationInMesh: location && location.every(Number.isFinite) ? location : null,
       addLayers: {
         enabled: layersOn,
+        // The surfaces (boundaries) the layers grow on — the checked STL surfaces.
+        surfaces: stls.map((s) => s.name).filter((name) => layerSurfaceOn[name] ?? true),
         nLayers: Math.max(1, Math.round(Number(nLayers) || 3)),
         relativeSizes,
         finalLayerThickness: Math.max(1e-6, Number(finalThickness) || 0.5),
@@ -200,7 +227,7 @@ export function SnappyConfigForm({
       cores: clampCores(String(cores), maxCores),
     };
   }, [
-    domainType, cellSize, refinements, margin, featureLevel, layersOn, nLayers,
+    domainType, cellSize, refinements, margin, featureLevel, layersOn, layerSurfaceOn, nLayers,
     relativeSizes, finalThickness, expansionRatio, manualPoint, px, py, pz, cores, maxCores, stls,
   ]);
 
@@ -471,6 +498,46 @@ export function SnappyConfigForm({
                     />
                     Thickness relative to the local cell size
                   </label>
+
+                  {/* Which surfaces (boundaries) the layers grow on. */}
+                  <fieldset className="flex flex-col gap-2">
+                    <legend className="text-sm font-medium text-text">Grow layers on</legend>
+                    {stls.length === 0 ? (
+                      <p className="text-xs text-text-secondary">
+                        Upload a surface to choose where layers grow.
+                      </p>
+                    ) : (
+                      <>
+                        <div className="flex flex-col gap-1.5">
+                          {stls.map((stl) => (
+                            <label
+                              key={stl.name}
+                              className="flex items-center gap-2 text-sm text-text"
+                              title={stl.name}
+                            >
+                              <input
+                                type="checkbox"
+                                className="size-4 shrink-0 rounded-sm border-border-strong text-cta focus-visible:ring-2 focus-visible:ring-focus-ring"
+                                checked={layerSurfaceOn[stl.name] ?? true}
+                                onChange={(e) =>
+                                  setLayerSurfaceOn((prev) => ({ ...prev, [stl.name]: e.target.checked }))
+                                }
+                              />
+                              <span className="min-w-0 truncate">{stl.name}</span>
+                            </label>
+                          ))}
+                        </div>
+                        {stls.every((s) => !(layerSurfaceOn[s.name] ?? true)) && (
+                          <p
+                            className="rounded-md bg-accent-tint px-2.5 py-1.5 text-xs text-text"
+                            role="status"
+                          >
+                            No surface selected — no layers will be grown.
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </fieldset>
                 </div>
               )}
             </fieldset>
