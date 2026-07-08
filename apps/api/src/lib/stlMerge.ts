@@ -78,6 +78,22 @@ function foamWord(stem: string): string {
   return word || 'surface';
 }
 
+/**
+ * The solid (patch) names the merge would assign to these files — one per file,
+ * its stem reduced to a Foam word, deduplicated by suffixing `_`. Exported so the
+ * boundary-type editor can list the exact patches a merged surface will have,
+ * without running the merge.
+ */
+export function mergedSolidNames(fileNames: string[]): string[] {
+  const used = new Set<string>();
+  return fileNames.map((name) => {
+    let solid = foamWord(name.replace(/\.[^.]+$/, ''));
+    while (used.has(solid)) solid = `${solid}_`;
+    used.add(solid);
+    return solid;
+  });
+}
+
 /** A finite normal, recomputed from the winding when the stored one is degenerate. */
 function faceNormal(t: Triangle): Vec3 {
   const [a, b, c] = t.v;
@@ -118,20 +134,17 @@ export async function mergeStlFilesToAscii(
   names: string[],
   outAbs: string,
 ): Promise<{ triangles: number }> {
-  const used = new Set<string>();
+  const solids = mergedSolidNames(names);
   const parts: string[] = [];
   let total = 0;
-  for (const name of names) {
-    const buffer = await fs.readFile(path.join(triSurfaceDirAbs, name));
+  for (let i = 0; i < names.length; i += 1) {
+    const buffer = await fs.readFile(path.join(triSurfaceDirAbs, names[i]));
     const tris = parseTriangles(buffer);
     if (tris.length === 0) {
-      throw new Error(`"${name}" contained no readable triangles.`);
+      throw new Error(`"${names[i]}" contained no readable triangles.`);
     }
     total += tris.length;
-    let solid = foamWord(name.replace(/\.[^.]+$/, ''));
-    while (used.has(solid)) solid = `${solid}_`;
-    used.add(solid);
-    parts.push(emitSolid(solid, tris));
+    parts.push(emitSolid(solids[i], tris));
   }
   await fs.mkdir(path.dirname(outAbs), { recursive: true });
   await fs.writeFile(outAbs, `${parts.join('\n')}\n`, 'utf8');

@@ -33,6 +33,24 @@ describe('renderMeshDict', () => {
     expect(dict).not.toContain('boundaryLayers');
   });
 
+  it('writes a renameBoundary block for assigned patch types only', () => {
+    const dict = renderMeshDict(
+      config({ patchTypes: { inlet: 'patch', walls: 'wall' } }),
+      'constant/triSurface/x.fms',
+      0.4,
+    );
+    expect(dict).toContain('renameBoundary');
+    expect(dict).toContain('"inlet"');
+    expect(dict).toContain('type    patch;');
+    expect(dict).toContain('"walls"');
+    expect(dict).toContain('type    wall;');
+  });
+
+  it('omits renameBoundary when no patch type is assigned', () => {
+    const dict = renderMeshDict(config({ patchTypes: {} }), 'x.fms', 0.4);
+    expect(dict).not.toContain('renameBoundary');
+  });
+
   it('emits refinement sizes and a boundary-layer block when set', () => {
     const dict = renderMeshDict(
       config({

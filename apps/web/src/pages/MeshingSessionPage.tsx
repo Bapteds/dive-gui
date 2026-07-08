@@ -186,6 +186,7 @@ export function MeshingSessionPage() {
         <CfMeshConfigForm
           stls={data.stls}
           bounds={data.bounds}
+          patches={data.patches}
           disabled={data.stls.length === 0}
           running={running}
           initialConfig={seededConfig?.engine === 'cfmesh' ? seededConfig : null}

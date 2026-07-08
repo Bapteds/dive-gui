@@ -1,6 +1,6 @@
 // Zod schemas for the standalone Meshing endpoints (snappyHexMesh / cfMesh).
 import { z } from 'zod';
-import { DOMAIN_TYPES, MESHING_ENGINES } from '@dive/shared';
+import { CFMESH_PATCH_TYPES, DOMAIN_TYPES, MESHING_ENGINES } from '@dive/shared';
 
 /** Body for POST /meshing — create a session with its (fixed) engine. */
 export const createSessionSchema = z.object({
@@ -85,6 +85,9 @@ export const runCfMeshSchema = z.object({
   boundaryCellSize: z.number().positive().nullable().default(null),
   extractFeatures: z.boolean().default(true),
   featureAngle: z.number().min(0).max(180).default(45),
+  // Per-patch boundary type (patch name -> OpenFOAM type); a patch absent keeps its
+  // FMS/cfMesh default. Written to meshDict as renameBoundary.
+  patchTypes: z.record(z.string(), z.enum(CFMESH_PATCH_TYPES)).optional(),
   addLayers: z
     .object({
       enabled: z.boolean(),

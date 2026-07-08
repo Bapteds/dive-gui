@@ -778,6 +778,7 @@ export {
   DEFAULT_CFMESH_CONFIG,
   defaultMeshingConfig,
   MESHING_ENGINES,
+  CFMESH_PATCH_TYPES,
   STL_EXTENSION,
   FMS_EXTENSION,
 } from '@dive/shared';
@@ -789,6 +790,7 @@ export type {
   SnappyConfig,
   CfMeshConfig,
   CfMeshLayersConfig,
+  CfMeshPatchType,
   SurfaceRefinement,
   AddLayersConfig,
   StlFile,

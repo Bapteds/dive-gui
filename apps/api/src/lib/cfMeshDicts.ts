@@ -97,6 +97,20 @@ export function renderMeshDict(
     lines.push('', ...layer);
   }
 
+  // Per-patch boundary type: keep each patch's name, set its type. Only patches the
+  // user assigned a type to appear; the rest keep their FMS / cfMesh default.
+  const typed = Object.entries(config.patchTypes ?? {}).filter(([, type]) => !!type);
+  if (typed.length > 0) {
+    const entries = typed.flatMap(([name, type]) => [
+      `        "${name}"`,
+      '        {',
+      `            newName ${name};`,
+      `            type    ${type};`,
+      '        }',
+    ]);
+    lines.push('', 'renameBoundary', '{', '    newPatchNames', '    {', ...entries, '    }', '}');
+  }
+
   return `${foamHeader('meshDict')}
 ${lines.join('\n')}
 ${FOOTER}`;

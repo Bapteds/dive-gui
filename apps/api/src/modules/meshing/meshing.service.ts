@@ -28,6 +28,8 @@ import { coreBudget } from '../../lib/cores';
 import { runCommand, type CommandResult } from '../../lib/commandRunner';
 import { zipTreeAt } from '../../lib/fileTreeStorage';
 import { parseStlBounds, unionBounds } from '../../lib/stlBounds';
+import { parseFmsPatchNames, parseStlSolidNames } from '../../lib/meshPatches';
+import { mergedSolidNames } from '../../lib/stlMerge';
 import { runSnappyPipeline } from '../../lib/snappyPipeline';
 import { runCfMeshPipeline } from '../../lib/cfMeshPipeline';
 import {
@@ -85,14 +87,38 @@ async function sessionBounds(sessionId: string): Promise<MeshBounds | null> {
   return unionBounds(boxes);
 }
 
+/**
+ * The boundary patch names of a cfMesh session's input surface (empty for snappy):
+ *  - one FMS  -> its header patch names;
+ *  - one STL  -> its `solid` names (else the file name as a fallback);
+ *  - many STL -> the merged solid names (one per file), matching stlMerge exactly.
+ * Drives the per-patch boundary-type editor.
+ */
+async function discoverPatches(sessionId: string, engine: MeshingEngine): Promise<string[]> {
+  if (engine !== 'cfmesh') return [];
+  const files = await listStl(sessionId);
+  const fms = files.find((f) => isFms(f.name));
+  if (fms) {
+    const buffer = await readStl(sessionId, fms.name);
+    return buffer ? parseFmsPatchNames(buffer) : [];
+  }
+  const stls = files.filter((f) => isStl(f.name)).map((f) => f.name);
+  if (stls.length === 0) return [];
+  if (stls.length >= 2) return mergedSolidNames(stls);
+  const buffer = await readStl(sessionId, stls[0]);
+  const names = buffer ? parseStlSolidNames(buffer) : [];
+  return names.length > 0 ? names : mergedSolidNames(stls);
+}
+
 /** Assemble the full session view (summary + STLs + bounds + last run + config). */
 async function assembleSession(meta: MeshingMeta): Promise<MeshingSession> {
-  const [stls, bounds, lastRun, savedConfig, hasMesh] = await Promise.all([
+  const [stls, bounds, lastRun, savedConfig, hasMesh, patches] = await Promise.all([
     listStl(meta.id),
     sessionBounds(meta.id),
     readRun(meta.id),
     readConfig(meta.id),
     hasResultMesh(meta.id),
+    discoverPatches(meta.id, meta.engine),
   ]);
   return {
     id: meta.id,
@@ -106,6 +132,7 @@ async function assembleSession(meta: MeshingMeta): Promise<MeshingSession> {
     lastRun,
     savedConfig,
     maxCores: coreBudget(),
+    patches,
   };
 }
 

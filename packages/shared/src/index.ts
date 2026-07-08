@@ -942,6 +942,15 @@ export interface CfMeshLayersConfig {
 }
 
 /**
+ * OpenFOAM boundary-patch types a cfMesh patch can be assigned (via meshDict
+ * renameBoundary). `cyclic`/`wedge` need extra coefficients so they are out of
+ * scope here; these are the standalone types the UI offers. An unassigned patch
+ * keeps whatever type the FMS / cfMesh gave it.
+ */
+export const CFMESH_PATCH_TYPES = ['patch', 'wall', 'symmetry', 'symmetryPlane', 'empty'] as const;
+export type CfMeshPatchType = (typeof CFMESH_PATCH_TYPES)[number];
+
+/**
  * cfMesh cartesianMesh tunables. Writes system/meshDict. cfMesh meshes the volume
  * bounded by the (closed) surface — INTERNAL flow — so there is no domain-type /
  * keep-point knob like snappy. Sizes are absolute metres; `maxCellSize` null means
@@ -963,6 +972,12 @@ export interface CfMeshConfig {
   featureAngle: number;
   /** Boundary (prism) layers, applied to all boundaries. */
   addLayers: CfMeshLayersConfig;
+  /**
+   * Per-boundary OpenFOAM patch type, keyed by patch name (the FMS patch names, or
+   * the STL solid / file names). A patch absent here keeps its FMS/cfMesh default.
+   * Written to meshDict as a `renameBoundary` block.
+   */
+  patchTypes?: Record<string, CfMeshPatchType>;
   /** OpenMP threads for cartesianMesh (cfMesh is multithreaded, not MPI-decomposed). */
   cores: number;
 }
@@ -1030,6 +1045,13 @@ export interface MeshingSession extends MeshingSessionSummary {
   savedConfig: MeshingConfig | null;
   /** Max cores a run may request (the machine's core budget). */
   maxCores: number;
+  /**
+   * Boundary patch names discovered from the input surface (cfMesh only): the FMS
+   * patch names, the STL solid names, or the merged file names. Empty for snappy
+   * (whose patches are per-STL) or when nothing is uploaded. Drives the per-patch
+   * boundary-type editor.
+   */
+  patches: string[];
 }
 
 /**
