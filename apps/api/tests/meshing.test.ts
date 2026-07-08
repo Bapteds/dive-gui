@@ -220,38 +220,29 @@ describe('Meshing sessions', () => {
     expect(commands).toEqual(['surfaceFeatureEdges', 'cartesianMesh', 'checkMesh']);
   });
 
-  it('cfMesh merges several STLs in-process before meshing', async () => {
-    const commands: string[] = [];
-    setCommandRunner(async (spec) => {
-      commands.push(spec.command);
-      return successRunner(spec);
-    });
+  it('rejects a second surface file for a cfMesh session', async () => {
+    setCommandRunner(successRunner);
     const user = await createTestUser();
     const auth = authHeader(user);
 
     const { body: c } = await request(app)
       .post('/api/v1/meshing')
       .set('Authorization', auth)
-      .send({ name: 'cfMesh multi', engine: 'cfmesh' })
+      .send({ name: 'cfMesh single', engine: 'cfmesh' })
       .expect(201);
     const id = c.session.id as string;
     await request(app)
       .post(`/api/v1/meshing/${id}/stl`)
       .set('Authorization', auth)
       .attach('files', CUBE_STL, 'rotor.stl')
-      .attach('files', CUBE_STL, 'stator.stl')
       .expect(201);
-
-    const run = await request(app)
-      .post(`/api/v1/meshing/${id}/run`)
+    // A second file is refused — cfMesh meshes a single surfaceFile.
+    const second = await request(app)
+      .post(`/api/v1/meshing/${id}/stl`)
       .set('Authorization', auth)
-      .send(CFMESH_CONFIG)
-      .expect(200);
-    expect(run.body.result.success).toBe(true);
-    // The merge is in-process (not a command); the tools are unchanged.
-    expect(commands).toEqual(['surfaceFeatureEdges', 'cartesianMesh', 'checkMesh']);
-    const labels = run.body.result.steps.map((s: { label: string }) => s.label);
-    expect(labels[0]).toBe('Combine surfaces');
+      .attach('files', CUBE_STL, 'stator.stl')
+      .expect(422);
+    expect(second.body.error.code).toBe('INVALID_STL');
   });
 
   it('rejects a config whose engine differs from the session', async () => {

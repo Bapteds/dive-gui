@@ -155,24 +155,21 @@ function isFms(name: string): boolean {
 
 /**
  * Add one or more input surfaces to a session, validated for its engine:
- *  - snappy: only .stl, each parseable to a non-empty bounding box.
- *  - cfmesh: .stl (parseable) OR a single .fms. A session holds EITHER STLs OR one
- *    FMS — never both, and never two FMS — since cfMesh meshes one surfaceFile.
+ *  - snappy: one or more .stl, each parseable to a non-empty bounding box.
+ *  - cfmesh: exactly ONE surface file — a single .stl (which may hold several named
+ *    solids, one patch each) or a single .fms. cfMesh meshes one surfaceFile, so a
+ *    second file is rejected (remove the current one first).
  * A malformed / disallowed upload is rejected before anything is written.
  *
  * @throws 404 when the session is absent.
  * @throws 400 NO_STL when no files were provided.
- * @throws 422 INVALID_STL for a wrong type / unparseable STL / a disallowed mix.
+ * @throws 422 INVALID_STL for a wrong type / unparseable STL / too many files.
  */
 export async function addStlFiles(sessionId: string, uploads: StlUpload[]): Promise<MeshingSession> {
   const meta = await requireSession(sessionId);
   if (uploads.length === 0) {
     throw new AppError(400, 'NO_STL', 'No files were uploaded.');
   }
-
-  const existing = await listStl(sessionId);
-  const hasFms = existing.some((f) => isFms(f.name));
-  const hasStl = existing.some((f) => isStl(f.name));
 
   for (const upload of uploads) {
     const stl = isStl(upload.name);
@@ -186,18 +183,14 @@ export async function addStlFiles(sessionId: string, uploads: StlUpload[]): Prom
     }
   }
 
-  // cfMesh: enforce "one surfaceFile" — STLs and an FMS are mutually exclusive.
+  // cfMesh meshes a single surfaceFile: allow exactly one input file per session.
   if (meta.engine === 'cfmesh') {
-    const addingFms = uploads.filter((u) => isFms(u.name)).length;
-    const addingStl = uploads.some((u) => isStl(u.name));
-    if (addingFms + (hasFms ? 1 : 0) > 1) {
-      throw new AppError(422, 'INVALID_STL', 'A cfMesh session takes a single .fms file.');
-    }
-    if ((addingFms > 0 && (hasStl || addingStl)) || (addingStl && hasFms)) {
+    const existing = (await listStl(sessionId)).length;
+    if (uploads.length > 1 || existing + uploads.length > 1) {
       throw new AppError(
         422,
         'INVALID_STL',
-        'Use either STL surfaces or one FMS file — not both. Remove the others first.',
+        'A cfMesh session takes a single surface file (STL or FMS). Remove the current one first.',
       );
     }
   }

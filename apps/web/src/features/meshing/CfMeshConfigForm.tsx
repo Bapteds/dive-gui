@@ -145,7 +145,7 @@ export function CfMeshConfigForm({
       <div className="flex flex-col gap-1">
         <h3 className="text-sm font-semibold text-text">Mesh settings</h3>
         <p className="text-sm text-text-secondary">
-          cfMesh cartesianMesh builds a hex-dominant volume mesh inside the surface.
+          cfMesh cartesianMesh builds a hex-dominant volume mesh inside the surface (one STL or FMS).
         </p>
       </div>
 
@@ -323,7 +323,7 @@ export function CfMeshConfigForm({
         </Button>
         {disabled && !running && (
           <p className="text-xs text-text-secondary">
-            Upload at least one STL surface (or an FMS) to enable meshing.
+            Upload a single STL or FMS file to enable meshing.
           </p>
         )}
       </div>
