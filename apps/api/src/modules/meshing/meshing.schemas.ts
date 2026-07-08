@@ -62,5 +62,8 @@ export const runSnappySchema = z.object({
       finalLayerThickness: 0.5,
       expansionRatio: 1.2,
     }),
+  // Cores for the run: 1 = serial, > 1 = MPI-parallel snappyHexMesh. No upper bound
+  // here (it is machine-dependent); the service clamps it to the host's core budget.
+  cores: z.number().int().min(1).max(1024).default(1),
 });
 export type RunSnappyInput = z.infer<typeof runSnappySchema>;

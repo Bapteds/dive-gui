@@ -22,6 +22,7 @@ import type {
 } from '@dive/shared';
 import { env } from '../../config/env';
 import { AppError } from '../../lib/AppError';
+import { coreBudget } from '../../lib/cores';
 import { runCommand, type CommandResult } from '../../lib/commandRunner';
 import { zipTreeAt } from '../../lib/fileTreeStorage';
 import { parseStlBounds, unionBounds } from '../../lib/stlBounds';
@@ -33,11 +34,13 @@ import {
   hasResultMesh,
   listSessions as listSessionDirs,
   listStl,
+  readConfig,
   readMeta,
   readRun,
   readStl,
   sessionCaseDir,
   sessionDirAbsolute,
+  writeConfig,
   writeRun,
   writeStl,
   type MeshingMeta,
@@ -79,12 +82,13 @@ async function sessionBounds(sessionId: string): Promise<MeshBounds | null> {
   return unionBounds(boxes);
 }
 
-/** Assemble the full session view (summary + STLs + bounds + last run). */
+/** Assemble the full session view (summary + STLs + bounds + last run + config). */
 async function assembleSession(meta: MeshingMeta): Promise<MeshingSession> {
-  const [stls, bounds, lastRun, hasMesh] = await Promise.all([
+  const [stls, bounds, lastRun, savedConfig, hasMesh] = await Promise.all([
     listStl(meta.id),
     sessionBounds(meta.id),
     readRun(meta.id),
+    readConfig(meta.id),
     hasResultMesh(meta.id),
   ]);
   return {
@@ -96,6 +100,8 @@ async function assembleSession(meta: MeshingMeta): Promise<MeshingSession> {
     stls,
     bounds,
     lastRun,
+    savedConfig,
+    maxCores: coreBudget(),
   };
 }
 
@@ -204,17 +210,46 @@ export async function runSnappy(
     throw new AppError(400, 'NO_STL', 'The uploaded STL surfaces could not be read.');
   }
 
-  const caseDir = sessionCaseDir(sessionId);
-  const result = await runSnappyPipeline(caseDir, stls.map((s) => s.name), bounds, config);
+  // Clamp the requested cores to the machine budget: a run must never ask for more
+  // MPI ranks than the host can offer (the UI already caps it, but a direct API
+  // call could exceed it). cores <= 1 keeps the serial path.
+  const effectiveConfig: SnappyConfig = {
+    ...config,
+    cores: Math.min(Math.max(1, Math.floor(config.cores || 1)), coreBudget()),
+  };
 
-  // Persist the run report + config so the UI can show the last outcome on reload.
-  const run: MeshingRun = { config, result, at: new Date().toISOString() };
+  const caseDir = sessionCaseDir(sessionId);
+  const result = await runSnappyPipeline(caseDir, stls.map((s) => s.name), bounds, effectiveConfig);
+
+  // Persist the run report + config so the UI can show the last outcome on reload,
+  // and mirror the config into the autosave sidecar so the two stay in sync.
+  const run: MeshingRun = { config: effectiveConfig, result, at: new Date().toISOString() };
   await writeRun(sessionId, run);
+  await writeConfig(sessionId, effectiveConfig);
 
   // Drop the stale render so the viewer rebuilds from the new polyMesh.
   await fs.rm(meshingVizDir(sessionId), { recursive: true, force: true }).catch(() => undefined);
 
   return { session: await assembleSession(meta), result };
+}
+
+/**
+ * Persist the session's edited config (autosaved from the form), independent of a
+ * run, so manual settings survive a reload even before the mesh is generated. The
+ * cores are clamped to the machine budget, exactly as a run would. Returns the
+ * refreshed session. @throws 404 when the session is absent.
+ */
+export async function saveMeshingConfig(
+  sessionId: string,
+  config: SnappyConfig,
+): Promise<MeshingSession> {
+  const meta = await requireSession(sessionId);
+  const clamped: SnappyConfig = {
+    ...config,
+    cores: Math.min(Math.max(1, Math.floor(config.cores || 1)), coreBudget()),
+  };
+  await writeConfig(sessionId, clamped);
+  return assembleSession(meta);
 }
 
 // --- Result-mesh render (reuses scripts/extractPatches.py) -------------------

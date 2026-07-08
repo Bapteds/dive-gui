@@ -17,6 +17,7 @@ import {
   getSessionController,
   listSessionsController,
   runSnappyController,
+  saveConfigController,
   uploadStlController,
 } from './meshing.controller';
 import {
@@ -67,6 +68,13 @@ export function createMeshingRouter(): Router {
     '/:id/run',
     validate({ params: sessionIdParamSchema, body: runSnappySchema }),
     asyncHandler(runSnappyController),
+  );
+
+  // Autosave the edited config (persist without running).
+  router.put(
+    '/:id/config',
+    validate({ params: sessionIdParamSchema, body: runSnappySchema }),
+    asyncHandler(saveConfigController),
   );
 
   // Result-mesh 3D viewer (build-on-demand, mirrors the project mesh viewer).

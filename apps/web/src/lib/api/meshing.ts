@@ -74,6 +74,15 @@ export async function runSnappy(
   return apiClient.post<RunSnappyResponse>(`/meshing/${id}/run`, config);
 }
 
+/**
+ * Autosave the edited config (persist without running). Returns the refreshed
+ * session so `savedConfig` in the cache stays current.
+ */
+export async function saveMeshingConfig(id: string, config: SnappyConfig): Promise<MeshingSession> {
+  const data = await apiClient.put<MeshingSessionResponse>(`/meshing/${id}/config`, config);
+  return data.session;
+}
+
 /** Fetch the result-mesh patch manifest (builds the render on first call). */
 export async function getMeshingManifest(id: string): Promise<MeshManifest> {
   const data = await apiClient.get<MeshManifestResponse>(`/meshing/${id}/mesh/manifest`);

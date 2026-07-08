@@ -84,6 +84,16 @@ const envSchema = z
     // Per-step wall-clock timeout (ms). snappyHexMesh on a fine STL is slow, so this
     // is generous (30 min/step), like the merge/conversion pipelines.
     SNAPPY_STEP_TIMEOUT_MS: z.coerce.number().int().positive().default(1800000),
+    // Parallel meshing (cores > 1): the background mesh is split with decomposePar,
+    // snappyHexMesh runs under `mpirun -np N … -parallel`, then reconstructParMesh
+    // reassembles constant/polyMesh. Shares the SOLVER MPI knobs (MPI_BIN,
+    // MPI_RUN_FLAGS, DECOMPOSE_METHOD, SOLVER_TOTAL_CORES) so there is one parallel
+    // story for the whole app; only the mesh-reconstruction binary differs from the
+    // solver's field-oriented reconstructPar. Same operational model as every other
+    // OpenFOAM tool here (configurable, sourced via OPENFOAM_BASHRC, absent on a
+    // Windows dev box -> a clean per-step "not found" rather than a crash).
+    DECOMPOSE_PAR_BIN: z.string().min(1).default('decomposePar'),
+    RECONSTRUCT_PAR_MESH_BIN: z.string().min(1).default('reconstructParMesh'),
     // --- Multi-mesh merge (Merge meshes flow) ---------------------------------
     // mergeMeshes combines several imported polyMesh sources into one master
     // mesh; stitchMesh then conformally fuses chosen patch pairs (e.g. one part's

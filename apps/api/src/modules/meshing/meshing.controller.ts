@@ -17,6 +17,7 @@ import {
   removeMeshingSession,
   removeStlFile,
   runSnappy,
+  saveMeshingConfig,
   type StlUpload,
 } from './meshing.service';
 import type { CreateSessionInput, RunSnappyInput, StlNameQuery } from './meshing.schemas';
@@ -80,6 +81,13 @@ export async function runSnappyController(req: Request, res: Response): Promise<
   const config = req.body as RunSnappyInput;
   const { session, result } = await runSnappy(req.params.id, config);
   res.status(200).json({ session, result });
+}
+
+/** PUT /meshing/:id/config — autosave the edited config (no run). */
+export async function saveConfigController(req: Request, res: Response): Promise<void> {
+  const config = req.body as RunSnappyInput;
+  const session = await saveMeshingConfig(req.params.id, config);
+  res.status(200).json({ session });
 }
 
 /** GET /meshing/:id/mesh/manifest — build-on-demand, return the result patch manifest. */

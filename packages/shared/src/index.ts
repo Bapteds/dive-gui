@@ -875,6 +875,14 @@ export interface SnappyConfig {
   locationInMesh: [number, number, number] | null;
   /** Boundary-layer (prism) growth on the surfaces. */
   addLayers: AddLayersConfig;
+  /**
+   * CPU cores for the run. 1 meshes serially (the classic
+   * blockMesh -> surfaceFeatureExtract -> snappyHexMesh -> checkMesh chain); more
+   * runs snappyHexMesh in parallel (decomposePar -> mpirun -np N snappyHexMesh
+   * -parallel -> reconstructParMesh), which is dramatically faster on a fine mesh.
+   * Clamped server-side to the machine's core budget.
+   */
+  cores: number;
 }
 
 /** The auto/minimal defaults the config form starts from. */
@@ -892,6 +900,7 @@ export const DEFAULT_SNAPPY_CONFIG: SnappyConfig = {
     finalLayerThickness: 0.5,
     expansionRatio: 1.2,
   },
+  cores: 1,
 };
 
 /** One uploaded input surface of a meshing session. */
@@ -926,6 +935,14 @@ export interface MeshingSession extends MeshingSessionSummary {
   /** Union bounding box of the STLs (null when none uploaded / unparseable). */
   bounds: MeshBounds | null;
   lastRun: MeshingRun | null;
+  /**
+   * The last config the user edited (autosaved), independent of a run — so manual
+   * settings survive a reload even before the mesh is generated. Null when the
+   * session has never been configured; the form then seeds from `lastRun.config`.
+   */
+  savedConfig: SnappyConfig | null;
+  /** Max cores a run may request (the machine's core budget). */
+  maxCores: number;
 }
 
 /**

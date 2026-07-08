@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Layers, Wand2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, ChevronRight, Cpu, Layers, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
@@ -10,13 +10,18 @@ import type { DomainType, MeshBounds, SnappyConfig, StlFile, SurfaceRefinement }
 /**
  * SnappyConfigForm - the snappyHexMesh tunables for one run. Surface refinement
  * is set PER STL surface; an Advanced disclosure reveals the keep-point,
- * background padding, feature level and boundary (prism) layers. One orange CTA
- * runs it. The form seeds from the session's last run so a manual keep-point (and
- * every other setting) survives a reload; a manual keep-point once typed is kept.
+ * background padding, feature level, CPU cores and boundary (prism) layers. One
+ * orange CTA runs it.
+ *
+ * The form seeds from `initialConfig` (the session's autosaved config, else its
+ * last run) so every setting survives a reload. Any edit is autosaved via a
+ * debounced `onConfigChange`, so manual values persist even before a run — the
+ * seed happens on mount only, so autosave never fights the cursor.
  *
  * `baseCellSize` empty and the manual keep-point off both send `null`, which the
  * server resolves from the STL bounds. When the bounds are known we mirror that
- * derivation here so the placeholders show the value the server will use.
+ * derivation here so the placeholders show the value the server will use. `cores`
+ * is 1 (serial) up to `maxCores`; more cores run snappyHexMesh in parallel (MPI).
  */
 
 /** Round for display without scientific notation. */
@@ -42,6 +47,18 @@ function autoLocation(b: MeshBounds, domainType: DomainType, marginFactor: numbe
   return [b.min[0] - pad * 0.99, b.min[1] - pad * 0.99, b.min[2] - pad * 0.99];
 }
 
+/** Clamp a core-count string to the integer range [1, max] (mirrors the solver panel). */
+function clampCores(value: string, max: number): number {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(n, Math.max(1, max));
+}
+
+/** The default cores for a fresh session: half the machine budget, at least 1. */
+function defaultCores(max: number): number {
+  return Math.max(1, Math.floor(Math.max(1, max) / 2));
+}
+
 /** Editable refinement (strings so a field can be cleared mid-edit). */
 type RefinementInput = { min: string; max: string };
 type RefinementMap = Record<string, RefinementInput>;
@@ -63,14 +80,20 @@ export function SnappyConfigForm({
   disabled,
   running,
   initialConfig,
+  maxCores,
   onGenerate,
+  onConfigChange,
 }: {
   stls: StlFile[];
   bounds: MeshBounds | null;
   disabled: boolean;
   running: boolean;
   initialConfig: SnappyConfig | null;
+  /** Max cores a run may request (the machine's core budget). */
+  maxCores: number;
   onGenerate: (config: SnappyConfig) => void;
+  /** Debounced autosave of the current config (persist without running). */
+  onConfigChange?: (config: SnappyConfig) => void;
 }) {
   const init = initialConfig ?? DEFAULT_SNAPPY_CONFIG;
 
@@ -88,7 +111,16 @@ export function SnappyConfigForm({
   const [px, setPx] = useState(init.locationInMesh ? fmt(init.locationInMesh[0]) : '');
   const [py, setPy] = useState(init.locationInMesh ? fmt(init.locationInMesh[1]) : '');
   const [pz, setPz] = useState(init.locationInMesh ? fmt(init.locationInMesh[2]) : '');
+  // Seed cores from the saved config (a pre-cores config has none -> half budget).
+  const [cores, setCores] = useState(() =>
+    initialConfig?.cores ? clampCores(String(initialConfig.cores), maxCores) : defaultCores(maxCores),
+  );
   const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  // Keep the chosen cores within the current budget (it may shrink at runtime).
+  useEffect(() => {
+    setCores((current) => Math.min(current, Math.max(1, maxCores)));
+  }, [maxCores]);
 
   // Keep the per-surface map in sync with the current STL set: add a default row
   // for a new surface, drop a removed one, keep existing edits untouched.
@@ -129,7 +161,9 @@ export function SnappyConfigForm({
     setRefinements((prev) => ({ ...prev, [name]: { ...prev[name], [key]: value } }));
   };
 
-  const handleGenerate = () => {
+  // The assembled config, shared by the run CTA and the debounced autosave. A
+  // stable reference while the inputs are unchanged (so autosave does not loop).
+  const config = useMemo<SnappyConfig>(() => {
     const parsedCell = cellSize.trim() === '' ? null : Number(cellSize);
     const location: [number, number, number] | null = manualPoint
       ? [Number(px), Number(py), Number(pz)]
@@ -148,7 +182,7 @@ export function SnappyConfigForm({
     const surfaceRefinement =
       (firstName && surfaceRefinements[firstName]) || DEFAULT_SNAPPY_CONFIG.surfaceRefinement;
 
-    const config: SnappyConfig = {
+    return {
       domainType,
       baseCellSize: parsedCell && parsedCell > 0 ? parsedCell : null,
       marginFactor: margin,
@@ -163,9 +197,31 @@ export function SnappyConfigForm({
         finalLayerThickness: Math.max(1e-6, Number(finalThickness) || 0.5),
         expansionRatio: Math.max(1, Number(expansionRatio) || 1.2),
       },
+      cores: clampCores(String(cores), maxCores),
     };
-    onGenerate(config);
-  };
+  }, [
+    domainType, cellSize, refinements, margin, featureLevel, layersOn, nLayers,
+    relativeSizes, finalThickness, expansionRatio, manualPoint, px, py, pz, cores, maxCores, stls,
+  ]);
+
+  const handleGenerate = () => onGenerate(config);
+
+  // Debounced autosave: persist the config whenever it changes, so manual values
+  // survive a reload even without a run. Keyed on the SERIALIZED config (a value,
+  // not a reference) so a re-render from the save's cache update never re-triggers
+  // it — otherwise autosave would loop. Skips the initial (seeded) value and any
+  // invalid refinement (max < min), which the server would reject.
+  const serialized = useMemo(() => JSON.stringify(config), [config]);
+  const didMount = useRef(false);
+  useEffect(() => {
+    if (!didMount.current) {
+      didMount.current = true;
+      return;
+    }
+    if (!onConfigChange || refinementError) return;
+    const handle = setTimeout(() => onConfigChange(JSON.parse(serialized) as SnappyConfig), 800);
+    return () => clearTimeout(handle);
+  }, [serialized, onConfigChange, refinementError]);
 
   // Prefill the manual keep-point from the auto value ONLY when the fields are
   // empty, so turning the toggle off and on never wipes values the user typed.
@@ -311,6 +367,30 @@ export function SnappyConfigForm({
                 />
               </Field>
             </div>
+
+            {/* CPU cores: 1 = serial, more = parallel snappyHexMesh (MPI). */}
+            <Field
+              label="CPU cores"
+              helperText={
+                cores > 1
+                  ? `Runs snappyHexMesh in parallel across ${cores} cores. ${maxCores} available.`
+                  : `Serial (single core). Raise to mesh in parallel — ${maxCores} available.`
+              }
+              className="sm:max-w-xs"
+            >
+              <div className="flex items-center gap-2">
+                <Cpu className="size-4 shrink-0 text-text-secondary" strokeWidth={1.75} aria-hidden="true" />
+                <Input
+                  type="number"
+                  min="1"
+                  max={maxCores}
+                  step="1"
+                  aria-label="Number of CPU cores for the mesh run"
+                  value={cores}
+                  onChange={(e) => setCores(clampCores(e.target.value, maxCores))}
+                />
+              </div>
+            </Field>
 
             {/* Keep-point (locationInMesh): auto by default, editable when manual. */}
             <fieldset className="flex flex-col gap-2">

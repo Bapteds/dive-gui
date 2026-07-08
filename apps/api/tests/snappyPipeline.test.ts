@@ -46,6 +46,36 @@ describe('runSnappyPipeline', () => {
     }
   });
 
+  it('runs the MPI-parallel chain and writes decomposeParDict when cores > 1', async () => {
+    const caseDir = await tempCase();
+    const commands: string[] = [];
+    const runner: CommandRunner = async (spec) => {
+      commands.push(spec.command);
+      return ok(spec);
+    };
+    setCommandRunner(runner);
+
+    const result = await runSnappyPipeline(caseDir, ['rotor.stl'], BOUNDS, {
+      ...DEFAULT_SNAPPY_CONFIG,
+      cores: 4,
+    });
+
+    expect(result.success).toBe(true);
+    // blockMesh -> surfaceFeatureExtract -> decomposePar -> mpirun (snappy) ->
+    // reconstructParMesh -> checkMesh.
+    expect(commands).toEqual([
+      'blockMesh',
+      'surfaceFeatureExtract',
+      'decomposePar',
+      'mpirun',
+      'reconstructParMesh',
+      'checkMesh',
+    ]);
+    // The decomposition dict was written with the requested subdomain count.
+    const decompose = await fs.readFile(path.join(caseDir, 'system', 'decomposeParDict'), 'utf8');
+    expect(decompose).toContain('numberOfSubdomains 4;');
+  });
+
   it('short-circuits the remaining steps when blockMesh fails', async () => {
     const caseDir = await tempCase();
     const runner: CommandRunner = async (spec) => {

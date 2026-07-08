@@ -15,7 +15,6 @@
 // Access model: gated by project visibility (assertProjectVisible), same as case
 // files; any member may start/stop a run. A tool failure never throws (the run
 // resolves `failed`); only validation/authorization errors throw (404/409/422).
-import os from 'node:os';
 import {
   ACTIVE_RUN_STATUSES,
   RUN_DIRNAME,
@@ -40,6 +39,7 @@ import {
   writeCaseFile,
 } from '../../lib/caseStorage';
 import { renderDecomposeParDict } from '../../lib/openfoamCase';
+import { coreBudget } from '../../lib/cores';
 import { appendRunLog, ensureRunDir, readRunLog, runLogAbsolute } from '../../lib/runStorage';
 import { downsampleResiduals, parseResiduals } from '../../lib/residualParser';
 import { computeRunnable } from './files.service';
@@ -106,15 +106,6 @@ function resolveSolver(fromControlDict: string | null, fromInput?: SolverId): So
     'NOT_RUNNABLE',
     `Unsupported solver "${candidate}". This version runs: ${SOLVER_IDS.join(', ')}.`,
   );
-}
-
-/**
- * The global core budget for parallel runs across ALL projects: the configured cap
- * (SOLVER_TOTAL_CORES), or the machine's logical core count when unset (0). A new
- * run is refused when the sum of active runs' cores + the request would exceed it.
- */
-function coreBudget(): number {
-  return env.SOLVER_TOTAL_CORES > 0 ? env.SOLVER_TOTAL_CORES : os.cpus().length;
 }
 
 /**

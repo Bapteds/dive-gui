@@ -18,7 +18,7 @@
 // pinned to the meshing root. Mirrors meshStorage.ts (the per-project analogue).
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { MeshingRun, StlFile } from '@dive/shared';
+import type { MeshingRun, SnappyConfig, StlFile } from '@dive/shared';
 import { STL_EXTENSION } from '@dive/shared';
 import {
   assertSafeId,
@@ -247,6 +247,27 @@ export async function readRun(sessionId: string): Promise<MeshingRun | null> {
   try {
     const file = path.join(sessionDirAbsolute(sessionId), 'run.json');
     return JSON.parse(await fs.readFile(file, 'utf8')) as MeshingRun;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist the last-edited config (autosaved from the form, independent of a run),
+ * so manual settings survive a reload even before the mesh is generated. A run
+ * also refreshes this via the same writer, keeping the two in sync.
+ */
+export async function writeConfig(sessionId: string, config: SnappyConfig): Promise<void> {
+  const file = path.join(sessionDirAbsolute(sessionId), 'config.json');
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify(config), 'utf8');
+}
+
+/** Read the last-edited config, or null when the session was never configured. */
+export async function readConfig(sessionId: string): Promise<SnappyConfig | null> {
+  try {
+    const file = path.join(sessionDirAbsolute(sessionId), 'config.json');
+    return JSON.parse(await fs.readFile(file, 'utf8')) as SnappyConfig;
   } catch {
     return null;
   }

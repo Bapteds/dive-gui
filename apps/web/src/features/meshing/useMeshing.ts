@@ -9,6 +9,7 @@ import {
   getMeshingSession,
   listMeshingSessions,
   runSnappy,
+  saveMeshingConfig,
   uploadStl,
 } from '@/lib/api/meshing';
 import type {
@@ -116,6 +117,21 @@ export function useRunSnappy(id: string) {
         queryClient.removeQueries({ queryKey: meshingGeometryKey(id) });
         queryClient.removeQueries({ queryKey: meshingEdgesKey(id) });
       }
+    },
+  });
+}
+
+/**
+ * Autosave the edited config (persist without running). Updates the session cache
+ * so `savedConfig` stays current, without disturbing the form (it seeds on mount).
+ * Failures are swallowed by the caller's debounce — a lost autosave is non-fatal.
+ */
+export function useSaveMeshingConfig(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation<MeshingSession, Error, SnappyConfig>({
+    mutationFn: (config) => saveMeshingConfig(id, config),
+    onSuccess: (session) => {
+      queryClient.setQueryData(meshingSessionKey(id), session);
     },
   });
 }

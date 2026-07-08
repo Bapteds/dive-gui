@@ -5,15 +5,23 @@
 // runner is injectable so this runs under test without the toolchain.
 //
 // Steps (ESI OpenFOAM.com v2406 classic tools):
-//   blockMesh -> surfaceFeatureExtract -> snappyHexMesh -overwrite -> checkMesh
+//   serial (cores <= 1):
+//     blockMesh -> surfaceFeatureExtract -> snappyHexMesh -overwrite -> checkMesh
+//   parallel (cores > 1), the same story the solver already uses:
+//     blockMesh -> surfaceFeatureExtract -> decomposePar
+//       -> mpirun -np N snappyHexMesh -overwrite -parallel
+//       -> reconstructParMesh -constant -> checkMesh
 // Writing the generated dicts (system/*) is done first; a mid-pipeline failure
-// marks the remaining steps `skipped`, so the report reads top-to-bottom.
+// marks the remaining steps `skipped`, so the report reads top-to-bottom. In the
+// parallel path the processor* directories are removed once the mesh is
+// reconstructed (kept on failure for debugging).
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { ImportStep, MeshBounds, MeshImportConversion, SnappyConfig } from '@dive/shared';
 import { env } from '../config/env';
 import { runCommand, type CommandResult } from './commandRunner';
-import { commandFailed, planOpenfoamCommand } from './openfoamCommand';
+import { commandFailed, planOpenfoamCommand, type PlannedCommand } from './openfoamCommand';
+import { renderDecomposeParDict } from './openfoamCase';
 import {
   computeDomain,
   renderBlockMeshDict,
@@ -66,10 +74,11 @@ async function writeDicts(
   stlNames: string[],
   domain: SnappyDomain,
   config: SnappyConfig,
+  cores: number,
 ): Promise<void> {
   const systemDir = path.join(caseDir, 'system');
   await fs.mkdir(systemDir, { recursive: true });
-  await Promise.all([
+  const writes = [
     fs.writeFile(path.join(systemDir, 'controlDict'), renderMeshingControlDict(), 'utf8'),
     fs.writeFile(path.join(systemDir, 'fvSchemes'), renderMeshingFvSchemes(), 'utf8'),
     fs.writeFile(path.join(systemDir, 'fvSolution'), renderMeshingFvSolution(), 'utf8'),
@@ -84,14 +93,119 @@ async function writeDicts(
       renderSnappyHexMeshDict(stlNames, domain, config),
       'utf8',
     ),
-  ]);
+  ];
+  // Parallel runs need a decomposeParDict whose numberOfSubdomains matches -np N.
+  if (cores > 1) {
+    writes.push(
+      fs.writeFile(
+        path.join(systemDir, 'decomposeParDict'),
+        renderDecomposeParDict(cores, env.DECOMPOSE_METHOD),
+        'utf8',
+      ),
+    );
+  }
+  await Promise.all(writes);
+}
+
+/** One planned pipeline step: the tool + label to report, and its command. */
+interface PlannedStep {
+  tool: string;
+  label: string;
+  plan: PlannedCommand;
 }
 
 /**
- * Generate the dicts, then run blockMesh -> surfaceFeatureExtract ->
- * snappyHexMesh -overwrite -> checkMesh in `caseDir`, returning the per-step
- * report. Never throws on a tool failure — resolves `success: false` with the
- * captured logs; the caller decides what to do with a partial result.
+ * Run planned steps in order, short-circuiting on the first failure: every step
+ * after a failed one is reported `skipped`, so the report reads top-to-bottom.
+ */
+async function runSteps(steps: PlannedStep[], timeoutMs: number): Promise<ImportStep[]> {
+  const out: ImportStep[] = [];
+  let failed = false;
+  for (const step of steps) {
+    if (failed) {
+      out.push(skipped(step.tool, step.label, step.plan.display));
+      continue;
+    }
+    const result = await runCommand({ ...step.plan, timeoutMs });
+    const reported = toStep(step.tool, step.label, step.plan.display, result);
+    out.push(reported);
+    if (reported.status !== 'success') failed = true;
+  }
+  return out;
+}
+
+/** The ordered steps for a run: serial or MPI-parallel snappyHexMesh. */
+function planSteps(caseDir: string, cores: number): PlannedStep[] {
+  const block: PlannedStep = {
+    tool: env.BLOCK_MESH_BIN,
+    label: 'Background mesh (blockMesh)',
+    plan: planOpenfoamCommand(env.BLOCK_MESH_BIN, ['-case', caseDir], caseDir),
+  };
+  const feat: PlannedStep = {
+    tool: env.SURFACE_FEATURE_BIN,
+    label: 'Extract surface features',
+    plan: planOpenfoamCommand(env.SURFACE_FEATURE_BIN, ['-case', caseDir], caseDir),
+  };
+  const check: PlannedStep = {
+    tool: env.CHECK_MESH_BIN,
+    label: 'Check mesh',
+    plan: planOpenfoamCommand(env.CHECK_MESH_BIN, ['-case', caseDir], caseDir),
+  };
+
+  if (cores <= 1) {
+    const snappy: PlannedStep = {
+      tool: env.SNAPPY_HEX_MESH_BIN,
+      label: 'Snap mesh to surface (snappyHexMesh)',
+      plan: planOpenfoamCommand(env.SNAPPY_HEX_MESH_BIN, ['-overwrite', '-case', caseDir], caseDir),
+    };
+    return [block, feat, snappy, check];
+  }
+
+  // Parallel: decompose the background mesh, snap under mpirun, then reassemble.
+  // The MPI flags (default --allow-run-as-root --use-hwthread-cpus --oversubscribe)
+  // make the requested core count map to MPI slots, avoiding the common "not enough
+  // slots" failure on a hyperthreaded host — identical to the solver's parallel run.
+  const mpiFlags = env.MPI_RUN_FLAGS.split(/\s+/).filter(Boolean);
+  const decompose: PlannedStep = {
+    tool: env.DECOMPOSE_PAR_BIN,
+    label: `Decompose the mesh into ${cores} subdomains (decomposePar)`,
+    plan: planOpenfoamCommand(env.DECOMPOSE_PAR_BIN, ['-case', caseDir, '-force'], caseDir),
+  };
+  const snappy: PlannedStep = {
+    tool: env.SNAPPY_HEX_MESH_BIN,
+    label: `Snap mesh to surface (snappyHexMesh, ${cores} cores)`,
+    plan: planOpenfoamCommand(
+      env.MPI_BIN,
+      [...mpiFlags, '-np', String(cores), env.SNAPPY_HEX_MESH_BIN, '-overwrite', '-case', caseDir, '-parallel'],
+      caseDir,
+    ),
+  };
+  const reconstruct: PlannedStep = {
+    tool: env.RECONSTRUCT_PAR_MESH_BIN,
+    label: 'Reassemble the mesh (reconstructParMesh)',
+    plan: planOpenfoamCommand(
+      env.RECONSTRUCT_PAR_MESH_BIN,
+      ['-constant', '-case', caseDir],
+      caseDir,
+    ),
+  };
+  return [block, feat, decompose, snappy, reconstruct, check];
+}
+
+/** Remove the processor0..N-1 directories a parallel run created (best-effort). */
+async function cleanupProcessors(caseDir: string, cores: number): Promise<void> {
+  for (let i = 0; i < cores; i += 1) {
+    await fs
+      .rm(path.join(caseDir, `processor${i}`), { recursive: true, force: true })
+      .catch(() => undefined);
+  }
+}
+
+/**
+ * Generate the dicts, then run the meshing pipeline in `caseDir`, returning the
+ * per-step report. `config.cores` selects the serial or MPI-parallel path. Never
+ * throws on a tool failure — resolves `success: false` with the captured logs;
+ * the caller decides what to do with a partial result.
  */
 export async function runSnappyPipeline(
   caseDir: string,
@@ -99,56 +213,19 @@ export async function runSnappyPipeline(
   bounds: MeshBounds,
   config: SnappyConfig,
 ): Promise<MeshImportConversion> {
+  const cores = Math.max(1, Math.floor(config.cores || 1));
   const domain = computeDomain(bounds, config);
-  await writeDicts(caseDir, stlNames, domain, config);
+  await writeDicts(caseDir, stlNames, domain, config, cores);
 
-  const timeoutMs = env.SNAPPY_STEP_TIMEOUT_MS;
-  const steps: ImportStep[] = [];
+  const steps = await runSteps(planSteps(caseDir, cores), env.SNAPPY_STEP_TIMEOUT_MS);
 
-  // 1) blockMesh — build the background hex mesh.
-  const blockPlan = planOpenfoamCommand(env.BLOCK_MESH_BIN, ['-case', caseDir], caseDir);
-  const featPlan = planOpenfoamCommand(env.SURFACE_FEATURE_BIN, ['-case', caseDir], caseDir);
-  const snappyPlan = planOpenfoamCommand(
-    env.SNAPPY_HEX_MESH_BIN,
-    ['-overwrite', '-case', caseDir],
-    caseDir,
-  );
-  const checkPlan = planOpenfoamCommand(env.CHECK_MESH_BIN, ['-case', caseDir], caseDir);
-
-  const blockResult = await runCommand({ ...blockPlan, timeoutMs });
-  steps.push(toStep(env.BLOCK_MESH_BIN, 'Background mesh (blockMesh)', blockPlan.display, blockResult));
-  if (steps[0].status !== 'success') {
-    steps.push(
-      skipped(env.SURFACE_FEATURE_BIN, 'Extract surface features', featPlan.display),
-      skipped(env.SNAPPY_HEX_MESH_BIN, 'Snap mesh to surface (snappyHexMesh)', snappyPlan.display),
-      skipped(env.CHECK_MESH_BIN, 'Check mesh', checkPlan.display),
-    );
-    return finalize(steps);
+  // Parallel: tidy the processor* dirs once the mesh is reassembled (kept on a
+  // reconstruct failure so the decomposed result stays available for debugging).
+  if (cores > 1) {
+    const reconstructOk =
+      steps.find((step) => step.tool === env.RECONSTRUCT_PAR_MESH_BIN)?.status === 'success';
+    if (reconstructOk) await cleanupProcessors(caseDir, cores);
   }
 
-  // 2) surfaceFeatureExtract — feature edges (*.eMesh) for the snap.
-  const featResult = await runCommand({ ...featPlan, timeoutMs });
-  steps.push(toStep(env.SURFACE_FEATURE_BIN, 'Extract surface features', featPlan.display, featResult));
-  if (steps[1].status !== 'success') {
-    steps.push(
-      skipped(env.SNAPPY_HEX_MESH_BIN, 'Snap mesh to surface (snappyHexMesh)', snappyPlan.display),
-      skipped(env.CHECK_MESH_BIN, 'Check mesh', checkPlan.display),
-    );
-    return finalize(steps);
-  }
-
-  // 3) snappyHexMesh -overwrite — castellate + snap (+ layers) into constant/polyMesh.
-  const snappyResult = await runCommand({ ...snappyPlan, timeoutMs });
-  steps.push(
-    toStep(env.SNAPPY_HEX_MESH_BIN, 'Snap mesh to surface (snappyHexMesh)', snappyPlan.display, snappyResult),
-  );
-  if (steps[2].status !== 'success') {
-    steps.push(skipped(env.CHECK_MESH_BIN, 'Check mesh', checkPlan.display));
-    return finalize(steps);
-  }
-
-  // 4) checkMesh — quality report on the produced mesh.
-  const checkResult = await runCommand({ ...checkPlan, timeoutMs });
-  steps.push(toStep(env.CHECK_MESH_BIN, 'Check mesh', checkPlan.display, checkResult));
   return finalize(steps);
 }

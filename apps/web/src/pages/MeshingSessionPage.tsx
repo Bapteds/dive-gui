@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -31,6 +31,7 @@ import {
   useDeleteStl,
   useMeshingSession,
   useRunSnappy,
+  useSaveMeshingConfig,
   useUploadStl,
 } from '@/features/meshing/useMeshing';
 import { StlViewer } from '@/features/meshing/StlViewer';
@@ -48,10 +49,18 @@ export function MeshingSessionPage() {
   const navigate = useNavigate();
   const session = useMeshingSession(id);
   const runSnappy = useRunSnappy(id);
+  const { mutate: saveConfig } = useSaveMeshingConfig(id);
   const deleteSession = useDeleteMeshingSession();
 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [downloading, setDownloading] = useState(false);
+
+  // Autosave the edited config (debounced in the form). Best-effort: a lost save
+  // is non-fatal, so a failure is swallowed rather than surfaced as a toast.
+  const handleConfigChange = useCallback(
+    (config: SnappyConfig) => saveConfig(config),
+    [saveConfig],
+  );
 
   const handleGenerate = async (config: SnappyConfig) => {
     try {
@@ -164,15 +173,18 @@ export function MeshingSessionPage() {
         <StlViewer sessionId={id} stls={data.stls} />
       </section>
 
-      {/* snappyHexMesh configuration + run. Seeds from the last run so settings
-          (including a manual keep-point) persist across reloads. */}
+      {/* snappyHexMesh configuration + run. Seeds from the autosaved config (else
+          the last run) so every setting persists across reloads, and autosaves any
+          edit so manual values survive even before a run. */}
       <SnappyConfigForm
         stls={data.stls}
         bounds={data.bounds}
         disabled={data.stls.length === 0}
         running={running}
-        initialConfig={data.lastRun?.config ?? null}
+        initialConfig={data.savedConfig ?? data.lastRun?.config ?? null}
+        maxCores={data.maxCores}
         onGenerate={handleGenerate}
+        onConfigChange={handleConfigChange}
       />
 
       {/* The last run's per-step report. */}
