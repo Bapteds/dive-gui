@@ -1,15 +1,23 @@
 import { useId, useMemo, useState } from 'react';
-import { Calculator, Check, ChevronDown, Copy } from 'lucide-react';
+import { ArrowDownToLine, Calculator, Check, ChevronDown, Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { toast } from '@/components/ui/sonner';
+import { ApiError } from '@/lib/api/client';
+import { getCaseFileContent } from '@/lib/api/projects';
 import { TURBULENCE_APPROACHES, TURBULENCE_MODELS } from '@/lib/api/types';
+import { insertFoamField, setFoamValue } from '@/features/projects/foamModel';
+import { useCaseFilesQuery, useSaveCaseFile } from '@/features/projects/useCaseFiles';
 
 /**
- * TurbulenceCalculator - a standalone tab tool that estimates the RANS seed values
+ * TurbulenceCalculator - a project tab tool that estimates the RANS seed values
  * (k, epsilon, omega) from three flow inputs (velocity U, characteristic length Dh,
- * kinematic viscosity nu) plus a turbulent intensity I. It computes, it does not
- * write: each value carries a copy button so it can be pasted into the matching 0/
- * field (internalField / inlet) when configuring the solver.
+ * kinematic viscosity nu) plus a turbulent intensity I. Each value carries a copy
+ * button, and "Write to case" splices `internalField uniform <value>` into the
+ * case 0/ fields: k into 0/k, and the second field into whichever of 0/omega /
+ * 0/epsilon the case actually carries (k-omega models keep omega, k-epsilon keep
+ * epsilon).
  *
  * Formulas (see documents/calculator/turbulence_cfd_notes.md):
  *   Re      = U * Dh / nu
@@ -69,13 +77,14 @@ function formatNumber(value: number, sig: number): string {
   return trimZeros(value.toPrecision(sig));
 }
 
-export function TurbulenceCalculator() {
+export function TurbulenceCalculator({ projectId }: { projectId: string }) {
   const [u, setU] = useState('2');
   const [dh, setDh] = useState('0.1');
   // Water at ~20 C. DIVE runs hydro turbines, so water is the sensible default.
   const [nu, setNu] = useState('1e-6');
   const [intensity, setIntensity] = useState('5');
   const [model, setModel] = useState('kOmegaSST');
+  const [writing, setWriting] = useState(false);
 
   const baseId = useId();
   const seeds = useMemo(() => computeSeeds(u, dh, nu, intensity), [u, dh, nu, intensity]);
@@ -84,6 +93,57 @@ export function TurbulenceCalculator() {
   const usesEpsilon = fields.includes('epsilon');
   const usesOmega = fields.includes('omega');
   const usesNone = fields.length === 0;
+
+  // Which 0/ turbulence fields the case actually carries. The second field target
+  // follows the FILE that exists (omega for k-omega cases, epsilon for k-epsilon),
+  // not the model highlighted above - that is only a reading aid.
+  const { data: entries } = useCaseFilesQuery(projectId);
+  const hasField = (path: string) => !!entries?.some((entry) => entry.path === path);
+  const hasK = hasField('0/k');
+  const secondField: 'omega' | 'epsilon' | null = hasField('0/omega')
+    ? 'omega'
+    : hasField('0/epsilon')
+      ? 'epsilon'
+      : null;
+  const targets = [hasK ? '0/k' : null, secondField ? `0/${secondField}` : null].filter(
+    (path): path is string => path != null,
+  );
+
+  const save = useSaveCaseFile(projectId);
+
+  // Splice `internalField uniform <value>` into one 0/ field, preserving the rest
+  // of the file (banner, boundaryField, comments), then persist it.
+  const writeField = async (path: string, value: number) => {
+    const { content } = await getCaseFileContent(projectId, path);
+    const body = `uniform ${formatNumber(value, 6)}`;
+    const next =
+      setFoamValue(content, ['internalField'], body) ??
+      insertFoamField(content, [], 'internalField', body);
+    if (next && next !== content) {
+      await save.mutateAsync({ path, content: next });
+    }
+  };
+
+  const writeToCase = async () => {
+    if (!seeds || targets.length === 0) return;
+    setWriting(true);
+    try {
+      const written: string[] = [];
+      if (hasK) {
+        await writeField('0/k', seeds.k);
+        written.push('k');
+      }
+      if (secondField) {
+        await writeField(`0/${secondField}`, secondField === 'omega' ? seeds.omega : seeds.epsilon);
+        written.push(secondField);
+      }
+      toast.success(`Wrote internalField for ${written.join(' and ')} to the case.`);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not write to the case files.');
+    } finally {
+      setWriting(false);
+    }
+  };
 
   return (
     <div className="flex w-full flex-col overflow-hidden rounded-md border border-border bg-surface shadow-sm lg:min-h-0 lg:flex-1">
@@ -192,11 +252,36 @@ export function TurbulenceCalculator() {
                   />
                 </dl>
 
-                <p className="text-xs text-text-secondary">
-                  {usesNone
-                    ? 'Laminar uses no turbulence fields. These values apply once you pick a RANS model.'
-                    : 'Copy each value into its 0/ field (internalField and the inlet) on the Solver tab.'}
-                </p>
+                <div className="flex flex-col gap-2 rounded-md border border-border bg-bg/40 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm font-medium text-text">Write to case</span>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      loading={writing}
+                      disabled={targets.length === 0}
+                      onClick={() => void writeToCase()}
+                    >
+                      <ArrowDownToLine strokeWidth={1.75} aria-hidden="true" />
+                      Write to case
+                    </Button>
+                  </div>
+                  <p className="text-xs text-text-secondary">
+                    {targets.length > 0 ? (
+                      <>
+                        Sets <span className="font-mono text-text" translate="no">internalField</span>{' '}
+                        in{' '}
+                        <span className="font-mono text-text" translate="no">
+                          {targets.join(', ')}
+                        </span>
+                        . The second field follows the file this case carries (
+                        {secondField ?? 'none'}).
+                      </>
+                    ) : (
+                      'No 0/ turbulence fields in this case yet. Set up the solver on the Solver tab first, then write.'
+                    )}
+                  </p>
+                </div>
               </div>
             ) : (
               <p className="rounded-md border border-dashed border-border px-3 py-8 text-center text-sm text-text-secondary">

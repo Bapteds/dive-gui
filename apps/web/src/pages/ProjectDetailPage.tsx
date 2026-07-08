@@ -266,9 +266,9 @@ function ProjectTabs({ project }: { project: Project }) {
         value="calculator"
         className="mt-0 flex-col data-[state=active]:flex lg:min-h-0 lg:flex-1"
       >
-        {/* A pure computation tool (no case dependency), so it is always available
-            and mounts directly (no lazy chunk or server work). */}
-        <TurbulenceCalculator />
+        {/* Always available (turbulence math needs no mesh); mounts directly (no
+            lazy chunk). It reads the case 0/ fields to write the seeds on demand. */}
+        <TurbulenceCalculator projectId={project.id} />
       </TabsContent>
 
       <TabsContent
