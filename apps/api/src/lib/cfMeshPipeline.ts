@@ -7,19 +7,21 @@
 // decomposePar/MPI.
 //
 // Steps (ESI OpenFOAM.com v2406, cfMesh bundled):
-//   FMS input:   cartesianMesh -> checkMesh
-//   STL input:   [surfaceAdd × (n-1)] -> [surfaceFeatureEdges] -> cartesianMesh -> checkMesh
-// Several STLs are folded into one surface with surfaceAdd; surfaceFeatureEdges
-// then extracts feature edges into an FMS (when enabled). The merge/feature files
+//   FMS input:  cartesianMesh -> checkMesh
+//   STL input:  [Combine surfaces] -> [surfaceFeatureEdges] -> cartesianMesh -> checkMesh
+// Several STLs are combined IN-PROCESS into one multi-solid ASCII STL (stlMerge) —
+// no surfaceAdd, which behaved unreliably on the deploy box. surfaceFeatureEdges
+// then extracts feature edges into an FMS (when enabled). The combined/feature files
 // live under <case>/.work so they never show up as input surfaces. A prior mesh is
 // cleared first (the shared Allclean), so every run starts clean.
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { CfMeshConfig, MeshBounds, MeshImportConversion } from '@dive/shared';
+import type { CfMeshConfig, ImportStep, MeshBounds, MeshImportConversion } from '@dive/shared';
 import { FMS_EXTENSION, STL_EXTENSION } from '@dive/shared';
 import { env } from '../config/env';
 import { planOpenfoamCommand, type PlannedCommand } from './openfoamCommand';
 import { renderMeshDict, resolveMaxCellSize } from './cfMeshDicts';
+import { mergeStlFilesToAscii } from './stlMerge';
 import {
   renderMeshingControlDict,
   renderMeshingFvSchemes,
@@ -36,10 +38,26 @@ import {
 /** Relative (to the case dir) location of the input surfaces and the scratch dir. */
 const TRI_SURFACE_REL = 'constant/triSurface';
 const WORK_REL = '.work';
+const COMBINED_STL_REL = `${WORK_REL}/combined.stl`;
+const COMBINED_FMS_REL = `${WORK_REL}/combined.fms`;
 
 /** Add OMP_NUM_THREADS to a planned command so cartesianMesh runs multithreaded. */
 function withThreads(plan: PlannedCommand, threads: number): PlannedCommand {
   return { ...plan, env: { ...plan.env, OMP_NUM_THREADS: String(threads) } };
+}
+
+/** A synthetic (non-command) report step for the in-process surface merge. */
+function mergeStep(status: 'success' | 'failed', detail: string): ImportStep {
+  return {
+    tool: 'stlMerge',
+    label: 'Combine surfaces',
+    command: 'combine STL surfaces → one multi-solid surface',
+    status,
+    exitCode: status === 'success' ? 0 : 1,
+    stdout: status === 'success' ? detail : '',
+    stderr: status === 'success' ? '' : detail,
+    durationMs: 0,
+  };
 }
 
 /** Write the cfMesh case dicts: meshDict + the minimal control/scheme/solution set. */
@@ -60,67 +78,47 @@ async function writeCfMeshDicts(
 }
 
 /**
- * Plan the surface-preparation steps and resolve the meshDict `surfaceFile`:
+ * Combine the STL inputs into one surface and resolve the meshDict `surfaceFile`:
  *  - one FMS  -> use it directly (features + patches already baked in);
- *  - one STL  -> use it directly (optionally feature-extracted to an FMS);
- *  - many STL -> fold with surfaceAdd into one surface, then optionally extract.
- * All merge/feature outputs go under <case>/.work.
+ *  - one STL  -> use it directly;
+ *  - many STL -> merge in-process into .work/combined.stl (one solid/patch each).
+ * Returns the pre-steps (a synthetic merge report, if any) and the base surface
+ * path; `ok` is false when the merge failed (the caller short-circuits).
  */
-function planSurfacePrep(
+async function prepareSurface(
   caseDir: string,
   surfaceNames: string[],
-  config: CfMeshConfig,
-): { steps: PlannedStep[]; surfaceFileRel: string } {
+): Promise<{ ok: boolean; pre: ImportStep[]; baseSurfaceRel: string | null; isFms: boolean }> {
   const fms = surfaceNames.find((n) => n.toLowerCase().endsWith(FMS_EXTENSION));
   if (fms) {
-    return { steps: [], surfaceFileRel: `${TRI_SURFACE_REL}/${fms}` };
+    return { ok: true, pre: [], baseSurfaceRel: `${TRI_SURFACE_REL}/${fms}`, isFms: true };
   }
 
   const stls = surfaceNames.filter((n) => n.toLowerCase().endsWith(STL_EXTENSION));
-  const steps: PlannedStep[] = [];
-
-  // Fold several STLs into one combined surface (surfaceAdd takes two inputs).
-  // Surface utilities carry cwd = caseDir so their relative paths resolve.
-  let combinedRel = `${TRI_SURFACE_REL}/${stls[0]}`;
-  for (let i = 1; i < stls.length; i += 1) {
-    const out = `${WORK_REL}/merged-${i}.stl`;
-    steps.push({
-      tool: env.SURFACE_ADD_BIN,
-      label: `Merge surfaces (${i}/${stls.length - 1})`,
-      // surfaceAdd <surf1> <surf2> <out>; a surface utility (no -case).
-      plan: planOpenfoamCommand(
-        env.SURFACE_ADD_BIN,
-        [combinedRel, `${TRI_SURFACE_REL}/${stls[i]}`, out],
-        caseDir,
-      ),
-    });
-    combinedRel = out;
+  if (stls.length <= 1) {
+    return { ok: true, pre: [], baseSurfaceRel: `${TRI_SURFACE_REL}/${stls[0]}`, isFms: false };
   }
 
-  if (config.extractFeatures) {
-    const fmsOut = `${WORK_REL}/combined.fms`;
-    steps.push({
-      tool: env.SURFACE_FEATURE_EDGES_BIN,
-      label: 'Extract feature edges (surfaceFeatureEdges)',
-      plan: planOpenfoamCommand(
-        env.SURFACE_FEATURE_EDGES_BIN,
-        ['-angle', String(Math.max(0, config.featureAngle)), combinedRel, fmsOut],
-        caseDir,
-      ),
-    });
-    return { steps, surfaceFileRel: fmsOut };
+  try {
+    const { triangles } = await mergeStlFilesToAscii(
+      path.join(caseDir, 'constant', 'triSurface'),
+      stls,
+      path.join(caseDir, COMBINED_STL_REL),
+    );
+    const detail = `Combined ${stls.length} surfaces (${triangles} triangles) into one.`;
+    return { ok: true, pre: [mergeStep('success', detail)], baseSurfaceRel: COMBINED_STL_REL, isFms: false };
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return { ok: false, pre: [mergeStep('failed', detail)], baseSurfaceRel: null, isFms: false };
   }
-  return { steps, surfaceFileRel: combinedRel };
 }
 
 /**
- * Generate the meshDict, prepare the surface, then run cartesianMesh (multithreaded)
- * and checkMesh in `caseDir`, returning the per-step report. `bounds` is the STL
- * union bbox (null for an FMS input); `config.cores` maps to OMP threads. Never
- * throws on a tool failure — resolves `success: false` with the captured logs.
- *
- * Returns a single failed step when the base cell size cannot be resolved (an FMS
- * input with no configured maxCellSize), rather than writing an invalid meshDict.
+ * Generate the meshDict, prepare the surface, then run [surfaceFeatureEdges ->]
+ * cartesianMesh (multithreaded) and checkMesh in `caseDir`, returning the per-step
+ * report. `bounds` is the STL union bbox (null for an FMS input); `config.cores`
+ * maps to OMP threads. Never throws on a tool failure — resolves `success: false`
+ * with the captured logs.
  */
 export async function runCfMeshPipeline(
   caseDir: string,
@@ -132,8 +130,6 @@ export async function runCfMeshPipeline(
 
   const maxCellSize = resolveMaxCellSize(config, bounds);
   if (maxCellSize == null) {
-    // No bounds (FMS) and no configured size: cartesianMesh needs one. Report it
-    // as a failed first step so the UI shows a clear, actionable reason.
     return finalize([
       {
         ...skipped(env.CARTESIAN_MESH_BIN, 'Generate mesh (cartesianMesh)', 'cartesianMesh'),
@@ -146,12 +142,10 @@ export async function runCfMeshPipeline(
   await cleanPriorMeshArtifacts(caseDir);
   await fs.mkdir(path.join(caseDir, WORK_REL), { recursive: true });
 
-  const { steps: prep, surfaceFileRel } = planSurfacePrep(caseDir, surfaceNames, config);
-  await writeCfMeshDicts(caseDir, config, surfaceFileRel, maxCellSize);
-
+  const cartesianLabel = `Generate mesh (cartesianMesh, ${threads} thread${threads === 1 ? '' : 's'})`;
   const cartesian: PlannedStep = {
     tool: env.CARTESIAN_MESH_BIN,
-    label: `Generate mesh (cartesianMesh, ${threads} thread${threads === 1 ? '' : 's'})`,
+    label: cartesianLabel,
     plan: withThreads(planOpenfoamCommand(env.CARTESIAN_MESH_BIN, ['-case', caseDir], caseDir), threads),
   };
   const check: PlannedStep = {
@@ -160,6 +154,35 @@ export async function runCfMeshPipeline(
     plan: planOpenfoamCommand(env.CHECK_MESH_BIN, ['-case', caseDir], caseDir),
   };
 
-  const steps = await runSteps([...prep, cartesian, check], env.CFMESH_STEP_TIMEOUT_MS);
-  return finalize(steps);
+  // Combine the STL inputs (or use the FMS / single STL directly).
+  const surface = await prepareSurface(caseDir, surfaceNames);
+  if (!surface.ok || !surface.baseSurfaceRel) {
+    return finalize([
+      ...surface.pre,
+      skipped(env.CARTESIAN_MESH_BIN, cartesianLabel, cartesian.plan.display),
+      skipped(env.CHECK_MESH_BIN, 'Check mesh', check.plan.display),
+    ]);
+  }
+
+  // Optional feature extraction into an FMS (STL inputs only).
+  const steps: PlannedStep[] = [];
+  let surfaceFileRel = surface.baseSurfaceRel;
+  if (!surface.isFms && config.extractFeatures) {
+    steps.push({
+      tool: env.SURFACE_FEATURE_EDGES_BIN,
+      label: 'Extract feature edges (surfaceFeatureEdges)',
+      plan: planOpenfoamCommand(
+        env.SURFACE_FEATURE_EDGES_BIN,
+        ['-angle', String(Math.max(0, config.featureAngle)), surface.baseSurfaceRel, COMBINED_FMS_REL],
+        caseDir,
+      ),
+    });
+    surfaceFileRel = COMBINED_FMS_REL;
+  }
+
+  await writeCfMeshDicts(caseDir, config, surfaceFileRel, maxCellSize);
+  steps.push(cartesian, check);
+
+  const ran = await runSteps(steps, env.CFMESH_STEP_TIMEOUT_MS);
+  return finalize([...surface.pre, ...ran]);
 }
