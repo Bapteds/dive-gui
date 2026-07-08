@@ -17,6 +17,7 @@ import type {
   MeshManifest,
   MeshingConfig,
   MeshingEngine,
+  MeshingPatch,
   MeshingRun,
   MeshingSession,
   MeshingSessionSummary,
@@ -28,7 +29,7 @@ import { coreBudget } from '../../lib/cores';
 import { runCommand, type CommandResult } from '../../lib/commandRunner';
 import { zipTreeAt } from '../../lib/fileTreeStorage';
 import { parseStlBounds, unionBounds } from '../../lib/stlBounds';
-import { parseFmsPatchNames, parseStlSolidNames } from '../../lib/meshPatches';
+import { parseFmsPatches, parseStlSolidNames } from '../../lib/meshPatches';
 import { mergedSolidNames } from '../../lib/stlMerge';
 import { runSnappyPipeline } from '../../lib/snappyPipeline';
 import { runCfMeshPipeline } from '../../lib/cfMeshPipeline';
@@ -94,17 +95,25 @@ async function sessionBounds(sessionId: string): Promise<MeshBounds | null> {
  *  - many STL -> the merged solid names (one per file), matching stlMerge exactly.
  * Drives the per-patch boundary-type editor.
  */
-async function discoverPatches(sessionId: string, engine: MeshingEngine): Promise<string[]> {
+async function discoverPatches(sessionId: string, engine: MeshingEngine): Promise<MeshingPatch[]> {
   if (engine !== 'cfmesh') return [];
   const files = await listStl(sessionId);
   const fms = files.find((f) => isFms(f.name));
   if (fms) {
     const buffer = await readStl(sessionId, fms.name);
-    return buffer ? parseFmsPatchNames(buffer) : [];
+    // An FMS carries the current type of each patch — surface it so the user sees it.
+    return buffer ? parseFmsPatches(buffer).map((p) => ({ name: p.name, type: p.type })) : [];
   }
+  // An STL has no patch types; the names come from its solids (or the merged files).
   const stls = files.filter((f) => isStl(f.name)).map((f) => f.name);
   if (stls.length === 0) return [];
-  if (stls.length >= 2) return mergedSolidNames(stls);
+  const names =
+    stls.length >= 2 ? mergedSolidNames(stls) : await stlSolidNamesOr(sessionId, stls);
+  return names.map((name) => ({ name, type: null }));
+}
+
+/** A single STL's solid names, falling back to the file's merged name when unnamed. */
+async function stlSolidNamesOr(sessionId: string, stls: string[]): Promise<string[]> {
   const buffer = await readStl(sessionId, stls[0]);
   const names = buffer ? parseStlSolidNames(buffer) : [];
   return names.length > 0 ? names : mergedSolidNames(stls);

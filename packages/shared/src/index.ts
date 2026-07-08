@@ -950,6 +950,13 @@ export interface CfMeshLayersConfig {
 export const CFMESH_PATCH_TYPES = ['patch', 'wall', 'symmetry', 'symmetryPlane', 'empty'] as const;
 export type CfMeshPatchType = (typeof CFMESH_PATCH_TYPES)[number];
 
+/** A discovered boundary patch: its name and its CURRENT type (from the FMS), or null. */
+export interface MeshingPatch {
+  name: string;
+  /** The type read from the FMS header, or null (an STL has no patch types). */
+  type: string | null;
+}
+
 /**
  * cfMesh cartesianMesh tunables. Writes system/meshDict. cfMesh meshes the volume
  * bounded by the (closed) surface — INTERNAL flow — so there is no domain-type /
@@ -1046,12 +1053,12 @@ export interface MeshingSession extends MeshingSessionSummary {
   /** Max cores a run may request (the machine's core budget). */
   maxCores: number;
   /**
-   * Boundary patch names discovered from the input surface (cfMesh only): the FMS
-   * patch names, the STL solid names, or the merged file names. Empty for snappy
-   * (whose patches are per-STL) or when nothing is uploaded. Drives the per-patch
-   * boundary-type editor.
+   * Boundary patches discovered from the input surface (cfMesh only): the FMS
+   * patches (with their current type), the STL solid names, or the merged file
+   * names. Empty for snappy (whose patches are per-STL) or when nothing is
+   * uploaded. Drives the per-patch boundary-type editor.
    */
-  patches: string[];
+  patches: MeshingPatch[];
 }
 
 /**

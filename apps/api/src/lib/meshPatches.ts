@@ -6,23 +6,29 @@
 // Best-effort and defensive: malformed input yields an empty list rather than
 // throwing, so surfacing the patches never breaks loading a session.
 
+/** A patch parsed from an FMS header: its name and its declared type. */
+export interface FmsPatch {
+  name: string;
+  type: string;
+}
+
 /**
- * Patch names from the header of an FMS surface. The header is
+ * Patches from the header of an FMS surface. The header is
  * `<numPatches> ( name0 type0 name1 type1 … )`; we read the count, then take the
- * patch NAMES (every other token inside the first parenthesised block).
+ * `(name, type)` pairs inside the first parenthesised block.
  */
-export function parseFmsPatchNames(buffer: Buffer): string[] {
+export function parseFmsPatches(buffer: Buffer): FmsPatch[] {
   // The patch block is plain ASCII at the very top even for an otherwise binary FMS.
   const head = buffer.subarray(0, Math.min(buffer.length, 65536)).toString('latin1');
   const m = head.match(/(\d+)\s*\(([\s\S]*?)\)/);
   if (!m) return [];
   const count = Number(m[1]);
   const tokens = m[2].trim().split(/\s+/).filter(Boolean);
-  const names: string[] = [];
-  for (let i = 0; i + 1 < tokens.length && names.length < count; i += 2) {
-    names.push(tokens[i]);
+  const patches: FmsPatch[] = [];
+  for (let i = 0; i + 1 < tokens.length && patches.length < count; i += 2) {
+    patches.push({ name: tokens[i], type: tokens[i + 1] });
   }
-  return names;
+  return patches;
 }
 
 /** Solid (patch) names of an ASCII STL — each `solid <name>` block is one patch. */

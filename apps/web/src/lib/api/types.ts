@@ -791,6 +791,7 @@ export type {
   CfMeshConfig,
   CfMeshLayersConfig,
   CfMeshPatchType,
+  MeshingPatch,
   SurfaceRefinement,
   AddLayersConfig,
   StlFile,

@@ -1,15 +1,15 @@
 // Unit tests for boundary-patch discovery (FMS header + ASCII STL solid names).
 import { describe, expect, it } from 'vitest';
-import { parseFmsPatchNames, parseStlSolidNames } from '../src/lib/meshPatches';
+import { parseFmsPatches, parseStlSolidNames } from '../src/lib/meshPatches';
 
-describe('parseFmsPatchNames', () => {
-  it('reads the patch names from an FMS header (name type pairs)', () => {
+describe('parseFmsPatches', () => {
+  it('reads the patch names and types from an FMS header', () => {
     const fms = Buffer.from(
       `3
 (
-    inlet    patch
-    outlet   patch
-    walls    wall
+    DT_Inlet    empty
+    DT_Outlet   empty
+    DT_Wall     empty
 )
 
 12
@@ -17,11 +17,15 @@ describe('parseFmsPatchNames', () => {
 `,
       'utf8',
     );
-    expect(parseFmsPatchNames(fms)).toEqual(['inlet', 'outlet', 'walls']);
+    expect(parseFmsPatches(fms)).toEqual([
+      { name: 'DT_Inlet', type: 'empty' },
+      { name: 'DT_Outlet', type: 'empty' },
+      { name: 'DT_Wall', type: 'empty' },
+    ]);
   });
 
   it('returns [] when there is no patch block', () => {
-    expect(parseFmsPatchNames(Buffer.from('not an fms', 'utf8'))).toEqual([]);
+    expect(parseFmsPatches(Buffer.from('not an fms', 'utf8'))).toEqual([]);
   });
 });
 

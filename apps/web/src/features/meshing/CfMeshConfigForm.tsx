@@ -5,7 +5,20 @@ import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { CFMESH_PATCH_TYPES, DEFAULT_CFMESH_CONFIG } from '@/lib/api/types';
-import type { CfMeshConfig, CfMeshPatchType, MeshBounds, StlFile } from '@/lib/api/types';
+import type { CfMeshConfig, CfMeshPatchType, MeshBounds, MeshingPatch, StlFile } from '@/lib/api/types';
+
+/** The type set for a discovered patch: the saved choice, its FMS type, else wall. */
+function seedPatchType(
+  patch: MeshingPatch,
+  saved: Record<string, CfMeshPatchType> | undefined,
+): CfMeshPatchType {
+  const fromSaved = saved?.[patch.name];
+  if (fromSaved) return fromSaved;
+  if (patch.type && (CFMESH_PATCH_TYPES as readonly string[]).includes(patch.type)) {
+    return patch.type as CfMeshPatchType;
+  }
+  return 'wall';
+}
 
 /**
  * CfMeshConfigForm — the cfMesh (cartesianMesh) tunables for one run. Distinct
@@ -65,8 +78,8 @@ export function CfMeshConfigForm({
 }: {
   stls: StlFile[];
   bounds: MeshBounds | null;
-  /** Boundary patch names discovered from the input surface (for the type editor). */
-  patches: string[];
+  /** Boundary patches discovered from the input surface (for the type editor). */
+  patches: MeshingPatch[];
   disabled: boolean;
   running: boolean;
   initialConfig: CfMeshConfig | null;
@@ -92,27 +105,47 @@ export function CfMeshConfigForm({
   const [cores, setCores] = useState(() =>
     initialConfig?.cores ? clampCores(String(initialConfig.cores), maxCores) : defaultCores(maxCores),
   );
-  // Per-patch boundary type; '' means "keep the FMS/cfMesh default" (not written).
-  const [patchTypes, setPatchTypes] = useState<Record<string, CfMeshPatchType | ''>>(
-    () => init.patchTypes ?? {},
-  );
+  // Per-patch boundary type. Seeds from the saved choice, else the patch's current
+  // FMS type, else `wall` — never `empty` by default (empty is a 2D-only type).
+  const [patchTypes, setPatchTypes] = useState<Record<string, CfMeshPatchType>>(() => {
+    const map: Record<string, CfMeshPatchType> = {};
+    for (const p of patches) map[p.name] = seedPatchType(p, init.patchTypes);
+    return map;
+  });
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   useEffect(() => {
     setCores((current) => Math.min(current, Math.max(1, maxCores)));
   }, [maxCores]);
 
+  // Keep the per-patch map in sync with the discovered patches (surface uploaded /
+  // replaced after mount): add a default for a new patch, drop a removed one, keep
+  // the user's existing choices.
+  const patchKey = useMemo(() => patches.map((p) => p.name).join('|'), [patches]);
+  useEffect(() => {
+    setPatchTypes((prev) => {
+      const next: Record<string, CfMeshPatchType> = {};
+      for (const p of patches) next[p.name] = prev[p.name] ?? seedPatchType(p, init.patchTypes);
+      const same =
+        Object.keys(next).length === Object.keys(prev).length &&
+        Object.keys(next).every((k) => prev[k] === next[k]);
+      return same ? prev : next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patchKey]);
+
   const autoCell = bounds ? (diagonalOf(bounds) || 1) / 40 : null;
   // An FMS input has no bounds, so cartesianMesh cannot derive a base size.
   const needsCellSize = !bounds && parseSize(maxCellSize) == null;
   const canSubmit = !disabled && !running && !needsCellSize;
 
-  // Only patches with a concrete (non-empty) type are sent; the rest keep their default.
+  // Every discovered patch is sent with its resolved type, so meshDict's
+  // renameBoundary always sets each patch (no accidental `empty` from the source).
   const chosenPatchTypes = useMemo(() => {
     const out: Record<string, CfMeshPatchType> = {};
-    for (const name of patches) {
-      const type = patchTypes[name];
-      if (type) out[name] = type;
+    for (const p of patches) {
+      const type = patchTypes[p.name];
+      if (type) out[p.name] = type;
     }
     return out;
   }, [patches, patchTypes]);
@@ -225,18 +258,22 @@ export function CfMeshConfigForm({
         <fieldset className="flex flex-col gap-2">
           <legend className="text-sm font-medium text-text">Boundary types</legend>
           <p className="text-xs text-text-secondary">
-            The type each patch gets in the mesh. “Keep” leaves the surface&apos;s own type.
+            The OpenFOAM type each boundary gets in the mesh. Defaults to <code>wall</code> — set
+            inlets/outlets to <code>patch</code>.
           </p>
           <div className="flex flex-col divide-y divide-border overflow-hidden rounded-md border border-border">
-            {patches.map((name) => (
-              <div key={name} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
-                <span className="min-w-0 flex-1 truncate font-mono text-sm text-text" title={name} translate="no">
-                  {name}
+            {patches.map((patch) => (
+              <div key={patch.name} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                <span className="min-w-0 flex-1 truncate font-mono text-sm text-text" title={patch.name} translate="no">
+                  {patch.name}
+                  {patch.type && (
+                    <span className="ml-2 text-xs text-text-secondary">(now: {patch.type})</span>
+                  )}
                 </span>
                 <PatchTypeSelect
-                  patch={name}
-                  value={patchTypes[name] ?? ''}
-                  onChange={(type) => setPatchTypes((prev) => ({ ...prev, [name]: type }))}
+                  patch={patch.name}
+                  value={patchTypes[patch.name] ?? 'wall'}
+                  onChange={(type) => setPatchTypes((prev) => ({ ...prev, [patch.name]: type }))}
                 />
               </div>
             ))}
@@ -381,22 +418,21 @@ function PatchTypeSelect({
   onChange,
 }: {
   patch: string;
-  value: CfMeshPatchType | '';
-  onChange: (value: CfMeshPatchType | '') => void;
+  value: CfMeshPatchType;
+  onChange: (value: CfMeshPatchType) => void;
 }) {
   return (
     <div className="relative">
       <select
         aria-label={`Boundary type for ${patch}`}
         value={value}
-        onChange={(e) => onChange(e.target.value as CfMeshPatchType | '')}
+        onChange={(e) => onChange(e.target.value as CfMeshPatchType)}
         className={cn(
           'h-9 w-40 appearance-none rounded-md border border-border bg-surface pl-3 pr-9 text-sm text-text',
           'transition-colors duration-fast ease-out hover:border-border-strong',
           'focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
         )}
       >
-        <option value="">Keep (default)</option>
         {CFMESH_PATCH_TYPES.map((type) => (
           <option key={type} value={type}>
             {type}
