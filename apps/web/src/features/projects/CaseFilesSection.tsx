@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
+  Calculator,
   Combine,
   Download,
   File as FileIcon,
@@ -47,6 +48,7 @@ import { ConvertToFoamFlow } from '@/features/projects/ConvertToFoamFlow';
 import { MergeMeshesFlow } from '@/features/projects/MergeMeshesFlow';
 import { BoundaryConditionDialog } from '@/features/projects/BoundaryConditionDialog';
 import { ApplyTemplateFlow } from '@/features/templates/ApplyTemplateFlow';
+import { TurbulenceCalculatorDialog } from '@/features/solver/TurbulenceCalculator';
 
 /**
  * CaseFilesSection - import, inspect, verify, and download a project's OpenFOAM
@@ -136,6 +138,8 @@ export function CaseFilesSection({
   const [mergeOpen, setMergeOpen] = useState(false);
   // Whether the "boundary conditions" overlay is open (post-import setup).
   const [bcOpen, setBcOpen] = useState(false);
+  // Whether the turbulence calculator overlay is open.
+  const [calcOpen, setCalcOpen] = useState(false);
 
   const hasFiles = !!entries && entries.some((entry) => entry.type === 'file');
   const hasPolyMesh =
@@ -350,6 +354,15 @@ export function CaseFilesSection({
                 </Button>
                 <Button
                   type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setCalcOpen(true)}
+                >
+                  <Calculator strokeWidth={1.75} aria-hidden="true" />
+                  Calculator
+                </Button>
+                <Button
+                  type="button"
                   variant="ghost"
                   size="sm"
                   onClick={() => void handleDownload()}
@@ -407,6 +420,8 @@ export function CaseFilesSection({
       {bcOpen && (
         <BoundaryConditionDialog projectId={projectId} onClose={() => setBcOpen(false)} />
       )}
+
+      <TurbulenceCalculatorDialog projectId={projectId} open={calcOpen} onOpenChange={setCalcOpen} />
     </section>
   );
 }

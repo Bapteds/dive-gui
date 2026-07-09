@@ -2,6 +2,7 @@ import { useId, useMemo, useState } from 'react';
 import { ArrowDownToLine, Calculator, Check, ChevronDown, Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/sonner';
 import { ApiError } from '@/lib/api/client';
@@ -77,7 +78,41 @@ function formatNumber(value: number, sig: number): string {
   return trimZeros(value.toPrecision(sig));
 }
 
-export function TurbulenceCalculator({ projectId }: { projectId: string }) {
+/**
+ * TurbulenceCalculatorDialog - the calculator inside a modal overlay, opened from
+ * the Case files toolbar (next to "Edit files") rather than a dedicated tab. The
+ * content wrapper drops its own card chrome (the dialog surface provides it) and
+ * scrolls internally within a bounded height.
+ */
+export function TurbulenceCalculatorDialog({
+  projectId,
+  open,
+  onOpenChange,
+}: {
+  projectId: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[85vh] max-w-3xl flex-col overflow-hidden p-0">
+        {/* The calculator's own header carries the visible title; this hidden one
+            gives the dialog its accessible name (Radix requires a DialogTitle). */}
+        <DialogTitle className="sr-only">Turbulence calculator</DialogTitle>
+        <TurbulenceCalculator projectId={projectId} bare />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function TurbulenceCalculator({
+  projectId,
+  bare = false,
+}: {
+  projectId: string;
+  /** Drop the outer card chrome so the component can fill a dialog surface. */
+  bare?: boolean;
+}) {
   const [u, setU] = useState('2');
   const [dh, setDh] = useState('0.1');
   // Water at ~20 C. DIVE runs hydro turbines, so water is the sensible default.
@@ -146,7 +181,14 @@ export function TurbulenceCalculator({ projectId }: { projectId: string }) {
   };
 
   return (
-    <div className="flex w-full flex-col overflow-hidden rounded-md border border-border bg-surface shadow-sm lg:min-h-0 lg:flex-1">
+    <div
+      className={cn(
+        'flex w-full flex-col overflow-hidden',
+        bare
+          ? 'min-h-0 flex-1'
+          : 'rounded-md border border-border bg-surface shadow-sm lg:min-h-0 lg:flex-1',
+      )}
+    >
       <header className="flex shrink-0 items-center gap-3 border-b border-border p-6 pb-4">
         <span
           className="grid size-9 shrink-0 place-items-center rounded-md bg-primary-tint text-primary"

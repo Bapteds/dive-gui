@@ -7,7 +7,6 @@ import {
   ArrowLeft,
   Box,
   Boxes,
-  Calculator,
   Info,
   Loader2,
   Play,
@@ -59,7 +58,6 @@ import {
   useRemoveCollaborator,
 } from '@/features/projects/useProjects';
 import { CaseFilesSection } from '@/features/projects/CaseFilesSection';
-import { TurbulenceCalculator } from '@/features/solver/TurbulenceCalculator';
 import { useCaseFilesQuery } from '@/features/projects/useCaseFiles';
 import { useMeshesQuery } from '@/features/projects/useMeshes';
 import { ProjectTerminalButton } from '@/features/terminal/ProjectTerminalButton';
@@ -183,7 +181,7 @@ export function ProjectDetailPage() {
  * Opening it swaps the whole detail body for the lazy-loaded Visualize panel
  * (mesh picker + 3D viewer), which fills the pinned region at lg+.
  */
-type ProjectView = 'detail' | 'visualize' | 'assemble' | 'solver' | 'calculator' | 'export';
+type ProjectView = 'detail' | 'visualize' | 'assemble' | 'solver' | 'export';
 
 function ProjectTabs({ project }: { project: Project }) {
   const [view, setView] = useState<ProjectView>('detail');
@@ -208,10 +206,6 @@ function ProjectTabs({ project }: { project: Project }) {
         <VisualizeTab disabled={!(hasPolyMesh || hasSources)} />
         <AssembleTab disabled={!hasSources} />
         <SolverTabTrigger disabled={!hasPolyMesh} />
-        <TabsTrigger value="calculator">
-          <Calculator strokeWidth={1.75} aria-hidden="true" />
-          Calculator
-        </TabsTrigger>
         <ExportTabTrigger disabled={!hasPolyMesh} />
       </TabsList>
 
@@ -260,15 +254,6 @@ function ProjectTabs({ project }: { project: Project }) {
             <SolverTab projectId={project.id} />
           </Suspense>
         )}
-      </TabsContent>
-
-      <TabsContent
-        value="calculator"
-        className="mt-0 flex-col data-[state=active]:flex lg:min-h-0 lg:flex-1"
-      >
-        {/* Always available (turbulence math needs no mesh); mounts directly (no
-            lazy chunk). It reads the case 0/ fields to write the seeds on demand. */}
-        <TurbulenceCalculator projectId={project.id} />
       </TabsContent>
 
       <TabsContent
