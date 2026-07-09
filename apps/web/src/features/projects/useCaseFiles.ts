@@ -125,11 +125,11 @@ export function useCaseFileContentQuery(projectId: string, path: string | null) 
   });
 }
 
-/** Create a new (empty) file, then write the refreshed tree into the cache. */
+/** Create a new file (optionally seeded with content), then write the refreshed tree into the cache. */
 export function useCreateCaseFile(projectId: string) {
   const queryClient = useQueryClient();
-  return useMutation<CreateCaseFileResponse, Error, { path: string }>({
-    mutationFn: ({ path }) => createCaseFile(projectId, path),
+  return useMutation<CreateCaseFileResponse, Error, { path: string; content?: string }>({
+    mutationFn: ({ path, content }) => createCaseFile(projectId, path, content),
     onSuccess: (result) => {
       queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
     },

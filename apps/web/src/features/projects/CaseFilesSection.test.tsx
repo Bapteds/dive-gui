@@ -71,6 +71,7 @@ describe('CaseFilesSection', () => {
     expect(screen.getByRole('button', { name: /verify case/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /download/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reset' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /topoSet/i })).toBeInTheDocument();
   });
 
   it('resets the case after confirmation', async () => {

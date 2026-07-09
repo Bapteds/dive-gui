@@ -152,9 +152,16 @@ export async function saveCaseFileContent(
   await apiClient.putText(`/projects/${id}/files/content?path=${encodeURIComponent(path)}`, content);
 }
 
-/** Create a new (empty) case file from the editor. Returns the refreshed tree. */
-export async function createCaseFile(id: string, path: string): Promise<CreateCaseFileResponse> {
-  return apiClient.post<CreateCaseFileResponse>(`/projects/${id}/files/content`, { path });
+/**
+ * Create a new case file from the editor, optionally seeded with content
+ * (e.g. a generated dictionary). Returns the refreshed tree.
+ */
+export async function createCaseFile(
+  id: string,
+  path: string,
+  content?: string,
+): Promise<CreateCaseFileResponse> {
+  return apiClient.post<CreateCaseFileResponse>(`/projects/${id}/files/content`, { path, content });
 }
 
 /** Delete a single case file from the editor. Returns the refreshed tree. */

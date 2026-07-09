@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
+  Boxes,
   Calculator,
   Combine,
   Download,
@@ -49,6 +50,7 @@ import { MergeMeshesFlow } from '@/features/projects/MergeMeshesFlow';
 import { BoundaryConditionDialog } from '@/features/projects/BoundaryConditionDialog';
 import { ApplyTemplateFlow } from '@/features/templates/ApplyTemplateFlow';
 import { TurbulenceCalculatorDialog } from '@/features/solver/TurbulenceCalculator';
+import { TopoSetDialog } from '@/features/solver/TopoSetDialog';
 
 /**
  * CaseFilesSection - import, inspect, verify, and download a project's OpenFOAM
@@ -140,6 +142,8 @@ export function CaseFilesSection({
   const [bcOpen, setBcOpen] = useState(false);
   // Whether the turbulence calculator overlay is open.
   const [calcOpen, setCalcOpen] = useState(false);
+  // Whether the TopoSet (system/topoSetDict) overlay is open.
+  const [topoOpen, setTopoOpen] = useState(false);
 
   const hasFiles = !!entries && entries.some((entry) => entry.type === 'file');
   const hasPolyMesh =
@@ -363,6 +367,15 @@ export function CaseFilesSection({
                 </Button>
                 <Button
                   type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setTopoOpen(true)}
+                >
+                  <Boxes strokeWidth={1.75} aria-hidden="true" />
+                  TopoSet
+                </Button>
+                <Button
+                  type="button"
                   variant="ghost"
                   size="sm"
                   onClick={() => void handleDownload()}
@@ -422,6 +435,7 @@ export function CaseFilesSection({
       )}
 
       <TurbulenceCalculatorDialog projectId={projectId} open={calcOpen} onOpenChange={setCalcOpen} />
+      <TopoSetDialog projectId={projectId} open={topoOpen} onOpenChange={setTopoOpen} />
     </section>
   );
 }

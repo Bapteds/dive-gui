@@ -159,10 +159,10 @@ export async function saveCaseFileContentController(req: Request, res: Response)
   res.status(200).json({ file });
 }
 
-/** POST /projects/:id/files/content — create a new (empty) file from the editor. */
+/** POST /projects/:id/files/content — create a new file from the editor, optionally with initial content. */
 export async function createCaseFileController(req: Request, res: Response): Promise<void> {
-  const { path } = req.body as { path: string };
-  const result = await createCaseFile(requireViewer(req), req.params.id, path);
+  const { path, content } = req.body as { path: string; content?: string };
+  const result = await createCaseFile(requireViewer(req), req.params.id, path, content);
   res.status(201).json(result);
 }
 
