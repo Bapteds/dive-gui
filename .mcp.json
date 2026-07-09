@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "dive": {
+      "command": "npx",
+      "args": ["tsx", "apps/mcp/src/server.ts"]
+    }
+  }
+}
