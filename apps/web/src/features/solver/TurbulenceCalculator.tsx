@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { ArrowDownToLine, Calculator, Check, ChevronDown, Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -7,12 +7,22 @@ import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/sonner';
 import { ApiError } from '@/lib/api/client';
 import { getCaseFileContent } from '@/lib/api/projects';
-import { TURBULENCE_APPROACHES, TURBULENCE_MODELS } from '@/lib/api/types';
-import { insertFoamField, setFoamValue } from '@/features/projects/foamModel';
-import { useCaseFilesQuery, useSaveCaseFile } from '@/features/projects/useCaseFiles';
+import { TURBULENCE_MODELS } from '@/lib/api/types';
+import {
+  getFoamValue,
+  insertFoamField,
+  parseFoamModel,
+  setFoamValue,
+} from '@/features/projects/foamModel';
+import {
+  useCaseFileContentQuery,
+  useCaseFilesQuery,
+  useSaveCaseFile,
+} from '@/features/projects/useCaseFiles';
 
 /**
- * TurbulenceCalculator - a project tab tool that estimates the RANS seed values
+ * TurbulenceCalculator - a project tool (opened from the Case files toolbar) that
+ * estimates the RANS seed values
  * (k, epsilon, omega) from three flow inputs (velocity U, characteristic length Dh,
  * kinematic viscosity nu) plus a turbulent intensity I. Each value carries a copy
  * button, and "Write to case" splices `internalField uniform <value>` into the
@@ -27,8 +37,10 @@ import { useCaseFilesQuery, useSaveCaseFile } from '@/features/projects/useCaseF
  *   epsilon = k^1.5 / (Cmu^0.75 * L)          with Cmu = 0.09
  *   omega   = k^0.5 / (Cmu^0.75 * L) = epsilon / k
  *
- * A turbulence-model selector highlights the fields that model actually reads
- * (kOmegaSST -> k, omega; kEpsilon -> k, epsilon) and dims the rest.
+ * The turbulence model is the project's own (read from constant/turbulenceProperties,
+ * set on the Solver tab), not a manual pick: it highlights the fields that model reads
+ * (kOmegaSST -> k, omega; kEpsilon -> k, epsilon) and dims the rest. The flow inputs
+ * are remembered per project (localStorage) so a computed case need not be re-entered.
  */
 
 /** Cmu^0.75 - the coefficient shared by the epsilon and omega length-scale terms. */
@@ -105,6 +117,35 @@ export function TurbulenceCalculatorDialog({
   );
 }
 
+/** The active turbulence model from constant/turbulenceProperties (RAS / LES / laminar), or null. */
+function readProjectModel(content: string): string | null {
+  const doc = parseFoamModel(content);
+  const simulationType = getFoamValue(doc, ['simulationType']);
+  if (simulationType === 'laminar') return 'laminar';
+  if (simulationType === 'LES') return getFoamValue(doc, ['LES', 'LESModel']);
+  return getFoamValue(doc, ['RAS', 'RASModel']);
+}
+
+/** localStorage key for a project's remembered flow inputs. */
+const INPUTS_STORAGE_PREFIX = 'dive.turbulence-calculator.';
+
+interface StoredInputs {
+  u: string;
+  dh: string;
+  nu: string;
+  intensity: string;
+}
+
+/** Read the remembered inputs for a project (empty when none / storage blocked). */
+function loadInputs(projectId: string): Partial<StoredInputs> {
+  try {
+    const raw = window.localStorage.getItem(INPUTS_STORAGE_PREFIX + projectId);
+    return raw ? (JSON.parse(raw) as Partial<StoredInputs>) : {};
+  } catch {
+    return {};
+  }
+}
+
 export function TurbulenceCalculator({
   projectId,
   bare = false,
@@ -113,27 +154,51 @@ export function TurbulenceCalculator({
   /** Drop the outer card chrome so the component can fill a dialog surface. */
   bare?: boolean;
 }) {
-  const [u, setU] = useState('2');
-  const [dh, setDh] = useState('0.1');
+  // Restore the last inputs so a computed case need not be re-entered on reopen.
+  const stored = useMemo(() => loadInputs(projectId), [projectId]);
+  const [u, setU] = useState(stored.u ?? '2');
+  const [dh, setDh] = useState(stored.dh ?? '0.1');
   // Water at ~20 C. DIVE runs hydro turbines, so water is the sensible default.
-  const [nu, setNu] = useState('1e-6');
-  const [intensity, setIntensity] = useState('5');
-  const [model, setModel] = useState('kOmegaSST');
+  const [nu, setNu] = useState(stored.nu ?? '1e-6');
+  const [intensity, setIntensity] = useState(stored.intensity ?? '5');
   const [writing, setWriting] = useState(false);
 
   const baseId = useId();
   const seeds = useMemo(() => computeSeeds(u, dh, nu, intensity), [u, dh, nu, intensity]);
 
+  // Persist the inputs on every change so the calculation survives a reopen.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        INPUTS_STORAGE_PREFIX + projectId,
+        JSON.stringify({ u, dh, nu, intensity }),
+      );
+    } catch {
+      // Storage unavailable (private mode / quota): inputs simply won't persist.
+    }
+  }, [projectId, u, dh, nu, intensity]);
+
+  // Which 0/ turbulence fields the case actually carries. The second field target
+  // follows the FILE that exists (omega for k-omega cases, epsilon for k-epsilon).
+  const { data: entries } = useCaseFilesQuery(projectId);
+  const hasField = (path: string) => !!entries?.some((entry) => entry.path === path);
+
+  // The turbulence model is the project's own (constant/turbulenceProperties),
+  // not a manual pick: change it on the Solver tab and this follows automatically.
+  const hasTurbProps = hasField('constant/turbulenceProperties');
+  const { data: turbProps } = useCaseFileContentQuery(
+    projectId,
+    hasTurbProps ? 'constant/turbulenceProperties' : null,
+  );
+  const projectModel = turbProps?.content ? readProjectModel(turbProps.content) : null;
+  // Fall back to k-omega SST (DIVE's default) purely to drive the highlight when no
+  // model is configured yet; the read-out below says whether it is the real one.
+  const model = projectModel ?? 'kOmegaSST';
+
   const fields = TURBULENCE_MODELS.find((m) => m.id === model)?.fields ?? [];
   const usesEpsilon = fields.includes('epsilon');
   const usesOmega = fields.includes('omega');
   const usesNone = fields.length === 0;
-
-  // Which 0/ turbulence fields the case actually carries. The second field target
-  // follows the FILE that exists (omega for k-omega cases, epsilon for k-epsilon),
-  // not the model highlighted above - that is only a reading aid.
-  const { data: entries } = useCaseFilesQuery(projectId);
-  const hasField = (path: string) => !!entries?.some((entry) => entry.path === path);
   const hasK = hasField('0/k');
   const secondField: 'omega' | 'epsilon' | null = hasField('0/omega')
     ? 'omega'
@@ -249,7 +314,7 @@ export function TurbulenceCalculator({
               />
             </div>
 
-            <ModelSelect id={`${baseId}-model`} value={model} onChange={setModel} />
+            <ModelReadout modelId={model} configured={projectModel != null} />
           </section>
 
           {/* Results */}
@@ -390,49 +455,31 @@ function NumberField({
   );
 }
 
-/** The turbulence-model selector - drives which seed fields are highlighted as "used". */
-function ModelSelect({
-  id,
-  value,
-  onChange,
-}: {
-  id: string;
-  value: string;
-  onChange: (value: string) => void;
-}) {
+/**
+ * The project's turbulence model, read-only. It comes from the case
+ * (constant/turbulenceProperties) rather than a manual pick, so changing it on
+ * the Solver tab updates the highlighted fields here automatically.
+ */
+function ModelReadout({ modelId, configured }: { modelId: string; configured: boolean }) {
+  const label = TURBULENCE_MODELS.find((m) => m.id === modelId)?.label ?? modelId;
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="text-xs font-medium text-text-secondary">
-        Turbulence model
-      </label>
-      <div className="relative">
-        <select
-          id={id}
-          value={value}
-          onChange={(event) => onChange(event.currentTarget.value)}
-          className={cn(
-            'h-10 w-full appearance-none rounded-sm border border-border bg-surface pl-3 pr-9 text-sm text-text',
-            'transition-colors duration-fast ease-out hover:border-border-strong',
-            'focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2',
-          )}
-        >
-          {TURBULENCE_APPROACHES.map((approach) => (
-            <optgroup key={approach.id} label={approach.label}>
-              {TURBULENCE_MODELS.filter((m) => m.simulationType === approach.id).map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
-        <ChevronDown
-          className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-text-secondary"
-          strokeWidth={1.75}
-          aria-hidden="true"
-        />
+      <span className="text-xs font-medium text-text-secondary">Turbulence model</span>
+      <div className="flex h-10 items-center rounded-sm border border-border bg-bg/40 px-3 text-sm text-text">
+        <span className="truncate font-medium" translate="no">
+          {label}
+        </span>
+        {configured && (
+          <span className="ml-2 shrink-0 rounded-sm bg-primary-tint px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary">
+            project
+          </span>
+        )}
       </div>
-      <p className="text-xs text-text-secondary">Highlights the fields this model needs.</p>
+      <p className="text-xs text-text-secondary">
+        {configured
+          ? 'From the project. Change it on the Solver tab to update the highlighted fields.'
+          : 'No model set yet — showing kOmegaSST as a guide. Set one on the Solver tab.'}
+      </p>
     </div>
   );
 }
