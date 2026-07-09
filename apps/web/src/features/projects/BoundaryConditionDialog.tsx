@@ -611,7 +611,7 @@ function PatchesStep({
   const ready = !!inlet && !!outlet && !sameInOut;
 
   return (
-    <DialogContent className="max-w-2xl overscroll-contain">
+    <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto overscroll-contain">
       <DialogHeader>
         <DialogTitle>Assign the boundary patches</DialogTitle>
         <DialogDescription>
@@ -681,11 +681,11 @@ function PatchesStep({
               Walls ({wallNames.length})
             </span>
             {wallNames.length > 0 ? (
-              <ul className="flex flex-wrap gap-1.5">
+              <ul className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto overscroll-contain">
                 {wallNames.map((name) => (
                   <li
                     key={name}
-                    className="rounded-sm border border-border bg-bg px-1.5 py-0.5 font-mono text-xs text-text-secondary"
+                    className="h-fit rounded-sm border border-border bg-bg px-1.5 py-0.5 font-mono text-xs text-text-secondary"
                     translate="no"
                   >
                     {name}
