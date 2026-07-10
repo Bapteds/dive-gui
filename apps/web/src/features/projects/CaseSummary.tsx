@@ -25,12 +25,31 @@ function isMeshPath(path: string): boolean {
   return path.startsWith('constant/polyMesh/');
 }
 
+/**
+ * Is this a SOLVER OUTPUT path (a written time directory or a processor
+ * decomposition), not a settings file? A solved run writes hundreds of numeric
+ * time dirs; summarising each would fire hundreds of parallel GETs (L17). The
+ * initial-conditions "0" / "0.orig" are kept (they ARE settings).
+ */
+function isSolverOutputPath(path: string): boolean {
+  const first = path.split('/')[0];
+  if (/^processor\d+$/.test(first)) return true;
+  if (first === '0' || first === '0.orig') return false;
+  return /^\d+(\.\d+)?([eE][-+]?\d+)?$/.test(first);
+}
+
 export function CaseSummary({ projectId }: { projectId: string }) {
   const { data: entries, isPending, isError, refetch, isRefetching } = useCaseFilesQuery(projectId);
 
   const files = useMemo(() => (entries ?? []).filter((entry) => entry.type === 'file'), [entries]);
   const summarisable = useMemo(
-    () => files.filter((file) => file.size <= EDITABLE_FILE_MAX_BYTES && !isMeshPath(file.path)),
+    () =>
+      files.filter(
+        (file) =>
+          file.size <= EDITABLE_FILE_MAX_BYTES &&
+          !isMeshPath(file.path) &&
+          !isSolverOutputPath(file.path),
+      ),
     [files],
   );
 

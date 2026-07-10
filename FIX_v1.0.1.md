@@ -267,6 +267,12 @@ Fichiers : `apps/web/src/features/assemble/AssemblyWorkspace.tsx`.
 
 ## LOW
 
+### ✅ L1 — Le rate-limiter login compte les logins RÉUSSIS → lockout NAT
+Bug : 10 tentatives / 15 min / IP comptaient AUSSI les logins réussis → un bureau derrière un seul NAT se faisait 429 le lundi matin. Fix : `skipSuccessfulRequests: true` → seules les tentatives ÉCHOUÉES comptent (le keying `req.ip` + `TRUST_PROXY` reste une config de deploy, documentée). Fichiers : `apps/api/src/middleware/rateLimit.ts`.
+
+### ✅ L17 — L'onglet Summary fait un GET par fichier, dossiers de temps inclus
+Bug : un run résolu écrit des centaines de dossiers de temps → des centaines de GET parallèles. Fix : `isSolverOutputPath` exclut les dossiers de temps numériques (sauf `0`/`0.orig`) et `processorN` du résumé. Fichiers : `apps/web/src/features/projects/CaseSummary.tsx`.
+
 ### ✅ L2 — Oracle temporel au login (énumération d'emails)
 Bug : un email inconnu court-circuitait le verify argon2 (401 rapide) alors qu'un email connu le lançait (401 lent) → distinguable au chrono.
 Fix : `dummyVerify(password)` (verify contre un hash argon2id fixe valide) exécuté quand l'email est inconnu → même coût temporel. Fichiers : `apps/api/src/lib/password.ts`, `modules/auth/auth.service.ts`.
