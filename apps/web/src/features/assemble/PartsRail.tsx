@@ -509,10 +509,17 @@ function PatchEditor({ projectId, mesh }: { projectId: string; mesh: MeshSource 
   const [angle, setAngle] = useState('30');
   const [failure, setFailure] = useState<string | null>(null);
 
+  // A blank field parses to 0 (Number('') === 0), and feature angle 0 shatters the
+  // boundary into maximal patches — require a real positive angle instead (L15).
+  const parsedAngle = Number(angle);
+  const validAngle =
+    angle.trim() !== '' && Number.isFinite(parsedAngle) && parsedAngle > 0 && parsedAngle <= 180;
+
   const handleSplit = async () => {
+    if (!validAngle) return;
     setFailure(null);
     try {
-      const res = await autoPatch.mutateAsync({ meshId: mesh.id, featureAngle: Number(angle) });
+      const res = await autoPatch.mutateAsync({ meshId: mesh.id, featureAngle: parsedAngle });
       if (!res.result.success) {
         setFailure(res.result.stderr || res.result.stdout || 'autoPatch failed.');
         toast.error('Auto-split failed. See the log below.');
@@ -550,6 +557,7 @@ function PatchEditor({ projectId, mesh }: { projectId: string; mesh: MeshSource 
           size="sm"
           onClick={() => void handleSplit()}
           loading={autoPatch.isPending}
+          disabled={!validAngle || autoPatch.isPending}
         >
           <Scissors strokeWidth={1.75} aria-hidden="true" />
           Split patches
