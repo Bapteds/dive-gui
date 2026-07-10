@@ -3,9 +3,10 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, Check, ChevronRight, Minus } from 'lucide-react';
+import { Check, ChevronRight, Minus } from 'lucide-react';
 import { PageHeader } from '@/components/common/PageHeader';
 import { EmptyState } from '@/components/common/EmptyState';
+import { ErrorState } from '@/components/common/ErrorState';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
@@ -63,31 +64,11 @@ export function MeshingPage() {
       {isPending ? (
         <SessionsSkeleton />
       ) : isError ? (
-        <div
-          role="alert"
-          className="flex flex-col items-start gap-3 rounded-md border border-danger/40 bg-danger-tint px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
-        >
-          <div className="flex items-start gap-2.5">
-            <AlertTriangle
-              className="mt-0.5 size-5 shrink-0 text-danger"
-              strokeWidth={1.75}
-              aria-hidden="true"
-            />
-            <div className="flex flex-col gap-0.5">
-              <p className="text-sm font-medium text-text">We could not load your sessions.</p>
-              <p className="text-sm text-text-secondary">Check your connection and try again.</p>
-            </div>
-          </div>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => void refetch()}
-            loading={isRefetching}
-            className="shrink-0"
-          >
-            Try again
-          </Button>
-        </div>
+        <ErrorState
+          title="We could not load your sessions."
+          onRetry={() => void refetch()}
+          retrying={isRefetching}
+        />
       ) : sessions.length === 0 ? (
         <EmptyState
           title="No meshing sessions yet."

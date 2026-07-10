@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useState } from 'react';
-import { Box, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
+import { EmptyState } from '@/components/common/EmptyState';
 import { NativeSelect } from '@/components/ui/native-select';
 import { MERGE_BASE_CASE } from '@/lib/api/types';
 import { useCaseFilesQuery } from '@/features/projects/useCaseFiles';
@@ -111,31 +112,24 @@ export function VisualizePanel({ projectId }: { projectId: string }) {
 
 /** Loading (queries in flight) or empty (nothing to visualise yet) placeholder. */
 function PanelPlaceholder({ loading }: { loading: boolean }) {
+  if (loading) {
+    return (
+      <div
+        className="flex min-h-[45vh] flex-1 flex-col items-center justify-center gap-3 rounded-md border border-border bg-surface px-6 py-12 text-center shadow-sm"
+        role="status"
+        aria-live="polite"
+      >
+        <Loader2 className="size-6 animate-spin text-primary" strokeWidth={1.75} aria-hidden="true" />
+        <p className="text-sm text-text-secondary">Loading meshes&hellip;</p>
+      </div>
+    );
+  }
   return (
-    <div
-      className="flex min-h-[45vh] flex-1 flex-col items-center justify-center gap-3 rounded-md border border-border bg-surface px-6 py-12 text-center shadow-sm"
-      role="status"
-      aria-live="polite"
-    >
-      {loading ? (
-        <>
-          <Loader2 className="size-6 animate-spin text-primary" strokeWidth={1.75} aria-hidden="true" />
-          <p className="text-sm text-text-secondary">Loading meshes&hellip;</p>
-        </>
-      ) : (
-        <>
-          <span className="grid size-12 place-items-center rounded-md bg-primary-tint">
-            <Box className="size-6 text-primary" strokeWidth={1.5} aria-hidden="true" />
-          </span>
-          <div className="flex max-w-xs flex-col gap-1">
-            <p className="text-base font-semibold text-text">Nothing to visualize</p>
-            <p className="text-sm text-text-secondary">
-              Import a mesh into the case, or add a part to the library, to preview it here.
-            </p>
-          </div>
-        </>
-      )}
-    </div>
+    <EmptyState
+      className="min-h-[45vh] flex-1"
+      title="Nothing to visualize"
+      description="Import a mesh into the case, or add a part to the library, to preview it here."
+    />
   );
 }
 

@@ -17,6 +17,7 @@ import {
   Users,
 } from 'lucide-react';
 import { PageHeader } from '@/components/common/PageHeader';
+import { EmptyState } from '@/components/common/EmptyState';
 import { FullPageLoader } from '@/components/common/FullPageLoader';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
@@ -139,16 +140,14 @@ export function ProjectDetailPage() {
     return (
       <div className="flex flex-col gap-6">
         <BackLink />
-        <div className="rounded-md border border-border bg-surface px-6 py-12 text-center shadow-sm">
-          <p className="text-lg font-semibold text-text">
-            {notFound ? 'Project not found' : 'We could not load this project'}
-          </p>
-          <p className="mt-1 text-sm text-text-secondary">
-            {notFound
+        <EmptyState
+          title={notFound ? 'Project not found' : 'We could not load this project'}
+          description={
+            notFound
               ? 'It may have been deleted, or you do not have access to it.'
-              : 'Check your connection and try again.'}
-          </p>
-        </div>
+              : 'Check your connection and try again.'
+          }
+        />
       </div>
     );
   }

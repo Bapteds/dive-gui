@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { AlertTriangle, Loader2, Pencil, Search, SquarePen, Trash2, X } from 'lucide-react';
+import { Loader2, Pencil, Search, SquarePen, Trash2, X } from 'lucide-react';
 import { PageHeader } from '@/components/common/PageHeader';
 import { EmptyState } from '@/components/common/EmptyState';
+import { ErrorState } from '@/components/common/ErrorState';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
@@ -110,31 +111,11 @@ export function TemplatesPage() {
       {isPending ? (
         <TemplatesTableSkeleton />
       ) : isError ? (
-        <div
-          role="alert"
-          className="flex flex-col items-start gap-3 rounded-md border border-danger/40 bg-danger-tint px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
-        >
-          <div className="flex items-start gap-2.5">
-            <AlertTriangle
-              className="mt-0.5 size-5 shrink-0 text-danger"
-              strokeWidth={1.75}
-              aria-hidden="true"
-            />
-            <div className="flex flex-col gap-0.5">
-              <p className="text-sm font-medium text-text">We could not load the templates.</p>
-              <p className="text-sm text-text-secondary">Check your connection and try again.</p>
-            </div>
-          </div>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => void refetch()}
-            loading={isRefetching}
-            className="shrink-0"
-          >
-            Try again
-          </Button>
-        </div>
+        <ErrorState
+          title="We could not load the templates."
+          onRetry={() => void refetch()}
+          retrying={isRefetching}
+        />
       ) : templates.length === 0 ? (
         <EmptyState
           title="No templates yet."
@@ -309,7 +290,7 @@ function TemplatesToolbar({
               type="button"
               onClick={() => onToggleTag(tag)}
               aria-label={`Remove filter ${tag}`}
-              className="inline-flex items-center gap-1 rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1"
+              className="inline-flex items-center gap-1 rounded-sm bg-primary px-2 py-0.5 text-xs font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1"
             >
               {tag}
               <X className="size-3" strokeWidth={2.5} aria-hidden="true" />
@@ -336,7 +317,7 @@ function TagChip({ tag, active, onClick }: { tag: string; active: boolean; onCli
       onClick={onClick}
       aria-pressed={active}
       className={cn(
-        'rounded-full px-2 py-0.5 text-xs font-medium transition-colors duration-fast ease-out',
+        'rounded-sm px-2 py-0.5 text-xs font-medium transition-colors duration-fast ease-out',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
         active
           ? 'bg-primary text-white'
@@ -387,7 +368,6 @@ function DeleteTemplateDialog({
         <AlertDialogFooter>
           <AlertDialogCancel disabled={remove.isPending}>Cancel</AlertDialogCancel>
           <AlertDialogAction
-            className="border-danger/50 bg-danger text-white hover:bg-danger/90"
             onClick={(event) => {
               event.preventDefault();
               void handleConfirm();
@@ -406,20 +386,50 @@ function DeleteTemplateDialog({
   );
 }
 
-/** Loading placeholder mirroring the templates table. */
+/** Loading placeholder mirroring the templates table (same columns as loaded). */
 function TemplatesTableSkeleton({ rows = 4 }: { rows?: number }) {
   return (
-    <div className="overflow-hidden rounded-md border border-border bg-surface shadow-sm" aria-hidden="true">
-      {Array.from({ length: rows }).map((_, index) => (
-        <div
-          key={index}
-          className="flex items-center gap-4 border-b border-border px-4 py-3.5 last:border-b-0"
-        >
-          <Skeleton className="h-4 w-40" />
-          <Skeleton className="hidden h-4 w-64 md:block" />
-          <Skeleton className="ml-auto h-4 w-24" />
-        </div>
-      ))}
+    <div className="overflow-hidden rounded-md border border-border bg-surface shadow-sm">
+      <Table>
+        <TableHeader>
+          <TableRow className="hover:bg-bg">
+            <TableHead scope="col">Name</TableHead>
+            <TableHead scope="col" className="hidden md:table-cell">
+              Description
+            </TableHead>
+            <TableHead scope="col">Author</TableHead>
+            <TableHead scope="col" className="hidden lg:table-cell">
+              Created
+            </TableHead>
+            <TableHead scope="col" className="text-right">
+              <span className="sr-only">Actions</span>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody aria-hidden="true">
+          {Array.from({ length: rows }).map((_, index) => (
+            <TableRow key={index} className="hover:bg-transparent">
+              <TableCell>
+                <Skeleton className="h-4 w-40" />
+              </TableCell>
+              <TableCell className="hidden md:table-cell">
+                <Skeleton className="h-4 w-64" />
+              </TableCell>
+              <TableCell>
+                <Skeleton className="h-4 w-24" />
+              </TableCell>
+              <TableCell className="hidden lg:table-cell">
+                <Skeleton className="h-4 w-20" />
+              </TableCell>
+              <TableCell>
+                <div className="flex justify-end">
+                  <Skeleton className="h-4 w-16" />
+                </div>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
     </div>
   );
 }

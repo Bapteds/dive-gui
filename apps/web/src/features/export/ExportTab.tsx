@@ -4,7 +4,6 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
-  FileBox,
   FileText,
   Loader2,
   MinusCircle,
@@ -13,6 +12,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/common/EmptyState';
 import { Diamond } from '@/components/brand/Diamond';
 import { toast } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
@@ -96,7 +96,7 @@ export function ExportTab({ projectId }: { projectId: string }) {
         {run.isPending && !steps ? (
           <RunningState />
         ) : !hasAnything ? (
-          <EmptyState />
+          <NoExportYet />
         ) : (
           <div className="flex flex-col gap-6">
             {steps && <PipelineReport steps={steps} />}
@@ -139,18 +139,14 @@ function RunningState() {
 }
 
 /** The empty state before any export has run. */
-function EmptyState() {
+function NoExportYet() {
   return (
-    <div className="grid place-items-center gap-3 py-16 text-center">
-      <FileBox className="size-6 text-text-secondary" strokeWidth={1.5} aria-hidden="true" />
-      <div className="max-w-md">
-        <p className="text-sm font-medium text-text">No export yet</p>
-        <p className="mt-1 text-xs text-text-secondary">
-          Run a solver first, then export the solved results to a CGNS file for CFD-Post. The export
-          reads the latest solved time and never modifies the case.
-        </p>
-      </div>
-    </div>
+    <EmptyState
+      variant="inline"
+      className="py-16"
+      title="No export yet"
+      description="Run a solver first, then export the solved results to a CGNS file for CFD-Post. The export reads the latest solved time and never modifies the case."
+    />
   );
 }
 
