@@ -126,7 +126,7 @@ export function ExportTab({ projectId }: { projectId: string }) {
 /** The running placeholder while the pipeline executes server-side. */
 function RunningState() {
   return (
-    <div className="grid place-items-center gap-3 py-16 text-center">
+    <div className="grid place-items-center gap-3 py-16 text-center" role="status" aria-live="polite">
       <Loader2 className="size-6 animate-spin text-primary" strokeWidth={1.75} aria-hidden="true" />
       <div>
         <p className="text-sm font-medium text-text">Exporting to CGNS…</p>
