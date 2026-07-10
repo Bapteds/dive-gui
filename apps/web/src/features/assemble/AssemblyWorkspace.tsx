@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, History, Loader2, PackagePlus, Workflow } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { toast } from '@/components/ui/sonner';
 import { getMeshSourceGeometry } from '@/lib/api/meshes';
 import { getMeshGeometry } from '@/lib/api/projects';
 import type { MeshSource, PartTransform } from '@/lib/api/types';
@@ -308,7 +309,16 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
   };
 
   // Picking a base face sets the coupling's base patch; it never moves the part.
-  const handlePickBaseFace = (target: HitTarget) => patchDraft({ target });
+  const handlePickBaseFace = (target: HitTarget) => {
+    // A face with no named patch can't be coupled: the merge would receive zero
+    // interfaces while the panel still showed "Coupled" (L16). Reject it and tell
+    // the user to re-patch the base or pick a face on a named patch.
+    if (!target.patchName) {
+      toast.error('That face has no named patch. Re-patch the base (Split by angle) or pick a face on a named patch.');
+      return;
+    }
+    patchDraft({ target });
+  };
   const handleMatingPatch = (patch: string) => patchDraft({ matingPatch: patch || null });
   const handleClearCouple = () => patchDraft({ matingPatch: null, target: null });
 
