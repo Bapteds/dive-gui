@@ -287,6 +287,12 @@ Bug : `toFixed(6)` mettait à 0 une composante d'axe rotor / origine minuscule m
 ### ✅ L15 — autoPatch accepte un champ vide comme angle 0°
 Bug : `Number(angle)` sur un champ vidé = 0 → autoPatch éclatait la frontière en patches maximaux. Fix : `validAngle` (non vide, fini, 0 < a ≤ 180) désactive le bouton Split et garde `handleSplit`. Fichiers : `apps/web/src/features/assemble/PartsRail.tsx`.
 
+### ✅ L16 — Couplage silencieusement perdu quand la face de base a un patch vide
+Bug : une face sans patch nommé (`patchName === ''`) était acceptée comme cible → le panneau montrait « Coupled » mais le merge ne recevait aucune interface (filtré). Fix : `handlePickBaseFace` rejette une face sans patch nommé avec un toast (re-patcher la base / choisir une face nommée). Fichiers : `apps/web/src/features/assemble/AssemblyWorkspace.tsx`.
+
+### ✅ L20 — FolderImportDialog garde la sélection précédente (même nom + même compte)
+Bug : la clé de re-seed = `root:childCount` → un autre dossier de même nom racine et même nombre d'items gardait l'ancienne sélection (noms d'enfants périmés). Fix : clé sur les NOMS d'enfants. Fichiers : `apps/web/src/features/files/FolderImportDialog.tsx`.
+
 ### ✅ L18 — ResidualChart : ticks dupliqués / axe « 0…0 » pour un run transitoire t<1
 Bug : `Math.round(t)` écrasait tous les ticks à 0 pour t<1 (axe « 0…0 », clés React dupliquées). Fix : décimales adaptées à l'étendue (`toFixed` 0/2/4) + clé par index. Fichiers : `apps/web/src/features/solver/ResidualChart.tsx`.
 

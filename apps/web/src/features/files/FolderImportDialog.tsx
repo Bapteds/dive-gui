@@ -59,8 +59,10 @@ export function FolderImportDialog({
 }: FolderImportDialogProps) {
   // Start with everything selected; keyed by child name (unique within a root).
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  // Re-seed the selection whenever a new folder is picked.
-  const pickedKey = picked ? `${picked.root}:${picked.children.length}` : null;
+  // Re-seed the selection whenever a new folder is picked. Key on the child NAMES,
+  // not just the count: a different folder with the same root name and item count
+  // otherwise kept the previous (now-wrong) selection (L20).
+  const pickedKey = picked ? `${picked.root}:${picked.children.map((child) => child.name).join('|')}` : null;
   const [seededFor, setSeededFor] = useState<string | null>(null);
   if (picked && pickedKey !== seededFor) {
     setSelected(new Set(picked.children.map((child) => child.name)));
