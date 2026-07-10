@@ -1,4 +1,4 @@
-import { useId } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
   Crosshair,
   Link2,
@@ -328,10 +328,70 @@ export function PlacementPanel({
   );
 }
 
-/** Round a value for a numeric field: fewer decimals for degrees than metres. */
-function roundForInput(value: number, step: number): number {
-  const decimals = step >= 1 ? 1 : 3;
-  return Number(value.toFixed(decimals));
+/**
+ * Format a value for DISPLAY only (metres keep enough decimals to type sub-mm;
+ * degrees fewer), trimming float noise and trailing zeros. This is only used to
+ * seed the field from the model value — it never rounds what the user is typing.
+ */
+function formatAxis(value: number, step: number): string {
+  if (!Number.isFinite(value)) return '';
+  const decimals = step >= 1 ? 2 : 6;
+  return String(Number(value.toFixed(decimals)));
+}
+
+/**
+ * One axis numeric field. A `type="text"` input backed by a local string draft, so
+ * the user can type freely (including sub-mm decimals, a lone "-" or ".", and
+ * pasted precision) without the display rounding fighting their keystrokes. It
+ * commits ONLY a finite parsed number, so an intermediate "-"/"."/"" never snaps
+ * the part to 0 (which also flips reposition on) — M21. The draft re-syncs from the
+ * model value when it changes externally (a gizmo drag) and the field is not focused.
+ */
+function AxisInput({
+  id,
+  value,
+  step,
+  onCommit,
+  ariaLabel,
+}: {
+  id: string;
+  value: number;
+  step: number;
+  onCommit: (value: number) => void;
+  ariaLabel: string;
+}) {
+  const [draft, setDraft] = useState(() => formatAxis(value, step));
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!focused.current) setDraft(formatAxis(value, step));
+  }, [value, step]);
+  return (
+    <Input
+      id={id}
+      name={id}
+      type="text"
+      inputMode="decimal"
+      value={draft}
+      onFocus={() => {
+        focused.current = true;
+      }}
+      onBlur={() => {
+        focused.current = false;
+        const n = Number(draft);
+        // Normalise the display on blur; revert to the model value if unparseable.
+        setDraft(draft.trim() !== '' && Number.isFinite(n) ? formatAxis(n, step) : formatAxis(value, step));
+      }}
+      onChange={(event) => {
+        const raw = event.currentTarget.value;
+        setDraft(raw);
+        const n = Number(raw);
+        if (raw.trim() !== '' && Number.isFinite(n)) onCommit(n);
+      }}
+      aria-label={ariaLabel}
+      autoComplete="off"
+      className="h-9 min-w-0 px-2 tabular-nums"
+    />
+  );
 }
 
 /** A labelled X/Y/Z triple of numeric inputs (a fieldset for screen readers). */
@@ -369,17 +429,12 @@ function AxisTriplet({
               >
                 {axis}
               </label>
-              <Input
+              <AxisInput
                 id={id}
-                name={id}
-                type="number"
-                inputMode="decimal"
+                value={value}
                 step={step}
-                value={Number.isFinite(value) ? roundForInput(value, step) : 0}
-                onChange={(event) => onChange(index as 0 | 1 | 2, Number(event.currentTarget.value))}
-                aria-label={`${legend} ${axis} in ${unit}`}
-                autoComplete="off"
-                className="h-9 min-w-0 px-2 tabular-nums"
+                onCommit={(next) => onChange(index as 0 | 1 | 2, next)}
+                ariaLabel={`${legend} ${axis} in ${unit}`}
               />
             </div>
           );
