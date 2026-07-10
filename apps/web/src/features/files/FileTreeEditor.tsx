@@ -287,10 +287,14 @@ function FileListSidebar({
   const handleConfirmDelete = async () => {
     const entry = confirmDelete;
     if (!entry) return;
+    // Clear the selection BEFORE deleting. If the open file (or a file under the
+    // deleted folder) is dirty, its armed 600ms autosave would otherwise fire
+    // during the delete round-trip and re-create the file via PUT (M15). onRemoved
+    // disarms that autosave; deleting a file implies discarding its unsaved edits.
+    onRemoved(entry.path);
     try {
       if (entry.type === 'directory') await deleteDir.mutateAsync({ path: entry.path });
       else await deleteFile.mutateAsync({ path: entry.path });
-      onRemoved(entry.path);
       toast.success(entry.type === 'directory' ? 'Folder deleted.' : 'File deleted.');
       setConfirmDelete(null);
     } catch (err) {
