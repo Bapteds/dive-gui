@@ -3,13 +3,18 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowLeft,
+  CheckCircle2,
   Download,
   FileUp,
   Loader2,
   Trash2,
+  XCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/common/EmptyState';
+import { PageHeader } from '@/components/common/PageHeader';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Diamond } from '@/components/brand/Diamond';
 import {
   AlertDialog,
@@ -106,9 +111,22 @@ export function MeshingSessionPage() {
   };
 
   if (session.isPending) {
+    // Skeleton mirroring the loaded layout: back link, header row, then the
+    // surfaces manager + preview panels (DESIGN.md: skeletons, not spinners).
     return (
-      <div className="flex min-h-[40vh] items-center justify-center" role="status" aria-live="polite">
-        <Loader2 className="size-5 animate-spin text-text-secondary" strokeWidth={1.75} aria-hidden="true" />
+      <div className="flex flex-col gap-6" role="status" aria-live="polite">
+        <BackLink />
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between" aria-hidden="true">
+          <div className="flex flex-col gap-2">
+            <Skeleton className="h-7 w-64" />
+            <Skeleton className="h-4 w-48" />
+          </div>
+          <Skeleton className="h-10 w-40" />
+        </div>
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,22rem)_1fr]" aria-hidden="true">
+          <Skeleton className="h-64 rounded-md" />
+          <Skeleton className="h-64 rounded-md" />
+        </div>
         <span className="sr-only">Loading session</span>
       </div>
     );
@@ -141,36 +159,31 @@ export function MeshingSessionPage() {
     <div className="flex flex-col gap-6">
       <BackLink />
 
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="flex items-start gap-2.5">
-          <Diamond size={18} className="mt-1 shrink-0 text-primary" aria-hidden="true" />
-          <div className="flex flex-col gap-0.5">
-            <h1 className="text-2xl font-semibold text-text">{data.name}</h1>
-            <p className="text-sm text-text-secondary">
-              <span className="font-medium text-text">{engineLabel}</span> ·{' '}
-              {data.stls.length} surface{data.stls.length === 1 ? '' : 's'} ·{' '}
-              {data.hasMesh ? 'mesh ready' : 'not meshed yet'}
-            </p>
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {data.hasMesh && (
-            <Button type="button" variant="secondary" onClick={handleDownload} loading={downloading}>
-              <Download strokeWidth={1.75} aria-hidden="true" />
-              Download case
+      <PageHeader
+        title={data.name}
+        subtitle={`${engineLabel} · ${data.stls.length} surface${data.stls.length === 1 ? '' : 's'}, ${
+          data.hasMesh ? 'mesh ready' : 'not meshed yet'
+        }`}
+        action={
+          <>
+            {data.hasMesh && (
+              <Button type="button" variant="secondary" onClick={handleDownload} loading={downloading}>
+                <Download strokeWidth={1.75} aria-hidden="true" />
+                Download case
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              className="text-danger hover:bg-danger-tint hover:text-danger"
+              onClick={() => setConfirmDelete(true)}
+            >
+              <Trash2 strokeWidth={1.75} aria-hidden="true" />
+              Delete
             </Button>
-          )}
-          <Button
-            type="button"
-            variant="ghost"
-            className="text-danger hover:bg-danger-tint hover:text-danger"
-            onClick={() => setConfirmDelete(true)}
-          >
-            <Trash2 strokeWidth={1.75} aria-hidden="true" />
-            Delete
-          </Button>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       {/* Surfaces: manager (left) + client-side preview (right). The viewer only
           renders STL (an FMS cannot be previewed client-side). */}
@@ -265,18 +278,21 @@ function BackLink() {
   );
 }
 
-/** OK / Failed pill for the run report header. */
+/** OK / Failed status for the run report header, on the shared Badge. */
 function StatusPill({ success }: { success: boolean }) {
+  if (success) {
+    return (
+      <Badge variant="success">
+        <CheckCircle2 className="size-3.5" strokeWidth={1.75} aria-hidden="true" />
+        Completed
+      </Badge>
+    );
+  }
   return (
-    <span
-      className={
-        success
-          ? 'inline-flex items-center gap-1 rounded-sm bg-success-tint px-2 py-0.5 text-xs font-medium text-success'
-          : 'inline-flex items-center gap-1 rounded-sm bg-danger-tint px-2 py-0.5 text-xs font-medium text-danger'
-      }
-    >
-      {success ? 'Completed' : 'Failed'}
-    </span>
+    <Badge variant="danger">
+      <XCircle className="size-3.5" strokeWidth={1.75} aria-hidden="true" />
+      Failed
+    </Badge>
   );
 }
 
