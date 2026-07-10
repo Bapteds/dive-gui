@@ -37,7 +37,19 @@ Bug : `TIME_DIR_RE = /^\d+(\.\d+)?$/` rejetait `1e-05` / `2.5e-06` (écrits par 
 Ce qui a été fait : regex étendue à l'exposant `([eE][+-]?\d+)?`.
 Fichiers : `apps/api/src/modules/projects/export.service.ts`.
 
-### ⬜ H7 — CgnsMergeTime.py : zones figées sauf la première
+### ✅ H7 — CgnsMergeTime.py : zones figées sauf la première
+Bug : le merge ne construisait la série temporelle que pour la **première zone** de la première base. Or les assemblages gardent volontairement chaque pièce comme zone séparée → dans CFD-Post toutes les zones sauf une restaient figées au pas 0.
+Ce qui a été fait :
+- Itération sur **toutes** les zones (`find_children(base, "Zone_t")`), pas seulement `[0]`.
+- Chaque pas ultérieur copie sa `FlowSolution` dans la zone **correspondante** (appariement par nom, fallback positionnel si les noms diffèrent mais le nombre de zones est identique).
+- `ZoneIterativeData`/`FlowSolutionPointers` écrits **par zone** ; `BaseIterativeData` reste unique par base.
+- Une zone sans solution (ex. interface de couplage pure) est ignorée sans faire échouer le merge. Comportement mono-zone inchangé.
+- `py_compile` OK.
+
+Fichiers : `apps/api/scripts/CgnsMergeTime.py`.
+
+⚠️ À VÉRIFIER sur le serveur de deploy (h5py + vrai CGNS multi-zones non exécutables ici) : merge d'un assemblage ≥2 zones → animation de toutes les zones dans CFD-Post.
+
 ### ⬜ C2 — Suppression d'un compte : cascade destructrice + storage orphelin
 ### ⬜ C3 — streamRunner : write stream sans listener `error` → crash process
 ### ⬜ C4 — Logout : cache React Query jamais vidé
