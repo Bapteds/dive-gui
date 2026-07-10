@@ -6,12 +6,15 @@ import rateLimit from 'express-rate-limit';
 import type { Request, Response } from 'express';
 
 /**
- * Limiter for the login route: 10 attempts per 15 minutes per IP.
- * In the test environment the limit is relaxed so the suite is not throttled.
+ * Limiter for the login route: 10 FAILED attempts per 15 minutes per IP.
+ * `skipSuccessfulRequests` means a successful login (200) does not count, so a
+ * whole office behind one NAT/proxy logging in normally is never locked out — only
+ * brute-force (failing) attempts are throttled (L1). In tests the limit is relaxed.
  */
 export const loginRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   limit: process.env.NODE_ENV === 'test' ? 1000 : 10,
+  skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
   handler: (_req: Request, res: Response): void => {
