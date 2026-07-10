@@ -73,13 +73,23 @@ Fichiers : `apps/web/src/features/auth/AuthProvider.tsx`.
 
 ---
 
-## MEDIUM (traités en passant)
+## MEDIUM
 
 ### ✅ M3 — Suppression d'un projet ne stoppe pas son solveur
 Corrigé via le même helper : `deleteProject` appelle `stopProjectRuns(id)` avant la suppression.
 Fichiers : `apps/api/src/modules/projects/projects.service.ts`.
 
 ### ✅ M16 — voir section CRITICAL (corrigé avec C1).
+
+### ✅ M4 — Backup mesh mono-slot : destroy-before-replace + méta périmée → un restore détruit le cas
+Bug : `writeBackup` supprimait l'ancien slot **avant** de copier et n'effaçait jamais le `meta.json` périmé en cas d'échec → `backupExists()` mentait (méta présente, copie absente/partielle) ; `restoreBackup` vidait alors le cas **avant** de copier depuis un slot vide/partiel → perte du cas.
+Ce qui a été fait :
+- `writeBackup` copie d'abord le cas courant dans un dossier **staging**, puis commit (drop méta → remplace le slot depuis la copie locale complète → réécrit la méta **en dernier**). Un échec de copie (disque plein, EIO) laisse l'ancien backup **intact**.
+- `backupExists` vérifie désormais **la méta ET une copie de cas non vide** (ne ment plus).
+- `restoreBackup` copie le slot dans un staging **à côté** du cas vivant d'abord ; il ne vide le cas qu'une fois une copie complète en main (slot manquant/illisible → throw, cas vivant intact).
+- `cp` (pas `rename`) pour matérialiser les dossiers : un rename de dossier fait un EPERM intermittent sous Windows (dev/tests Windows, deploy Linux).
+- 3 tests unitaires (`meshBackup.test.ts`) : méta honnête après perte de copie, restore refusé sur slot corrompu sans toucher au cas, round-trip write→restore.
+Fichiers : `apps/api/src/lib/meshBackupStorage.ts`, `apps/api/tests/meshBackup.test.ts`.
 
 ---
 

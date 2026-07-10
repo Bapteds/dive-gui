@@ -45,9 +45,23 @@ export async function readBackupMeta(projectId: string): Promise<MeshBackupInfo 
   }
 }
 
-/** Does a backup exist for this project? */
+/** Does the slot's case copy exist on disk with at least one entry? */
+async function backupCaseCopyPresent(projectId: string): Promise<boolean> {
+  try {
+    return (await fs.readdir(backupCaseDir(projectId))).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Does a COMPLETE backup exist for this project? Both the metadata AND a non-empty
+ * case copy must be present — a slot with a stale meta but a missing/half-written
+ * case copy (e.g. a `writeBackup` interrupted mid-copy) must report `false`, or a
+ * later restore would wipe the live case and copy nothing back.
+ */
 export async function backupExists(projectId: string): Promise<boolean> {
-  return (await readBackupMeta(projectId)) !== null;
+  return (await readBackupMeta(projectId)) !== null && (await backupCaseCopyPresent(projectId));
 }
 
 /**
@@ -64,11 +78,26 @@ export async function writeBackup(
   const previous = await readBackupMeta(projectId);
   const now = new Date().toISOString();
 
-  // Replace the slot atomically-enough: drop the old copy, then mirror case/.
   const dest = backupCaseDir(projectId);
-  await removeTreeAt(dest);
+  const staging = `${dest}.staging`;
+  await removeTreeAt(staging); // clear any leftover from a previously interrupted write
   await fs.mkdir(backupsRoot(projectId), { recursive: true });
-  await fs.cp(caseDirAbsolute(projectId), dest, { recursive: true });
+
+  // Copy the live case into a STAGING dir first. A failure here (disk full, EIO,
+  // permissions) throws BEFORE the existing slot is touched, so a good backup is
+  // never destroyed by a failed overwrite — the old copy + meta stay intact.
+  await fs.cp(caseDirAbsolute(projectId), staging, { recursive: true });
+
+  // Commit. Drop the meta FIRST so that if anything below is interrupted the slot
+  // reads as "no backup" (honest) instead of pointing at a half-written copy;
+  // materialize the new slot from the (complete, local) staging copy — using cp,
+  // not rename, because a directory rename intermittently EPERMs on Windows; write
+  // the meta LAST so it exists only alongside a COMPLETE copy. `backupExists` also
+  // re-checks the case copy, closing the commit-window gap.
+  await fs.rm(metaPath(projectId), { force: true });
+  await removeTreeAt(dest);
+  await fs.cp(staging, dest, { recursive: true });
+  await removeTreeAt(staging);
 
   const info: MeshBackupInfo = {
     createdAt: previous?.createdAt ?? now,
@@ -92,11 +121,31 @@ export async function ensureOriginalBackup(projectId: string): Promise<void> {
 }
 
 /**
- * Restore the case from the backup: wipe the current case tree and copy the
- * slot's case copy back over it. The caller is responsible for checking the
- * backup exists and for rebuilding the render afterwards.
+ * Restore the case from the backup slot. Crash-safe: the slot is copied into a
+ * STAGING dir beside the live case first, so a missing/unreadable/partial slot
+ * throws BEFORE the live case is cleared (the old code wiped the case, then copied
+ * from a possibly-empty slot — destroying the case). The live case is only cleared
+ * once a complete staged copy is in hand. The caller checks `backupExists` and
+ * rebuilds the render afterwards.
  */
 export async function restoreBackup(projectId: string): Promise<void> {
-  await clearCase(projectId);
-  await fs.cp(backupCaseDir(projectId), caseDirAbsolute(projectId), { recursive: true });
+  const slot = backupCaseDir(projectId);
+  const live = caseDirAbsolute(projectId);
+  const staging = `${live}.restoring`;
+  await removeTreeAt(staging);
+
+  // Copy the slot into staging FIRST. If the slot is missing or unreadable this
+  // throws and the live case is left completely intact.
+  await fs.cp(slot, staging, { recursive: true });
+
+  // Guard against a slot that copied to nothing (should not happen once
+  // `backupExists` gates this, but never wipe the case for an empty restore).
+  if ((await fs.readdir(staging)).length === 0) {
+    await removeTreeAt(staging);
+    throw new Error('The mesh backup slot is empty; refusing to restore.');
+  }
+
+  await clearCase(projectId); // removes the case root; staging holds a full copy
+  await fs.cp(staging, live, { recursive: true }); // cp, not rename (Windows EPERM)
+  await removeTreeAt(staging);
 }
