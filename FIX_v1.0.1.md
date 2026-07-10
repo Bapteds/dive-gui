@@ -118,6 +118,12 @@ Ce qui a été fait :
 - Script vérifié à la main sur 5 cas (bon, ligne courte, header-only, vide, BOM).
 Fichiers : `apps/api/scripts/csv_to_boundaryData.py`, `apps/web/src/features/projects/BoundaryConditionDialog.tsx`, `apps/web/src/components/ui/sonner.tsx`.
 
+### ✅ M10 — `createTemplate` crée la ligne DB avant de valider le fichier
+Bug : un create rejeté laissait un template fantôme vide dans le roster de tout le monde (la ligne DB était créée AVANT la validation/écriture du fichier inline).
+Ce qui a été fait : le fichier inline est validé (path + taille) **avant** le `prisma.template.create`, et si l'écriture échoue après la création, la ligne (+ storage partiel) est **rollback**. Aucun fantôme sur aucun chemin d'échec.
+- 1 test (`templates.test.ts`, niveau service car le cap body 16 Ko HTTP masque le 413 tant que M9 n'est pas fait) : un fichier > 2 Mo → 413 ET `template.count()` inchangé.
+Fichiers : `apps/api/src/modules/templates/templates.service.ts`, `apps/api/tests/templates.test.ts`.
+
 ---
 
 ## HIGH

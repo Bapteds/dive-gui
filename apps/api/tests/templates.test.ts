@@ -7,6 +7,7 @@ import request from 'supertest';
 import AdmZip from 'adm-zip';
 import { app, authHeader, createProtectedAdmin, createTestUser, resetDatabase } from './helpers';
 import { prisma } from '../src/lib/prisma';
+import { createTemplate } from '../src/modules/templates/templates.service';
 
 /** Create a template via the API, returning its id. */
 async function makeTemplate(auth: string, name = 'My template'): Promise<string> {
@@ -415,6 +416,24 @@ describe('template tags + single-file create', () => {
       .send({ name: 'Starter', tags: ['Steady RANS', 'steady rans', 'k-Omega!', '  '] });
     expect(res.status).toBe(201);
     expect(res.body.template.tags).toEqual(['steady-rans', 'k-omega']);
+  });
+
+  it('does not leave a phantom template when the inline file is rejected (M10)', async () => {
+    const user = await createTestUser({ email: 'phantom@dive-turbinen.test' });
+    const before = await prisma.template.count();
+
+    // A 2 MB + 1 file exceeds EDITABLE_FILE_MAX_BYTES; the service must reject it
+    // BEFORE creating the row (the HTTP path can't reach this — the 16KB body cap
+    // trips first — so drive the service directly).
+    await expect(
+      createTemplate(
+        { id: user.id, role: user.role },
+        { name: 'Too big', file: { path: 'system/x', content: 'a'.repeat(2 * 1024 * 1024 + 1) } },
+      ),
+    ).rejects.toMatchObject({ status: 413 });
+
+    // No phantom template row was left behind.
+    expect(await prisma.template.count()).toBe(before);
   });
 
   it('creates a single-file template with inline content', async () => {

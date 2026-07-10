@@ -164,6 +164,15 @@ export async function createTemplate(
   viewer: Viewer,
   input: CreateTemplateInput,
 ): Promise<PublicTemplate> {
+  // Validate the optional inline file BEFORE creating the DB row, so a rejected
+  // create never leaves a phantom empty template in everyone's roster (M10).
+  const file = input.file
+    ? { path: sanitizeRelative(input.file.path), content: input.file.content }
+    : null;
+  if (file && Buffer.byteLength(file.content, 'utf8') > EDITABLE_FILE_MAX_BYTES) {
+    throw new AppError(413, 'FILE_TOO_LARGE', 'The file content is too large to create here');
+  }
+
   const template = await prisma.template.create({
     data: {
       name: input.name.trim(),
@@ -174,12 +183,15 @@ export async function createTemplate(
     include: templateInclude,
   });
 
-  if (input.file) {
-    const safePath = sanitizeRelative(input.file.path);
-    if (Buffer.byteLength(input.file.content, 'utf8') > EDITABLE_FILE_MAX_BYTES) {
-      throw new AppError(413, 'FILE_TOO_LARGE', 'The file content is too large to create here');
+  if (file) {
+    try {
+      await writeTemplateFile(template.id, file.path, file.content);
+    } catch (err) {
+      // Roll back the row (and any partial file) so a failed write leaves no phantom.
+      await prisma.template.delete({ where: { id: template.id } }).catch(() => undefined);
+      await removeTemplateStorage(template.id).catch(() => undefined);
+      throw err;
     }
-    await writeTemplateFile(template.id, safePath, input.file.content);
   }
 
   return toPublicTemplate(template);
