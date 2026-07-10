@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { UseQueryResult } from '@tanstack/react-query';
 import {
   AlertCircle,
@@ -327,7 +327,7 @@ function SourcesStep({
   onCancel: () => void;
 }) {
   const { isPending, isError, refetch, isRefetching } = query;
-  const folderInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
   const zipInputRef = useRef<HTMLInputElement>(null);
   const meshFileInputRef = useRef<HTMLInputElement>(null);
   const importMesh = useImportMesh(projectId);
@@ -337,12 +337,18 @@ function SourcesStep({
   // Optional business name for the next import; its slug becomes the source dir.
   const [name, setName] = useState('');
 
-  // The folder picker needs the non-standard webkitdirectory/directory attrs.
-  useEffect(() => {
-    const input = folderInputRef.current;
-    if (!input) return;
-    input.setAttribute('webkitdirectory', '');
-    input.setAttribute('directory', '');
+  // The folder picker needs the non-standard webkitdirectory/directory attrs
+  // (not part of React's typed input props). A mount effect is unreliable here:
+  // this input lives inside the Radix Dialog portal, whose node may not be
+  // attached when a one-shot effect runs, so `webkitdirectory` never lands and
+  // the picker opens in file mode. A ref callback stamps the attributes at the
+  // exact moment the node attaches, every time it does.
+  const setFolderInput = useCallback((node: HTMLInputElement | null) => {
+    folderInputRef.current = node;
+    if (node) {
+      node.setAttribute('webkitdirectory', '');
+      node.setAttribute('directory', '');
+    }
   }, []);
 
   const runImport = async (kind: 'folder' | 'zip' | 'file', files: File[]) => {
@@ -384,7 +390,7 @@ function SourcesStep({
       </DialogHeader>
 
       <input
-        ref={folderInputRef}
+        ref={setFolderInput}
         type="file"
         multiple
         className="sr-only"
