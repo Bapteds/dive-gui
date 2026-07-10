@@ -103,6 +103,21 @@ Ce qui a été fait : nouveau garde partagé `assertNoActiveRun(projectId)` (`li
 - 3 tests (`runGuard.test.ts`) : reset/auto-patch/sync bloqués 409 pendant un run ; édition de fichier bloquée ; un run terminal (completed) ne bloque plus.
 Fichiers : `apps/api/src/lib/runGuard.ts` (nouveau), `files.service.ts`, `meshes.service.ts`, `conversion.service.ts`, `boundary.service.ts`, `mesh.service.ts`, `../templates/templates.service.ts`, `apps/api/tests/runGuard.test.ts`.
 
+### ✅ M7 — Apply BC : les patches rotor/6-DoF validés APRÈS mutation du cas
+Bug : un patch rotor (`nonRotatingPatches`) ou 6-DoF (`sixDof.patches`) mal orthographié renvoyait 422 « rien appliqué » alors que le boundary ET tous les champs `0/` avaient déjà été réécrits (inlet totalPressure, outlet fixedValue, walls…) — mutation partielle + erreur = état incohérent.
+Ce qui a été fait : toutes les références de patches rotor sont validées **en amont**, avec inlet/outlet/walls, AVANT tout write (backup/scaffold/setFieldPatchBc). Les deux boucles de validation tardives (post-mutation) sont supprimées.
+- Test renforcé (`boundary.test.ts`) : un patch rotor inexistant → 422 ET le cas reste vierge (`0/U` et `constant/MRFProperties` absents, rien n'a été scaffoldé).
+Fichiers : `apps/api/src/modules/projects/boundary.service.ts`, `apps/api/tests/boundary.test.ts`.
+
+### ✅ M8 — CSV → boundaryData écrit une sortie corrompue et sort 0
+Bug : `csv_to_boundaryData.py` écrivait un `None` littéral dans `0/U` sur une ligne courte, un fichier 0-point sur un CSV header-only, tracebackait sur un CSV vide, et un BOM Excel cassait la colonne `x` — le tout **en sortant 0** (succès), la corruption ne surfaçant qu'au crash du solveur.
+Ce qui a été fait :
+- Le script valide et **parse chaque cellule en amont** (helper `num()` : cellule manquante/non numérique → `sys.exit` avec ligne+colonne) → aucune écriture partielle, jamais de `None`.
+- `utf-8-sig` à l'ouverture (strip le BOM Excel) ; `reader.fieldnames` vide → sortie propre ; 0 ligne de données → sortie propre. Le service marque alors l'étape `failed` et pousse la note « conversion did not complete » (déjà testée via `csvFailRunner`).
+- Frontend : le toast n'affiche plus « applied » en dur — un `csvStep` échoué déclenche un **toast warning** (accent orange de marque, pas l'ambre par défaut de sonner ; classe `warning` ajoutée au Toaster) pointant vers le rapport ci-dessous.
+- Script vérifié à la main sur 5 cas (bon, ligne courte, header-only, vide, BOM).
+Fichiers : `apps/api/scripts/csv_to_boundaryData.py`, `apps/web/src/features/projects/BoundaryConditionDialog.tsx`, `apps/web/src/components/ui/sonner.tsx`.
+
 ---
 
 ## HIGH

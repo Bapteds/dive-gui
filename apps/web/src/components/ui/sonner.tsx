@@ -5,7 +5,8 @@ import { Toaster as SonnerToaster, type ToasterProps } from 'sonner';
  *
  * Top-right, 4s auto-dismiss, light theme. Toasts are announced politely and
  * never steal focus (sonner default). Success toasts carry the success accent,
- * error toasts the danger accent; both keep the app's surface / border / radius.
+ * warning toasts the brand accent, error toasts the danger accent; all keep the
+ * app's surface / border / radius.
  * Re-exports `toast` so callers import the trigger from one place.
  */
 export { toast } from 'sonner';
@@ -29,6 +30,9 @@ export function Toaster(props: ToasterProps) {
             'rounded-sm bg-cta px-2.5 py-1 text-xs font-bold text-white transition-colors hover:bg-cta-hover',
           cancelButton: 'rounded-sm px-2.5 py-1 text-xs font-medium text-text-secondary',
           success: 'group-data-[type=success]:text-success [&_[data-icon]]:text-success',
+          // Warning uses the brand accent (orange) rather than sonner's default amber,
+          // to stay on-palette.
+          warning: 'group-data-[type=warning]:text-accent [&_[data-icon]]:text-accent',
           error: 'group-data-[type=error]:text-danger [&_[data-icon]]:text-danger',
           closeButton: 'border-border bg-surface text-text-secondary hover:text-text',
         },

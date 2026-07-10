@@ -42,13 +42,31 @@ def find_col(fieldnames, key):
     return None
 
 
+def num(row, col, rownum):
+    """Parse one cell as a float, or fail with a precise message. Guards against a
+    short row (DictReader fills the missing cell with None -> the old code wrote a
+    literal 'None' into 0/U, corrupting the field) and any non-numeric value."""
+    raw = row.get(col)
+    if raw is None or str(raw).strip() == "":
+        sys.exit(f"Row {rownum}: missing value for column '{col}'. "
+                 f"Every row must have all of x, y, z, Ux, Uy, Uz.")
+    try:
+        return float(str(raw).strip())
+    except ValueError:
+        sys.exit(f"Row {rownum}: '{raw}' in column '{col}' is not a number.")
+
+
 def main():
     if len(sys.argv) != 4:
         sys.exit(__doc__)
     csv_file, case_dir, patch = sys.argv[1:4]
 
-    with open(csv_file, newline="") as f:
+    # utf-8-sig strips an Excel byte-order mark that would otherwise glue itself to
+    # the first header ("﻿x"), breaking the 'x' column match.
+    with open(csv_file, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
+        if not reader.fieldnames:
+            sys.exit("The CSV is empty (no header row).")
         cols = {k: find_col(reader.fieldnames, k)
                 for k in ("x", "y", "z", "ux", "uy", "uz", "k", "omega")}
         missing = [k for k in ("x", "y", "z", "ux", "uy", "uz")
@@ -58,25 +76,34 @@ def main():
                      f"Found headers: {reader.fieldnames}")
         rows = list(reader)
 
+    if not rows:
+        sys.exit("The CSV has a header but no data rows.")
+
+    # Validate + parse EVERY cell up front, so we never write a partly-corrupt
+    # boundaryData set (points written, then U aborts) and never emit 'None'.
+    points, vels = [], []
+    scal_vals = {s: [] for s in ("k", "omega") if cols[s]}
+    for i, r in enumerate(rows, start=1):
+        points.append(tuple(num(r, cols[c], i) for c in ("x", "y", "z")))
+        vels.append(tuple(num(r, cols[c], i) for c in ("ux", "uy", "uz")))
+        for s in scal_vals:
+            scal_vals[s].append(num(r, cols[s], i))
+
     out = Path(case_dir) / "constant" / "boundaryData" / patch
     (out / "0").mkdir(parents=True, exist_ok=True)
 
-    def flist(path, fmt_row, header_note):
+    def flist(path, values, fmt, header_note):
         with open(path, "w") as f:
-            f.write(f"// {header_note}\n{len(rows)}\n(\n")
-            for r in rows:
-                f.write(fmt_row(r) + "\n")
+            f.write(f"// {header_note}\n{len(values)}\n(\n")
+            for v in values:
+                f.write(fmt(v) + "\n")
             f.write(")\n")
 
-    flist(out / "points",
-          lambda r: f"({r[cols['x']]} {r[cols['y']]} {r[cols['z']]})",
+    flist(out / "points", points, lambda p: f"({p[0]} {p[1]} {p[2]})",
           f"points for patch '{patch}'")
-    flist(out / "0" / "U",
-          lambda r: f"({r[cols['ux']]} {r[cols['uy']]} {r[cols['uz']]})",
-          "velocity")
-    for scal in ("k", "omega"):
-        if cols[scal]:
-            flist(out / "0" / scal, lambda r, c=cols[scal]: r[c], scal)
+    flist(out / "0" / "U", vels, lambda u: f"({u[0]} {u[1]} {u[2]})", "velocity")
+    for scal, vals in scal_vals.items():
+        flist(out / "0" / scal, vals, lambda v: f"{v}", scal)
 
     print(f"Wrote {len(rows)} points to {out}")
     print("BC: type timeVaryingMappedFixedValue; mapMethod planarInterpolation;")

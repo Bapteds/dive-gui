@@ -270,7 +270,15 @@ export function BoundaryConditionDialog({ projectId, onClose }: BoundaryConditio
     try {
       const res = await apply.mutateAsync({ request, csv: mode === 'csvProfile' ? csvFile : null });
       setResult(res);
-      toast.success('Boundary conditions applied.');
+      // A draft-tube CSV can fail to convert (bad/short rows, or the toolchain is
+      // absent on this host) while the rest of the BCs still apply — don't claim a
+      // clean success in that case, point the user at the report below (M8).
+      const csvFailed = res.csvSteps?.some((s) => s.status !== 'success') ?? false;
+      if (csvFailed) {
+        toast.warning('Boundary conditions applied, but the CSV inlet profile did not convert. See the report below.');
+      } else {
+        toast.success('Boundary conditions applied.');
+      }
     } catch (err) {
       // Validation / transport error: return to the values step to correct + retry.
       setStep('values');
