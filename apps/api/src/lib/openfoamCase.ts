@@ -209,9 +209,17 @@ export function fieldBcBody(fieldName: string, geometricType: string, model?: st
 //    whose outlet velocity is pressureInletOutletVelocity (both ends).
 // ---------------------------------------------------------------------------
 
-/** Format a number for an OpenFOAM entry, trimming float noise (490.5 not 490.500001). */
+/**
+ * Format a number for an OpenFOAM entry, trimming float noise (490.5 not
+ * 490.500000001) with SIGNIFICANT digits, not fixed decimals: `toFixed(6)` flushed
+ * any |x| < 5e-7 to 0, silently zeroing a tiny-but-real rotor axis component or
+ * origin offset in MRFProperties / dynamicMeshDict (L8). `toPrecision` keeps small
+ * magnitudes (OpenFOAM reads the resulting `3e-7` fine).
+ */
 function fmtFoamNumber(value: number): string {
-  return String(Number(value.toFixed(6)));
+  if (!Number.isFinite(value)) return String(value);
+  if (value === 0) return '0';
+  return String(Number(value.toPrecision(12)));
 }
 
 /** One `keyword    value;` line, padded to this file's 16-column value gutter. */
