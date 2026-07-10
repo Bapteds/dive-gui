@@ -126,6 +126,12 @@ Fichiers : `apps/api/src/modules/templates/templates.service.ts`, `apps/api/test
 
 ---
 
+### ✅ M9 — Limite JSON globale 16 Ko casse la création de templates
+Bug : `express.json({limit:'16kb'})` global rejetait en 413 tout body plus gros — or un template inline peut porter un fichier jusqu'à `EDITABLE_FILE_MAX_BYTES` (2 Mo) et un apply jusqu'à 1000 chemins. Coller un vrai dict OpenFOAM dans « create template » → 413 brut.
+Ce qui a été fait : le parser 16 Ko reste le défaut (protection mémoire) mais est **contourné pour les seules routes à gros JSON** (`POST /templates` et `POST …/apply-template/:tid[/files]`, matchées par `isLargeJsonRoute`), qui parsent avec leur propre limite (2,5 Mo pour create, 1 Mo pour apply). Le global reste 16 Ko partout ailleurs.
+- 1 test (`templates.test.ts`) : un fichier inline de ~35 Ko (> 16 Ko) passe (201) et est relu intact.
+Fichiers : `apps/api/src/app.ts`, `apps/api/src/modules/templates/templates.routes.ts`, `apps/api/src/modules/projects/projects.routes.ts`, `apps/api/tests/templates.test.ts`.
+
 ## HIGH
 
 ### ✅ H1 — Solveurs orphelins survivant à un redémarrage de l'API

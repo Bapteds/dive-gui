@@ -126,6 +126,13 @@ import {
  */
 const parseFileContent = express.text({ type: '*/*', limit: EDITABLE_FILE_MAX_BYTES });
 
+/**
+ * JSON parser for the apply-template routes: a decision map / selected-paths array
+ * for up to 1000 files overflows the 16kb global limit (which is skipped for these
+ * routes in app.ts) (M9).
+ */
+const parseApplyBody = express.json({ limit: '1mb' });
+
 /** Build the projects router (authenticated, visibility-scoped). */
 export function createProjectsRouter(): Router {
   const router = Router();
@@ -460,11 +467,13 @@ export function createProjectsRouter(): Router {
   );
   router.post(
     '/:id/apply-template/:templateId/files',
+    parseApplyBody,
     validate({ params: applyTemplateParamSchema, body: applyTemplateFilesSchema }),
     asyncHandler(applyTemplateFilesController),
   );
   router.post(
     '/:id/apply-template/:templateId',
+    parseApplyBody,
     validate({ params: applyTemplateParamSchema, body: applyDecisionsSchema }),
     asyncHandler(applyTemplateController),
   );

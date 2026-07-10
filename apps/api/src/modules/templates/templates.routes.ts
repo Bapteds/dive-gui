@@ -37,6 +37,13 @@ import {
  */
 const parseFileContent = express.text({ type: '*/*', limit: EDITABLE_FILE_MAX_BYTES });
 
+/**
+ * JSON parser for the create route: its optional inline `file.content` can be up
+ * to EDITABLE_FILE_MAX_BYTES, far past the 16kb global limit (which is skipped for
+ * this route in app.ts). Headroom is added for the name/tags/JSON-escaping (M9).
+ */
+const parseLargeJson = express.json({ limit: EDITABLE_FILE_MAX_BYTES + 512 * 1024 });
+
 /** Build the templates router (authenticated; shared read, owner-scoped writes). */
 export function createTemplatesRouter(): Router {
   const router = Router();
@@ -45,7 +52,7 @@ export function createTemplatesRouter(): Router {
 
   // Template metadata CRUD.
   router.get('/', asyncHandler(listTemplatesController));
-  router.post('/', validate({ body: createTemplateSchema }), asyncHandler(createTemplateController));
+  router.post('/', parseLargeJson, validate({ body: createTemplateSchema }), asyncHandler(createTemplateController));
   router.get(
     '/:id',
     validate({ params: templateIdParamSchema }),

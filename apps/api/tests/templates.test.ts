@@ -418,6 +418,26 @@ describe('template tags + single-file create', () => {
     expect(res.body.template.tags).toEqual(['steady-rans', 'k-omega']);
   });
 
+  it('accepts an inline template file larger than the 16KB global JSON limit (M9)', async () => {
+    const user = await createTestUser({ email: 'bigdict@dive-turbinen.test' });
+    // ~35 KB of OpenFOAM-dict-like text: well over the 16kb global cap, well under
+    // EDITABLE_FILE_MAX_BYTES. Before M9 this hit a raw 413 from the body parser.
+    const content = 'FoamFile { object fvSolution; }\n' + '// padding line\n'.repeat(2200);
+    expect(Buffer.byteLength(content, 'utf8')).toBeGreaterThan(16 * 1024);
+
+    const res = await request(app)
+      .post('/api/v1/templates')
+      .set('Authorization', authHeader(user))
+      .send({ name: 'Big dict', file: { path: 'system/fvSolution', content } });
+    expect(res.status).toBe(201);
+
+    const id = res.body.template.id as string;
+    const file = await request(app)
+      .get(`/api/v1/templates/${id}/files/content?path=system/fvSolution`)
+      .set('Authorization', authHeader(user));
+    expect(file.body.file.content.length).toBe(content.length);
+  });
+
   it('does not leave a phantom template when the inline file is rejected (M10)', async () => {
     const user = await createTestUser({ email: 'phantom@dive-turbinen.test' });
     const before = await prisma.template.count();

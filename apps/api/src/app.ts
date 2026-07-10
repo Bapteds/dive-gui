@@ -15,6 +15,16 @@ import { createTemplatesRouter } from './modules/templates/templates.routes';
 import { createMeshingRouter } from './modules/meshing/meshing.routes';
 import { createDashboardRouter } from './modules/dashboard/dashboard.routes';
 
+/** Routes whose JSON body is parsed with a larger limit by their own router (M9). */
+const APPLY_TEMPLATE_PATH = /^\/api\/v1\/projects\/[^/]+\/apply-template\/[^/]+(\/files)?$/;
+function isLargeJsonRoute(method: string, path: string): boolean {
+  if (method !== 'POST') return false;
+  // Template create (optional inline file up to EDITABLE_FILE_MAX_BYTES).
+  if (path === '/api/v1/templates') return true;
+  // Apply a template to a case: decisions map / selected paths (up to 1000 files).
+  return APPLY_TEMPLATE_PATH.test(path);
+}
+
 /**
  * Create and configure the Express application.
  * @returns A ready-to-listen Express instance.
@@ -39,10 +49,17 @@ export function createApp(): Express {
     }),
   );
 
-  // Body and cookie parsing. The JSON limit caps request bodies well above any
-  // legitimate payload (the largest is a user form) while rejecting oversized
-  // bodies that could be used to exhaust memory.
-  app.use(express.json({ limit: '16kb' }));
+  // Body and cookie parsing. Most routes cap JSON bodies at 16kb (rejecting
+  // oversized bodies that could exhaust memory). A few legitimately carry larger
+  // JSON — a template's inline file (up to EDITABLE_FILE_MAX_BYTES) and apply
+  // decisions / selected paths for up to 1000 files — so the small global parser is
+  // skipped for them and their router parses with its own larger limit (M9). Without
+  // this, pasting any real OpenFOAM dict into "create template" hit a raw 413.
+  const smallJson = express.json({ limit: '16kb' });
+  app.use((req, res, next) => {
+    if (isLargeJsonRoute(req.method, req.path)) return next();
+    return smallJson(req, res, next);
+  });
   app.use(cookieParser());
 
   // Liveness/health probe.
