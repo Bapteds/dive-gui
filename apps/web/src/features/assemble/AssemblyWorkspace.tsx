@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useQueries } from '@tanstack/react-query';
+import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, History, Loader2, PackagePlus, Workflow } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { getMeshSourceGeometry } from '@/lib/api/meshes';
@@ -86,6 +86,7 @@ interface BaseStatus {
 }
 
 export function AssemblyWorkspace({ projectId }: { projectId: string }) {
+  const queryClient = useQueryClient();
   const meshesQuery = useMeshesQuery(projectId);
   const planQuery = useMergePlanQuery(projectId);
   const caseFilesQuery = useCaseFilesQuery(projectId);
@@ -493,7 +494,21 @@ export function AssemblyWorkspace({ projectId }: { projectId: string }) {
             onViewerError={() => setViewerError(true)}
             onRetry={() => {
               setViewerError(false);
-              baseStatus?.refetch();
+              // Drop EVERY geometry buffer for this project (base + all parts), not
+              // just the base: a corrupt PART GLB otherwise stays cached for its
+              // 5-min TTL and the viewer loops on the same error (M23).
+              void queryClient.invalidateQueries({
+                predicate: (query) => {
+                  const k = query.queryKey;
+                  return (
+                    Array.isArray(k) &&
+                    k[0] === 'projects' &&
+                    k[1] === projectId &&
+                    (k[2] === 'mesh' || k[2] === 'meshSource') &&
+                    k[k.length - 1] === 'glb'
+                  );
+                },
+              });
             }}
           />
         </div>

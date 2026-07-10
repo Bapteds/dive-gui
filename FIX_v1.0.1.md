@@ -230,6 +230,41 @@ RESTE (suivi) : le zip du case (`buildCaseArchive`/`zipTreeAt` via `zip.toBuffer
 ### ⏸️ M18 — `buildSolverSpec` : mauvais family/requiredFiles pour les solveurs non-RANS (deferred-by-design)
 Constat : interFoam/solidDisplacementFoam… sont décrits avec les fichiers RANS incompressibles (`0/p`, `transportProperties`) au lieu de leurs vrais champs (`0/p_rgh`, `0/alpha.water`). **NON corrigé volontairement** : c'est une décision de conception DÉLIBÉRÉE ET TESTÉE (backlog F4 « tous les solveurs guidés » ; `runnable.test.ts` verrouille explicitement « interFoam gate sur le set incompressible complet » + `runnable:true` après scaffold), avec l'UI qui signale déjà le tier « Base setup » + un hint honnête. La vraie résolution = la feature déjà backloggée « templates par famille pour les familles exotiques (VoF/combustion/…) ». Un fix partiel casserait le design testé pour un gain incomplet ; à traiter comme une feature, hors passe de bugfix.
 
+### ✅ M14 — Apply template ne droppe pas les caches de contenu de fichier
+Bug : `useApplyTemplate`/`useApplyTemplateFiles` mettaient à jour l'arbre mais pas les caches de CONTENU — un éditeur ouvert gardait l'ancien contenu et une frappe autosauvait par-dessus le fichier importé.
+Fix : les deux hooks font `removeQueries([...caseFilesQueryKey, 'content'])` en succès (même pattern que les autres mutations de cas).
+Fichiers : `apps/web/src/features/templates/useTemplates.ts`.
+
+### ✅ M15 — Supprimer un fichier ouvert et dirty le ressuscite
+Bug : l'autosave 600 ms armé se déclenchait pendant le round-trip du delete et re-PUTait le fichier.
+Fix : `handleConfirmDelete` vide la sélection (`onRemoved`) AVANT le delete → désarme l'autosave (supprimer implique jeter les éditions non sauvées).
+Fichiers : `apps/web/src/features/files/FileTreeEditor.tsx`.
+
+### ✅ M11 — L'onglet Export perd le run au changement d'onglet → double export
+Bug : `useRunExport` sans `mutationKey` → son état in-flight (component-local) était perdu au démontage de l'onglet ; au retour le bouton se ré-activait → 2e export concurrent sur le même cas.
+Fix : `mutationKey` sur la mutation + hook `useIsExporting` (via `useIsMutating`) lu du cache de mutations (survit au démontage) → bouton désactivé/loading tant que l'export tourne.
+Fichiers : `apps/web/src/features/export/useExport.ts`, `ExportTab.tsx`.
+
+### ✅ M22 — Dashboard Home : skeletons + badge « Live » vert à vie sur échec API
+Bug : `HomePage` ne regardait jamais `isError` → skeletons infinis + badge « Live » mensonger.
+Fix : badge conditionnel (« Offline » neutre en erreur) + `ErrorState` partagé (avec retry) quand le premier chargement échoue sans cache ; un blip transitoire AVEC cache garde le dashboard (stale) signalé par le badge.
+Fichiers : `apps/web/src/pages/HomePage.tsx`.
+
+### ✅ M13 — Le formulaire Easy solveur perd la 1re de deux éditions rapides
+Bug : `commit` splice dans le contenu du CACHE (en retard) ; deux éditions rapides du même fichier lisent la même base → la 2e écrase la 1re côté serveur.
+Fix : mise à jour OPTIMISTE du cache de contenu (`setQueryData`) sur chaque commit → la 2e édition part de la 1re (le form Easy n'a pas de draft CodeMirror à écraser).
+Fichiers : `apps/web/src/features/solver/SolverConfigPanel.tsx`.
+
+### ✅ M21 — Les champs numériques de placement massacrent la précision
+Bug : la value était arrondie à 3 décimales (sous-mm intypable) et un « - » ou « . » intermédiaire (value navigateur = "" → `Number("")` = 0) committait la position 0 → la pièce sautait à l'origine (reposition on).
+Fix : nouveau `AxisInput` = `type="text" inputMode="decimal"` avec un draft string local (frappe libre, resync depuis le modèle hors focus), ne committant QU'un nombre fini (`raw !== '' && Number.isFinite`).
+Fichiers : `apps/web/src/features/assemble/PlacementPanel.tsx`.
+
+### ✅ M23 — Le retry du viewer d'assemblage ne récupère jamais d'un GLB de pièce corrompu
+Bug : le retry ne refetchait QUE la géométrie de base ; un GLB de PIÈCE corrompu restait en cache 5 min → boucle d'erreur.
+Fix : le retry invalide TOUTES les géométries (`glb`) du projet (base `mesh` + pièces `meshSource`) via un predicate → la pièce corrompue est re-fetchée.
+Fichiers : `apps/web/src/features/assemble/AssemblyWorkspace.tsx`.
+
 ## Reste à faire
 
 **Tous les CRITICAL (C1–C4) et HIGH (H1–H10) sont traités.**
