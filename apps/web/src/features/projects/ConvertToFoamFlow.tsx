@@ -306,7 +306,7 @@ function EmptyHint() {
       </span>
       <p className="text-sm text-text-secondary">
         No CGNS mesh added yet. Add a{' '}
-        <code className="font-mono text-[0.8125rem] text-text" translate="no">
+        <code className="font-mono text-sm text-text" translate="no">
           .cgns
         </code>{' '}
         file to continue.
@@ -495,7 +495,7 @@ function ConfirmStep({
         <DialogTitle>Convert to OpenFOAM?</DialogTitle>
         <DialogDescription>
           This builds the case mesh from the CGNS file and overwrites any existing{' '}
-          <code className="font-mono text-[0.8125rem]">constant/polyMesh</code>. It cannot be undone.
+          <code className="font-mono text-sm">constant/polyMesh</code>. It cannot be undone.
         </DialogDescription>
       </DialogHeader>
 
@@ -631,7 +631,7 @@ function RunStep({
           <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" strokeWidth={1.75} aria-hidden="true" />
           <span>
             Mesh converted. The case now has a fresh{' '}
-            <code className="font-mono text-[0.8125rem]" translate="no">
+            <code className="font-mono text-sm" translate="no">
               constant/polyMesh
             </code>
             .
@@ -809,7 +809,7 @@ function LogDisclosure({ step, defaultOpen }: { step: ConversionStep; defaultOpe
             tabIndex={0}
             className="max-h-48 overflow-auto overscroll-contain px-3 py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
           >
-            <p className="mb-1.5 font-mono text-[0.7rem] text-text-secondary" translate="no">
+            <p className="mb-1.5 font-mono text-xs text-text-secondary" translate="no">
               $ {step.command}
             </p>
             {hasOut && (

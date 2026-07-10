@@ -452,7 +452,7 @@ function TypeStep({
         <DialogDescription>
           Pick the component this mesh represents. It sets the inlet, outlet and wall boundary
           conditions written to the case&rsquo;s{' '}
-          <code className="font-mono text-[0.8125rem]" translate="no">
+          <code className="font-mono text-sm" translate="no">
             0/
           </code>{' '}
           fields. You can configure it later instead.
@@ -919,7 +919,7 @@ function RotorStep({
         <DialogDescription>
           Choose how the turbine&rsquo;s rotating region is handled, then set the rotation. This
           writes the{' '}
-          <code className="font-mono text-[0.8125rem]" translate="no">
+          <code className="font-mono text-sm" translate="no">
             {ROTOR_MODE_LIBRARY[rotorMode].file}
           </code>{' '}
           dictionary.

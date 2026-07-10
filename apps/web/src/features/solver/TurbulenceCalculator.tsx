@@ -470,7 +470,7 @@ function ModelReadout({ modelId, configured }: { modelId: string; configured: bo
           {label}
         </span>
         {configured && (
-          <span className="ml-2 shrink-0 rounded-sm bg-primary-tint px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary">
+          <span className="ml-2 shrink-0 rounded-sm bg-primary-tint px-1.5 py-0.5 text-xs font-medium text-primary">
             project
           </span>
         )}
@@ -554,7 +554,7 @@ function SeedRow({
         </span>
         <span className="truncate text-xs text-text-secondary">{name}</span>
         {used && (
-          <span className="shrink-0 rounded-sm bg-primary-tint px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary">
+          <span className="shrink-0 rounded-sm bg-primary-tint px-1.5 py-0.5 text-xs font-medium text-primary">
             used
           </span>
         )}

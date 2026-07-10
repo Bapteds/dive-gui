@@ -125,7 +125,7 @@ export function MergeRunReport({
           <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" strokeWidth={1.75} aria-hidden="true" />
           <span>
             Combined mesh written to{' '}
-            <code className="font-mono text-[0.8125rem]" translate="no">
+            <code className="font-mono text-sm" translate="no">
               constant/polyMesh
             </code>{' '}
             with {result.boundaryPatches.length} patch
@@ -324,7 +324,7 @@ function MergeLogDisclosure({ step, defaultOpen }: { step: MergeStep; defaultOpe
             className="max-h-48 overflow-auto overscroll-contain px-3 py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
           >
             {hasCommand && (
-              <p className="mb-1.5 font-mono text-[0.7rem] text-text-secondary" translate="no">
+              <p className="mb-1.5 font-mono text-xs text-text-secondary" translate="no">
                 $ {step.command}
               </p>
             )}

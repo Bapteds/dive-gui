@@ -376,7 +376,7 @@ function PartRow({
             <span className="min-w-0 truncate text-sm font-medium text-text" title={mesh.name}>
               {mesh.name}
             </span>
-            <span className="shrink-0 rounded-sm bg-primary-tint px-1.5 py-0.5 text-[0.6875rem] font-medium text-primary">
+            <span className="shrink-0 rounded-sm bg-primary-tint px-1.5 py-0.5 text-xs font-medium text-primary">
               Base
             </span>
           </span>
@@ -402,12 +402,12 @@ function PartRow({
               {mesh.name}
             </span>
             {isPlaced ? (
-              <span className="inline-flex shrink-0 items-center gap-1 rounded-sm bg-success-tint px-1.5 py-0.5 text-[0.6875rem] font-medium text-success">
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-sm bg-success-tint px-1.5 py-0.5 text-xs font-medium text-success">
                 <MapPin className="size-3" strokeWidth={2} aria-hidden="true" />
                 Placed
               </span>
             ) : (
-              <span className="shrink-0 rounded-sm border border-border px-1.5 py-0.5 text-[0.6875rem] font-medium text-text-secondary">
+              <span className="shrink-0 rounded-sm border border-border px-1.5 py-0.5 text-xs font-medium text-text-secondary">
                 Part {index}
               </span>
             )}
@@ -465,7 +465,7 @@ function PartRow({
         <p className="-mt-0.5 mb-1.5 ml-2.5 text-xs text-text-secondary">
           <span className="tabular-nums">{mesh.patches.length}</span> patch
           {mesh.patches.length === 1 ? '' : 'es'} from{' '}
-          <code className="font-mono text-[0.6875rem] text-text" translate="no">
+          <code className="font-mono text-xs text-text" translate="no">
             constant/polyMesh
           </code>
         </p>
@@ -562,7 +562,7 @@ function PatchEditor({ projectId, mesh }: { projectId: string; mesh: MeshSource 
             <AlertCircle className="size-3.5 shrink-0 text-danger" strokeWidth={1.75} aria-hidden="true" />
             autoPatch failed
           </p>
-          <pre className="max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words text-[0.6875rem] leading-relaxed text-text-secondary">
+          <pre className="max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words text-xs leading-relaxed text-text-secondary">
             {failure}
           </pre>
         </div>

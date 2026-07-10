@@ -342,10 +342,10 @@ function ModeStep({
         <DialogTitle>Set up TopoSet</DialogTitle>
         <DialogDescription>
           Choose how to write{' '}
-          <code className="font-mono text-[0.8125rem]" translate="no">
+          <code className="font-mono text-sm" translate="no">
             {TOPOSET_PATH}
           </code>
-          , the dictionary <span className="font-mono text-[0.8125rem]">topoSet</span> reads to
+          , the dictionary <span className="font-mono text-sm">topoSet</span> reads to
           build named cell sets and zones (e.g. a rotor cell zone).
         </DialogDescription>
       </DialogHeader>
@@ -507,8 +507,8 @@ function CylinderStep({
         <DialogTitle>Cylindrical cell zone</DialogTitle>
         <DialogDescription>
           Defines a cylinder, selects the cells inside it, then promotes them to a cell zone. This
-          writes a <span className="font-mono text-[0.8125rem]">cylinderToCell</span> +{' '}
-          <span className="font-mono text-[0.8125rem]">setToCellZone</span> action pair.
+          writes a <span className="font-mono text-sm">cylinderToCell</span> +{' '}
+          <span className="font-mono text-sm">setToCellZone</span> action pair.
         </DialogDescription>
       </DialogHeader>
 

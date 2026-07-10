@@ -145,7 +145,7 @@ function FileSummary({
       <div className="flex items-center justify-between gap-3 px-4 py-3.5">
         <p className="flex items-center gap-2 text-sm text-text-secondary">
           <AlertCircle className="size-4 text-danger" strokeWidth={1.75} aria-hidden="true" />
-          <span className="font-mono text-[0.8125rem]" translate="no">
+          <span className="font-mono text-sm" translate="no">
             {path}
           </span>
         </p>
@@ -207,10 +207,10 @@ function FoamEntries({ entries }: { entries: FoamEntry[] }) {
             </div>
           ) : (
             <div className="flex items-baseline justify-between gap-4">
-              <dt className="shrink-0 font-mono text-[0.8125rem] text-text-secondary" translate="no">
+              <dt className="shrink-0 font-mono text-sm text-text-secondary" translate="no">
                 {entry.key}
               </dt>
-              <dd className="min-w-0 break-words text-right font-mono text-[0.8125rem] text-text" translate="no">
+              <dd className="min-w-0 break-words text-right font-mono text-sm text-text" translate="no">
                 {entry.value ?? '—'}
               </dd>
             </div>

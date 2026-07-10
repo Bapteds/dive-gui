@@ -126,13 +126,13 @@ export function PlacementPanel({
           <span className="text-primary">{activePart.name}</span>
         </h2>
         {isCoupled && (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-sm bg-success-tint px-1.5 py-0.5 text-[0.6875rem] font-medium text-success">
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-sm bg-success-tint px-1.5 py-0.5 text-xs font-medium text-success">
             <Link2 className="size-3" strokeWidth={2.5} aria-hidden="true" />
             Coupled
           </span>
         )}
         {isRepositioned && (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-sm bg-accent-tint px-1.5 py-0.5 text-[0.6875rem] font-medium text-accent-hover">
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-sm bg-accent-tint px-1.5 py-0.5 text-xs font-medium text-accent-hover">
             <Move3d className="size-3" strokeWidth={2.5} aria-hidden="true" />
             Moved
           </span>
@@ -170,7 +170,7 @@ export function PlacementPanel({
             {hasFace ? (
               <>
                 <Crosshair className="size-4 shrink-0 text-primary" strokeWidth={1.75} aria-hidden="true" />
-                <code className="min-w-0 flex-1 truncate font-mono text-[0.8125rem] text-text" translate="no">
+                <code className="min-w-0 flex-1 truncate font-mono text-sm text-text" translate="no">
                   {target.patchName || 'face'}
                 </code>
                 <span className="shrink-0 text-xs text-text-secondary">picked</span>

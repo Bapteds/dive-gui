@@ -207,7 +207,7 @@ function ChoiceDialog({
                   strokeWidth={1.75}
                   aria-hidden="true"
                 />
-                <span className="truncate font-mono text-[0.8125rem]">{path}</span>
+                <span className="truncate font-mono text-sm">{path}</span>
               </li>
             ))}
           </ul>
@@ -409,7 +409,7 @@ function ConflictsDialog({
                   strokeWidth={1.75}
                   aria-hidden="true"
                 />
-                <span className="truncate font-mono text-[0.8125rem] text-text" title={path}>
+                <span className="truncate font-mono text-sm text-text" title={path}>
                   {path}
                 </span>
               </span>

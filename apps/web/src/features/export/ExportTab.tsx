@@ -294,7 +294,7 @@ function LogDisclosure({ step, defaultOpen }: { step: ExportStep; defaultOpen: b
             tabIndex={0}
             className="max-h-48 overflow-auto overscroll-contain px-3 py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
           >
-            <p className="mb-1.5 font-mono text-[0.7rem] text-text-secondary" translate="no">
+            <p className="mb-1.5 font-mono text-xs text-text-secondary" translate="no">
               $ {step.command}
             </p>
             {hasOut && (

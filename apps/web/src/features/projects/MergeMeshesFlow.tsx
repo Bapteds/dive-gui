@@ -567,7 +567,7 @@ function MeshRow({
               {mesh.name}
             </span>
             {isMaster && (
-              <span className="shrink-0 rounded-sm bg-primary-tint px-1.5 py-0.5 text-[0.6875rem] font-medium text-primary">
+              <span className="shrink-0 rounded-sm bg-primary-tint px-1.5 py-0.5 text-xs font-medium text-primary">
                 Base
               </span>
             )}
@@ -704,7 +704,7 @@ function PatchEditor({ projectId, mesh }: { projectId: string; mesh: MeshSource 
             <AlertCircle className="size-3.5 shrink-0 text-danger" strokeWidth={1.75} aria-hidden="true" />
             autoPatch failed
           </p>
-          <pre className="max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words text-[0.6875rem] leading-relaxed text-text-secondary">
+          <pre className="max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words text-xs leading-relaxed text-text-secondary">
             {failure}
           </pre>
         </div>
@@ -795,7 +795,7 @@ function EmptyHint() {
       </span>
       <p className="text-sm text-text-secondary">
         No meshes imported yet. Import each part as a{' '}
-        <code className="font-mono text-[0.8125rem] text-text" translate="no">
+        <code className="font-mono text-sm text-text" translate="no">
           polyMesh
         </code>{' '}
         folder, a .zip, or a .cgns / .msh file to combine them.
@@ -1082,7 +1082,7 @@ function ConfirmStep({
         <DialogTitle>Merge into the case mesh?</DialogTitle>
         <DialogDescription>
           This combines the meshes and overwrites any existing{' '}
-          <code className="font-mono text-[0.8125rem]" translate="no">
+          <code className="font-mono text-sm" translate="no">
             constant/polyMesh
           </code>
           . It cannot be undone.
@@ -1235,7 +1235,7 @@ function RunStep({
           <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" strokeWidth={1.75} aria-hidden="true" />
           <span>
             Combined mesh written to{' '}
-            <code className="font-mono text-[0.8125rem]" translate="no">
+            <code className="font-mono text-sm" translate="no">
               constant/polyMesh
             </code>{' '}
             with {result.boundaryPatches.length} patch
@@ -1401,7 +1401,7 @@ function MergeLogDisclosure({ step, defaultOpen }: { step: MergeStep; defaultOpe
             className="max-h-48 overflow-auto overscroll-contain px-3 py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
           >
             {hasCommand && (
-              <p className="mb-1.5 font-mono text-[0.7rem] text-text-secondary" translate="no">
+              <p className="mb-1.5 font-mono text-xs text-text-secondary" translate="no">
                 $ {step.command}
               </p>
             )}
@@ -1434,7 +1434,7 @@ function CouplingChip({ coupling }: { coupling: InterfaceCoupling }) {
   return (
     <span
       className={cn(
-        'shrink-0 rounded-sm px-1.5 py-0.5 text-[0.6875rem] font-medium',
+        'shrink-0 rounded-sm px-1.5 py-0.5 text-xs font-medium',
         coupling === 'nonConformal'
           ? 'bg-primary-tint text-primary'
           : 'border border-border text-text-secondary',

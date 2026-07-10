@@ -453,11 +453,11 @@ function ConfirmStep({
           {caseBase ? (
             <>
               This positions each added part and couples them onto your project mesh (
-              <code className="font-mono text-[0.8125rem]" translate="no">
+              <code className="font-mono text-sm" translate="no">
                 constant/polyMesh
               </code>
               ), which is backed up first. Its existing{' '}
-              <code className="font-mono text-[0.8125rem]" translate="no">
+              <code className="font-mono text-sm" translate="no">
                 0/
               </code>{' '}
               physics is preserved.
@@ -465,7 +465,7 @@ function ConfirmStep({
           ) : (
             <>
               This positions each part, combines them, and overwrites any existing{' '}
-              <code className="font-mono text-[0.8125rem]" translate="no">
+              <code className="font-mono text-sm" translate="no">
                 constant/polyMesh
               </code>
               . It cannot be undone.
@@ -568,7 +568,7 @@ function CouplingChip({ coupling }: { coupling: InterfaceCoupling }) {
   return (
     <span
       className={cn(
-        'shrink-0 rounded-sm px-1.5 py-0.5 text-[0.6875rem] font-medium',
+        'shrink-0 rounded-sm px-1.5 py-0.5 text-xs font-medium',
         coupling === 'nonConformal'
           ? 'bg-primary-tint text-primary'
           : 'border border-border text-text-secondary',
