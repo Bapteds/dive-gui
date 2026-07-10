@@ -97,6 +97,12 @@ Ce qui a été fait : le re-merge (base=cas + assemblage sur registre + backup p
 - 1 test (`meshes.test.ts`) : un re-merge dont `mergeMeshes` échoue laisse le cas (patches de la pièce ajoutée présents) ET le registre d'assemblage intacts.
 Fichiers : `apps/api/src/modules/projects/meshes.service.ts`, `apps/api/src/lib/meshBackupStorage.ts` (export `backupCaseDir`), `apps/api/tests/meshes.test.ts`.
 
+### ✅ M1 — Aucune garde « run actif » sur les mutations destructrices du cas
+Bug : reset, merge/promote, restore backup, autoPatch, édition de patches, conversion CGNS, apply BC, scaffold, apply template et move/delete/save de fichiers pouvaient réécrire/supprimer le mesh qu'un solveur lit en direct → mort du run sur un FOAM fatal cryptique ; pire, un run parallèle peut `reconstructPar` ses dossiers processor sur le NOUVEAU mesh (cas corrompu).
+Ce qui a été fait : nouveau garde partagé `assertNoActiveRun(projectId)` (`lib/runGuard.ts`, autonome — prisma + `@dive/shared`, sans dépendance circulaire sur runs.service) → **409 RUN_IN_PROGRESS** si un run `queued`/`running` existe. Appelé après `assertProjectVisible` dans chaque mutation publique : `resetCase`, `importCaseFiles`, `saveCaseFileContent`, `createCaseFile`, `deleteCaseFileContent`, `deleteCaseDirContent`, `moveCaseEntry`, `scaffoldCase`, `scaffoldSolver`, `syncBoundaryFields`, `convertCgnsToFoam`, `runMerge`, `renameMeshPatch`, `setPatchType`, `editMeshPatches`, `autoPatchMesh`, `restoreMeshBackup`, `applyBoundaryConditions`, `applyTemplate`, `applyTemplateFiles`. Les 4 helpers partagés (scaffoldCase/scaffoldSolver/syncBoundaryFields/applyTemplate) prennent un flag `skipRunGuard` que leurs appelants internes (déjà gardés à leur entrée) passent, pour éviter un double-check qui throw en plein flux. Les mutations de la **librairie** de meshes (meshes/<id>/) ne sont PAS gardées (le solveur lit le cas, pas la librairie).
+- 3 tests (`runGuard.test.ts`) : reset/auto-patch/sync bloqués 409 pendant un run ; édition de fichier bloquée ; un run terminal (completed) ne bloque plus.
+Fichiers : `apps/api/src/lib/runGuard.ts` (nouveau), `files.service.ts`, `meshes.service.ts`, `conversion.service.ts`, `boundary.service.ts`, `mesh.service.ts`, `../templates/templates.service.ts`, `apps/api/tests/runGuard.test.ts`.
+
 ---
 
 ## HIGH

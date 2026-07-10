@@ -22,6 +22,7 @@ import {
   type SolverId,
 } from '@dive/shared';
 import { AppError } from '../../lib/AppError';
+import { assertNoActiveRun } from '../../lib/runGuard';
 import { convertCsvToBoundaryData } from '../../lib/boundaryData';
 import {
   BOUNDARY_FILE,
@@ -85,6 +86,7 @@ export async function applyBoundaryConditions(
   csv?: Buffer,
 ): Promise<ApplyBoundaryConditionsResult> {
   await assertProjectVisible(viewer, projectId);
+  await assertNoActiveRun(projectId); // rewrites 0/ fields a live solver reads (M1)
 
   const boundary = await readCaseFile(projectId, BOUNDARY_FILE);
   if (!boundary) {
@@ -126,7 +128,7 @@ export async function applyBoundaryConditions(
 
   // Ensure the 0/ fields exist for the case's solver + model (non-overwriting): a
   // freshly imported case has only polyMesh. We then overwrite inlet/outlet/walls.
-  await scaffoldSolver(viewer, projectId, await caseSolver(projectId));
+  await scaffoldSolver(viewer, projectId, await caseSolver(projectId), undefined, { skipRunGuard: true });
   const model = await caseTurbulenceModel(projectId);
 
   // Draft tube: map the CSV profile into boundaryData BEFORE writing the fields,

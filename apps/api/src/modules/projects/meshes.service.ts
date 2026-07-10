@@ -90,6 +90,7 @@ import {
   type CaseEntry,
 } from '../../lib/caseStorage';
 import { backupCaseDir, backupExists, ensureOriginalBackup } from '../../lib/meshBackupStorage';
+import { assertNoActiveRun } from '../../lib/runGuard';
 import { convertMeshFileToCase, meshFileFormat } from '../../lib/meshImport';
 import {
   deleteMeshSource,
@@ -811,6 +812,7 @@ export async function runMerge(
   plan: MergePlan,
 ): Promise<MergeRunResult> {
   await assertProjectVisible(viewer, projectId);
+  await assertNoActiveRun(projectId); // promoting a new mesh would corrupt a live run (M1)
 
   // --- Validate the plan against the library (+ the case for a base=case) --
   const order = [...new Set(plan.order)];
@@ -1188,7 +1190,7 @@ export async function runMerge(
     // A case base preserves its physics (merge mode keeps existing BCs, only new
     // patches get defaults); a library base rebuilds every field (patches renamed).
     const mode = baseIsCase ? 'merge' : 'rebuild';
-    const sync = await syncBoundaryFields(viewer, projectId, { mode });
+    const sync = await syncBoundaryFields(viewer, projectId, { mode, skipRunGuard: true });
     if (sync.updated.length)
       notes.push(
         mode === 'merge'

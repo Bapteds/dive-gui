@@ -14,6 +14,7 @@
 import type { Prisma } from '@prisma/client';
 import { EDITABLE_FILE_MAX_BYTES, normalizeTags } from '@dive/shared';
 import { AppError } from '../../lib/AppError';
+import { assertNoActiveRun } from '../../lib/runGuard';
 import { prisma } from '../../lib/prisma';
 import { sanitizeRelative } from '../../lib/fileTreeStorage';
 import {
@@ -373,8 +374,11 @@ export async function applyTemplate(
   projectId: string,
   templateId: string,
   decisions: Record<string, ApplyDecision> = {},
+  // convertCgnsToFoam already asserted no active run at entry; it passes skipRunGuard.
+  opts: { skipRunGuard?: boolean } = {},
 ): Promise<ApplyResult> {
   await assertProjectVisible(viewer, projectId);
+  if (!opts.skipRunGuard) await assertNoActiveRun(projectId); // overwrites case files (M1)
   await findOrThrow(templateId);
 
   const files = await templateFilePaths(templateId);
@@ -415,6 +419,7 @@ export async function applyTemplateFiles(
   paths: string[],
 ): Promise<ApplyResult> {
   await assertProjectVisible(viewer, projectId);
+  await assertNoActiveRun(projectId); // overwrites case files a live solver reads (M1)
   await findOrThrow(templateId);
 
   const available = new Set(await templateFilePaths(templateId));

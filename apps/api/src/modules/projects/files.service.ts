@@ -18,6 +18,7 @@ import {
 } from '@dive/shared';
 import os from 'node:os';
 import { AppError } from '../../lib/AppError';
+import { assertNoActiveRun } from '../../lib/runGuard';
 import { env } from '../../config/env';
 import {
   caseFileExists,
@@ -118,6 +119,7 @@ export async function importCaseFiles(
   payload: ImportPayload,
 ): Promise<ImportResult> {
   await assertProjectVisible(viewer, projectId);
+  await assertNoActiveRun(projectId); // don't overwrite the case a live solver is using (M1)
 
   let written: string[];
   if (payload.archive) {
@@ -138,6 +140,7 @@ export async function importCaseFiles(
 /** Remove every imported case file (the "Reset" action). Returns the now-empty tree. */
 export async function resetCase(viewer: Viewer, projectId: string): Promise<ImportResult> {
   await assertProjectVisible(viewer, projectId);
+  await assertNoActiveRun(projectId); // resetting the case would kill a live solver (M1)
   await clearCase(projectId);
   return { written: [], entries: await listCaseTree(projectId) };
 }
@@ -184,8 +187,15 @@ export async function verifyCase(viewer: Viewer, projectId: string): Promise<Cas
  * the generated case stays coherent with the imported mesh. Existing files are
  * never overwritten.
  */
-export async function scaffoldCase(viewer: Viewer, projectId: string): Promise<ScaffoldResult> {
+export async function scaffoldCase(
+  viewer: Viewer,
+  projectId: string,
+  // Internal callers (convertCgnsToFoam, autoPatchMesh) already asserted no run at
+  // their own entry; they pass skipRunGuard so the guard isn't re-run mid-flow.
+  opts: { skipRunGuard?: boolean } = {},
+): Promise<ScaffoldResult> {
   await assertProjectVisible(viewer, projectId);
+  if (!opts.skipRunGuard) await assertNoActiveRun(projectId);
 
   const boundary = await readCaseFile(projectId, BOUNDARY_FILE);
   const patches = boundary ? parseBoundaryPatchesWithTypes(boundary.toString('utf8')) : [];
@@ -542,8 +552,11 @@ export async function scaffoldSolver(
   projectId: string,
   solver: SolverId = 'simpleFoam',
   turbulence?: string,
+  // applyBoundaryConditions already asserted no run at entry; it passes skipRunGuard.
+  opts: { skipRunGuard?: boolean } = {},
 ): Promise<ScaffoldSolverResult> {
   await assertProjectVisible(viewer, projectId);
+  if (!opts.skipRunGuard) await assertNoActiveRun(projectId);
 
   // Run from a copy of 0.orig when the case uses that convention and has no 0/
   // yet, so the template's initial conditions seed 0/ instead of generic ones.
@@ -728,6 +741,9 @@ export interface SyncBoundaryOptions {
    * building onto the project case mesh (Assembly v2) so its physics is preserved.
    */
   mode?: 'rebuild' | 'merge';
+  // Internal callers (autoPatchMesh, runMerge) already asserted no active run at
+  // their own entry; they set this so the guard isn't re-run mid-flow.
+  skipRunGuard?: boolean;
 }
 
 /**
@@ -748,6 +764,7 @@ export async function syncBoundaryFields(
   options?: SyncBoundaryOptions,
 ): Promise<SyncBoundariesResult> {
   await assertProjectVisible(viewer, projectId);
+  if (!options?.skipRunGuard) await assertNoActiveRun(projectId); // M1
   const mode = options?.mode ?? 'rebuild';
 
   const boundary = await readCaseFile(projectId, BOUNDARY_FILE);
@@ -823,6 +840,7 @@ export async function saveCaseFileContent(
   content: string,
 ): Promise<{ path: string; size: number }> {
   await assertProjectVisible(viewer, projectId);
+  await assertNoActiveRun(projectId); // editing case files mid-run corrupts it (M1)
 
   if (!(await caseFileExists(projectId, relPath))) {
     throw new AppError(404, 'NOT_FOUND', 'File not found');
@@ -847,6 +865,7 @@ export async function createCaseFile(
   content = '',
 ): Promise<{ path: string; entries: CaseEntry[] }> {
   await assertProjectVisible(viewer, projectId);
+  await assertNoActiveRun(projectId); // M1
 
   const safePath = sanitizeRelative(relPath);
   if (await caseFileExists(projectId, safePath)) {
@@ -870,6 +889,7 @@ export async function deleteCaseFileContent(
   relPath: string,
 ): Promise<{ entries: CaseEntry[] }> {
   await assertProjectVisible(viewer, projectId);
+  await assertNoActiveRun(projectId); // M1
 
   if (!(await caseFileExists(projectId, relPath))) {
     throw new AppError(404, 'NOT_FOUND', 'File not found');
@@ -888,6 +908,7 @@ export async function deleteCaseDirContent(
   relPath: string,
 ): Promise<{ entries: CaseEntry[] }> {
   await assertProjectVisible(viewer, projectId);
+  await assertNoActiveRun(projectId); // M1
   await deleteCaseDir(projectId, relPath);
   return { entries: await listCaseTree(projectId) };
 }
@@ -905,6 +926,7 @@ export async function moveCaseEntry(
   to: string,
 ): Promise<{ from: string; to: string; entries: CaseEntry[] }> {
   await assertProjectVisible(viewer, projectId);
+  await assertNoActiveRun(projectId); // moving polyMesh/controlDict mid-run corrupts it (M1)
   const result = await moveCasePath(projectId, from, to);
   return { from: result.from, to: result.to, entries: await listCaseTree(projectId) };
 }

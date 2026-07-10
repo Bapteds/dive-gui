@@ -46,6 +46,7 @@ import {
 } from '@dive/shared';
 import { env } from '../../config/env';
 import { AppError } from '../../lib/AppError';
+import { assertNoActiveRun } from '../../lib/runGuard';
 import { runCommand, type CommandResult } from '../../lib/commandRunner';
 import { commandFailed, planOpenfoamCommand } from '../../lib/openfoamCommand';
 import {
@@ -260,6 +261,7 @@ export async function renameMeshPatch(
   to: string,
 ): Promise<{ patches: string[] }> {
   await assertProjectVisible(viewer, projectId);
+  await assertNoActiveRun(projectId); // rewrites the boundary a live solver reads (M1)
 
   if (!isValidPatchName(to)) {
     throw new AppError(422, 'VALIDATION_ERROR', 'A patch name must be a single word (letters, digits, underscore).');
@@ -412,6 +414,7 @@ export async function setPatchType(
   type: MeshPatchSetting,
 ): Promise<{ patches: string[] }> {
   await assertProjectVisible(viewer, projectId);
+  await assertNoActiveRun(projectId); // M1
 
   if (!(MESH_PATCH_SETTINGS as readonly string[]).includes(type)) {
     throw new AppError(422, 'VALIDATION_ERROR', `Unsupported patch type "${type}".`);
@@ -479,6 +482,7 @@ export async function editMeshPatches(
   edits: MeshPatchEdit[],
 ): Promise<{ patches: string[] }> {
   await assertProjectVisible(viewer, projectId);
+  await assertNoActiveRun(projectId); // M1
 
   const boundary = await readCaseFile(projectId, BOUNDARY_FILE);
   if (!boundary) {
@@ -597,6 +601,7 @@ export async function saveMeshBackup(viewer: Viewer, projectId: string): Promise
  */
 export async function restoreMeshBackup(viewer: Viewer, projectId: string): Promise<MeshManifest> {
   await assertProjectVisible(viewer, projectId);
+  await assertNoActiveRun(projectId); // restore rewrites the whole case a live solver uses (M1)
   if (!(await backupExists(projectId))) {
     throw new AppError(404, 'NOT_FOUND', 'No mesh backup to restore.');
   }
@@ -681,6 +686,7 @@ export async function autoPatchMesh(
   featureAngle: number,
 ): Promise<AutoPatchResult> {
   await assertProjectVisible(viewer, projectId);
+  await assertNoActiveRun(projectId); // autoPatch rewrites constant/polyMesh in place (M1)
 
   if (!(await hasPolyMesh(projectId))) {
     throw new AppError(409, 'NO_MESH', 'No polyMesh found for this project.');
@@ -693,7 +699,7 @@ export async function autoPatchMesh(
   // autoPatch reads system/controlDict; generate the minimal base files when the
   // case has none so the utility can run on a mesh-only import.
   if (!(await caseFileExists(projectId, 'system/controlDict'))) {
-    await scaffoldCase(viewer, projectId);
+    await scaffoldCase(viewer, projectId, { skipRunGuard: true });
   }
 
   const caseDir = caseDirAbsolute(projectId);
@@ -738,7 +744,7 @@ export async function autoPatchMesh(
     // sync failure must not turn a good run into a failure, but it IS surfaced
     // in the captured output so it never fails silently.
     try {
-      const sync = await syncBoundaryFields(viewer, projectId);
+      const sync = await syncBoundaryFields(viewer, projectId, { skipRunGuard: true });
       syncNote = `\n[sync] aligned 0/ fields to ${sync.patches.length} patches`;
       if (sync.updated.length) syncNote += ` (updated ${sync.updated.join(', ')})`;
       else syncNote += ' (no field files needed changes)';

@@ -22,6 +22,7 @@ import path from 'node:path';
 import { CONVERSION_STEPS, type ConversionStepId } from '@dive/shared';
 import { env } from '../../config/env';
 import { AppError } from '../../lib/AppError';
+import { assertNoActiveRun } from '../../lib/runGuard';
 import { runCommand, type CommandResult } from '../../lib/commandRunner';
 import { commandFailed, planOpenfoamCommand } from '../../lib/openfoamCommand';
 import {
@@ -229,6 +230,7 @@ export async function convertCgnsToFoam(
   input: ConvertCgnsInput,
 ): Promise<ConversionResult> {
   await assertProjectVisible(viewer, projectId);
+  await assertNoActiveRun(projectId); // converting overwrites constant/polyMesh mid-run (M1)
 
   const cgnsName = cgnsBaseName(input.cgnsFile);
   if (!(await cgnsFileExists(projectId, cgnsName))) {
@@ -240,7 +242,7 @@ export async function convertCgnsToFoam(
   // 1) Apply the chosen template (validates it exists). New files are added;
   //    existing case files are kept. getTemplate gives us a name for the note.
   const template = await getTemplate(input.templateId);
-  const applied = await applyTemplate(viewer, projectId, input.templateId);
+  const applied = await applyTemplate(viewer, projectId, input.templateId, {}, { skipRunGuard: true });
   notes.push(
     `Applied template "${template.name}": ${applied.applied.length} file(s) added` +
       (applied.skipped.length ? `, ${applied.skipped.length} kept` : ''),
@@ -249,7 +251,7 @@ export async function convertCgnsToFoam(
   // 2) The OpenFOAM utilities need system/controlDict. If the template did not
   //    provide one, generate the minimal base files so the pipeline can run.
   if (!(await caseFileExists(projectId, 'system/controlDict'))) {
-    const scaffolded = await scaffoldCase(viewer, projectId);
+    const scaffolded = await scaffoldCase(viewer, projectId, { skipRunGuard: true });
     if (scaffolded.created.length) {
       notes.push(`Generated minimal base files: ${scaffolded.created.join(', ')}`);
     }
