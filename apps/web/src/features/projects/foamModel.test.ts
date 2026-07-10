@@ -151,3 +151,29 @@ describe('findNode', () => {
     expect(findNode(doc, ['boundaryField', 'inlet', 'type'])?.type).toBe('leaf');
   });
 });
+
+describe('line-terminated #include directives (H8)', () => {
+  const WITH_INCLUDE = `FoamFile
+{
+    object controlDict;
+}
+#include "initialConditions"
+application     simpleFoam;
+startTime       0;
+`;
+
+  it('does not swallow the entry that follows a #include with no semicolon', () => {
+    const doc = parseFoamModel(WITH_INCLUDE);
+    // The directive is its own node...
+    expect(findNode(doc, ['#include'])).not.toBeNull();
+    // ...and the neighbour survives intact (previously merged into the #include).
+    expect(getFoamValue(doc, ['application'])).toBe('simpleFoam');
+    expect(getFoamValue(doc, ['startTime'])).toBe('0');
+  });
+
+  it('splices a neighbour value without corrupting the #include line', () => {
+    const next = setFoamValue(WITH_INCLUDE, ['application'], 'pimpleFoam');
+    expect(next).toContain('#include "initialConditions"');
+    expect(next).toContain('application     pimpleFoam;');
+  });
+});

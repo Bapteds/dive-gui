@@ -115,15 +115,33 @@ Bug : chemin non-pty, `child.stdin.write(data)` sans garde ni listener `error` �
 Ce qui a été fait : listener `error` sur `child.stdin`, suivi de l'état `exit`, et écriture gardée (`writable` + non exité).
 Fichiers : `apps/api/src/lib/terminalSession.ts`.
 
-### ⬜ H4 — Autosave éditeur écrase les frappes pendant l'aller-retour de save
-### ⬜ H5 — Le polling live s'arrête définitivement après un fetch échoué
-### ⬜ H6 — Visualize/Assembly montrent l'ancien mesh après merge/convert/reset
-### ⬜ H8 — Parseur Foam casse `#include` → Easy mode corrompt les fichiers
+### ✅ H4 — Autosave éditeur écrase les frappes pendant l'aller-retour de save
+Bug : l'effet `[content.data]` réinitialisait le buffer CodeMirror à chaque changement de `content.data` — y compris l'**écho** de notre propre save → tout ce qui était tapé pendant la requête était effacé et le curseur sautait.
+Ce qui a été fait : le buffer n'est rechargé que sur **changement de fichier** (ref sur le `path` chargé), pas sur l'écho de save. Appliqué à `FileTreeEditor` (couvre aussi l'éditeur de templates qui le réutilise) **et** à `RawFileEditor` du panneau solveur.
+Fichiers : `apps/web/src/features/files/FileTreeEditor.tsx`, `apps/web/src/features/solver/SolverConfigPanel.tsx`.
+
+### ✅ H5 — Le polling live s'arrête définitivement après un fetch échoué
+Bug : `refetchInterval` dérivait de `query.state.data` ; si le premier fetch échouait, `data` restait `undefined` → intervalle `false` → plus jamais de retry (chart/log figés sur « Running »).
+Ce qui a été fait : `useRunsQuery` et `useRunLogQuery` continuent de poller tant qu'aucun statut **terminal** n'a été vu (pas de data / erreur ⇒ on retente).
+Fichiers : `apps/web/src/features/solver/useRuns.ts`.
+
+### ✅ H6 — Visualize/Assembly montrent l'ancien mesh après merge/convert/reset
+Bug : `useRunMerge`, `useConvertToFoam`, `useResetCase` ne droppaient pas les caches de rendu (manifest/GLB/edges, TTL 5 min) ni l'enregistrement d'assemblage → Visualize rendait l'ancien mesh, le dialog Boundary Conditions proposait les **anciens** patches, le panneau Disassemble n'apparaissait pas.
+Ce qui a été fait : les trois hooks droppent maintenant manifest/geometry/edges et invalident library/plan/assembly (`useRunMerge` réutilise `invalidateAssemblyOutputs`). Import des clés de rendu depuis le module feuille `useMesh` pour éviter le cycle useMeshes↔useCaseFiles.
+Fichiers : `apps/web/src/features/projects/useMeshes.ts`, `useConversion.ts`, `useCaseFiles.ts`.
+
+### ✅ H8 — Parseur Foam casse `#include` → Easy mode corrompt les fichiers
+Bug : `#include "file"` n'a pas de `;` ; le parseur continuait d'accumuler après le saut de ligne et **avalait l'entrée suivante** dans un leaf corrompu → éditer cette ligne en Easy mode supprimait le voisin.
+Ce qui a été fait : une directive `#...` se termine au **saut de ligne** (le premier délimiteur `;` ou newline gagne). Flush aussi en fin de dict `}` et en fin de fichier. 2 tests ajoutés (non-avalement + splice du voisin intact).
+Fichiers : `apps/web/src/features/projects/foamModel.ts`, `foamModel.test.ts`.
 
 ---
 
 ## Reste à faire
 
-HIGH restants : H4, H5, H6, H8 (tous frontend). MEDIUM restants : M1–M2, M4–M15, M17–M24. Tous les LOW. Backlog complet + ordre suggéré dans `BUG_AUDIT.md`.
+**Tous les CRITICAL (C1–C4) et HIGH (H1–H10) sont traités.**
+MEDIUM restants : M1–M2, M4–M15, M17–M24 (M3, M16 déjà faits). Tous les LOW. Backlog + ordre dans `BUG_AUDIT.md`.
+
+Vérifs de ce lot : API 4 suites vertes (fileTree/solver/runs), web 128/128, typecheck + lint OK.
 
 Vérifications tests (ce lot) : API 449/449, web 126/126, typecheck + lint OK. À valider sur le serveur de deploy : les chemins Python (C1 sidecar, H7 multi-zones) et le comportement crash-log C3 en conditions réelles.

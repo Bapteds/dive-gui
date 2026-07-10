@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQueries } from '@tanstack/react-query';
 import {
   AlertCircle,
@@ -1025,9 +1025,17 @@ function RawFileEditor({
   const { mutate: saveFile, isPending: saving, isError: saveFailed } = useSaveCaseFile(projectId);
   const [draft, setDraft] = useState('');
 
+  // Load the buffer only when the file (path) changes. query.data also updates on
+  // a save-success echo for the same file; resetting the draft then wiped
+  // keystrokes typed during the save round-trip and jumped the cursor (H4).
+  const loadedPathRef = useRef<string | null>(null);
   useEffect(() => {
-    if (query.data) setDraft(query.data.content);
-  }, [query.data]);
+    if (!query.data) return;
+    if (loadedPathRef.current !== path) {
+      loadedPathRef.current = path;
+      setDraft(query.data.content);
+    }
+  }, [query.data, path]);
 
   const dirty = !!query.data && draft !== query.data.content;
 

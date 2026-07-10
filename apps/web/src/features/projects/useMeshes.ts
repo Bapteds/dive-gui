@@ -146,10 +146,14 @@ export function useRunMerge(projectId: string) {
   return useMutation<MergeRunResult, Error, MergePlan>({
     mutationFn: (plan) => runMerge(projectId, plan),
     onSuccess: (result) => {
-      if (result.success) {
-        queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
-        queryClient.removeQueries({ queryKey: [...caseFilesQueryKey(projectId), 'content'] });
-      }
+      if (!result.success) return;
+      queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
+      // The combined mesh changed. Drop the case manifest (so the Boundary
+      // Conditions dialog stops offering the OLD patch names) and the case
+      // render, and invalidate the assembly record so the Disassemble panel
+      // appears - previously the merge left all of these stale (H6).
+      queryClient.removeQueries({ queryKey: meshManifestQueryKey(projectId) });
+      invalidateAssemblyOutputs(queryClient, projectId);
     },
   });
 }

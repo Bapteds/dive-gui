@@ -129,6 +129,34 @@ function tokenize(text: string): Token[] {
   return tokens;
 }
 
+/**
+ * A `#`-directive (`#include`, `#includeIfPresent`, `#includeEtc`, `#remove`, …)
+ * is line-terminated: it carries NO `;`. The `#{ … #}` verbatim block is a value,
+ * not a directive key, so it is excluded.
+ */
+const isDirectiveKey = (t: Token): boolean =>
+  t.kind === 'word' && t.text.startsWith('#') && !t.text.startsWith('#{');
+
+/** Is there a line break in the source between offsets a and b? */
+const newlineBetween = (text: string, a: number, b: number): boolean =>
+  b > a && text.slice(a, b).includes('\n');
+
+/** Build a leaf for a line-terminated directive (`#include "file"`). */
+function directiveLeaf(text: string, keyTokens: Token[]): FoamLeaf {
+  const [keyTok, ...valueToks] = keyTokens;
+  const hasValue = valueToks.length > 0;
+  const valueStart = hasValue ? valueToks[0].start : keyTok.end;
+  const valueEnd = keyTokens[keyTokens.length - 1].end;
+  return {
+    type: 'leaf',
+    key: keyTok.text,
+    value: hasValue ? text.slice(valueStart, valueEnd).trim() : '',
+    hasValue,
+    valueStart,
+    valueEnd,
+  };
+}
+
 /** Parse a run of entries from `start`, stopping after a `}` or at the end. */
 function parseEntries(
   text: string,
@@ -142,7 +170,27 @@ function parseEntries(
   while (i < tokens.length) {
     const token = tokens[i];
 
+    // A `#include`-style directive ends at the line break, not a `;`. Without
+    // this the parser keeps accumulating past the newline and swallows the NEXT
+    // entry into one garbled leaf, so editing that row in Easy mode deletes the
+    // neighbouring entry (H8). Flush the pending directive at the first newline;
+    // a same-line `;` is still handled below (whichever delimiter comes first).
+    if (
+      keyTokens.length > 0 &&
+      isDirectiveKey(keyTokens[0]) &&
+      newlineBetween(text, keyTokens[keyTokens.length - 1].end, token.start)
+    ) {
+      nodes.push(directiveLeaf(text, keyTokens));
+      keyTokens = [];
+      // Fall through: `token` begins a fresh entry.
+    }
+
     if (token.kind === '}') {
+      // Flush a directive sitting as the last line of a dict body.
+      if (keyTokens.length > 0 && isDirectiveKey(keyTokens[0])) {
+        nodes.push(directiveLeaf(text, keyTokens));
+        keyTokens = [];
+      }
       i += 1;
       break;
     }
@@ -183,6 +231,11 @@ function parseEntries(
 
     keyTokens.push(token);
     i += 1;
+  }
+
+  // A directive on the very last line (no trailing `;` or newline) still emits.
+  if (keyTokens.length > 0 && isDirectiveKey(keyTokens[0])) {
+    nodes.push(directiveLeaf(text, keyTokens));
   }
 
   return { nodes, next: i };

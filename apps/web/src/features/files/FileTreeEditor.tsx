@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { UseMutationResult, UseQueryResult } from '@tanstack/react-query';
 import {
@@ -115,9 +115,18 @@ export function FileTreeEditor({
   const { mutate: saveFile, isPending: saving, isError: saveFailed } = resource.useSave();
 
   const [draft, setDraft] = useState('');
+  // Load the editor buffer only when we switch to a DIFFERENT file. content.data
+  // also updates on a save-success echo for the SAME file; resetting the draft
+  // then wiped any keystrokes typed during the save round-trip and jumped the
+  // cursor (H4). The user's buffer wins for the file they are actively editing.
+  const loadedPathRef = useRef<string | null>(null);
   useEffect(() => {
-    if (content.data) setDraft(content.data.content);
-  }, [content.data]);
+    if (!content.data) return;
+    if (loadedPathRef.current !== selectedPath) {
+      loadedPathRef.current = selectedPath;
+      setDraft(content.data.content);
+    }
+  }, [content.data, selectedPath]);
 
   const isDirty = !!selectedPath && !!content.data && draft !== content.data.content;
 
