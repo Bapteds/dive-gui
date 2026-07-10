@@ -103,6 +103,7 @@ Weights: 400 body, 500 labels, 600 headings/buttons, 700 reserved for brand. Hea
 
 - **Spacing scale (4px):** 4, 8, 12, 16, 24, 32, 48, 64. Use rhythm, not one uniform gap.
 - **Radius (documented Shape Lock — apply consistently):**
+  - `--radius-xs: 4px` → micro-controls ONLY (checkboxes, menu items inside a padded menu, tiny inline chips). Never for buttons/inputs/cards.
   - `--radius-sm: 8px` → inputs, buttons, badges, dropdowns, small controls.
   - `--radius-md: 12px` → cards, dialogs, panels, table container.
   - `--radius-lg: 16px` → the login card and other large standalone containers.

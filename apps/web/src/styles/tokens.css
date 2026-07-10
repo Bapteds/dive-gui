@@ -53,6 +53,7 @@
   --color-scrim: rgba(16, 24, 40, 0.45);
 
   /* ---- Radius (Shape Lock) ---- */
+  --radius-xs: 4px; /* micro-controls only: checkboxes, menu items, tiny chips */
   --radius-sm: 8px; /* inputs, buttons, badges, dropdowns, small controls */
   --radius-md: 12px; /* cards, dialogs, panels, table container */
   --radius-lg: 16px; /* login card and other large standalone containers */
