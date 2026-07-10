@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useQueries } from '@tanstack/react-query';
+import { useQueries, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
   Check,
@@ -29,6 +29,7 @@ import {
   TURBULENCE_APPROACHES,
   TURBULENCE_MODELS,
   isConfigurableSolver,
+  type CaseFileContent,
   type ConfigurableSolverId,
   type SolverId,
   type SolverParamDef,
@@ -485,6 +486,7 @@ function SolverEasyForm({
     })),
   });
   const save = useSaveCaseFile(projectId);
+  const queryClient = useQueryClient();
 
   const contentByFile: Record<string, string | null> = {};
   files.forEach((file, index) => {
@@ -508,6 +510,13 @@ function SolverEasyForm({
       setFoamValue(content, param.path, value) ??
       insertFoamField(content, param.path.slice(0, -1), key, value);
     if (next && next !== content) {
+      // Reflect the edit in the cache IMMEDIATELY so a SECOND quick edit to the same
+      // file (e.g. endTime then writeInterval) builds on this one instead of the
+      // stale cached content — otherwise the second save overwrites the first (M13).
+      queryClient.setQueryData<CaseFileContent>(
+        caseFileContentQueryKey(projectId, param.file),
+        (old) => (old ? { ...old, content: next, size: new Blob([next]).size } : old),
+      );
       save.mutate(
         { path: param.file, content: next },
         {
