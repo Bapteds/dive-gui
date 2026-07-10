@@ -83,8 +83,35 @@ Fichiers : `apps/api/src/modules/projects/projects.service.ts`.
 
 ---
 
+## HIGH
+
+### ✅ H1 — Solveurs orphelins survivant à un redémarrage de l'API
+Bug : au boot, `reconcileOrphanRuns` marquait les runs actifs `failed` mais ne **tuait pas** les process : sous Linux l'enfant est reparenté à init et continue (cœurs brûlés, écriture du cas), non tuable depuis l'UI, et l'utilisateur pouvait lancer un **2e** solveur dans le même cas.
+Ce qui a été fait : avant de marquer `failed`, on tue le PID enregistré — **uniquement après** avoir vérifié via `/proc/<pid>/cmdline` que l'argv référence bien ce case dir (garde-fou contre la réutilisation de PID). SIGTERM puis SIGKILL après le délai de grâce. Linux-only (no-op sinon).
+Fichiers : `apps/api/src/modules/projects/runs.service.ts`.
+⚠️ À VÉRIFIER sur le serveur : `/proc` non dispo ici (Windows). Tester : kill -9 API pendant un run → restart → le mpirun est bien tué.
+
+### ✅ H2 — Deux solveurs dans le même cas (TOCTOU)
+Bug : `count(active)` puis `create` sans atomicité → double-clic / deux onglets = deux process OpenFOAM écrivant le même cas (corruption) ; le budget cœurs global avait la même course.
+Ce qui a été fait : verrou FIFO in-process (`runExclusive`) rendant atomiques la vérif « un run actif » + budget cœurs + création (le run subsystem est déjà mono-process via la map `handles`). Test : deux `startRun` simultanés → exactement un 201, un 409, un seul run actif.
+Fichiers : `apps/api/src/modules/projects/runs.service.ts`, `apps/api/tests/solver.test.ts`.
+
+### ✅ H3 — Logs de run non bornés, relus entièrement en mémoire à chaque poll
+Bug : `SOLVER_LOG_MAX_BYTES` (32 Mo) déclaré mais inutilisé ; `getRunLog` lisait tout le fichier depuis l'octet 0 à chaque poll → run multi-heures = centaines de Mo alloués par poll et par viewer, au-delà de ~1 Go `toString` throw → live view en 500.
+Ce qui a été fait : `readRunLog` accepte un `maxBytes` et lit la **queue** (les dernières `maxBytes`). `getRunLog` **et** `finalizeRun` passent `SOLVER_LOG_MAX_BYTES`. `logBytes` reporte toujours la taille totale réelle.
+Fichiers : `apps/api/src/lib/runStorage.ts`, `apps/api/src/modules/projects/runs.service.ts`.
+
+### ⬜ H4 — Autosave éditeur écrase les frappes pendant l'aller-retour de save
+### ⬜ H5 — Le polling live s'arrête définitivement après un fetch échoué
+### ⬜ H6 — Visualize/Assembly montrent l'ancien mesh après merge/convert/reset
+### ⬜ H8 — Parseur Foam casse `#include` → Easy mode corrompt les fichiers
+### ⬜ H9 — DoS OOM authentifié via uploads
+### ⬜ H10 — Fallback terminal crash l'API sur frappe vers un shell mort
+
+---
+
 ## Reste à faire
 
-HIGH restants : H1–H6, H8–H10. MEDIUM restants : M1–M2, M4–M15, M17–M24. Tous les LOW. Backlog complet + ordre suggéré dans `BUG_AUDIT.md`.
+HIGH restants : H4–H6, H8–H10. MEDIUM restants : M1–M2, M4–M15, M17–M24. Tous les LOW. Backlog complet + ordre suggéré dans `BUG_AUDIT.md`.
 
 Vérifications tests (ce lot) : API 449/449, web 126/126, typecheck + lint OK. À valider sur le serveur de deploy : les chemins Python (C1 sidecar, H7 multi-zones) et le comportement crash-log C3 en conditions réelles.

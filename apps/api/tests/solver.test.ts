@@ -238,6 +238,23 @@ describe('solver run guards and access', () => {
     expect(second.body.error.code).toBe('RUN_IN_PROGRESS');
   });
 
+  it('admits only ONE of two simultaneous starts (H2 TOCTOU)', async () => {
+    setStreamRunner(fakeRunner('hang'));
+    const { id, auth } = await makeRunnableProject('solver-toctou@x.test');
+
+    // Fire both starts concurrently: the admission check + row create is
+    // serialised, so exactly one wins and the other gets 409 - never two
+    // solvers writing the same case.
+    const [a, b] = await Promise.all([startRun(id, auth), startRun(id, auth)]);
+    const statuses = [a.status, b.status].sort();
+    expect(statuses).toEqual([201, 409]);
+
+    const active = await prisma.run.count({
+      where: { projectId: id, status: { in: ['queued', 'running'] } },
+    });
+    expect(active).toBe(1);
+  });
+
   it('rejects a run on a case with no mesh (409 NO_MESH)', async () => {
     const user = await createTestUser({ email: 'solver-nomesh@x.test' });
     const project = await prisma.project.create({ data: { title: 'Empty', ownerId: user.id } });

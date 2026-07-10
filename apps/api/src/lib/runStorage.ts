@@ -61,15 +61,22 @@ export async function runLogSize(projectId: string, runId: string): Promise<numb
 }
 
 /**
- * Read a run's log from `fromByte` to the end. Returns the slice plus the total
- * size, so a streaming client can advance its byte offset. Missing log => empty.
- * Byte-offset reads can split a multi-byte UTF-8 char; solver logs are ASCII so
- * this is a non-issue in practice.
+ * Read a run's log from `fromByte` to the end, reading AT MOST `maxBytes` (the
+ * tail wins). Returns the slice plus the total size, so a streaming client can
+ * advance its byte offset. Missing log => empty. Byte-offset reads can split a
+ * multi-byte UTF-8 char; solver logs are ASCII so this is a non-issue.
+ *
+ * The `maxBytes` cap bounds memory: a multi-hour solver log reaches hundreds of
+ * MB, and reading it whole on every client poll allocates that per poll per
+ * viewer (past ~1GB `toString` throws and the live view 500s) — H3. Callers on
+ * the hot path pass SOLVER_LOG_MAX_BYTES; the latest iterations (what the live
+ * view and residual series care about) are always in the tail.
  */
 export async function readRunLog(
   projectId: string,
   runId: string,
   fromByte = 0,
+  maxBytes = Number.POSITIVE_INFINITY,
 ): Promise<{ content: string; size: number }> {
   const abs = runLogAbsolute(projectId, runId);
   let size = 0;
@@ -78,7 +85,10 @@ export async function readRunLog(
   } catch {
     return { content: '', size: 0 };
   }
-  const start = Math.max(0, Math.min(fromByte, size));
+  let start = Math.max(0, Math.min(fromByte, size));
+  if (Number.isFinite(maxBytes) && size - start > maxBytes) {
+    start = size - maxBytes; // keep only the last maxBytes
+  }
   if (start >= size) return { content: '', size };
 
   const handle = await fs.open(abs, 'r');
