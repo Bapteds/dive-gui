@@ -8,10 +8,10 @@
 
 ## 0. Where the folders live (read once)
 
-In this sheet the application is installed in **`/root/dive-gui`** (root's home is `/root`):
+On the server the application lives in **`/home/app`** (you are logged in as root):
 
 ```
-/root/dive-gui                    ← the application folder
+/home/app                         ← the application folder
 ├── apps/api/.env                 ← THE config file (secrets, paths, admin account)
 ├── apps/api/dist/                ← the built API (created by `npm run build`)
 ├── apps/web/dist/                ← the built website (created by `npm run build`, served by nginx in prod)
@@ -27,10 +27,10 @@ Other important locations (in production):
 /etc/nginx/sites-available/dive   ← the nginx config that serves the site
 ```
 
-**Every `npm` and `git` command is run from `/root/dive-gui`.** If you open a new terminal, start with:
+**Every `npm` and `git` command is run from `/home/app`.** If you open a new terminal, start with:
 
 ```bash
-cd /root/dive-gui
+cd /home/app
 ```
 
 ---
@@ -51,10 +51,11 @@ node -v
 ### 1.2 Get the code from GitHub
 
 ```bash
-cd /root
-git clone https://github.com/Bapteds/dive-gui.git
-cd dive-gui
+git clone https://github.com/Bapteds/dive-gui.git /home/app
+cd /home/app
 ```
+
+> If `/home/app` already exists and is not empty, clone elsewhere or empty it first — `git clone` refuses a non-empty target.
 
 ### 1.3 Install packages + create config + database
 
@@ -118,7 +119,7 @@ which pvbatch
 Open the config file:
 
 ```bash
-nano /root/dive-gui/apps/api/.env
+nano /home/app/apps/api/.env
 ```
 
 (`nano`: arrow keys to move, **Ctrl+O** then **Enter** to save, **Ctrl+X** to quit.)
@@ -138,7 +139,7 @@ MESH_PYTHON_BIN=/opt/dive-venv/bin/python3
 Do this whenever a new version is published:
 
 ```bash
-cd /root/dive-gui
+cd /home/app
 git pull
 npm install
 npm run build
@@ -160,7 +161,7 @@ npm run build
 After a `npm run build`, you can run the API alone:
 
 ```bash
-cd /root/dive-gui
+cd /home/app
 npm start -w @dive/api
 ```
 
@@ -183,7 +184,7 @@ mkdir -p /var/lib/dive/storage
 ### 5.2 Configure production mode
 
 ```bash
-nano /root/dive-gui/apps/api/.env
+nano /home/app/apps/api/.env
 ```
 
 Edit these lines (the others can stay as they are):
@@ -213,7 +214,7 @@ SEED_ADMIN_NAME=Administrator
 Then rebuild and create the database + admin:
 
 ```bash
-cd /root/dive-gui
+cd /home/app
 npm ci
 npm run build
 npm run db:migrate -w @dive/api
@@ -236,7 +237,7 @@ Create the file:
 nano /etc/systemd/system/dive-api.service
 ```
 
-Paste this as-is (running as root, working dir is `/root/dive-gui/apps/api`):
+Paste this as-is (running as root, working dir is `/home/app/apps/api`):
 
 ```ini
 [Unit]
@@ -246,7 +247,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/dive-gui/apps/api
+WorkingDirectory=/home/app/apps/api
 ExecStart=/bin/bash -lc 'source /usr/lib/openfoam/openfoam2406/etc/bashrc && npm start'
 Restart=on-failure
 Environment=NODE_ENV=production
@@ -255,7 +256,7 @@ Environment=NODE_ENV=production
 WantedBy=multi-user.target
 ```
 
-> If you cloned somewhere other than `/root/dive-gui`, adjust the `WorkingDirectory` path (it points at the `apps/api` subfolder inside your clone).
+> If you cloned somewhere other than `/home/app`, adjust the `WorkingDirectory` path (it points at the `apps/api` subfolder inside your clone).
 
 Enable it:
 
@@ -289,7 +290,7 @@ server {
     # ssl_certificate     /path/to/certificate.pem;
     # ssl_certificate_key /path/to/key.pem;
 
-    root /root/dive-gui/apps/web/dist;
+    root /home/app/apps/web/dist;
     index index.html;
 
     location / {
@@ -308,7 +309,7 @@ server {
 }
 ```
 
-> Note: nginx (as root) must be able to read `/root/dive-gui/apps/web/dist`. If you later run the site under a non-root user and hit a 403, move the clone to a shared path such as `/opt/dive` and point `root`/`WorkingDirectory` there.
+> Note: nginx must be able to read `/home/app/apps/web/dist`. Under `/home/app` this is normally fine; if you hit a 403, check that each folder on the path is traversable (`chmod o+x /home /home/app`).
 
 Enable it:
 
@@ -334,12 +335,12 @@ curl -k https://dive.your-domain.de/api/v1/health
 
 | I want to… | Command |
 |---|---|
-| Update the app | `cd /root/dive-gui && git pull && npm install && npm run build` |
+| Update the app | `cd /home/app && git pull && npm install && npm run build` |
 | Restart the API (prod) | `systemctl restart dive-api` |
 | Check the API is running | `systemctl status dive-api` |
 | Watch the logs live | `journalctl -u dive-api -f` |
-| Run in dev (API + site) | `cd /root/dive-gui && npm run dev` → http://localhost:5173 |
-| Run the API alone (after build) | `cd /root/dive-gui && npm start -w @dive/api` → :4000 |
+| Run in dev (API + site) | `cd /home/app && npm run dev` → http://localhost:5173 |
+| Run the API alone (after build) | `cd /home/app && npm start -w @dive/api` → :4000 |
 | Stop a manual run | `Ctrl+C` in the terminal |
 
 ## 7. Quick troubleshooting
