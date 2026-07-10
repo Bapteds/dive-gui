@@ -83,11 +83,16 @@ function TerminalLoading() {
   return (
     <div
       className="flex min-h-0 flex-1 items-center justify-center rounded-md"
-      style={{ backgroundColor: '#1A2230' }}
+      style={{ backgroundColor: 'var(--terminal-bg)' }}
       role="status"
       aria-label="Loading the terminal"
     >
-      <Loader2 className="size-5 animate-spin text-[#9AA4B2]" strokeWidth={2} aria-hidden="true" />
+      <Loader2
+        className="size-5 animate-spin"
+        style={{ color: 'var(--terminal-muted)' }}
+        strokeWidth={2}
+        aria-hidden="true"
+      />
     </div>
   );
 }

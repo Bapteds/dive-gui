@@ -52,6 +52,23 @@
   /* ---- Scrim behind dialogs / overlays ---- */
   --color-scrim: rgba(16, 24, 40, 0.45);
 
+  /* ---- Dark terminal inset (the one dark surface: ANSI output needs it) ----
+     Ink background = the text color; ANSI slots stay on the brand scale
+     (yellow = accent, blue = primary-light, magenta -> neutral grey,
+     cyan -> primary tint). Red/green are the functional signals, brightened
+     for legibility on the dark ground. Read via getComputedStyle (xterm
+     paints to canvas, so it cannot consume CSS variables directly). */
+  --terminal-bg: #1a2230;
+  --terminal-fg: #e4e8ee;
+  --terminal-selection: rgba(30, 99, 181, 0.45);
+  --terminal-muted: #5b6676;
+  --terminal-ansi-red: #e5484d;
+  --terminal-ansi-green: #30a46c;
+  --terminal-ansi-yellow: #ee7f00;
+  --terminal-ansi-blue: #1e63b5;
+  --terminal-ansi-magenta: #bcbdbf;
+  --terminal-ansi-cyan: #e8f0f9;
+
   /* ---- Radius (Shape Lock) ---- */
   --radius-xs: 4px; /* micro-controls only: checkboxes, menu items, tiny chips */
   --radius-sm: 8px; /* inputs, buttons, badges, dropdowns, small controls */

@@ -16,24 +16,36 @@ import { getAccessToken } from '@/lib/api/client';
  * silent dead terminal.
  */
 
-/** Brand-tinted dark terminal theme (ink background, orange cursor). */
-const TERMINAL_THEME = {
-  background: '#1A2230',
-  foreground: '#E4E8EE',
-  cursor: '#EE7F00',
-  cursorAccent: '#1A2230',
-  selectionBackground: 'rgba(30, 99, 181, 0.45)',
-  black: '#1A2230',
-  red: '#E5484D',
-  green: '#30A46C',
-  yellow: '#EE7F00',
-  blue: '#1E63B5',
-  magenta: '#8E4EC6',
-  cyan: '#3DB9CF',
-  white: '#E4E8EE',
-  brightBlack: '#5B6676',
-  brightWhite: '#FFFFFF',
-} as const;
+/** Resolve a tokens.css variable at runtime (xterm paints to canvas, so it
+ *  cannot consume CSS variables directly), with the token's value as fallback. */
+function readToken(name: string, fallback: string): string {
+  if (typeof window === 'undefined') return fallback;
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+/** Brand-tinted dark terminal theme, sourced from the --terminal-* tokens. */
+function terminalTheme() {
+  const bg = readToken('--terminal-bg', '#1A2230');
+  const fg = readToken('--terminal-fg', '#E4E8EE');
+  return {
+    background: bg,
+    foreground: fg,
+    cursor: readToken('--color-accent', '#EE7F00'),
+    cursorAccent: bg,
+    selectionBackground: readToken('--terminal-selection', 'rgba(30, 99, 181, 0.45)'),
+    black: bg,
+    red: readToken('--terminal-ansi-red', '#E5484D'),
+    green: readToken('--terminal-ansi-green', '#30A46C'),
+    yellow: readToken('--terminal-ansi-yellow', '#EE7F00'),
+    blue: readToken('--terminal-ansi-blue', '#1E63B5'),
+    magenta: readToken('--terminal-ansi-magenta', '#BCBDBF'),
+    cyan: readToken('--terminal-ansi-cyan', '#E8F0F9'),
+    white: fg,
+    brightBlack: readToken('--terminal-muted', '#5B6676'),
+    brightWhite: '#FFFFFF',
+  };
+}
 
 type Status = 'connecting' | 'open' | 'closed' | 'error';
 
@@ -56,7 +68,7 @@ export function TerminalView({ projectId }: { projectId: string }) {
     if (!host) return;
 
     const term = new Terminal({
-      theme: TERMINAL_THEME,
+      theme: terminalTheme(),
       fontFamily:
         'ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace',
       fontSize: 13,
@@ -174,7 +186,7 @@ export function TerminalView({ projectId }: { projectId: string }) {
       <div
         ref={hostRef}
         className="min-h-0 flex-1 overflow-hidden overscroll-contain rounded-md p-2"
-        style={{ backgroundColor: TERMINAL_THEME.background }}
+        style={{ backgroundColor: 'var(--terminal-bg)' }}
       />
     </div>
   );
