@@ -1,61 +1,62 @@
-# Fiche de tâches — Installer, lancer, mettre à jour DIVE Turbinen (WSL / Ubuntu)
+# Task sheet — Install, run and update DIVE Turbinen (WSL / Ubuntu, root user)
 
-> Copier-coller les commandes **ligne par ligne** dans le terminal WSL ou Ubuntu, dans l'ordre.
-> Les lignes qui commencent par `#` sont des commentaires : pas besoin de les copier.
+> Copy the commands **line by line** into your WSL or Ubuntu terminal, in order.
+> This sheet assumes you are logged in as **root** (so no `sudo` is needed).
+> Lines starting with `#` are comments: you don't need to copy them.
 
 ---
 
-## 0. Où se trouvent les dossiers (à lire une fois)
+## 0. Where the folders live (read once)
 
-Dans cette fiche, l'application est installée dans le dossier **`~/dive-gui`**, c'est-à-dire :
+In this sheet the application is installed in **`/root/dive-gui`** (root's home is `/root`):
 
 ```
-/home/VOTRE_NOM/dive-gui          ← le dossier de l'application (VOTRE_NOM = votre utilisateur Linux, voir `whoami`)
-├── apps/api/.env                 ← LE fichier de configuration (secrets, chemins, admin)
-├── apps/api/dist/                ← l'API construite (créée par `npm run build`)
-├── apps/web/dist/                ← le site web construit (créé par `npm run build`, servi par nginx en prod)
+/root/dive-gui                    ← the application folder
+├── apps/api/.env                 ← THE config file (secrets, paths, admin account)
+├── apps/api/dist/                ← the built API (created by `npm run build`)
+├── apps/web/dist/                ← the built website (created by `npm run build`, served by nginx in prod)
 └── package.json
 ```
 
-Autres emplacements importants (en prod) :
+Other important locations (in production):
 
 ```
-/var/lib/dive/prod.db             ← la base de données
-/var/lib/dive/storage/            ← maillages + résultats de calcul (prend beaucoup de place)
-/etc/systemd/system/dive-api.service   ← le fichier "service" qui démarre l'API tout seul
-/etc/nginx/sites-available/dive   ← la config nginx qui sert le site
+/var/lib/dive/prod.db             ← the database
+/var/lib/dive/storage/            ← meshes + solver results (uses a lot of disk)
+/etc/systemd/system/dive-api.service   ← the "service" that starts the API on its own
+/etc/nginx/sites-available/dive   ← the nginx config that serves the site
 ```
 
-**Toutes les commandes `npm` et `git` se tapent depuis `~/dive-gui`.** Si vous rouvrez un terminal, commencez par :
+**Every `npm` and `git` command is run from `/root/dive-gui`.** If you open a new terminal, start with:
 
 ```bash
-cd ~/dive-gui
+cd /root/dive-gui
 ```
 
 ---
 
-## 1. Installation initiale (une seule fois)
+## 1. First-time install (once)
 
-### 1.1 Installer Node.js 20 + git
+### 1.1 Install Node.js 20 + git
 
 ```bash
-sudo apt-get update
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs git
+apt-get update
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs git
 node -v
 ```
 
-→ `node -v` doit afficher `v20` ou plus.
+→ `node -v` must print `v20` or higher.
 
-### 1.2 Récupérer le code depuis GitHub
+### 1.2 Get the code from GitHub
 
 ```bash
-cd ~
+cd /root
 git clone https://github.com/Bapteds/dive-gui.git
 cd dive-gui
 ```
 
-### 1.3 Installer les paquets + créer la config + la base de données
+### 1.3 Install packages + create config + database
 
 ```bash
 npm install
@@ -64,65 +65,65 @@ npm run db:migrate
 npm run db:seed
 ```
 
-→ Les avertissements jaunes (`warn`) de `npm install` sont normaux. Seul `ERR!` en rouge est un problème.
+→ The yellow `warn` lines from `npm install` are normal. Only red `ERR!` lines are a real problem.
 
-### 1.4 Premier lancement (mode dev)
+### 1.4 First run (dev mode)
 
 ```bash
 npm run dev
 ```
 
-→ Ouvrir **http://localhost:5173** dans le navigateur (sous WSL ça marche directement depuis Windows).
-→ Connexion par défaut : **admin@dive-turbinen.de** / **ChangeMe!2026**
-→ Arrêter : `Ctrl+C` dans le terminal.
+→ Open **http://localhost:5173** in your browser (under WSL this works straight from Windows).
+→ Default login: **admin@dive-turbinen.de** / **ChangeMe!2026**
+→ Stop it: `Ctrl+C` in the terminal.
 
 ---
 
-## 2. Outils de calcul CFD (une seule fois, obligatoire pour que les calculs marchent)
+## 2. CFD compute tools (once, required for the calculations to work)
 
-Sans cette partie, l'interface fonctionne mais toutes les actions maillage/solveur/export répondent « outil non trouvé ».
+Without this section the interface works but every mesh/solver/export action reports "tool not found".
 
-### 2.1 OpenFOAM v2406 (version ESI — openfoam.**com**, pas .org)
+### 2.1 OpenFOAM v2406 (ESI edition — openfoam.**com**, not .org)
 
 ```bash
-curl https://dl.openfoam.com/add-debian-repo.sh | sudo bash
-sudo apt-get install -y openfoam2406-default
+curl https://dl.openfoam.com/add-debian-repo.sh | bash
+apt-get install -y openfoam2406-default
 source /usr/lib/openfoam/openfoam2406/etc/bashrc
 which simpleFoam checkMesh mergeMeshes mpirun
 ```
 
-→ La dernière commande doit afficher 4 chemins (un par outil).
+→ The last command must print 4 paths (one per tool).
 
-### 2.2 Python + modules (dans un dossier isolé — ne pas installer en global)
+### 2.2 Python + modules (in an isolated folder — do not install globally)
 
 ```bash
-sudo apt-get install -y python3 python3-venv python3-pip
-sudo python3 -m venv /opt/dive-venv
-sudo /opt/dive-venv/bin/pip install --upgrade pip
-sudo /opt/dive-venv/bin/pip install numpy vtk pyvista trimesh h5py
+apt-get install -y python3 python3-venv python3-pip
+python3 -m venv /opt/dive-venv
+/opt/dive-venv/bin/pip install --upgrade pip
+/opt/dive-venv/bin/pip install numpy vtk pyvista trimesh h5py
 /opt/dive-venv/bin/python3 -c "import vtk, pyvista, numpy, trimesh, h5py; print('OK')"
 ```
 
-→ Doit afficher `OK`.
+→ Must print `OK`.
 
-### 2.3 ParaView + Xvfb (pour l'export CFD-Post)
+### 2.3 ParaView + Xvfb (for the CFD-Post export)
 
 ```bash
-sudo apt-get install -y paraview xvfb
+apt-get install -y paraview xvfb
 which pvbatch
 ```
 
-### 2.4 Déclarer ces outils dans la config
+### 2.4 Declare these tools in the config
 
-Ouvrir le fichier de configuration :
+Open the config file:
 
 ```bash
-nano ~/dive-gui/apps/api/.env
+nano /root/dive-gui/apps/api/.env
 ```
 
-(`nano` : flèches pour se déplacer, **Ctrl+O** puis **Entrée** pour enregistrer, **Ctrl+X** pour quitter.)
+(`nano`: arrow keys to move, **Ctrl+O** then **Enter** to save, **Ctrl+X** to quit.)
 
-Vérifier / ajouter ces lignes :
+Check / add these lines:
 
 ```ini
 OPENFOAM_BASHRC=/usr/lib/openfoam/openfoam2406/etc/bashrc
@@ -132,111 +133,110 @@ MESH_PYTHON_BIN=/opt/dive-venv/bin/python3
 
 ---
 
-## 3. Mettre à jour l'application depuis GitHub
+## 3. Update the app from GitHub
 
-À faire à chaque fois qu'une nouvelle version est publiée :
+Do this whenever a new version is published:
 
 ```bash
-cd ~/dive-gui
+cd /root/dive-gui
 git pull
 npm install
 npm run build
 ```
 
-- `git pull` → télécharge la dernière version du code.
-- `npm install` → met à jour les paquets si besoin (rapide s'il n'y a rien de nouveau).
-- `npm run build` → reconstruit l'application (API + site web).
+- `git pull` → downloads the latest code.
+- `npm install` → updates packages if needed (fast when nothing changed).
+- `npm run build` → rebuilds the app (API + website).
 
-**Puis relancer :**
+**Then restart:**
 
-- En dev : `npm run dev`
-- En prod (service installé, voir §5) : `sudo systemctl restart dive-api`
+- In dev: `npm run dev`
+- In prod (service installed, see §5): `systemctl restart dive-api`
 
 ---
 
-## 4. Lancer la version construite à la main (dev)
+## 4. Run the built version by hand (dev)
 
-Après un `npm run build`, on peut lancer l'API seule :
+After a `npm run build`, you can run the API alone:
 
 ```bash
-cd ~/dive-gui
+cd /root/dive-gui
 npm start -w @dive/api
 ```
 
-→ L'API tourne sur **http://localhost:4000** (elle applique aussi les migrations de base toute seule).
-→ ⚠️ Cette commande ne sert **que l'API**, pas les pages web. Pour avoir l'interface :
-  - soit `npm run dev` (qui lance API + site ensemble sur :5173),
-  - soit nginx qui sert `apps/web/dist` (c'est le montage prod, §5).
-→ Arrêter : `Ctrl+C`.
+→ The API runs on **http://localhost:4000** (it also applies database migrations on its own).
+→ ⚠️ This command serves **only the API**, not the web pages. To get the interface:
+  - either `npm run dev` (runs API + site together on :5173),
+  - or nginx serving `apps/web/dist` (the prod setup, §5).
+→ Stop it: `Ctrl+C`.
 
 ---
 
-## 5. Passer en production (l'application démarre toute seule, en permanence)
+## 5. Go to production (the app starts on its own, always on)
 
-### 5.1 Préparer les dossiers de données
-
-```bash
-sudo mkdir -p /var/lib/dive/storage
-sudo chown -R "$USER" /var/lib/dive
-```
-
-### 5.2 Configurer le mode production
+### 5.1 Prepare the data folders
 
 ```bash
-nano ~/dive-gui/apps/api/.env
+mkdir -p /var/lib/dive/storage
 ```
 
-Modifier ces lignes (les autres peuvent rester telles quelles) :
+### 5.2 Configure production mode
+
+```bash
+nano /root/dive-gui/apps/api/.env
+```
+
+Edit these lines (the others can stay as they are):
 
 ```ini
 NODE_ENV=production
 
-# Générer DEUX clés différentes avec :  openssl rand -base64 48   (à lancer 2 fois)
-JWT_ACCESS_SECRET=coller-la-première-clé
-JWT_REFRESH_SECRET=coller-la-deuxième-clé
+# Generate TWO different keys with:  openssl rand -base64 48   (run it twice)
+JWT_ACCESS_SECRET=paste-the-first-key
+JWT_REFRESH_SECRET=paste-the-second-key
 
 DATABASE_URL=file:/var/lib/dive/prod.db
 STORAGE_DIR=/var/lib/dive/storage
 
-# L'adresse exacte tapée dans le navigateur
-CORS_ORIGIN=https://dive.votre-domaine.de
+# The exact address typed in the browser
+CORS_ORIGIN=https://dive.your-domain.de
 TRUST_PROXY=1
 
-# Le premier compte administrateur (mettre un VRAI mot de passe)
-SEED_ADMIN_EMAIL=admin@votre-entreprise.de
-SEED_ADMIN_PASSWORD=UnVraiMotDePasseFort!2026
-SEED_ADMIN_NAME=Administrateur
+# The first admin account (use a REAL password)
+SEED_ADMIN_EMAIL=admin@your-company.de
+SEED_ADMIN_PASSWORD=AReallyStrongPassword!2026
+SEED_ADMIN_NAME=Administrator
 ```
 
-⚠️ En production l'application **refuse de démarrer** si les secrets sont courts, identiques, ou laissés en valeur d'exemple. C'est voulu.
+⚠️ In production the app **refuses to start** if the secrets are short, identical, or left at their example value. This is intentional.
 
-Puis reconstruire et créer la base + l'admin :
+Then rebuild and create the database + admin:
 
 ```bash
-cd ~/dive-gui
+cd /root/dive-gui
 npm ci
 npm run build
 npm run db:migrate -w @dive/api
 npm run db:seed -w @dive/api
 ```
 
-### 5.3 Créer le fichier service (démarrage automatique)
+### 5.3 Create the service file (automatic start)
 
-**Cas WSL uniquement** — activer systemd une fois (inutile sur un vrai Ubuntu) :
-
-```bash
-sudo bash -c 'printf "[boot]\nsystemd=true\n" >> /etc/wsl.conf'
-```
-
-puis dans **PowerShell Windows** : `wsl --shutdown`, et rouvrir le terminal WSL.
-
-Créer le fichier :
+**WSL only** — enable systemd once (not needed on a real Ubuntu server):
 
 ```bash
-sudo nano /etc/systemd/system/dive-api.service
+printf "[boot]\nsystemd=true\n" >> /etc/wsl.conf
 ```
 
-Coller ceci en remplaçant **VOTRE_NOM** (2 endroits) par le résultat de la commande `whoami` :
+then in **Windows PowerShell**: `wsl --shutdown`, and reopen the WSL terminal.
+
+Create the file:
+
+```bash
+nano /etc/systemd/system/dive-api.service
+```
+
+Paste this as-is (running as root, working dir is `/root/dive-gui/apps/api`):
 
 ```ini
 [Unit]
@@ -245,8 +245,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=VOTRE_NOM
-WorkingDirectory=/home/VOTRE_NOM/dive-gui/apps/api
+User=root
+WorkingDirectory=/root/dive-gui/apps/api
 ExecStart=/bin/bash -lc 'source /usr/lib/openfoam/openfoam2406/etc/bashrc && npm start'
 Restart=on-failure
 Environment=NODE_ENV=production
@@ -255,41 +255,41 @@ Environment=NODE_ENV=production
 WantedBy=multi-user.target
 ```
 
-> `WorkingDirectory` = le sous-dossier `apps/api` **dans le dossier où vous avez cloné le code**. Si vous avez cloné ailleurs que `~/dive-gui`, adaptez le chemin.
+> If you cloned somewhere other than `/root/dive-gui`, adjust the `WorkingDirectory` path (it points at the `apps/api` subfolder inside your clone).
 
-Activer :
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now dive-api
-sudo systemctl status dive-api
-```
-
-→ `status` doit afficher **active (running)**. En cas d'erreur, lire les logs (le message dit quelle ligne du `.env` corriger) :
+Enable it:
 
 ```bash
-sudo journalctl -u dive-api -f
+systemctl daemon-reload
+systemctl enable --now dive-api
+systemctl status dive-api
 ```
 
-(`Ctrl+C` pour quitter les logs.)
-
-### 5.4 Servir le site avec nginx
+→ `status` must show **active (running)**. On error, read the logs (the message says which `.env` line to fix):
 
 ```bash
-sudo apt-get install -y nginx
-sudo nano /etc/nginx/sites-available/dive
+journalctl -u dive-api -f
 ```
 
-Coller (remplacer **VOTRE_NOM** et le domaine ; les 2 lignes `ssl_` viennent de votre certificat, ex. certbot/Let's Encrypt) :
+(`Ctrl+C` to leave the logs.)
+
+### 5.4 Serve the site with nginx
+
+```bash
+apt-get install -y nginx
+nano /etc/nginx/sites-available/dive
+```
+
+Paste this (adjust `server_name` to your domain; the two `ssl_` lines come from your certificate, e.g. certbot / Let's Encrypt):
 
 ```nginx
 server {
     listen 443 ssl;
-    server_name dive.votre-domaine.de;
-    # ssl_certificate     /chemin/vers/certificat.pem;
-    # ssl_certificate_key /chemin/vers/cle.pem;
+    server_name dive.your-domain.de;
+    # ssl_certificate     /path/to/certificate.pem;
+    # ssl_certificate_key /path/to/key.pem;
 
-    root /home/VOTRE_NOM/dive-gui/apps/web/dist;
+    root /root/dive-gui/apps/web/dist;
     index index.html;
 
     location / {
@@ -308,46 +308,48 @@ server {
 }
 ```
 
-Activer :
+> Note: nginx (as root) must be able to read `/root/dive-gui/apps/web/dist`. If you later run the site under a non-root user and hit a 403, move the clone to a shared path such as `/opt/dive` and point `root`/`WorkingDirectory` there.
+
+Enable it:
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/dive /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl reload nginx
+ln -s /etc/nginx/sites-available/dive /etc/nginx/sites-enabled/
+nginx -t
+systemctl reload nginx
 ```
 
-⚠️ Le site doit être en **HTTPS**, sinon la connexion des utilisateurs ne tient pas (cookie de session refusé en HTTP).
+⚠️ The site must be served over **HTTPS**, otherwise user logins won't persist (the session cookie is rejected over plain HTTP).
 
-### 5.5 Vérifier
+### 5.5 Verify
 
 ```bash
-curl -k https://dive.votre-domaine.de/api/v1/health
+curl -k https://dive.your-domain.de/api/v1/health
 ```
 
-→ Puis ouvrir le site dans le navigateur, se connecter avec l'admin du §5.2, et lancer une conversion de maillage test : chaque étape doit être verte.
+→ Then open the site in a browser, log in with the admin from §5.2, and run a test mesh conversion: every step should turn green. That proves OpenFOAM and Python are wired up correctly.
 
 ---
 
-## 6. Aide-mémoire quotidien
+## 6. Daily cheat sheet
 
-| Je veux… | Commande |
+| I want to… | Command |
 |---|---|
-| Mettre à jour l'application | `cd ~/dive-gui && git pull && npm install && npm run build` |
-| Redémarrer l'API (prod) | `sudo systemctl restart dive-api` |
-| Voir si l'API tourne | `sudo systemctl status dive-api` |
-| Lire les logs en direct | `sudo journalctl -u dive-api -f` |
-| Lancer en dev (API + site) | `cd ~/dive-gui && npm run dev` → http://localhost:5173 |
-| Lancer l'API seule (après build) | `cd ~/dive-gui && npm start -w @dive/api` → :4000 |
-| Arrêter un lancement manuel | `Ctrl+C` dans le terminal |
+| Update the app | `cd /root/dive-gui && git pull && npm install && npm run build` |
+| Restart the API (prod) | `systemctl restart dive-api` |
+| Check the API is running | `systemctl status dive-api` |
+| Watch the logs live | `journalctl -u dive-api -f` |
+| Run in dev (API + site) | `cd /root/dive-gui && npm run dev` → http://localhost:5173 |
+| Run the API alone (after build) | `cd /root/dive-gui && npm start -w @dive/api` → :4000 |
+| Stop a manual run | `Ctrl+C` in the terminal |
 
-## 7. Dépannage rapide
+## 7. Quick troubleshooting
 
-| Problème | Solution |
+| Problem | Fix |
 |---|---|
-| `node : commande introuvable` | Refaire §1.1 puis fermer/rouvrir le terminal |
-| L'appli refuse de démarrer, parle de `JWT_..._SECRET` | Générer 2 clés **différentes** : `openssl rand -base64 48` (§5.2) |
-| Actions de calcul → « outil non trouvé » | Refaire les vérifications §2.1–2.3 et contrôler les 3 lignes du §2.4 dans `.env` |
-| `EADDRINUSE` (port déjà utilisé) | L'appli tourne déjà ailleurs : fermer l'autre terminal ou `sudo systemctl stop dive-api` |
-| Le service ne démarre pas | `sudo journalctl -u dive-api -f` → le message indique la ligne fautive |
-| La connexion au site « ne tient pas » | Le site doit être servi en HTTPS (§5.4) |
-| `systemctl` ne marche pas sous WSL | Activer systemd (§5.3, cas WSL) puis `wsl --shutdown` |
+| `node: command not found` | Redo §1.1, then close/reopen the terminal |
+| App refuses to start, mentions `JWT_..._SECRET` | Generate 2 **different** keys: `openssl rand -base64 48` (§5.2) |
+| Compute actions say "tool not found" | Redo the checks in §2.1–2.3 and confirm the 3 lines in §2.4 of `.env` |
+| `EADDRINUSE` (port already in use) | The app is already running elsewhere: close the other terminal or `systemctl stop dive-api` |
+| The service won't start | `journalctl -u dive-api -f` → the message points at the offending line |
+| Login to the site "doesn't stick" | The site must be served over HTTPS (§5.4) |
+| `systemctl` doesn't work under WSL | Enable systemd (§5.3, WSL case) then `wsl --shutdown` |
