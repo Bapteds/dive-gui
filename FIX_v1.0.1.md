@@ -101,17 +101,29 @@ Bug : `SOLVER_LOG_MAX_BYTES` (32 Mo) déclaré mais inutilisé ; `getRunLog` lis
 Ce qui a été fait : `readRunLog` accepte un `maxBytes` et lit la **queue** (les dernières `maxBytes`). `getRunLog` **et** `finalizeRun` passent `SOLVER_LOG_MAX_BYTES`. `logBytes` reporte toujours la taille totale réelle.
 Fichiers : `apps/api/src/lib/runStorage.ts`, `apps/api/src/modules/projects/runs.service.ts`.
 
+### ✅ H9 — DoS OOM authentifié via uploads
+Bug : (1) multer `memoryStorage()` 1 Go/fichier × 5000 fichiers sans cap **total** ; (2) `extractArchiveAt` sans cap de taille décompressée → un zip-bomb de 50 Mo gonfle en Go en mémoire. L'un ou l'autre tue l'API.
+Ce qui a été fait :
+- `parseCaseUpload` rejette 413 sur `Content-Length` > `MAX_UPLOAD_TOTAL_MB` **avant** de bufferiser.
+- `extractArchiveAt` somme les tailles décompressées déclarées (central directory, borne fiable) et rejette 413 `ARCHIVE_TOO_LARGE` au-delà de `MAX_ARCHIVE_UNCOMPRESSED_MB`, avant d'inflater. Fonction rendue `async` (throw → rejet propre).
+- 2 nouveaux env (défaut 2048 Mo chacun). 2 tests (rejet + passage sous le cap).
+Fichiers : `apps/api/src/config/env.ts`, `apps/api/src/lib/fileTreeStorage.ts`, `apps/api/src/modules/projects/files.controller.ts`, `apps/api/tests/fileTreeStorage.test.ts`.
+Note : les uploads chunked (sans Content-Length) retombent sur les limites par-fichier + nombre de multer ; un cap streaming total reste un suivi.
+
+### ✅ H10 — Fallback terminal crash l'API sur frappe vers un shell mort
+Bug : chemin non-pty, `child.stdin.write(data)` sans garde ni listener `error` → EPIPE non géré → process down. C'est le chemin exact utilisé quand node-pty est absent sur le serveur.
+Ce qui a été fait : listener `error` sur `child.stdin`, suivi de l'état `exit`, et écriture gardée (`writable` + non exité).
+Fichiers : `apps/api/src/lib/terminalSession.ts`.
+
 ### ⬜ H4 — Autosave éditeur écrase les frappes pendant l'aller-retour de save
 ### ⬜ H5 — Le polling live s'arrête définitivement après un fetch échoué
 ### ⬜ H6 — Visualize/Assembly montrent l'ancien mesh après merge/convert/reset
 ### ⬜ H8 — Parseur Foam casse `#include` → Easy mode corrompt les fichiers
-### ⬜ H9 — DoS OOM authentifié via uploads
-### ⬜ H10 — Fallback terminal crash l'API sur frappe vers un shell mort
 
 ---
 
 ## Reste à faire
 
-HIGH restants : H4–H6, H8–H10. MEDIUM restants : M1–M2, M4–M15, M17–M24. Tous les LOW. Backlog complet + ordre suggéré dans `BUG_AUDIT.md`.
+HIGH restants : H4, H5, H6, H8 (tous frontend). MEDIUM restants : M1–M2, M4–M15, M17–M24. Tous les LOW. Backlog complet + ordre suggéré dans `BUG_AUDIT.md`.
 
 Vérifications tests (ce lot) : API 449/449, web 126/126, typecheck + lint OK. À valider sur le serveur de deploy : les chemins Python (C1 sidecar, H7 multi-zones) et le comportement crash-log C3 en conditions réelles.

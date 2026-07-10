@@ -41,6 +41,14 @@ const envSchema = z
     // Note: uploads are currently buffered in memory, so very large values cost
     // RAM per concurrent upload; raise deliberately on a server with headroom.
     MAX_UPLOAD_MB: z.coerce.number().int().positive().default(1024),
+    // Total request-body cap for a multipart case import (all files combined),
+    // enforced from Content-Length BEFORE buffering, so a single request cannot
+    // pin gigabytes of RAM even though each file is under MAX_UPLOAD_MB (H9).
+    MAX_UPLOAD_TOTAL_MB: z.coerce.number().int().positive().default(2048),
+    // Cap on an uploaded .zip's TOTAL decompressed size, checked against the
+    // archive's declared sizes before inflating, so a small zip bomb cannot
+    // expand to gigabytes in memory (H9).
+    MAX_ARCHIVE_UNCOMPRESSED_MB: z.coerce.number().int().positive().default(2048),
     // --- CGNS -> OpenFOAM mesh conversion toolchain ---------------------------
     // The conversion runs external binaries that exist on the Debian deploy
     // target (not on a Windows dev box). Every command is configurable so the

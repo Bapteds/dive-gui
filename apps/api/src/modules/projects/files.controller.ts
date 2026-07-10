@@ -44,6 +44,22 @@ const upload = multer({
  * normalized envelope (oversized payloads become 413 PAYLOAD_TOO_LARGE).
  */
 export const parseCaseUpload: RequestHandler = (req, res, next) => {
+  // Reject an oversized import from its Content-Length BEFORE multer buffers any
+  // of it, so one request cannot pin gigabytes of RAM even when each file is
+  // under MAX_UPLOAD_MB (H9). Chunked uploads (no Content-Length) still fall back
+  // to multer's per-file and file-count limits.
+  const declared = Number(req.headers['content-length']);
+  const totalCap = env.MAX_UPLOAD_TOTAL_MB * 1024 * 1024;
+  if (Number.isFinite(declared) && declared > totalCap) {
+    next(
+      new AppError(
+        413,
+        'PAYLOAD_TOO_LARGE',
+        `The upload exceeds the ${env.MAX_UPLOAD_TOTAL_MB} MB total limit`,
+      ),
+    );
+    return;
+  }
   upload.any()(req, res, (err: unknown) => {
     if (!err) {
       next();
