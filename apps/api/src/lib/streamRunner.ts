@@ -30,9 +30,15 @@ export interface StreamSpec {
   env: NodeJS.ProcessEnv;
   /** Absolute path of the log file stdout+stderr are appended to. */
   logFile: string;
-  /** Optional wall-clock cap (ms); the child is SIGKILLed when exceeded. */
+  /** Optional wall-clock cap (ms); on timeout the child is SIGTERMed then, if still
+   * alive after `killGraceMs`, SIGKILLed. */
   timeoutMs?: number;
+  /** Grace (ms) between the timeout SIGTERM and the SIGKILL escalation. */
+  killGraceMs?: number;
 }
+
+/** Default grace between the timeout SIGTERM and the SIGKILL escalation. */
+const DEFAULT_KILL_GRACE_MS = 10_000;
 
 /** Structured outcome of a finished run. */
 export interface StreamExit {
@@ -68,6 +74,7 @@ export const realStreamRunner: StreamRunner = (spec) => {
 
   let child: ChildProcessWithoutNullStreams | undefined;
   let timer: NodeJS.Timeout | undefined;
+  let killTimer: NodeJS.Timeout | undefined;
   let timedOut = false;
   let settled = false;
   let logStreamFailed = false;
@@ -92,6 +99,7 @@ export const realStreamRunner: StreamRunner = (spec) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       // Don't end() a stream that already errored (it may be destroyed).
       if (!logStreamFailed) out.end();
       resolve(result);
@@ -121,7 +129,21 @@ export const realStreamRunner: StreamRunner = (spec) => {
     if (spec.timeoutMs && spec.timeoutMs > 0) {
       timer = setTimeout(() => {
         timedOut = true;
-        child?.kill('SIGKILL');
+        // SIGTERM first so mpirun can forward it to its N ranks for a clean
+        // shutdown. SIGKILL is uncatchable, so SIGKILLing mpirun kills only the
+        // launcher and orphans the ranks — they keep computing and writing the
+        // case (M6). Escalate to SIGKILL only if the process is still alive after
+        // the grace period.
+        child?.kill('SIGTERM');
+        killTimer = setTimeout(() => {
+          if (!settled) {
+            try {
+              child?.kill('SIGKILL');
+            } catch {
+              /* already exited */
+            }
+          }
+        }, spec.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
       }, spec.timeoutMs);
     }
   });

@@ -192,6 +192,18 @@ Fichiers : `apps/web/src/features/projects/foamModel.ts`, `foamModel.test.ts`.
 
 ---
 
+### ✅ M5 — Meshers tués à 16 Mo de sortie et signalés « non installés »
+Bug : un dépassement de `maxBuffer` (`ERR_CHILD_PROCESS_STDIO_MAXBUFFER`) était mappé en `spawnError` (« le binaire n'a pas pu démarrer ») ET faisait passer `timedOut` à true (kill = killed) — un gros run snappy/cartesianMesh verbeux (> 16 Mo) envoyait l'utilisateur débugger une fausse piste « pas installé ».
+Ce qui a été fait : `commandRunner` distingue le dépassement de buffer (nouveau flag `outputTruncated`, pas de `spawnError`, `timedOut` exclu) d'un vrai échec de spawn (ENOENT/EACCES). Cap relevé 16 → **128 Mo** (`MAX_BUFFER` exporté + `MAX_BUFFER_MB`), overridable par `spec.maxBuffer`. Les rapports d'étape (meshPipelineRun, meshImport) affichent un message clair « dépassé la limite de capture, résultat peut être incomplet » au lieu de « could not start ».
+- 3 tests (`commandRunner.test.ts`, binaire réel node) : overflow → `outputTruncated` sans spawnError ni timeout ; binaire inexistant → spawnError ENOENT ; succès + exit non-zéro normaux.
+Fichiers : `apps/api/src/lib/commandRunner.ts`, `meshPipelineRun.ts`, `meshImport.ts`, `apps/api/tests/commandRunner.test.ts`.
+
+### ✅ M6 — SIGKILL au timeout orpheline les rangs MPI
+Bug : au timeout, `streamRunner` faisait `child.kill('SIGKILL')` — SIGKILL est non catchable, donc mpirun meurt sans le relayer à ses N rangs → les rangs solveur continuent de calculer et d'écrire le cas après que le run soit marqué timed-out.
+Ce qui a été fait : au timeout, **SIGTERM d'abord** (mpirun le relaie à ses rangs pour un arrêt propre), puis **SIGKILL après un délai de grâce** (`spec.killGraceMs`, câblé sur `RUN_STOP_GRACE_MS` aux deux sites `runStream`) seulement si le process est encore vivant.
+- 2 tests (`streamRunner.test.ts`, node réel) : un process dépassant son timeout → `timedOut:true` ; (POSIX only) un process ignorant SIGTERM → escaladé en SIGKILL (`signal: 'SIGKILL'`).
+Fichiers : `apps/api/src/lib/streamRunner.ts`, `apps/api/src/modules/projects/runs.service.ts`, `apps/api/tests/streamRunner.test.ts`.
+
 ## Reste à faire
 
 **Tous les CRITICAL (C1–C4) et HIGH (H1–H10) sont traités.**

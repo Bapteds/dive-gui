@@ -360,6 +360,9 @@ async function launchParallelRun(
       env: plan.env,
       logFile: logAbs,
       timeoutMs: env.SOLVER_MAX_RUNTIME_MS,
+      // On timeout, SIGTERM the (mpi)run so it forwards to its ranks, then SIGKILL
+      // after this grace if still alive — never orphan MPI ranks (M6).
+      killGraceMs: env.RUN_STOP_GRACE_MS,
     });
     handles.set(runId, handle);
     await prisma.run.updateMany({
@@ -496,6 +499,9 @@ export async function startRun(
     env: plan.env,
     logFile: logAbs,
     timeoutMs: env.SOLVER_MAX_RUNTIME_MS,
+    // On timeout, SIGTERM the (mpi)run so it forwards to its ranks, then SIGKILL
+    // after this grace if still alive — never orphan MPI ranks (M6).
+    killGraceMs: env.RUN_STOP_GRACE_MS,
   });
   handles.set(created.id, handle);
 
