@@ -76,7 +76,7 @@ const SelectItem = forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      'relative flex w-full cursor-pointer select-none items-center rounded-[6px] py-2 pl-8 pr-2.5 text-sm text-text outline-none',
+      'relative flex w-full cursor-pointer select-none items-center rounded-xs py-2 pl-8 pr-2.5 text-sm text-text outline-none',
       'transition-colors duration-fast ease-out data-[highlighted]:bg-bg',
       'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
       className,

@@ -44,7 +44,7 @@ const DropdownMenuItem = forwardRef<
   <DropdownMenuPrimitive.Item
     ref={ref}
     className={cn(
-      'relative flex cursor-pointer select-none items-center gap-2 rounded-[6px] px-2.5 py-2 text-sm outline-none',
+      'relative flex cursor-pointer select-none items-center gap-2 rounded-xs px-2.5 py-2 text-sm outline-none',
       'transition-colors duration-fast ease-out',
       'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
       '[&_svg]:size-4 [&_svg]:shrink-0',
@@ -66,7 +66,7 @@ const DropdownMenuCheckboxItem = forwardRef<
     ref={ref}
     checked={checked}
     className={cn(
-      'relative flex cursor-pointer select-none items-center gap-2 rounded-[6px] py-2 pl-8 pr-2.5 text-sm text-text outline-none',
+      'relative flex cursor-pointer select-none items-center gap-2 rounded-xs py-2 pl-8 pr-2.5 text-sm text-text outline-none',
       'transition-colors duration-fast ease-out data-[highlighted]:bg-bg',
       'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
       className,
