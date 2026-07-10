@@ -25,6 +25,7 @@ import { stopRun } from '@/lib/api/projects';
 import type { DashboardProject, DashboardRun } from '@/lib/api/types';
 import { useAuth } from '@/features/auth/AuthProvider';
 import { useDashboardQuery, dashboardQueryKey } from '@/features/dashboard/useDashboard';
+import { ErrorState } from '@/components/common/ErrorState';
 import { Sparkline, DistributionBar, Donut } from '@/features/dashboard/DashboardCharts';
 import {
   RUN_STATUS_COLOR,
@@ -54,7 +55,9 @@ export function HomePage() {
   const [memHistory, setMemHistory] = useState<number[]>([]);
   useEffect(() => {
     if (!data) return;
-    const mem = Math.round((data.metrics.memUsedBytes / Math.max(1, data.metrics.memTotalBytes)) * 100);
+    const mem = Math.round(
+      (data.metrics.memUsedBytes / Math.max(1, data.metrics.memTotalBytes)) * 100,
+    );
     setCpuHistory((history) => [...history, data.metrics.cpuPercent].slice(-40));
     setMemHistory((history) => [...history, mem].slice(-40));
   }, [dashboard.dataUpdatedAt, data]);
@@ -63,7 +66,8 @@ export function HomePage() {
     mutationFn: ({ projectId, runId }: { projectId: string; runId: string }) =>
       stopRun(projectId, runId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: dashboardQueryKey }),
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : 'Could not stop the run.'),
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.message : 'Could not stop the run.'),
   });
 
   const memPercent = data
@@ -105,10 +109,21 @@ export function HomePage() {
         <div>
           <div className="flex items-center gap-2.5">
             <h1 className="text-2xl font-semibold text-text">Dashboard</h1>
-            <span className="inline-flex items-center gap-1.5 rounded-sm bg-success-tint px-2 py-0.5 text-xs font-semibold text-success">
-              <span className="size-1.5 animate-pulse rounded-full bg-success" aria-hidden="true" />
-              Live
-            </span>
+            {dashboard.isError ? (
+              // Don't keep claiming "Live" when polling is failing (M22).
+              <span className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-surface px-2 py-0.5 text-xs font-semibold text-text-secondary">
+                <span className="size-1.5 rounded-full bg-neutral" aria-hidden="true" />
+                Offline
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 rounded-sm bg-success-tint px-2 py-0.5 text-xs font-semibold text-success">
+                <span
+                  className="size-1.5 animate-pulse rounded-full bg-success"
+                  aria-hidden="true"
+                />
+                Live
+              </span>
+            )}
           </div>
           <p className="mt-1 text-sm text-text-secondary">
             {firstName ? `Welcome back, ${firstName}.` : 'Welcome back.'} Live server and solver
@@ -121,113 +136,126 @@ export function HomePage() {
         </Button>
       </header>
 
-      {/* KPI strip */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <KpiCard
-          icon={<Cpu className="size-4" strokeWidth={1.75} aria-hidden="true" />}
-          label="CPU load"
-          tone={cpuColor}
-          delta={cpuDelta}
-        >
-          {data ? (
-            <>
-              <MetricNumber value={String(data.metrics.cpuPercent)} suffix="%" />
-              <Sparkline values={cpuHistory} color={cpuColor} />
-              <KpiFoot>
-                {cores} cores · load {data.metrics.loadAvg1.toFixed(2)}
-              </KpiFoot>
-            </>
-          ) : (
-            <KpiSkeleton />
-          )}
-        </KpiCard>
-
-        <KpiCard
-          icon={<MemoryStick className="size-4" strokeWidth={1.75} aria-hidden="true" />}
-          label="Memory"
-          tone={memColor}
-          delta={memDelta}
-        >
-          {data ? (
-            <>
-              <MetricNumber value={String(memPercent)} suffix="%" />
-              <Sparkline values={memHistory} color={memColor} />
-              <KpiFoot>
-                <span className="font-mono text-text-secondary">
-                  {formatBytes(data.metrics.memUsedBytes)}
-                </span>{' '}
-                / {formatBytes(data.metrics.memTotalBytes)}
-              </KpiFoot>
-            </>
-          ) : (
-            <KpiSkeleton />
-          )}
-        </KpiCard>
-
-        <KpiCard
-          icon={<Activity className="size-4" strokeWidth={1.75} aria-hidden="true" />}
-          label="Active solvers"
-          tone={TONE.success}
-        >
-          {data ? (
-            <>
-              <MetricNumber value={String(activeRuns.length)} />
-              <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-bg">
-                <div
-                  className="h-full rounded-full"
-                  style={{ width: `${activePct}%`, background: TONE.success }}
-                />
-              </div>
-              <KpiFoot>
-                <span className="font-mono text-text-secondary">{activeRuns.length}</span> of {cores}{' '}
-                cores in use
-              </KpiFoot>
-            </>
-          ) : (
-            <KpiSkeleton />
-          )}
-        </KpiCard>
-
-        <KpiCard
-          icon={<Layers className="size-4" strokeWidth={1.75} aria-hidden="true" />}
-          label="Total runs"
-          tone={TONE.primary}
-        >
-          {data ? (
-            <>
-              <MetricNumber value={String(outcomes.total)} />
-              <DistributionBar segments={distribution} className="mt-1.5 h-2" />
-              <KpiFoot>
-                success <span className="font-mono text-success">{outcomes.successRate}%</span>
-              </KpiFoot>
-            </>
-          ) : (
-            <KpiSkeleton />
-          )}
-        </KpiCard>
-      </div>
-
-      {/* main grid: running solvers + run outcomes */}
-      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[1.9fr_1fr]">
-        <RunningSolversPanel
-          runs={activeRuns}
-          queued={data?.runCounts.queued ?? 0}
-          pending={!data}
-          onStop={(run) => stop.mutate({ projectId: run.projectId, runId: run.runId })}
-          stopPending={stop.isPending}
+      {dashboard.isError && !data ? (
+        // Hard failure with nothing cached: an actionable error instead of skeletons
+        // that never resolve (M22). A transient poll blip WITH cached data keeps
+        // showing the (stale) dashboard, flagged by the "Offline" badge above.
+        <ErrorState
+          title="We could not load the dashboard."
+          onRetry={() => void dashboard.refetch()}
+          retrying={dashboard.isFetching}
         />
-        <RunOutcomesPanel
-          total={outcomes.total}
-          converged={outcomes.converged}
-          diverged={outcomes.diverged}
-          other={outcomes.other}
-          successRate={outcomes.successRate}
-          distribution={distribution}
-        />
-      </div>
+      ) : (
+        <>
+          {/* KPI strip */}
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+            <KpiCard
+              icon={<Cpu className="size-4" strokeWidth={1.75} aria-hidden="true" />}
+              label="CPU load"
+              tone={cpuColor}
+              delta={cpuDelta}
+            >
+              {data ? (
+                <>
+                  <MetricNumber value={String(data.metrics.cpuPercent)} suffix="%" />
+                  <Sparkline values={cpuHistory} color={cpuColor} />
+                  <KpiFoot>
+                    {cores} cores · load {data.metrics.loadAvg1.toFixed(2)}
+                  </KpiFoot>
+                </>
+              ) : (
+                <KpiSkeleton />
+              )}
+            </KpiCard>
 
-      {/* recent projects */}
-      <RecentProjectsPanel projects={data?.recentProjects ?? []} pending={!data} />
+            <KpiCard
+              icon={<MemoryStick className="size-4" strokeWidth={1.75} aria-hidden="true" />}
+              label="Memory"
+              tone={memColor}
+              delta={memDelta}
+            >
+              {data ? (
+                <>
+                  <MetricNumber value={String(memPercent)} suffix="%" />
+                  <Sparkline values={memHistory} color={memColor} />
+                  <KpiFoot>
+                    <span className="font-mono text-text-secondary">
+                      {formatBytes(data.metrics.memUsedBytes)}
+                    </span>{' '}
+                    / {formatBytes(data.metrics.memTotalBytes)}
+                  </KpiFoot>
+                </>
+              ) : (
+                <KpiSkeleton />
+              )}
+            </KpiCard>
+
+            <KpiCard
+              icon={<Activity className="size-4" strokeWidth={1.75} aria-hidden="true" />}
+              label="Active solvers"
+              tone={TONE.success}
+            >
+              {data ? (
+                <>
+                  <MetricNumber value={String(activeRuns.length)} />
+                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-bg">
+                    <div
+                      className="h-full rounded-full"
+                      style={{ width: `${activePct}%`, background: TONE.success }}
+                    />
+                  </div>
+                  <KpiFoot>
+                    <span className="font-mono text-text-secondary">{activeRuns.length}</span> of{' '}
+                    {cores} cores in use
+                  </KpiFoot>
+                </>
+              ) : (
+                <KpiSkeleton />
+              )}
+            </KpiCard>
+
+            <KpiCard
+              icon={<Layers className="size-4" strokeWidth={1.75} aria-hidden="true" />}
+              label="Total runs"
+              tone={TONE.primary}
+            >
+              {data ? (
+                <>
+                  <MetricNumber value={String(outcomes.total)} />
+                  <DistributionBar segments={distribution} className="mt-1.5 h-2" />
+                  <KpiFoot>
+                    success <span className="font-mono text-success">{outcomes.successRate}%</span>
+                  </KpiFoot>
+                </>
+              ) : (
+                <KpiSkeleton />
+              )}
+            </KpiCard>
+          </div>
+
+          {/* main grid: running solvers + run outcomes */}
+          <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[1.9fr_1fr]">
+            <RunningSolversPanel
+              runs={activeRuns}
+              queued={data?.runCounts.queued ?? 0}
+              pending={!data}
+              onStop={(run) => stop.mutate({ projectId: run.projectId, runId: run.runId })}
+              stopPending={stop.isPending}
+            />
+            <RunOutcomesPanel
+              total={outcomes.total}
+              converged={outcomes.converged}
+              diverged={outcomes.diverged}
+              other={outcomes.other}
+              successRate={outcomes.successRate}
+              distribution={distribution}
+            />
+          </div>
+
+          {/* recent projects */}
+          <RecentProjectsPanel projects={data?.recentProjects ?? []} pending={!data} />
+        </>
+      )}
     </div>
   );
 }
@@ -343,7 +371,12 @@ function RunningSolversPanel({
           </div>
           <ul className="min-h-0 flex-1 divide-y divide-border overflow-auto overscroll-contain">
             {runs.map((run) => (
-              <RunRow key={run.runId} run={run} onStop={() => onStop(run)} stopPending={stopPending} />
+              <RunRow
+                key={run.runId}
+                run={run}
+                onStop={() => onStop(run)}
+                stopPending={stopPending}
+              />
             ))}
           </ul>
         </>
@@ -408,7 +441,9 @@ function RunRow({
             {run.solver}
           </span>
           {run.startedAt && (
-            <span className="text-xs text-text-secondary tabular-nums">· {elapsed(run.startedAt)}</span>
+            <span className="text-xs text-text-secondary tabular-nums">
+              · {elapsed(run.startedAt)}
+            </span>
           )}
         </div>
       </div>
@@ -493,7 +528,11 @@ function RunOutcomesPanel({
 function LegendRow({ color, label, value }: { color: string; label: string; value: number }) {
   return (
     <li className="flex items-center gap-2.5">
-      <span className="size-2.5 shrink-0 rounded-sm" style={{ background: color }} aria-hidden="true" />
+      <span
+        className="size-2.5 shrink-0 rounded-sm"
+        style={{ background: color }}
+        aria-hidden="true"
+      />
       <span className="flex-1 truncate text-sm text-text-secondary">{label}</span>
       <span className="font-mono text-sm font-semibold text-text tabular-nums">{value}</span>
     </li>
@@ -502,7 +541,13 @@ function LegendRow({ color, label, value }: { color: string; label: string; valu
 
 /* --------------------------- Recent projects ----------------------------- */
 
-function RecentProjectsPanel({ projects, pending }: { projects: DashboardProject[]; pending: boolean }) {
+function RecentProjectsPanel({
+  projects,
+  pending,
+}: {
+  projects: DashboardProject[];
+  pending: boolean;
+}) {
   return (
     <section className="rounded-md border border-border bg-surface p-4 shadow-sm sm:p-5">
       <header className="mb-3 flex items-center justify-between gap-2">
