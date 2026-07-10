@@ -120,6 +120,22 @@ export async function applyBoundaryConditions(
   if (request.mode === 'csvProfile' && !csv) {
     throw new AppError(422, 'BC_CSV_REQUIRED', 'A CSV runner-exit profile is required for a draft tube.');
   }
+  // Rotor patch references (turbine only) must exist BEFORE any write, so a typo
+  // cannot 422 AFTER the boundary + every 0/ field were already rewritten (M7).
+  if (request.objectType === 'turbine' && request.rotor) {
+    const rotor = request.rotor;
+    const rotorPatches = [
+      ...(rotor.nonRotatingPatches ?? []),
+      ...(rotor.mode !== 'frozenRotor' && (rotor.movingKind ?? 'forced') === 'free' && rotor.sixDof
+        ? rotor.sixDof.patches
+        : []),
+    ];
+    for (const patch of rotorPatches) {
+      if (!patchNames.includes(patch)) {
+        throw new AppError(422, 'INVALID_BC_PLAN', `Rotor patch "${patch}" was not found in the mesh.`);
+      }
+    }
+  }
 
   const notes: string[] = [];
 
@@ -227,15 +243,7 @@ export async function applyBoundaryConditions(
   let appliedRotor: AppliedRotor | undefined;
   if (request.objectType === 'turbine' && request.rotor) {
     const rotor = request.rotor;
-    for (const patch of rotor.nonRotatingPatches ?? []) {
-      if (!patchNames.includes(patch)) {
-        throw new AppError(
-          422,
-          'INVALID_BC_PLAN',
-          `Non-rotating patch "${patch}" was not found in the mesh.`,
-        );
-      }
-    }
+    // Rotor patch references were already validated up front (M7), before any write.
     // The rotor needs a cell zone; we cannot create one, only warn if the mesh
     // has none defined yet (it must be made with topoSet before the run).
     const cellZones = await readCaseFile(projectId, 'constant/polyMesh/cellZones');
@@ -265,15 +273,7 @@ export async function applyBoundaryConditions(
     } else {
       const movingKind = rotor.movingKind ?? 'forced';
       if (movingKind === 'free' && rotor.sixDof) {
-        for (const patch of rotor.sixDof.patches) {
-          if (!patchNames.includes(patch)) {
-            throw new AppError(
-              422,
-              'INVALID_BC_PLAN',
-              `Moving patch "${patch}" was not found in the mesh.`,
-            );
-          }
-        }
+        // sixDof patch references were already validated up front (M7).
         await writeCaseFile(
           projectId,
           'constant/dynamicMeshDict',

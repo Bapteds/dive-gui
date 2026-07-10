@@ -574,6 +574,11 @@ describe('POST /projects/:id/boundary-conditions/apply', () => {
       );
     expect(res.status).toBe(422);
     expect(res.body.error.code).toBe('INVALID_BC_PLAN');
+
+    // M7: the rotor patch is validated BEFORE any write, so a fresh case is left
+    // untouched — no 0/ fields were scaffolded and the inlet BC was not rewritten.
+    expect(await readCaseFile(id, '0/U')).toBeNull();
+    expect(await readCaseFile(id, 'constant/MRFProperties')).toBeNull();
   });
 
   it('rejects an unknown patch, an inlet == outlet, and a missing driving value', async () => {
