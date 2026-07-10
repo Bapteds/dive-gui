@@ -9,6 +9,7 @@ import {
   resetDatabase,
 } from './helpers';
 import { prisma } from '../src/lib/prisma';
+import { revokeRefreshTokens } from '../src/modules/auth/auth.service';
 
 beforeEach(async () => {
   await resetDatabase();
@@ -172,5 +173,10 @@ describe('POST /api/v1/auth/logout', () => {
     const res = await request(app).post('/api/v1/auth/logout');
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('UNAUTHENTICATED');
+  });
+
+  it('revokeRefreshTokens is a no-op (not a 500) when the user was deleted (L4)', async () => {
+    // The record no longer exists; update() would throw P2025, updateMany() must not.
+    await expect(revokeRefreshTokens('nonexistent-user-id')).resolves.toBeUndefined();
   });
 });

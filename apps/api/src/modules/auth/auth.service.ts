@@ -7,7 +7,7 @@ import {
   signRefreshToken,
   verifyRefreshToken,
 } from '../../lib/jwt';
-import { hashPassword, verifyPassword } from '../../lib/password';
+import { dummyVerify, hashPassword, verifyPassword } from '../../lib/password';
 import { prisma } from '../../lib/prisma';
 import { toRole } from '../../lib/role';
 import { toPublicUser, type PublicUser } from '../../lib/serializeUser';
@@ -30,6 +30,9 @@ export async function login(email: string, password: string): Promise<AuthResult
   const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
 
   if (!user) {
+    // Still run a verify (against a dummy hash) so an unknown email costs the same
+    // time as a wrong password — no timing oracle for email enumeration (L2).
+    await dummyVerify(password);
     throw new AppError(401, 'INVALID_CREDENTIALS', 'Invalid email or password');
   }
 
@@ -103,7 +106,9 @@ export async function refresh(refreshToken: string | undefined): Promise<AuthRes
  * @param userId The id of the user logging out.
  */
 export async function revokeRefreshTokens(userId: string): Promise<void> {
-  await prisma.user.update({
+  // updateMany (not update) so a logout AFTER the user was deleted is a no-op
+  // instead of a P2025 500 — honouring this function's "safe if deleted" contract (L4).
+  await prisma.user.updateMany({
     where: { id: userId },
     data: { tokenVersion: { increment: 1 } },
   });

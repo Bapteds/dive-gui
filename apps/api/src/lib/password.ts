@@ -26,3 +26,19 @@ export async function verifyPassword(hash: string, plain: string): Promise<boole
     return false;
   }
 }
+
+/**
+ * A fixed, valid argon2id hash (default params) used ONLY to equalize login
+ * timing. Its plaintext is a throwaway — nothing authenticates against it.
+ */
+const DUMMY_HASH =
+  '$argon2id$v=19$m=65536,t=3,p=4$yKuzpxwjuqPUjjz4gGeL7g$QpmIM8WDo1B2ycFlhcL4dV9dLBxyE1nmAg4G+cAvzo8';
+
+/**
+ * Run a verify against a dummy hash so an UNKNOWN-email login costs the same time
+ * as a wrong-password login, closing the timing oracle that would otherwise let an
+ * attacker enumerate which emails exist (L2).
+ */
+export async function dummyVerify(plain: string): Promise<void> {
+  await verifyPassword(DUMMY_HASH, plain);
+}
