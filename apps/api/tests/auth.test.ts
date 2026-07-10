@@ -79,6 +79,9 @@ describe('POST /api/v1/auth/login', () => {
 
     expect(res.status).toBe(422);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    // Field-level validation details now reach the client (L3).
+    expect(Array.isArray(res.body.error.details)).toBe(true);
+    expect(res.body.error.details.length).toBeGreaterThan(0);
   });
 });
 

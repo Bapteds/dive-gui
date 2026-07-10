@@ -265,6 +265,28 @@ Bug : le retry ne refetchait QUE la géométrie de base ; un GLB de PIÈCE corro
 Fix : le retry invalide TOUTES les géométries (`glb`) du projet (base `mesh` + pièces `meshSource`) via un predicate → la pièce corrompue est re-fetchée.
 Fichiers : `apps/web/src/features/assemble/AssemblyWorkspace.tsx`.
 
+## LOW
+
+### ✅ L2 — Oracle temporel au login (énumération d'emails)
+Bug : un email inconnu court-circuitait le verify argon2 (401 rapide) alors qu'un email connu le lançait (401 lent) → distinguable au chrono.
+Fix : `dummyVerify(password)` (verify contre un hash argon2id fixe valide) exécuté quand l'email est inconnu → même coût temporel. Fichiers : `apps/api/src/lib/password.ts`, `modules/auth/auth.service.ts`.
+
+### ✅ L3 — Les 500 fuitent des codes internes ; les détails de validation n'atteignent pas le client
+Bug : un code Prisma (`P2025`) / fs (`ENOENT`) d'une erreur non-AppError passait tel quel sur le fil (`code`), et les `details` field-level d'une erreur de validation étaient droppés du payload.
+Fix : le handler ne renvoie code/message QUE pour une `AppError` (de confiance) + ses `details` optionnels ; tout le reste → 500 générique (`INTERNAL_SERVER_ERROR`, message générique), un 4xx framework (body-parser) garde son status mais pas son code interne. +1 test (details présents). Fichiers : `apps/api/src/middleware/errorHandler.ts`, `apps/api/tests/auth.test.ts`.
+
+### ✅ L4 — `revokeRefreshTokens` 500 si l'utilisateur a disparu
+Bug : `prisma.user.update` throw P2025 si la ligne n'existe plus, contredisant le contrat « safe if deleted ». Fix : `updateMany` (no-op sur 0 match). +1 test. Fichiers : `apps/api/src/modules/auth/auth.service.ts`, `apps/api/tests/auth.test.ts`.
+
+### ✅ L6 — Override de solveur de `startRun` silencieusement ignoré
+Bug : le controlDict gagnait toujours, l'`input.solver` était ignoré sans un mot. Fix : si un `input.solver` DIFFÉRENT du solveur configuré (controlDict) est passé → **409 SOLVER_MISMATCH** explicite (les fichiers du cas sont scaffoldés pour le solveur du controlDict). Fichiers : `apps/api/src/modules/projects/runs.service.ts`.
+
+### ✅ L8 — `fmtFoamNumber` écrase |x| < 5e-7 à 0
+Bug : `toFixed(6)` mettait à 0 une composante d'axe rotor / origine minuscule mais réelle dans MRFProperties/dynamicMeshDict. Fix : `toPrecision(12)` (chiffres significatifs, pas décimales fixes ; OpenFOAM lit `3e-7`). Fichiers : `apps/api/src/lib/openfoamCase.ts`.
+
+### ✅ L12 — Le seed réinitialise le mot de passe du super-admin à chaque deploy
+Bug : la branche `update` de l'upsert réécrivait `passwordHash` → tout changement de mot de passe fait dans l'app était réverti au prochain seed/deploy. Fix : `passwordHash` n'est plus dans `update` (seulement à la première création). Fichiers : `apps/api/prisma/seed.ts`.
+
 ## Reste à faire
 
 **Tous les CRITICAL (C1–C4), HIGH (H1–H10) et MEDIUM (M1–M24) sont traités** — sauf **M18** (deferred-by-design : décision testée « tous les solveurs guidés », vraie résolution = feature templates par famille). Restent les **LOW (L1–L21)**. Backlog + ordre dans `BUG_AUDIT.md`.
