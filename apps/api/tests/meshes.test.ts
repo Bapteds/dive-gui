@@ -874,6 +874,53 @@ ${entries}
     expect((result.notes as string[]).some((n) => /Renamed rotor\.outlet -> rotor_outlet/.test(n))).toBe(true);
   });
 
+  it('a failed re-merge leaves the case AND the applied-assembly record intact (M2)', async () => {
+    setCommandRunner(mergeRunner);
+    const { id, auth } = await makeProject('mg-remerge-safe@dive-turbinen.test');
+    await seedCase(id, auth); // case (base): inlet, outlet + 0/ physics
+
+    const rotor = await importMesh(id, auth, meshFiles('rotor', makeBoundary([
+      { name: 'iface' }, { name: 'walls', type: 'wall' },
+    ])));
+    const rotorId = rotor.body.mesh.id;
+
+    const plan = {
+      order: ['__case__', rotorId],
+      interfaces: [{ aMeshId: '__case__', aPatch: 'outlet', bMeshId: rotorId, bPatch: 'iface', coupling: 'nonConformal' }],
+    };
+
+    // First merge SUCCEEDS: the case becomes the assembly, a pristine backup is
+    // taken, and the applied-assembly record is written.
+    const first = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/merge`)
+      .set('Authorization', auth)
+      .send(plan);
+    expect(first.status).toBe(200);
+    expect(first.body.result.success).toBe(true);
+    const asmBefore = await request(app).get(`/api/v1/projects/${id}/meshes/assembly`).set('Authorization', auth);
+    expect(asmBefore.body.assembly).not.toBeNull();
+
+    // A RE-MERGE whose mergeMeshes fails must NOT revert the live case to the
+    // pristine base while still claiming an assembly is applied (the M2 lie).
+    setCommandRunner(mergeFailsRunner);
+    const second = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/merge`)
+      .set('Authorization', auth)
+      .send(plan);
+    expect(second.status).toBe(200);
+    expect(second.body.result.success).toBe(false);
+
+    // The live case still holds the V1 assembly (added part's patches present) —
+    // it was NOT destructively reverted to just inlet/outlet before staging.
+    const boundaryAfter = (await caseFileContent(id, auth, 'constant/polyMesh/boundary')).body.file.content as string;
+    expect(boundaryAfter).toMatch(/iface/);
+    expect(boundaryAfter).toMatch(/walls/);
+
+    // The applied-assembly record is still present and consistent with the case.
+    const asmAfter = await request(app).get(`/api/v1/projects/${id}/meshes/assembly`).set('Authorization', auth);
+    expect(asmAfter.body.assembly).not.toBeNull();
+  });
+
   it('rejects the case sentinel when the project has no case mesh (422)', async () => {
     setCommandRunner(mergeRunner);
     const { id, auth } = await makeProject('mg-base-nocase@dive-turbinen.test');

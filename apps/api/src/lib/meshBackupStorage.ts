@@ -23,8 +23,12 @@ function backupsRoot(projectId: string): string {
   return path.join(storageRoot(), 'projects', projectId, 'backups');
 }
 
-/** The slot's copy of the case tree. */
-function backupCaseDir(projectId: string): string {
+/**
+ * Absolute path to the slot's copy of the case tree. Exported so the merge can
+ * stage a re-merge's base from the pristine backup (non-destructive re-merge)
+ * instead of reverting the live case first.
+ */
+export function backupCaseDir(projectId: string): string {
   return path.join(backupsRoot(projectId), 'case');
 }
 

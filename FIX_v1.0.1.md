@@ -91,6 +91,12 @@ Ce qui a été fait :
 - 3 tests unitaires (`meshBackup.test.ts`) : méta honnête après perte de copie, restore refusé sur slot corrompu sans toucher au cas, round-trip write→restore.
 Fichiers : `apps/api/src/lib/meshBackupStorage.ts`, `apps/api/tests/meshBackup.test.ts`.
 
+### ✅ M2 — Un re-merge échoué révertait silencieusement l'assemblage appliqué
+Bug : `runMerge` restaurait le backup pré-assemblage (retour au cas pristine) **avant** le staging ; si une étape ultérieure échouait, l'API rapportait « merge failed, case untouched » alors que le cas avait été réverti, et `assembly.json` prétendait toujours qu'un assemblage était appliqué (état incohérent).
+Ce qui a été fait : le re-merge (base=cas + assemblage sur registre + backup présent) **stage désormais le master de base directement depuis le backup pristine** au lieu de révertir le cas vivant. Le cas vivant + le registre restent **intacts jusqu'au promote final** : en cas d'échec, tout reste exactement comme avant le re-merge (honnête, non destructif) ; en cas de succès, le promote remplace atomiquement à la fin. Bonus : les BC des patches de base éditées par l'utilisateur sont préservées à travers un re-merge (avant : réinitialisées au pristine). Géométrie identique au comportement précédent en cas de succès. La liste de patches de base est lue depuis la même source que le staging (backup vs cas vivant) pour que la résolution de collisions de noms et la validation d'interfaces correspondent au mesh réellement staged.
+- 1 test (`meshes.test.ts`) : un re-merge dont `mergeMeshes` échoue laisse le cas (patches de la pièce ajoutée présents) ET le registre d'assemblage intacts.
+Fichiers : `apps/api/src/modules/projects/meshes.service.ts`, `apps/api/src/lib/meshBackupStorage.ts` (export `backupCaseDir`), `apps/api/tests/meshes.test.ts`.
+
 ---
 
 ## HIGH

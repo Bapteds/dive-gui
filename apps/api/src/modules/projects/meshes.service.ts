@@ -89,7 +89,7 @@ import {
   readCaseFile,
   type CaseEntry,
 } from '../../lib/caseStorage';
-import { backupExists, ensureOriginalBackup, restoreBackup } from '../../lib/meshBackupStorage';
+import { backupCaseDir, backupExists, ensureOriginalBackup } from '../../lib/meshBackupStorage';
 import { convertMeshFileToCase, meshFileFormat } from '../../lib/meshImport';
 import {
   deleteMeshSource,
@@ -686,8 +686,23 @@ async function stageSource(
  * The base is never moved, so no transform is applied. The source case mesh stays
  * pristine (the pipeline only touches the transient .work/ copy until promote).
  */
-async function stageCaseMaster(projectId: string, caseDir: string): Promise<void> {
-  const srcPolyMesh = path.join(caseDirAbsolute(projectId), 'constant', 'polyMesh');
+/** Read the polyMesh boundary from an absolute case directory, or null if absent. */
+async function readBoundaryAt(caseSrcAbs: string): Promise<Buffer | null> {
+  try {
+    return await fs.readFile(path.join(caseSrcAbs, 'constant', 'polyMesh', 'boundary'));
+  } catch {
+    return null;
+  }
+}
+
+async function stageCaseMaster(
+  projectId: string,
+  caseDir: string,
+  // Where to read the base polyMesh from. Defaults to the live case; a re-merge
+  // passes the pristine backup so the live case is never touched before promote.
+  srcCaseDirAbs: string = caseDirAbsolute(projectId),
+): Promise<void> {
+  const srcPolyMesh = path.join(srcCaseDirAbs, 'constant', 'polyMesh');
   const destPolyMesh = path.join(caseDir, 'constant', 'polyMesh');
   await fs.mkdir(destPolyMesh, { recursive: true });
   await fs.cp(srcPolyMesh, destPolyMesh, { recursive: true });
@@ -806,16 +821,21 @@ export async function runMerge(
   const baseIsCase = order[0] === MERGE_BASE_CASE;
 
   // Re-merge safety (Disassemble): when a previous assembly is on record AND there
-  // is a backup of the pre-merge original, revert the case to that original BEFORE
-  // staging, so a re-merge (undo-all leaves no record; remove-one-part sends a
-  // reduced plan) rebuilds from the pristine base instead of STACKING onto the
-  // already-merged case. The FIRST merge has no record, so nothing is restored — it
-  // stages the current case, respecting any Visualize edits. Only meaningful for a
-  // base=case merge (a library-base merge never uses the case as its base, so it
-  // can never stack). This also closes the latent double-merge bug on a plain re-run.
-  if (baseIsCase && (await readAppliedAssembly(projectId)) && (await backupExists(projectId))) {
-    await restoreBackup(projectId);
-  }
+  // is a backup of the pre-merge original, a re-merge (undo-all leaves no record;
+  // remove-one-part sends a reduced plan) must rebuild from the pristine base
+  // instead of STACKING onto the already-merged case. Rather than reverting the LIVE
+  // case up front (destructive: a later step failure left the case reverted while
+  // the report said "case untouched" and assembly.json still claimed an assembly —
+  // M2), we stage the base master straight from the pristine BACKUP and leave the
+  // live case untouched until the final promote. On failure the live case + the
+  // applied-assembly record stay exactly as they were (honest, non-destructive); on
+  // success promote replaces them atomically at the end. The FIRST merge has no
+  // record, so it stages the current case, respecting any Visualize edits. Only
+  // meaningful for a base=case merge (a library base never stacks onto the case).
+  const reMergeFromBackup =
+    baseIsCase && (await readAppliedAssembly(projectId)) !== null && (await backupExists(projectId));
+  // Directory the base=case master (and its patch list) is read from.
+  const baseCaseSrcAbs = reMergeFromBackup ? backupCaseDir(projectId) : caseDirAbsolute(projectId);
 
   const metas = await listMeshSources(projectId);
   const byId = new Map(metas.map((meta) => [meta.id, meta] as const));
@@ -844,7 +864,10 @@ export async function runMerge(
   for (const id of order) {
     const boundary =
       id === MERGE_BASE_CASE
-        ? await readCaseFile(projectId, BOUNDARY_FILE)
+        ? // The base's patch list MUST come from the same place it is staged from
+          // (the pristine backup on a re-merge, else the live case) so patch-name
+          // collision resolution and interface validation match the staged mesh.
+          await readBoundaryAt(baseCaseSrcAbs)
         : await readMeshBoundary(projectId, id);
     if (!boundary) {
       const which = id === MERGE_BASE_CASE ? 'The project case mesh' : `Mesh "${byId.get(id)!.name}"`;
@@ -940,8 +963,13 @@ export async function runMerge(
     try {
       if (isBaseCaseMaster) {
         // Base=case: stage the project's own polyMesh as the master, patches kept.
-        await stageCaseMaster(projectId, caseDirOf(id));
-        steps.push(okStep('prepare', label, 'Staged the project case mesh as the assembly base (patches kept).'));
+        // A re-merge reads from the pristine backup (baseCaseSrcAbs) so the live
+        // case is left intact until the final promote (non-destructive — M2).
+        await stageCaseMaster(projectId, caseDirOf(id), baseCaseSrcAbs);
+        const baseNote = reMergeFromBackup
+          ? 'Staged the pristine base mesh from the backup as the assembly base (patches kept); the live case is untouched until promotion.'
+          : 'Staged the project case mesh as the assembly base (patches kept).';
+        steps.push(okStep('prepare', label, baseNote));
       } else {
         // Base (index 0) has an empty rename map (all names kept); an added part
         // renames only the patches that collided with an earlier part.
