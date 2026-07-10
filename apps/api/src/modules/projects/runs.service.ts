@@ -565,6 +565,40 @@ export async function stopRun(
 }
 
 /**
+ * Force-terminate every live solver for a project (best-effort). Used when the
+ * project — or its owner's account — is being deleted, so a ghost mpirun does
+ * not keep burning cores after the run rows (and case storage) are gone. Unlike
+ * stopRun this does no visibility check and does not wait: it SIGTERMs each
+ * registered handle (mpirun forwards SIGTERM to its ranks) and marks the still-
+ * running rows stopped. The caller's cascade delete removes the rows afterwards.
+ */
+export async function stopProjectRuns(projectId: string): Promise<void> {
+  const active = await prisma.run.findMany({
+    where: { projectId, status: { in: [...ACTIVE_RUN_STATUSES] } },
+    select: { id: true },
+  });
+  for (const { id } of active) {
+    stopRequested.add(id);
+    const handle = handles.get(id);
+    if (handle) {
+      try {
+        handle.stop('SIGTERM');
+      } catch {
+        /* already exited */
+      }
+    }
+  }
+  if (active.length > 0) {
+    await prisma.run
+      .updateMany({
+        where: { projectId, status: { in: [...ACTIVE_RUN_STATUSES] } },
+        data: { status: 'stopped', reason: 'Project or account deleted', finishedAt: new Date(), pid: null },
+      })
+      .catch(() => undefined);
+  }
+}
+
+/**
  * On API boot, mark any run still in an active state as failed: the child was
  * tied to the previous process and died with it (we do not re-adopt by pid —
  * pid reuse is unsafe). The persisted log is preserved. Returns the count fixed.
