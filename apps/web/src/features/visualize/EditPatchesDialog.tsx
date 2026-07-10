@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { NativeSelect } from '@/components/ui/native-select';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/sonner';
 import { ApiError } from '@/lib/api/client';
@@ -257,12 +258,11 @@ function TypeSelect({
 }) {
   const inSettings = (MESH_PATCH_SETTINGS as readonly string[]).includes(value);
   return (
-    <select
+    <NativeSelect
       aria-label={`Type for ${from}`}
       value={value}
       disabled={disabled}
       onChange={(event) => onChange(event.target.value)}
-      className="w-full rounded-sm border border-border bg-surface px-2 py-2 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-60"
     >
       {!inSettings && <option value={value}>{value}</option>}
       <optgroup label="Geometric type">
@@ -281,6 +281,6 @@ function TypeSelect({
           ))}
         </optgroup>
       )}
-    </select>
+    </NativeSelect>
   );
 }

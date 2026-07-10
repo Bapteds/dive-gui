@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, FileCode, Loader2, Search } from 'lucide-react';
+import { FileCode, Loader2, Search } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -10,8 +10,8 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { NativeSelect } from '@/components/ui/native-select';
 import { toast } from '@/components/ui/sonner';
-import { cn } from '@/lib/utils';
 import { ApiError } from '@/lib/api/client';
 import { useApplyTemplateFiles, useTemplateFilesQuery, useTemplatesQuery } from './useTemplates';
 
@@ -93,33 +93,21 @@ export function TemplateFilePicker({
 
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium text-text">Template</span>
-          <div className="relative">
-            <select
-              value={templateId}
-              onChange={(event) => setTemplateId(event.target.value)}
-              disabled={templates.isPending || importFiles.isPending}
-              className={cn(
-                'h-9 w-full appearance-none rounded-md border border-border bg-surface pl-3 pr-9 text-sm text-text',
-                'focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
-                'disabled:cursor-not-allowed disabled:opacity-60',
-              )}
-            >
-              <option value="" disabled>
-                Choose a template…
+          <NativeSelect
+            value={templateId}
+            onChange={(event) => setTemplateId(event.target.value)}
+            disabled={templates.isPending || importFiles.isPending}
+          >
+            <option value="" disabled>
+              Choose a template…
+            </option>
+            {(templates.data ?? []).map((template) => (
+              <option key={template.id} value={template.id}>
+                {template.name}
+                {template.tags.length > 0 ? ` (${template.tags.join(', ')})` : ''}
               </option>
-              {(templates.data ?? []).map((template) => (
-                <option key={template.id} value={template.id}>
-                  {template.name}
-                  {template.tags.length > 0 ? ` (${template.tags.join(', ')})` : ''}
-                </option>
-              ))}
-            </select>
-            <ChevronDown
-              className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-text-secondary"
-              strokeWidth={1.75}
-              aria-hidden="true"
-            />
-          </div>
+            ))}
+          </NativeSelect>
         </label>
 
         {templateId && (

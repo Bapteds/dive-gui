@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
-import { ChevronDown, FileText } from 'lucide-react';
+import { FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { NativeSelect } from '@/components/ui/native-select';
 import {
   getFoamValue,
   parseFoamModel,
@@ -298,31 +299,18 @@ function EnumControl({
   const withCurrent = value && !options.includes(value) ? [value, ...options] : options;
 
   return (
-    <div className="relative">
-      <select
-        id={id}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-        className={cn(
-          'h-9 w-full appearance-none rounded-md border border-border bg-surface pl-3 pr-9 text-sm text-text',
-          'transition-colors duration-fast ease-out hover:border-border-strong',
-          'focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
-          'disabled:cursor-not-allowed disabled:opacity-60',
-        )}
-      >
-        {withCurrent.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
-      <ChevronDown
-        className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-text-secondary"
-        strokeWidth={1.75}
-        aria-hidden="true"
-      />
-    </div>
+    <NativeSelect
+      id={id}
+      value={value}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value)}
+    >
+      {withCurrent.map((option) => (
+        <option key={option} value={option}>
+          {option}
+        </option>
+      ))}
+    </NativeSelect>
   );
 }
 

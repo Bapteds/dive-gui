@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import { Box, Loader2 } from 'lucide-react';
+import { NativeSelect } from '@/components/ui/native-select';
 import { MERGE_BASE_CASE } from '@/lib/api/types';
 import { useCaseFilesQuery } from '@/features/projects/useCaseFiles';
 import { useMeshesQuery } from '@/features/projects/useMeshes';
@@ -15,10 +16,6 @@ import { MeshViewer, type MeshTarget } from './MeshViewer';
  * there is an actual choice (a case mesh AND at least one library source), so a
  * project with just the case mesh looks exactly as it did before.
  */
-
-/** Compact native select, with explicit surface + text colour (Windows dark-mode safe). */
-const SELECT_CLASS =
-  'min-w-[13rem] max-w-full rounded-sm border border-border-strong bg-surface px-3 py-2 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring';
 
 export function VisualizePanel({ projectId }: { projectId: string }) {
   const selectId = useId();
@@ -82,11 +79,11 @@ export function VisualizePanel({ projectId }: { projectId: string }) {
           <label htmlFor={selectId} className="text-sm font-medium text-text">
             Mesh
           </label>
-          <select
+          <NativeSelect
             id={selectId}
             value={selectValue}
             onChange={(event) => handlePick(event.currentTarget.value)}
-            className={SELECT_CLASS}
+            className="w-auto min-w-[13rem] max-w-full"
           >
             {hasPolyMesh && <option value={MERGE_BASE_CASE}>Project case mesh</option>}
             {sources.map((source) => (
@@ -94,7 +91,7 @@ export function VisualizePanel({ projectId }: { projectId: string }) {
                 {source.name}
               </option>
             ))}
-          </select>
+          </NativeSelect>
           {target?.kind === 'source' && (
             <span className="text-xs text-text-secondary">
               Library part, edited independently of the case mesh.

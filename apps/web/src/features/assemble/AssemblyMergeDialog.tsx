@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { NativeSelect } from '@/components/ui/native-select';
 import { Diamond } from '@/components/brand/Diamond';
 import { SegmentedRadioGroup, type SegmentedOption } from '@/components/ui/segmented';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -81,9 +82,6 @@ const COUPLING_CHIP: Record<InterfaceCoupling, string> = {
   nonConformal: 'Non-conformal',
   stitch: 'Stitch',
 };
-
-const SELECT_CLASS =
-  'w-full rounded-sm border border-border-strong bg-surface px-3 py-2 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring';
 
 type Step = 'connections' | 'confirm' | 'run';
 
@@ -391,11 +389,10 @@ function SidePicker({
         <label htmlFor={meshFieldId} className="text-xs font-medium text-text-secondary">
           Part {label}
         </label>
-        <select
+        <NativeSelect
           id={meshFieldId}
           value={meshId}
           onChange={(event) => onMeshChange(event.currentTarget.value)}
-          className={SELECT_CLASS}
         >
           <option value="">Select part</option>
           {orderedMeshes.map((mesh) => (
@@ -403,18 +400,18 @@ function SidePicker({
               {mesh.name}
             </option>
           ))}
-        </select>
+        </NativeSelect>
       </div>
       <div className="flex min-w-0 flex-col gap-1">
         <label htmlFor={patchFieldId} className="text-xs font-medium text-text-secondary">
           Patch
         </label>
-        <select
+        <NativeSelect
           id={patchFieldId}
           value={patch}
           disabled={!meshId}
           onChange={(event) => onPatchChange(event.currentTarget.value)}
-          className={cn(SELECT_CLASS, 'font-mono')}
+          className="font-mono"
         >
           <option value="">{meshId ? 'Select patch' : '-'}</option>
           {patches.map((p) => (
@@ -422,7 +419,7 @@ function SidePicker({
               {p.name} ({p.type}, {p.nFaces})
             </option>
           ))}
-        </select>
+        </NativeSelect>
       </div>
     </div>
   );

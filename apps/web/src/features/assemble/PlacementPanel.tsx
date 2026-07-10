@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { NativeSelect } from '@/components/ui/native-select';
 import { SegmentedRadioGroup, type SegmentedOption } from '@/components/ui/segmented';
 import { Diamond } from '@/components/brand/Diamond';
 import { cn } from '@/lib/utils';
@@ -33,10 +34,6 @@ import type { HitTarget } from './placement';
  * The single orange CTA lives in the workspace toolbar (Merge); every action here
  * is blue (secondary) or a low-emphasis ghost, so the hierarchy stays clear.
  */
-
-/** Shared styling for the native select (matches the token form vocabulary). */
-const SELECT_CLASS =
-  'w-full rounded-sm border border-border-strong bg-surface px-3 py-2 text-sm text-text disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring';
 
 /** Move / Rotate toggle for the gizmo. */
 const MODE_OPTIONS: SegmentedOption<GizmoMode>[] = [
@@ -192,12 +189,12 @@ export function PlacementPanel({
           <label htmlFor={patchSelectId} className="text-xs font-medium text-text-secondary">
             Mating patch on {activePart.name}
           </label>
-          <select
+          <NativeSelect
             id={patchSelectId}
             value={matingPatch ?? ''}
             disabled={!hasPatches}
             onChange={(event) => onMatingPatchChange(event.currentTarget.value)}
-            className={cn(SELECT_CLASS, 'font-mono')}
+            className="font-mono"
           >
             <option value="">{hasPatches ? 'Select patch' : 'No patches - split it first'}</option>
             {patches.map((patch) => (
@@ -205,7 +202,7 @@ export function PlacementPanel({
                 {patch.name} ({patch.type}, {patch.nFaces})
               </option>
             ))}
-          </select>
+          </NativeSelect>
           {!hasPatches && (
             <p className="text-xs text-text-secondary">
               This part has no boundary patches yet. Split it into patches from its row on the left.

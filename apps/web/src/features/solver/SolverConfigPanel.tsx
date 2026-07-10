@@ -3,7 +3,6 @@ import { useQueries } from '@tanstack/react-query';
 import {
   AlertCircle,
   Check,
-  ChevronDown,
   Code2,
   Loader2,
   Play,
@@ -12,6 +11,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { NativeSelect } from '@/components/ui/native-select';
 import {
   Dialog,
   DialogContent,
@@ -655,17 +655,11 @@ function TurbulenceField({
       </div>
       <div className="flex flex-col gap-1">
         <div className="relative">
-          <select
+          <NativeSelect
             id={id}
             value={current}
             disabled={disabled || scaffold.isPending}
             onChange={(event) => void apply(event.target.value)}
-            className={cn(
-              'h-9 w-full appearance-none rounded-md border border-border bg-surface pl-3 pr-9 text-sm text-text',
-              'transition-colors duration-fast ease-out hover:border-border-strong',
-              'focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
-              'disabled:cursor-not-allowed disabled:opacity-60',
-            )}
           >
             {!current && (
               <option value="" disabled>
@@ -683,18 +677,17 @@ function TurbulenceField({
                 )}
               </optgroup>
             ))}
-          </select>
-          {scaffold.isPending ? (
-            <Loader2
-              className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 animate-spin text-text-secondary"
-              aria-hidden="true"
-            />
-          ) : (
-            <ChevronDown
-              className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-text-secondary"
-              strokeWidth={1.75}
-              aria-hidden="true"
-            />
+          </NativeSelect>
+          {scaffold.isPending && (
+            // Covers the built-in chevron while the model is being applied
+            // (the select is disabled then, so its surface is the page bg).
+            <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 bg-bg">
+              <Loader2
+                className="size-4 animate-spin text-text-secondary"
+                strokeWidth={1.75}
+                aria-hidden="true"
+              />
+            </span>
           )}
         </div>
         <p className="text-xs text-text-secondary">
@@ -841,31 +834,13 @@ function EnumControl({
 }) {
   const withCurrent = value && !options.includes(value) ? [value, ...options] : options;
   return (
-    <div className="relative">
-      <select
-        id={id}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-        className={cn(
-          'h-9 w-full appearance-none rounded-md border border-border bg-surface pl-3 pr-9 text-sm text-text',
-          'transition-colors duration-fast ease-out hover:border-border-strong',
-          'focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
-          'disabled:cursor-not-allowed disabled:opacity-60',
-        )}
-      >
-        {withCurrent.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
-      <ChevronDown
-        className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-text-secondary"
-        strokeWidth={1.75}
-        aria-hidden="true"
-      />
-    </div>
+    <NativeSelect id={id} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
+      {withCurrent.map((option) => (
+        <option key={option} value={option}>
+          {option}
+        </option>
+      ))}
+    </NativeSelect>
   );
 }
 
@@ -972,29 +947,18 @@ function AdvancedConfig({
           </p>
         ) : (
           <>
-            <div className="relative sm:max-w-xs">
-              <select
-                id="solver-raw-file"
-                value={selected}
-                onChange={(event) => setSelected(event.target.value)}
-                className={cn(
-                  'h-9 w-full appearance-none rounded-md border border-border bg-surface pl-3 pr-9 font-mono text-sm text-text',
-                  'transition-colors duration-fast ease-out hover:border-border-strong',
-                  'focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
-                )}
-              >
-                {files.map((file) => (
-                  <option key={file} value={file}>
-                    {file}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown
-                className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-text-secondary"
-                strokeWidth={1.75}
-                aria-hidden="true"
-              />
-            </div>
+            <NativeSelect
+              id="solver-raw-file"
+              value={selected}
+              onChange={(event) => setSelected(event.target.value)}
+              className="font-mono sm:max-w-xs"
+            >
+              {files.map((file) => (
+                <option key={file} value={file}>
+                  {file}
+                </option>
+              ))}
+            </NativeSelect>
             {selected && <RawFileEditor projectId={projectId} path={selected} disabled={disabled} />}
           </>
         )}

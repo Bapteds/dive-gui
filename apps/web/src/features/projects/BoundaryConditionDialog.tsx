@@ -49,6 +49,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { NativeSelect } from '@/components/ui/native-select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Diamond } from '@/components/brand/Diamond';
 import { toast } from '@/components/ui/sonner';
@@ -569,18 +570,18 @@ function PatchSelect({
       <label htmlFor={id} className="text-xs font-medium text-text-secondary">
         {label}
       </label>
-      <select
+      <NativeSelect
         id={id}
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
-        className="w-full rounded-sm border border-border-strong bg-surface px-3 py-2 font-mono text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        className="font-mono"
       >
         {patches.map((patch) => (
           <option key={patch.name} value={patch.name}>
             {patch.name}
           </option>
         ))}
-      </select>
+      </NativeSelect>
     </div>
   );
 }

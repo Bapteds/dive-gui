@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { NativeSelect } from '@/components/ui/native-select';
 import { Diamond } from '@/components/brand/Diamond';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -507,18 +508,18 @@ function ConfirmStep({
                 {cgnsFiles[0].name}
               </span>
             ) : (
-              <select
+              <NativeSelect
                 aria-label="CGNS file to convert"
                 value={cgnsFile}
                 onChange={(event) => onCgnsFileChange(event.currentTarget.value)}
-                className="w-full rounded-sm border border-border-strong bg-surface px-3 py-2 font-mono text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                className="font-mono"
               >
                 {cgnsFiles.map((file) => (
                   <option key={file.name} value={file.name}>
                     {file.name}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             )}
           </dd>
         </div>

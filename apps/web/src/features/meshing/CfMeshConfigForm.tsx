@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Cpu, Layers, Wand2 } from 'lucide-react';
+import { NativeSelect } from '@/components/ui/native-select';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { cn } from '@/lib/utils';
 import { CFMESH_PATCH_TYPES, DEFAULT_CFMESH_CONFIG } from '@/lib/api/types';
 import type { CfMeshConfig, CfMeshPatchType, MeshBounds, MeshingPatch, StlFile } from '@/lib/api/types';
 
@@ -422,29 +422,18 @@ function PatchTypeSelect({
   onChange: (value: CfMeshPatchType) => void;
 }) {
   return (
-    <div className="relative">
-      <select
-        aria-label={`Boundary type for ${patch}`}
-        value={value}
-        onChange={(e) => onChange(e.target.value as CfMeshPatchType)}
-        className={cn(
-          'h-9 w-40 appearance-none rounded-md border border-border bg-surface pl-3 pr-9 text-sm text-text',
-          'transition-colors duration-fast ease-out hover:border-border-strong',
-          'focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1',
-        )}
-      >
-        {CFMESH_PATCH_TYPES.map((type) => (
-          <option key={type} value={type}>
-            {type}
-          </option>
-        ))}
-      </select>
-      <ChevronDown
-        className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-text-secondary"
-        strokeWidth={1.75}
-        aria-hidden="true"
-      />
-    </div>
+    <NativeSelect
+      aria-label={`Boundary type for ${patch}`}
+      value={value}
+      onChange={(e) => onChange(e.target.value as CfMeshPatchType)}
+      className="w-40"
+    >
+      {CFMESH_PATCH_TYPES.map((type) => (
+        <option key={type} value={type}>
+          {type}
+        </option>
+      ))}
+    </NativeSelect>
   );
 }
 
