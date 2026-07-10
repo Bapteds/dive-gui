@@ -115,10 +115,19 @@ export async function readExportJson<T>(
   }
 }
 
+/** Numeric order of a produced CGNS filename: `out.cgns` first, then `out_<i>` by i. */
+function cgnsOrder(name: string): number {
+  if (name === EXPORT_FILES.cgns) return -1;
+  const m = /^out_(\d+)\.cgns$/.exec(name);
+  return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;
+}
+
 /**
- * The CGNS files the convert step produced, sorted by name. A single-time export
- * is `out.cgns`; an all-times export is `out_0.cgns`, `out_1.cgns`, … (one per
- * solved time). Excludes the zip itself. Returns absolute paths.
+ * The CGNS files the convert step produced, sorted by their NUMERIC timestep
+ * index. A single-time export is `out.cgns`; an all-times export is `out_0.cgns`,
+ * `out_1.cgns`, … (one per solved time). A lexicographic sort put `out_10` before
+ * `out_2`, which scrambled the merge and the zip order (C1). Excludes the zip
+ * itself. Returns absolute paths.
  */
 export async function listCgnsFiles(projectId: string): Promise<string[]> {
   const dir = exportDirAbsolute(projectId);
@@ -130,7 +139,7 @@ export async function listCgnsFiles(projectId: string): Promise<string[]> {
   }
   return names
     .filter((n) => n.endsWith('.cgns') && (n === EXPORT_FILES.cgns || n.startsWith('out_')))
-    .sort()
+    .sort((a, b) => cgnsOrder(a) - cgnsOrder(b))
     .map((n) => path.join(dir, n));
 }
 

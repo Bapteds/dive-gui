@@ -97,8 +97,13 @@ function skipped(id: ExportStepId, command: string): ExportStep {
   };
 }
 
-/** Numeric OpenFOAM time-directory name (e.g. "0", "0.5", "1000"). */
-const TIME_DIR_RE = /^\d+(\.\d+)?$/;
+/**
+ * Numeric OpenFOAM time-directory name (e.g. "0", "0.5", "1000", "1e-05").
+ * The exponent form is accepted because `timeFormat general` with a small
+ * `deltaT` writes directories like `1e-05` / `2.5e-06` (M16): rejecting them
+ * made a fully solved case report "No solved results to export".
+ */
+const TIME_DIR_RE = /^\d+(\.\d+)?([eE][+-]?\d+)?$/;
 /** Files in a time directory that are not solver fields. */
 const NON_FIELD_NAMES = new Set(['uniform', 'polyMesh']);
 
@@ -144,6 +149,37 @@ async function listSolvedTimeValues(caseDir: string): Promise<string[]> {
     return names.filter((n) => TIME_DIR_RE.test(n)).sort((a, b) => Number(a) - Number(b));
   } catch {
     return [];
+  }
+}
+
+/** Parse the 0-based timestep index i from an `out_<i>.cgns` series filename. */
+function seriesIndex(file: string): number | null {
+  const m = /out_(\d+)\.cgns$/.exec(file);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Read the converter's index->time sidecar (`out.cgns.times`) written by
+ * FoamToCgns.py: the exact ParaView TimestepValues, comma-separated, in the same
+ * index order as `out_<i>.cgns`. Returns the parsed times, or null when the
+ * sidecar is absent/empty/unparseable (so the caller falls back to the case scan).
+ *
+ * Using this instead of re-deriving times from the case directory is what makes
+ * the transient CGNS time axis correct: the case scan and ParaView disagree on
+ * whether t=0 is a step and on scientific-notation dirs, and any mismatch used to
+ * silently swap in fake integer times (C1).
+ */
+async function readSeriesTimes(outCgns: string): Promise<number[] | null> {
+  try {
+    const raw = await fs.readFile(`${outCgns}.times`, 'utf8');
+    const nums = raw
+      .trim()
+      .split(',')
+      .filter((s) => s !== '')
+      .map(Number);
+    return nums.length > 0 && nums.every((n) => Number.isFinite(n)) ? nums : null;
+  } catch {
+    return null;
   }
 }
 
@@ -366,32 +402,48 @@ async function convertToCgns(
   // What pvbatch produced: a single out.cgns (latest-time mode) or the per-time
   // out_<i>.cgns series (all-times mode).
   const files = await listCgnsFiles(projectId);
-  const series = files.filter((f) => /out_\d+\.cgns$/.test(f)).sort();
+  // Order the per-timestep series by its NUMERIC index (out_2 before out_10), so
+  // file _i pairs with time value _i in the merge. A lexicographic sort put
+  // out_10 before out_2 and shipped every field at the wrong time (C1).
+  const series = files
+    .map((f) => ({ f, i: seriesIndex(f) }))
+    .filter((x): x is { f: string; i: number } => x.i !== null)
+    .sort((a, b) => a.i - b.i);
+  const seriesFiles = series.map((x) => x.f);
   let mergeNote = '';
   let cgnsPath: string | null = null;
 
-  if (series.length > 0) {
+  if (seriesFiles.length > 0) {
     // Merge the per-timestep series into ONE transient CGNS (BaseIterativeData)
     // so CFD-Post shows the whole evolution on its time bar. Best-effort: on
     // failure, fall back to the per-timestep zip so the user still gets the data.
     const mergeScript = bundledScript('', 'CgnsMergeTime.py');
-    const timeValues = (await listSolvedTimeValues(caseDir)).join(',');
+    // Times index-aligned with the series: prefer the converter's sidecar (the
+    // real ParaView TimestepValues); fall back to a numeric case-dir scan.
+    const stepTimes = await readSeriesTimes(outCgns);
+    const timeValues =
+      stepTimes && series.every((x) => x.i < stepTimes.length)
+        ? series.map((x) => stepTimes[x.i]).join(',')
+        : (await listSolvedTimeValues(caseDir)).join(',');
     const merge = await runCommand({
       command: env.MESH_PYTHON_BIN,
-      args: [mergeScript, outCgns, timeValues, ...series],
+      args: [mergeScript, outCgns, timeValues, ...seriesFiles],
       cwd: exportDirAbsolute(projectId),
       env: process.env,
       timeoutMs: env.CONVERSION_STEP_TIMEOUT_MS,
     });
     if (merge.exitCode === 0 && (await pathExists(outCgns))) {
-      // Success: one transient out.cgns. Drop the now-redundant series files.
-      for (const f of series) await fs.rm(f, { force: true }).catch(() => undefined);
+      // Success: one transient out.cgns. Drop the now-redundant series files and
+      // the times sidecar.
+      for (const f of seriesFiles) await fs.rm(f, { force: true }).catch(() => undefined);
+      await fs.rm(`${outCgns}.times`, { force: true }).catch(() => undefined);
       cgnsPath = outCgns;
       mergeNote = `\n[merge] ${merge.stdout.trim() || 'transient CGNS written'}`;
     } else {
-      // Fallback: keep the series, offered as a zip.
+      // Fallback: keep the series, offered as a zip. The true latest step is the
+      // last file after the numeric sort (not out_9 over out_10).
       await zipCgnsFiles(projectId);
-      cgnsPath = series[series.length - 1];
+      cgnsPath = seriesFiles[seriesFiles.length - 1];
       mergeNote =
         '\n[merge] WARNING: could not merge into a single transient CGNS; ' +
         `falling back to the per-timestep zip.\n${merge.stderr || merge.stdout}`;
