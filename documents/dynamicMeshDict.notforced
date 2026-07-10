@@ -1,0 +1,119 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  v2412                                 |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      dynamicMeshDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+//- v2412 (ESI): no "mover" wrapper block. The mesh type, motion solver
+//  library and motion solver are declared at the top level.
+dynamicFvMesh       dynamicMotionSolverFvMesh;
+
+//- v2412 style: bare library name, no "lib" prefix / ".so" suffix needed
+motionSolverLibs    (sixDoFRigidBodyMotion);
+
+motionSolver        sixDoFRigidBodyMotion;
+
+//- v2412 reads the coefficients either flat at this level or from an
+//  optional sixDoFRigidBodyMotionCoeffs subdict. Flat style (as in the
+//  ESI tutorials, e.g. floatingObject) is used here.
+
+//- List of mesh patches associated with the solid body
+patches         (kaplan);
+
+//- Inner morphing distance (limit of solid-body region)
+innerDistance   0.2;
+
+//- Outer morphing distance (limit of linear interpolation region)
+outerDistance   0.5;
+
+//- Density handling: rhoInf keyword for incompressible cases [kg/m^3]
+rho             rhoInf;
+rhoInf          1000;
+
+//- Mass of kaplan [kg]
+//  Al-Alloy 2700 [kg/m^3]
+mass            0.11934;
+
+//- Moment of inertia [kg m^2], based on a cylinder (Salome calculation)
+momentOfInertia (8.5452e-4 2.93493e-4 8.5452e-4);
+
+//- Initial centre of mass (default) and centre of rotation of the rigid body
+centreOfMass    (-0.000000006 0.454503602 0.0000000483);
+
+//- Initial orientation of the rigid body
+orientation
+(
+    1 0 0
+    0 1 0
+    0 0 1
+);
+
+//- Linear velocity of the rigid body
+velocity        (0 0 0);
+
+//- Total linear acceleration of the rigid body
+acceleration    (0 0 0);
+
+//- Angular momentum of the rigid body in local reference frame
+angularMomentum (0 0 0);
+
+//- Total torque on the rigid body in local reference frame
+torque          (0 0 0);
+
+//- Report motion data
+report          on;
+
+//- Acceleration relaxation coeff [0-1]
+accelerationRelaxation 0.9;
+
+//- Acceleration damping coeff (for steady-state simulations) [0-1]
+//accelerationDamping 0.1;
+
+//- Motion time-integration solver: Newmark, CrankNicolson, symplectic
+solver
+{
+    type    Newmark;
+}
+
+//- Constraints
+constraints
+{
+    //- Rotation only about the y axis
+    //  (name kept descriptive; only the "axis" vector matters)
+    yAxis
+    {
+        sixDoFRigidBodyMotionConstraint axis;
+        axis    (0 1 0);
+    }
+
+    //- Fix the point: translation fully constrained,
+    //  only rotation about y remains
+    fixedPt
+    {
+        sixDoFRigidBodyMotionConstraint point;
+        point   (-0.000000006 0.454503602 0.0000000483);
+    }
+}
+
+//- Restraints
+restraints
+{
+    //- Angular damper, acts against motion like friction [N m s/rad]
+    translationDamper
+    {
+        sixDoFRigidBodyMotionRestraint  sphericalAngularDamper;
+        coeff   0.85;
+    }
+}
+
+// ************************************************************************* //

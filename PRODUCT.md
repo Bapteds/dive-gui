@@ -8,14 +8,14 @@ product
 
 Internal staff of **DIVE Turbinen GmbH & Co. KG** (German B2B turbine manufacturer):
 
-- **Engineers / CFD analysts** who will configure and launch openFOAM solver runs on a remote server. In this base phase they only authenticate and land on a (currently blank) home shell.
+- **Engineers / CFD analysts** who prepare OpenFOAM cases (mesh import & conversion, case setup, multi-part assembly), launch solver runs and watch their residuals live, and export results for CFD-Post — all per project, from the browser.
 - **Administrators (super-admin)** who manage the roster of accounts that may access the platform.
 
 Context of use: desktop, office environment, focused task work (not casual browsing, not mobile-first). Users return to the tool repeatedly and expect it to be predictable and fast.
 
 ## Product Purpose
 
-A controlled internal web platform to **parameterize and pilot openFOAM solver runs on a remote server**. The remote server does not exist yet, so this phase delivers the *foundation*: authentication, an admin back office to manage accounts (the super-admin account is permanent), and an empty home shell ready to receive the future solver-control workspace. Success = a secure, trustworthy base an engineering team can log into daily, with account administration that cannot be misused (no accidental lockout — the super-admin is protected).
+A controlled internal web platform to **prepare, run and post-process OpenFOAM CFD cases** from the browser. Per project it delivers the full workflow — mesh import & CGNS→Foam conversion, a 3D viewer, multi-part assembly, solver runs with live residuals, and export to CFD-Post — on top of a secure foundation: JWT authentication and an admin back office where the super-admin account is permanent. Success = a secure, trustworthy tool an engineering team can log into daily to drive their CFD work, with account administration that cannot be misused (no accidental lockout — the super-admin is protected).
 
 ## Brand Personality
 
