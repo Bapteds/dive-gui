@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { CFMESH_PATCH_TYPES, DEFAULT_CFMESH_CONFIG } from '@/lib/api/types';
+import { numOr } from './formNumber';
 import type { CfMeshConfig, CfMeshPatchType, MeshBounds, MeshingPatch, StlFile } from '@/lib/api/types';
 
 /** The type set for a discovered patch: the saved choice, its FMS type, else wall. */
@@ -64,6 +65,7 @@ function parseSize(value: string): number | null {
   const n = Number(value);
   return value.trim() !== '' && Number.isFinite(n) && n > 0 ? n : null;
 }
+
 
 export function CfMeshConfigForm({
   stls,
@@ -157,12 +159,12 @@ export function CfMeshConfigForm({
       minCellSize: parseSize(minCellSize),
       boundaryCellSize: parseSize(boundaryCellSize),
       extractFeatures,
-      featureAngle: Math.min(180, Math.max(0, Number(featureAngle) || DEFAULT_CFMESH_CONFIG.featureAngle)),
+      featureAngle: Math.min(180, Math.max(0, numOr(featureAngle, DEFAULT_CFMESH_CONFIG.featureAngle))),
       patchTypes: Object.keys(chosenPatchTypes).length > 0 ? chosenPatchTypes : undefined,
       addLayers: {
         enabled: layersOn,
-        nLayers: Math.max(1, Math.round(Number(nLayers) || 3)),
-        thicknessRatio: Math.max(1, Number(thicknessRatio) || 1.2),
+        nLayers: Math.max(1, Math.round(numOr(nLayers, 3))),
+        thicknessRatio: Math.max(1, numOr(thicknessRatio, 1.2)),
         maxFirstLayerThickness: parseSize(maxFirstLayer),
       },
       cores: clampCores(String(cores), maxCores),

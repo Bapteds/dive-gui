@@ -132,6 +132,12 @@ Ce qui a été fait : le parser 16 Ko reste le défaut (protection mémoire) mai
 - 1 test (`templates.test.ts`) : un fichier inline de ~35 Ko (> 16 Ko) passe (201) et est relu intact.
 Fichiers : `apps/api/src/app.ts`, `apps/api/src/modules/templates/templates.routes.ts`, `apps/api/src/modules/projects/projects.routes.ts`, `apps/api/tests/templates.test.ts`.
 
+### ✅ M12 — Les formulaires de meshing remplacent silencieusement un 0 légitime par le défaut
+Bug : `Number(x) || DEFAULT` dans SnappyConfigForm / CfMeshConfigForm coerçait un 0 tapé vers le défaut (margin 0 → 0.1, feature level 0 → 2, feature angle 0 → 45). Le champ affichait 0 mais la config persistée/le mesh différaient.
+Ce qui a été fait : helper partagé `numOr(value, fallback)` (`formNumber.ts`) distinguant un champ **vide** (→ défaut) d'un **0 tapé** (→ 0 ; `Number('')` vaut 0, d'où le piège du `||`). Appliqué à margin, featureLevel, featureAngle, nLayers, finalLayerThickness, expansionRatio, thicknessRatio. Aucun changement visuel.
+- 4 tests unitaires (`formNumber.test.ts`) : 0 tapé gardé, vide/blanc → défaut, non-numérique → défaut, nombre normal.
+Fichiers : `apps/web/src/features/meshing/formNumber.ts` (nouveau) + `.test.ts`, `SnappyConfigForm.tsx`, `CfMeshConfigForm.tsx`.
+
 ## HIGH
 
 ### ✅ H1 — Solveurs orphelins survivant à un redémarrage de l'API

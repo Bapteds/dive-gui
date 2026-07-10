@@ -5,6 +5,7 @@ import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { SegmentedRadioGroup } from '@/components/ui/segmented';
 import { DEFAULT_SNAPPY_CONFIG } from '@/lib/api/types';
+import { numOr } from './formNumber';
 import type { DomainType, MeshBounds, SnappyConfig, StlFile, SurfaceRefinement } from '@/lib/api/types';
 
 /**
@@ -165,7 +166,7 @@ export function SnappyConfigForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stlKey]);
 
-  const margin = Number(marginFactor) || DEFAULT_SNAPPY_CONFIG.marginFactor;
+  const margin = numOr(marginFactor, DEFAULT_SNAPPY_CONFIG.marginFactor);
 
   const autoCell = bounds ? (diagonalOf(bounds) || 1) / 40 : null;
   const autoPoint = useMemo(
@@ -214,16 +215,16 @@ export function SnappyConfigForm({
       marginFactor: margin,
       surfaceRefinement,
       surfaceRefinements,
-      featureLevel: Math.max(0, Math.round(Number(featureLevel) || DEFAULT_SNAPPY_CONFIG.featureLevel)),
+      featureLevel: Math.max(0, Math.round(numOr(featureLevel, DEFAULT_SNAPPY_CONFIG.featureLevel))),
       locationInMesh: location && location.every(Number.isFinite) ? location : null,
       addLayers: {
         enabled: layersOn,
         // The surfaces (boundaries) the layers grow on — the checked STL surfaces.
         surfaces: stls.map((s) => s.name).filter((name) => layerSurfaceOn[name] ?? true),
-        nLayers: Math.max(1, Math.round(Number(nLayers) || 3)),
+        nLayers: Math.max(1, Math.round(numOr(nLayers, 3))),
         relativeSizes,
-        finalLayerThickness: Math.max(1e-6, Number(finalThickness) || 0.5),
-        expansionRatio: Math.max(1, Number(expansionRatio) || 1.2),
+        finalLayerThickness: Math.max(1e-6, numOr(finalThickness, 0.5)),
+        expansionRatio: Math.max(1, numOr(expansionRatio, 1.2)),
       },
       cores: clampCores(String(cores), maxCores),
     };
