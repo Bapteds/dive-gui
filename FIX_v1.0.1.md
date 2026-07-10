@@ -307,7 +307,10 @@ Bug : la branche `update` de l'upsert réécrivait `passwordHash` → tout chang
 
 ## Reste à faire
 
-**Tous les CRITICAL (C1–C4), HIGH (H1–H10) et MEDIUM (M1–M24) sont traités** — sauf **M18** (deferred-by-design : décision testée « tous les solveurs guidés », vraie résolution = feature templates par famille). Restent les **LOW (L1–L21)**. Backlog + ordre dans `BUG_AUDIT.md`.
+**Tous les CRITICAL (C1–C4), HIGH (H1–H10) et MEDIUM (M1–M24) sont traités** — sauf **M18** (deferred-by-design : décision testée « tous les solveurs guidés », vraie résolution = feature templates par famille).
+
+**LOW faits (12/21) :** L1, L2, L3, L4, L6, L8, L12, L15, L16, L17, L18, L20.
+**LOW restants (9) :** L5 (stop-vs-launch race), L7 (`foamRun` sentinel non-ESI — gated, sentinel voulu), L9 (`.fms` dans une session snappy), L10 (course readdir-then-create sur les slugs), L11 (fuite argv dans le bashrc OpenFOAM), L13 (edges.bin boucle/stale), L14 (saut gimbal sur l'édition de rotation), L19 (StlViewer avale un STL illisible + perte de contexte WebGL), L21 (bundle divers). Restants = concurrence délicate, sentinels voulus, ou papercuts à faible valeur / nécessitant de la nouvelle UI. Détail + ordre dans `BUG_AUDIT.md`.
 
 Vérifications tests (fin du lot MEDIUM) : **API 466/466** (+1 skip POSIX-only pour l'escalade SIGKILL M6), **web 132/132**, **MCP 25/25**, typecheck + lint (0 erreur) OK.
 
