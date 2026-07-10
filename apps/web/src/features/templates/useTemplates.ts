@@ -232,6 +232,9 @@ export function useApplyTemplate(projectId: string) {
     mutationFn: ({ templateId, decisions }) => applyTemplate(projectId, templateId, decisions),
     onSuccess: (result) => {
       queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
+      // Applying a template overwrites case files; drop their content caches so an
+      // open editor can't autosave stale text over the just-imported content (M14).
+      queryClient.removeQueries({ queryKey: [...caseFilesQueryKey(projectId), 'content'] });
     },
   });
 }
@@ -243,6 +246,9 @@ export function useApplyTemplateFiles(projectId: string) {
     mutationFn: ({ templateId, paths }) => applyTemplateFiles(projectId, templateId, paths),
     onSuccess: (result) => {
       queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
+      // Drop content caches so an open editor can't autosave stale text over the
+      // just-imported files (M14).
+      queryClient.removeQueries({ queryKey: [...caseFilesQueryKey(projectId), 'content'] });
     },
   });
 }
