@@ -284,6 +284,12 @@ Bug : le controlDict gagnait toujours, l'`input.solver` était ignoré sans un m
 ### ✅ L8 — `fmtFoamNumber` écrase |x| < 5e-7 à 0
 Bug : `toFixed(6)` mettait à 0 une composante d'axe rotor / origine minuscule mais réelle dans MRFProperties/dynamicMeshDict. Fix : `toPrecision(12)` (chiffres significatifs, pas décimales fixes ; OpenFOAM lit `3e-7`). Fichiers : `apps/api/src/lib/openfoamCase.ts`.
 
+### ✅ L15 — autoPatch accepte un champ vide comme angle 0°
+Bug : `Number(angle)` sur un champ vidé = 0 → autoPatch éclatait la frontière en patches maximaux. Fix : `validAngle` (non vide, fini, 0 < a ≤ 180) désactive le bouton Split et garde `handleSplit`. Fichiers : `apps/web/src/features/assemble/PartsRail.tsx`.
+
+### ✅ L18 — ResidualChart : ticks dupliqués / axe « 0…0 » pour un run transitoire t<1
+Bug : `Math.round(t)` écrasait tous les ticks à 0 pour t<1 (axe « 0…0 », clés React dupliquées). Fix : décimales adaptées à l'étendue (`toFixed` 0/2/4) + clé par index. Fichiers : `apps/web/src/features/solver/ResidualChart.tsx`.
+
 ### ✅ L12 — Le seed réinitialise le mot de passe du super-admin à chaque deploy
 Bug : la branche `update` de l'upsert réécrivait `passwordHash` → tout changement de mot de passe fait dans l'app était réverti au prochain seed/deploy. Fix : `passwordHash` n'est plus dans `update` (seulement à la première création). Fichiers : `apps/api/prisma/seed.ts`.
 

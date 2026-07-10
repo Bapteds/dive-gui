@@ -101,10 +101,15 @@ function buildModel(samples: ResidualSample[], width: number): ChartModel | null
     gridlines.push({ y: yScale(10 ** d), label: `1e${d}` });
   }
 
-  const tickCount = Math.min(5, Math.max(2, Math.round(xMax - xMin) + 1));
+  const span = xMax - xMin;
+  const tickCount = Math.min(5, Math.max(2, Math.round(span) + 1));
+  // Decimals scaled to the time range: a transient run with t < 1 previously
+  // rounded every tick to 0, giving a meaningless "0 … 0" axis with duplicate
+  // labels/keys (L18). Integer times keep clean whole-number labels.
+  const tickDecimals = span >= 4 ? 0 : span >= 0.4 ? 2 : 4;
   const xTicks = Array.from({ length: tickCount }, (_, i) => {
-    const t = Math.round(xMin + ((xMax - xMin) * i) / (tickCount - 1));
-    return { x: xScale(t), label: String(t) };
+    const t = xMin + (span * i) / (tickCount - 1);
+    return { x: xScale(t), label: String(Number(t.toFixed(tickDecimals))) };
   });
 
   return { series, gridlines, xTicks, baselineY: PAD.top + plotH };
@@ -204,9 +209,9 @@ export function ResidualChart({ samples }: { samples: ResidualSample[] }) {
             stroke="var(--color-border-strong)"
             strokeWidth={1}
           />
-          {model.xTicks.map((tick) => (
+          {model.xTicks.map((tick, i) => (
             <text
-              key={tick.label}
+              key={i}
               x={tick.x}
               y={model.baselineY + 16}
               textAnchor="middle"
