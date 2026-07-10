@@ -10,7 +10,7 @@ import {
   restoreBackup,
   writeBackup,
 } from '../src/lib/meshBackupStorage';
-import { caseDirAbsolute, writeCaseFile, readCaseFile } from '../src/lib/caseStorage';
+import { writeCaseFile, readCaseFile } from '../src/lib/caseStorage';
 
 const created: string[] = [];
 
