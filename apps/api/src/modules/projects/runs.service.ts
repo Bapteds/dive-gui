@@ -422,6 +422,17 @@ export async function startRun(
     );
   }
 
+  // The case's controlDict decides the solver (its system/ + 0/ files are
+  // scaffolded for it). If the caller ALSO passed a different solver, don't silently
+  // ignore it — reject so the mismatch is explicit, since running another solver on
+  // these files would fail (L6). A matching or absent override runs normally.
+  if (input.solver && runnable.solver && input.solver !== runnable.solver) {
+    throw new AppError(
+      409,
+      'SOLVER_MISMATCH',
+      `This case is configured to run ${runnable.solver}. Change the solver in the Solver tab before running ${input.solver}.`,
+    );
+  }
   const solver = resolveSolver(runnable.solver, input.solver);
   // A prior stop persisted `stopAt writeNow;` in the controlDict; undo it (and
   // ensure runTimeModifiable) so this run runs to completion instead of writing
