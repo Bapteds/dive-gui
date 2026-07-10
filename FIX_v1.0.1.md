@@ -267,9 +267,11 @@ Fichiers : `apps/web/src/features/assemble/AssemblyWorkspace.tsx`.
 
 ## Reste à faire
 
-**Tous les CRITICAL (C1–C4) et HIGH (H1–H10) sont traités.**
-MEDIUM restants : M1–M2, M4–M15, M17–M24 (M3, M16 déjà faits). Tous les LOW. Backlog + ordre dans `BUG_AUDIT.md`.
+**Tous les CRITICAL (C1–C4), HIGH (H1–H10) et MEDIUM (M1–M24) sont traités** — sauf **M18** (deferred-by-design : décision testée « tous les solveurs guidés », vraie résolution = feature templates par famille). Restent les **LOW (L1–L21)**. Backlog + ordre dans `BUG_AUDIT.md`.
 
-Vérifs de ce lot : API 4 suites vertes (fileTree/solver/runs), web 128/128, typecheck + lint OK.
+Vérifications tests (fin du lot MEDIUM) : **API 466/466** (+1 skip POSIX-only pour l'escalade SIGKILL M6), **web 132/132**, **MCP 25/25**, typecheck + lint (0 erreur) OK.
 
-Vérifications tests (ce lot) : API 449/449, web 126/126, typecheck + lint OK. À valider sur le serveur de deploy : les chemins Python (C1 sidecar, H7 multi-zones) et le comportement crash-log C3 en conditions réelles.
+À VALIDER sur le serveur de deploy (non exécutable en dev Windows) :
+- Python : C1 sidecar, H7 multi-zones, **M8** (CSV strict), **M19** (internalMesh désactivé sous pyvista), **M24** (regex tirets).
+- OpenFOAM/MPI : **M1** garde run-actif, **M6** SIGTERM→SIGKILL mpirun, **M5** overflow buffer d'un gros mesher.
+- Streaming : **M20** download cgns multi-Go réel.
