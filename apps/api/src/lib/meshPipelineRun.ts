@@ -7,7 +7,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { ImportStep, MeshImportConversion } from '@dive/shared';
-import { runCommand, type CommandResult } from './commandRunner';
+import { runCommand, MAX_BUFFER_MB, type CommandResult } from './commandRunner';
 import { commandFailed, type PlannedCommand } from './openfoamCommand';
 
 /** Keep captured output bounded on the wire while preserving the useful tail. */
@@ -21,9 +21,11 @@ export function tail(text: string): string {
 export function toStep(tool: string, label: string, display: string, result: CommandResult): ImportStep {
   const extra = result.spawnError
     ? `\n[runner] ${result.spawnError}`
-    : result.timedOut
-      ? '\n[runner] command timed out'
-      : '';
+    : result.outputTruncated
+      ? `\n[runner] the tool exceeded the ${MAX_BUFFER_MB} MB output capture limit and was stopped; the mesh may be incomplete. Reduce solver/mesher verbosity or check the tool's own logs.`
+      : result.timedOut
+        ? '\n[runner] command timed out'
+        : '';
   return {
     tool,
     label,

@@ -14,7 +14,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { ImportStep, MeshImportConversion } from '@dive/shared';
 import { env } from '../config/env';
-import { runCommand, type CommandResult } from './commandRunner';
+import { runCommand, MAX_BUFFER_MB, type CommandResult } from './commandRunner';
 import { commandFailed, planOpenfoamCommand } from './openfoamCommand';
 import { renderBaseFile, type BaseFilePath } from './openfoamCase';
 
@@ -39,9 +39,11 @@ function tail(text: string): string {
 function toStep(tool: string, label: string, display: string, result: CommandResult): ImportStep {
   const extra = result.spawnError
     ? `\n[runner] ${result.spawnError}`
-    : result.timedOut
-      ? '\n[runner] command timed out'
-      : '';
+    : result.outputTruncated
+      ? `\n[runner] the tool exceeded the ${MAX_BUFFER_MB} MB output capture limit and was stopped; the result may be incomplete.`
+      : result.timedOut
+        ? '\n[runner] command timed out'
+        : '';
   return {
     tool,
     label,

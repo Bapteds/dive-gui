@@ -24,6 +24,8 @@ export interface CommandSpec {
   env?: NodeJS.ProcessEnv;
   /** Wall-clock timeout in ms; the child is killed (SIGTERM) when exceeded. */
   timeoutMs?: number;
+  /** Override the stdout+stderr buffer cap (bytes). Defaults to MAX_BUFFER. */
+  maxBuffer?: number;
 }
 
 /** Structured outcome of running a command — success or any kind of failure. */
@@ -42,13 +44,26 @@ export interface CommandResult {
    * binary is not installed / not on PATH). Distinct from a non-zero exit.
    */
   spawnError?: string;
+  /**
+   * Set when the child RAN but printed more than the buffer cap and was stopped by
+   * Node (`ERR_CHILD_PROCESS_STDIO_MAXBUFFER`). The captured stdout/stderr hold the
+   * output up to the cap. Distinct from a spawn error and from a timeout — a big
+   * mesher run (snappy/cartesianMesh) is verbose, not "not installed" (M5).
+   */
+  outputTruncated?: boolean;
 }
 
 /** A function that runs a command and resolves to its structured result. */
 export type CommandRunner = (spec: CommandSpec) => Promise<CommandResult>;
 
-/** Combined stdout+stderr buffer cap (large checkMesh reports are expected). */
-const MAX_BUFFER = 16 * 1024 * 1024; // 16 MB
+/**
+ * Combined stdout+stderr buffer cap. Verbose meshers (snappyHexMesh,
+ * cartesianMesh) print per-iteration stats that add up on a large mesh, so this is
+ * generous; an overflow is reported as `outputTruncated`, never as "not installed".
+ */
+export const MAX_BUFFER = 128 * 1024 * 1024; // 128 MB
+/** The cap in MB, for user-facing messages. */
+export const MAX_BUFFER_MB = MAX_BUFFER / (1024 * 1024);
 
 /** The real runner: spawns the process via execFile and never rejects. */
 export const realCommandRunner: CommandRunner = (spec) =>
@@ -61,7 +76,7 @@ export const realCommandRunner: CommandRunner = (spec) =>
         cwd: spec.cwd,
         env: spec.env,
         timeout: spec.timeoutMs,
-        maxBuffer: MAX_BUFFER,
+        maxBuffer: spec.maxBuffer ?? MAX_BUFFER,
         encoding: 'utf8',
         windowsHide: true,
       },
@@ -78,18 +93,23 @@ export const realCommandRunner: CommandRunner = (spec) =>
           resolve({ ...base, exitCode: 0, timedOut: false });
           return;
         }
-        // A numeric `code` is the process exit code; a string `code` (ENOENT,
-        // EACCES, ERR_CHILD_PROCESS_STDIO_MAXBUFFER, …) means it never ran (or
-        // could not be read), which we surface as a spawn error. A null/undefined
-        // code with `killed` means it was terminated (e.g. the timeout).
+        // A numeric `code` is the process exit code. A string `code` is ENOENT/
+        // EACCES (never ran -> spawn error) EXCEPT ERR_CHILD_PROCESS_STDIO_MAXBUFFER,
+        // which means it RAN but overflowed the buffer and Node killed it — that is
+        // truncated output, NOT a failure to start (M5). A null/undefined code with
+        // `killed` means it was terminated (the timeout). The maxBuffer kill also
+        // sets `killed`, so it must be excluded from `timedOut`.
         const code = error.code;
+        const outputTruncated = code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
         const exitCode = typeof code === 'number' ? code : null;
-        const spawnError = typeof code === 'string' ? `${code}: ${error.message}` : undefined;
+        const spawnError =
+          typeof code === 'string' && !outputTruncated ? `${code}: ${error.message}` : undefined;
         resolve({
           ...base,
           exitCode,
-          timedOut: error.killed === true,
+          timedOut: error.killed === true && !outputTruncated,
           spawnError,
+          outputTruncated: outputTruncated || undefined,
         });
       },
     );
