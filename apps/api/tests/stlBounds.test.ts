@@ -53,6 +53,24 @@ describe('parseStlBounds', () => {
     expect(result.max).toEqual([1, 5, 3]);
   });
 
+  it('reads a binary STL that has trailing padding (M17)', () => {
+    // Some exporters pad the file past 84 + n*50; the exact-size test rejected it
+    // and it fell through to the ASCII path, yielding 0 triangles.
+    const exact = binaryStl([
+      [
+        [0, 0, 0],
+        [1, 5, 0],
+        [-2, 0, 3],
+      ],
+    ]);
+    const padded = Buffer.concat([exact, Buffer.alloc(128)]); // 128 padding bytes
+    const result = parseStlBounds(padded);
+    expect(result.valid).toBe(true);
+    expect(result.triangleCount).toBe(1);
+    expect(result.min).toEqual([-2, 0, 0]);
+    expect(result.max).toEqual([1, 5, 3]);
+  });
+
   it('reads the bounding box of an ASCII STL', () => {
     const result = parseStlBounds(Buffer.from(ASCII_STL, 'utf8'));
     expect(result.valid).toBe(true);

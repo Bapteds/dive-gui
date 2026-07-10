@@ -204,6 +204,22 @@ Ce qui a été fait : au timeout, **SIGTERM d'abord** (mpirun le relaie à ses r
 - 2 tests (`streamRunner.test.ts`, node réel) : un process dépassant son timeout → `timedOut:true` ; (POSIX only) un process ignorant SIGTERM → escaladé en SIGKILL (`signal: 'SIGKILL'`).
 Fichiers : `apps/api/src/lib/streamRunner.ts`, `apps/api/src/modules/projects/runs.service.ts`, `apps/api/tests/streamRunner.test.ts`.
 
+### ✅ M17 — STL binaires paddés rejetés comme illisibles
+Bug : `stlBounds.ts` / `stlMerge.ts` exigeaient la taille EXACTE `84 + n*50` ; un STL binaire avec padding en fin de fichier (certains exporteurs) tombait dans le parseur ASCII → 0 triangle → l'erreur blâmait le fichier de l'utilisateur.
+Ce qui a été fait : détection relâchée à `84 + n*50 <= length` (le payload doit TENIR, padding toléré ; un ASCII ne peut pas satisfaire ça, ses octets 80-83 sont du texte → count énorme) + filet : si une lecture « binaire » ne donne aucun triangle, retomber sur ASCII.
+- 1 test (`stlBounds.test.ts`) : un STL binaire + 128 octets de padding est lu correctement.
+Fichiers : `apps/api/src/lib/stlBounds.ts`, `apps/api/src/lib/stlMerge.ts`, `apps/api/tests/stlBounds.test.ts`.
+
+### ✅ M19 — `extractPatches.py` charge tout le maillage volumique interne
+Bug : `enable_all_patch_arrays()` active AUSSI le pseudo-patch `internalMesh` (le maillage volumique complet), malgré le design « bords seulement » — un rendu synchrone in-request pouvait OOM/timeout sur un maillage de production.
+Ce qui a été fait : désactivation de `internalMesh` au niveau VTK (`SetPatchArrayStatus`, robuste aux versions pyvista, en best-effort try/except → dégrade vers l'ancien comportement plutôt que de casser le rendu).
+Fichiers : `apps/api/scripts/extractPatches.py`. À VÉRIFIER sur le box (pyvista non exécutable en dev).
+
+### ✅ M24 — Noms de patches à tiret mal indexés dans le manifest
+Bug : la regex `(\w+)…type\s+(\w+)` de `parse_boundary_types` capturait `wall-1` comme `1` (le `\w` exclut le tiret) et pouvait matcher `physicalType` — les consommateurs meshing/librairie recevaient de mauvais types (Visualize récupérait via re-enrich côté TS).
+Ce qui a été fait : regex `([A-Za-z_][\w-]*)…\btype\s+([\w-]+)` (tirets autorisés dans nom + type, `\btype` ancre la vraie clé). Vérifié en Python : `wall-1`/`inlet-1` + `physical... type ...` parsés correctement.
+Fichiers : `apps/api/scripts/extractPatches.py`.
+
 ## Reste à faire
 
 **Tous les CRITICAL (C1–C4) et HIGH (H1–H10) sont traités.**

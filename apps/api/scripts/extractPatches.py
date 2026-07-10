@@ -45,8 +45,10 @@ def parse_boundary_types(case_dir):
     if os.path.exists(bfile):
         with open(bfile) as fh:
             txt = fh.read()
-        # Match: <name> { ... type <word> ; ... }
-        for m in re.finditer(r"(\w+)\s*\{[^}]*?type\s+(\w+)\s*;", txt):
+        # Match: <name> { ... type <word> ; ... }. The name and type allow hyphens
+        # (Fluent zone names like "wall-1"); before the fix `\w+` captured "wall-1"
+        # as "1" and could pick up `physicalType`. `\btype` anchors the real key.
+        for m in re.finditer(r"([A-Za-z_][\w-]*)\s*\{[^}]*?\btype\s+([\w-]+)\s*;", txt):
             types[m.group(1)] = m.group(2)
         # FoamFile is the dictionary header, not a real patch.
         types.pop("FoamFile", None)
@@ -113,6 +115,19 @@ def main():
         #    speed/memory win, mirroring the original load_patches().
         reader = pv.OpenFOAMReader(foam)
         reader.enable_all_patch_arrays()
+        # enable_all_patch_arrays() also turns ON the "internalMesh" pseudo-patch,
+        # i.e. the full internal VOLUME mesh. We only render boundary surfaces, and
+        # loading the internal mesh can OOM / time out on a production case (M19), so
+        # disable it. Done at the VTK level for version-robustness; if the API
+        # differs, fall back to the prior behaviour rather than failing the render.
+        try:
+            raw = reader.reader
+            for i in range(raw.GetNumberOfPatchArrays()):
+                if raw.GetPatchArrayName(i) == "internalMesh":
+                    raw.SetPatchArrayStatus("internalMesh", 0)
+            raw.Modified()
+        except Exception as exc:  # noqa: BLE001 - best-effort optimisation only
+            sys.stderr.write(f"[extractPatches] could not disable internalMesh: {exc}\n")
         mesh = reader.read()
 
         keys = list(mesh.keys()) if mesh is not None else []

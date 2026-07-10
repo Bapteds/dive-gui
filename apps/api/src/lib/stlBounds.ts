@@ -54,11 +54,18 @@ function accumulate(acc: Accumulator, x: number, y: number, z: number): void {
   acc.count += 1;
 }
 
-/** Is `buffer` a binary STL? True iff its length matches the header+triangle layout. */
-function isBinaryStl(buffer: Buffer): boolean {
+/**
+ * Does `buffer` look like a binary STL? The declared triangle payload must FIT in
+ * the file — `84 + triangles*50 <= length`, not `===`, so a binary STL with
+ * trailing padding (some exporters pad the file) is still recognised (M17). A real
+ * ASCII STL cannot satisfy this: bytes 80-83 are printable text, giving a huge
+ * `triangles`, so `84 + triangles*50` dwarfs any file length. The parse itself
+ * falls back to ASCII if a "binary" read yields nothing, covering any rare misdetect.
+ */
+function looksBinaryStl(buffer: Buffer): boolean {
   if (buffer.length < 84) return false;
   const triangles = buffer.readUInt32LE(80);
-  return 84 + triangles * 50 === buffer.length;
+  return triangles > 0 && 84 + triangles * 50 <= buffer.length;
 }
 
 /** Parse a binary STL, folding every vertex into `acc`. */
@@ -100,8 +107,11 @@ function parseAscii(text: string, acc: Accumulator): void {
 export function parseStlBounds(buffer: Buffer): StlParseResult {
   const acc = newAccumulator();
   try {
-    if (isBinaryStl(buffer)) {
+    if (looksBinaryStl(buffer)) {
       parseBinary(buffer, acc);
+      // If a binary read found no vertices, the size test misdetected an ASCII
+      // file — retry as ASCII rather than reporting an unreadable STL.
+      if (acc.count === 0) parseAscii(buffer.toString('utf8'), acc);
     } else {
       parseAscii(buffer.toString('utf8'), acc);
     }

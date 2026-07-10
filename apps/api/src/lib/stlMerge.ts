@@ -16,11 +16,15 @@ interface Triangle {
   v: [Vec3, Vec3, Vec3];
 }
 
-/** Is `buffer` a binary STL? (length == 84 + triangles*50 — the reliable test). */
-function isBinaryStl(buffer: Buffer): boolean {
+/**
+ * Does `buffer` look like a binary STL? The declared payload must FIT in the file
+ * (`84 + triangles*50 <= length`, not `===`) so a padded binary STL is still read
+ * (M17). An ASCII STL cannot satisfy this (bytes 80-83 are text -> huge count).
+ */
+function looksBinaryStl(buffer: Buffer): boolean {
   if (buffer.length < 84) return false;
   const triangles = buffer.readUInt32LE(80);
-  return 84 + triangles * 50 === buffer.length;
+  return triangles > 0 && 84 + triangles * 50 <= buffer.length;
 }
 
 /** Read all triangles from a binary STL (12-byte normal + 3×12-byte vertices + 2 attr). */
@@ -65,7 +69,12 @@ function parseAscii(text: string): Triangle[] {
 
 /** Read the triangles of an STL buffer (ASCII or binary). */
 function parseTriangles(buffer: Buffer): Triangle[] {
-  return isBinaryStl(buffer) ? parseBinary(buffer) : parseAscii(buffer.toString('utf8'));
+  if (looksBinaryStl(buffer)) {
+    const tris = parseBinary(buffer);
+    // A misdetected ASCII file yields no binary triangles — retry as ASCII.
+    if (tris.length > 0) return tris;
+  }
+  return parseAscii(buffer.toString('utf8'));
 }
 
 /** Reduce a file stem to a valid OpenFOAM word (patch name): letters, digits, `_`. */
