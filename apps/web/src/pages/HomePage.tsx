@@ -17,7 +17,7 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Diamond } from '@/components/brand/Diamond';
+import { EmptyState } from '@/components/common/EmptyState';
 import { toast } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
 import { ApiError } from '@/lib/api/client';
@@ -105,7 +105,7 @@ export function HomePage() {
         <div>
           <div className="flex items-center gap-2.5">
             <h1 className="text-2xl font-semibold text-text">Dashboard</h1>
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-success-tint px-2 py-0.5 text-xs font-semibold text-success">
+            <span className="inline-flex items-center gap-1.5 rounded-sm bg-success-tint px-2 py-0.5 text-xs font-semibold text-success">
               <span className="size-1.5 animate-pulse rounded-full bg-success" aria-hidden="true" />
               Live
             </span>
@@ -248,7 +248,7 @@ function KpiCard({
   children: ReactNode;
 }) {
   return (
-    <div className="flex flex-col rounded-lg border border-border bg-surface p-4 shadow-sm">
+    <div className="flex flex-col rounded-md border border-border bg-surface p-4 shadow-sm">
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-1.5 text-xs font-semibold text-text-secondary">
           <span style={{ color: tone }} className="flex">
@@ -291,7 +291,7 @@ function DeltaPill({ delta }: { delta: number | null | undefined }) {
   if (delta === null || delta === undefined) return null;
   const Icon = delta === 0 ? Minus : delta > 0 ? TrendingUp : TrendingDown;
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-bg px-1.5 py-0.5 font-mono text-[11px] font-semibold text-text-secondary tabular-nums">
+    <span className="inline-flex items-center gap-1 rounded-sm bg-bg px-1.5 py-0.5 font-mono text-xs font-semibold text-text-secondary tabular-nums">
       <Icon className="size-3" strokeWidth={2} aria-hidden="true" />
       {Math.abs(delta)}
     </span>
@@ -314,7 +314,7 @@ function RunningSolversPanel({
   stopPending: boolean;
 }) {
   return (
-    <section className="flex min-h-0 flex-col rounded-lg border border-border bg-surface p-4 shadow-sm sm:p-5">
+    <section className="flex min-h-0 flex-col rounded-md border border-border bg-surface p-4 shadow-sm sm:p-5">
       <header className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2.5">
           <span className="grid size-7 place-items-center rounded-md bg-primary-tint text-primary">
@@ -322,7 +322,7 @@ function RunningSolversPanel({
           </span>
           <h2 className="text-sm font-semibold text-text">Running solvers</h2>
           {runs.length > 0 && (
-            <span className="rounded-full bg-primary-tint px-2 py-0.5 font-mono text-xs font-semibold text-primary tabular-nums">
+            <span className="rounded-sm bg-primary-tint px-2 py-0.5 font-mono text-xs font-semibold text-primary tabular-nums">
               {runs.length} live
             </span>
           )}
@@ -337,7 +337,7 @@ function RunningSolversPanel({
         </ul>
       ) : runs.length > 0 ? (
         <>
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-border px-1 pb-2 text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-border px-1 pb-2 text-xs font-semibold text-text-secondary">
             <span>Solver</span>
             <span className="text-right">Actions</span>
           </div>
@@ -348,10 +348,10 @@ function RunningSolversPanel({
           </ul>
         </>
       ) : (
-        <PanelEmpty
-          icon={<Cpu className="size-5 text-text-secondary" strokeWidth={1.5} aria-hidden="true" />}
+        <EmptyState
+          variant="inline"
           title="No solver running"
-          body="Start a run from a project's Solver tab and it appears here live."
+          description="Start a run from a project's Solver tab and it appears here live."
         />
       )}
 
@@ -398,7 +398,7 @@ function RunRow({
         <div className="mt-1 flex flex-wrap items-center gap-2 pl-4">
           <span
             className={cn(
-              'rounded-full px-1.5 py-0.5 text-[11px] font-semibold capitalize',
+              'rounded-sm px-1.5 py-0.5 text-xs font-semibold capitalize',
               RUN_STATUS_PILL[run.status],
             )}
           >
@@ -416,7 +416,7 @@ function RunRow({
         <Link
           to={`/projects/${run.projectId}`}
           aria-label={`View ${run.projectTitle}`}
-          className="grid size-8 place-items-center rounded-md border border-border bg-surface text-text-secondary transition-colors duration-fast hover:bg-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1"
+          className="grid size-8 place-items-center rounded-sm border border-border bg-surface text-text-secondary transition-colors duration-fast hover:bg-bg hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1"
         >
           <Eye className="size-4" strokeWidth={1.75} aria-hidden="true" />
         </Link>
@@ -425,7 +425,7 @@ function RunRow({
           onClick={onStop}
           disabled={stopPending}
           aria-label={`Stop ${run.projectTitle}`}
-          className="grid size-8 place-items-center rounded-md border border-accent-tint bg-accent-tint text-accent-hover transition-colors duration-fast hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 disabled:opacity-50"
+          className="grid size-8 place-items-center rounded-sm border border-border bg-surface text-text-secondary transition-colors duration-fast hover:border-danger/40 hover:bg-danger-tint hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-1 disabled:opacity-50"
         >
           <Square className="size-3.5" fill="currentColor" strokeWidth={0} aria-hidden="true" />
         </button>
@@ -452,17 +452,17 @@ function RunOutcomesPanel({
   distribution: { value: number; color: string }[];
 }) {
   return (
-    <section className="flex min-h-0 flex-col rounded-lg border border-border bg-surface p-4 shadow-sm sm:p-5">
+    <section className="flex min-h-0 flex-col rounded-md border border-border bg-surface p-4 shadow-sm sm:p-5">
       <header className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-text">Run outcomes</h2>
         <span className="text-xs text-text-secondary">last {total} runs</span>
       </header>
 
       {total === 0 ? (
-        <PanelEmpty
-          icon={<Diamond size={18} className="text-primary" />}
+        <EmptyState
+          variant="inline"
           title="No runs yet"
-          body="Outcomes appear here once you run a solver."
+          description="Outcomes appear here once you run a solver."
         />
       ) : (
         <>
@@ -475,9 +475,7 @@ function RunOutcomesPanel({
             </ul>
           </div>
           <div className="mt-auto pt-4">
-            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
-              Distribution
-            </div>
+            <div className="mb-2 text-xs font-semibold text-text-secondary">Distribution</div>
             <DistributionBar segments={distribution} label="Run outcome distribution" />
             <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
               <span className="text-sm text-text-secondary">Success rate</span>
@@ -506,7 +504,7 @@ function LegendRow({ color, label, value }: { color: string; label: string; valu
 
 function RecentProjectsPanel({ projects, pending }: { projects: DashboardProject[]; pending: boolean }) {
   return (
-    <section className="rounded-lg border border-border bg-surface p-4 shadow-sm sm:p-5">
+    <section className="rounded-md border border-border bg-surface p-4 shadow-sm sm:p-5">
       <header className="mb-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2.5">
           <span className="grid size-7 place-items-center rounded-md bg-bg text-text-secondary">
@@ -535,10 +533,10 @@ function RecentProjectsPanel({ projects, pending }: { projects: DashboardProject
           ))}
         </div>
       ) : (
-        <PanelEmpty
-          icon={<Diamond size={18} className="text-primary" />}
+        <EmptyState
+          variant="inline"
           title="No projects yet"
-          body="Create a project to import a mesh, set up a solver, and run it."
+          description="Create a project to import a mesh, set up a solver, and run it."
         />
       )}
     </section>
@@ -572,18 +570,6 @@ function ProjectCard({ project }: { project: DashboardProject }) {
         ]}
       />
     </Link>
-  );
-}
-
-/* ------------------------------- shared ---------------------------------- */
-
-function PanelEmpty({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
-  return (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-4 py-6 text-center">
-      <span className="grid size-10 place-items-center rounded-md bg-primary-tint">{icon}</span>
-      <p className="text-sm font-medium text-text">{title}</p>
-      <p className="max-w-xs text-xs text-text-secondary">{body}</p>
-    </div>
   );
 }
 
