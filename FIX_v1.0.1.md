@@ -50,12 +50,41 @@ Fichiers : `apps/api/scripts/CgnsMergeTime.py`.
 
 ⚠️ À VÉRIFIER sur le serveur de deploy (h5py + vrai CGNS multi-zones non exécutables ici) : merge d'un assemblage ≥2 zones → animation de toutes les zones dans CFD-Post.
 
-### ⬜ C2 — Suppression d'un compte : cascade destructrice + storage orphelin
-### ⬜ C3 — streamRunner : write stream sans listener `error` → crash process
-### ⬜ C4 — Logout : cache React Query jamais vidé
+### ✅ C2 — Suppression d'un compte : cascade destructrice + storage orphelin
+Bug : la cascade DB supprimait les projets possédés mais (a) ne stoppait jamais leurs solveurs en cours (mpirun fantôme brûlant des cœurs, non tuable), (b) ne supprimait jamais leur storage disque (orphelin multi-Go à jamais).
+Ce qui a été fait :
+- `deleteUser` collecte les projets + templates possédés, **stoppe les solveurs** de chaque projet avant la cascade, puis purge le storage projet **et** template (best-effort).
+- Nouveau helper `stopProjectRuns(projectId)` dans `runs.service.ts` (SIGTERM aux handles vivants — mpirun le relaie à ses rangs — + marque les runs `stopped`).
+- Test C2 ajouté : la suppression d'un compte retire bien le dossier de storage du projet, pas seulement la ligne DB.
+
+Fichiers : `apps/api/src/modules/users/users.service.ts`, `apps/api/src/modules/projects/runs.service.ts`, `apps/api/tests/users.test.ts`.
+
+⚠️ Décision produit restante : les projets **partagés** possédés par le compte supprimé disparaissent toujours pour leurs collaborateurs (cascade `onDelete: Cascade` sur l'owner). Corriger « proprement » = réassigner l'ownership ou bloquer la suppression → à trancher avec toi (hors correctif de sûreté).
+
+### ✅ C3 — streamRunner : write stream sans listener `error` → crash process
+Bug : `createWriteStream(logFile)` sans listener `'error'`. Disque plein / EIO / permissions → erreur non gérée → **tout le process Node meurt** en plein run, tous les users déconnectés, run bloqué `running`.
+Ce qui a été fait : listener `out.on('error')` qui débranche les pipes, draine `stdout`/`stderr` (le solveur ne bloque pas sur un buffer plein) et laisse l'enfant finir naturellement ; `finish()` n'appelle plus `end()` sur un stream déjà en erreur.
+Fichiers : `apps/api/src/lib/streamRunner.ts`.
+
+### ✅ C4 — Logout : cache React Query jamais vidé
+Bug : le logout (et le refresh échoué) ne vidait pas le cache React Query → sur poste partagé, l'utilisateur suivant voyait le dashboard/liste users/projets/meshes du précédent.
+Ce qui a été fait : `queryClient.clear()` appelé au logout **et** dans le handler de signal de logout (refresh échoué).
+Fichiers : `apps/web/src/features/auth/AuthProvider.tsx`.
 
 ---
 
-## HIGH / MEDIUM / LOW
+## MEDIUM (traités en passant)
 
-Non commencés. Backlog complet dans `BUG_AUDIT.md`.
+### ✅ M3 — Suppression d'un projet ne stoppe pas son solveur
+Corrigé via le même helper : `deleteProject` appelle `stopProjectRuns(id)` avant la suppression.
+Fichiers : `apps/api/src/modules/projects/projects.service.ts`.
+
+### ✅ M16 — voir section CRITICAL (corrigé avec C1).
+
+---
+
+## Reste à faire
+
+HIGH restants : H1–H6, H8–H10. MEDIUM restants : M1–M2, M4–M15, M17–M24. Tous les LOW. Backlog complet + ordre suggéré dans `BUG_AUDIT.md`.
+
+Vérifications tests (ce lot) : API 449/449, web 126/126, typecheck + lint OK. À valider sur le serveur de deploy : les chemins Python (C1 sidecar, H7 multi-zones) et le comportement crash-log C3 en conditions réelles.
