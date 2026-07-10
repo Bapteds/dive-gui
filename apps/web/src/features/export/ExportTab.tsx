@@ -25,7 +25,7 @@ import type {
   ExportStepId,
   ExportValidation,
 } from '@/lib/api/types';
-import { downloadArtifact, useExportStatusQuery, useRunExport } from './useExport';
+import { downloadArtifact, useExportStatusQuery, useIsExporting, useRunExport } from './useExport';
 
 /**
  * ExportTab - the "Export" tab body: turn a SOLVED OpenFOAM case into a CGNS file
@@ -55,6 +55,9 @@ const ARTIFACTS: Array<{ key: ExportArtifact; label: string }> = [
 export function ExportTab({ projectId }: { projectId: string }) {
   const status = useExportStatusQuery(projectId);
   const run = useRunExport(projectId);
+  // Global (mutation-cache) running flag: stays true across a tab switch that
+  // unmounts this tab, so returning to it can't launch a second export (M11).
+  const isExporting = useIsExporting(projectId);
 
   // The live run (this session) takes precedence; otherwise the persisted status.
   const result = run.data;
@@ -86,14 +89,20 @@ export function ExportTab({ projectId }: { projectId: string }) {
             needed.
           </p>
         </div>
-        <Button type="button" onClick={handleRun} loading={run.isPending} className="shrink-0">
+        <Button
+          type="button"
+          onClick={handleRun}
+          loading={isExporting}
+          disabled={isExporting}
+          className="shrink-0"
+        >
           <Upload strokeWidth={1.75} aria-hidden="true" />
           {artifacts?.cgns ? 'Re-export' : 'Export to CGNS'}
         </Button>
       </header>
 
       <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-4 sm:p-5">
-        {run.isPending && !steps ? (
+        {isExporting && !steps ? (
           <RunningState />
         ) : !hasAnything ? (
           <NoExportYet />

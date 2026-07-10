@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { downloadExportArtifact, getExportStatus, runExport } from '@/lib/api/projects';
 import type { ExportArtifact, ExportResult, ExportStatus } from '@/lib/api/types';
 
@@ -14,6 +14,16 @@ import type { ExportArtifact, ExportResult, ExportStatus } from '@/lib/api/types
 /** Query key for a project's export status. */
 export const exportStatusQueryKey = (projectId: string) =>
   ['projects', projectId, 'export'] as const;
+
+/**
+ * Mutation key for a project's export RUN. Keying the mutation makes its in-flight
+ * state observable globally (useIsExporting), so it survives the Export tab being
+ * unmounted on a tab switch — a component-local mutation reset to idle on remount,
+ * re-enabling the button and inviting a second concurrent export over the same
+ * case (M11).
+ */
+export const exportMutationKey = (projectId: string) =>
+  ['projects', projectId, 'export', 'run'] as const;
 
 /** Load the last export's status (profile / validation / artifacts), or null. */
 export function useExportStatusQuery(projectId: string, enabled = true) {
@@ -32,6 +42,7 @@ export function useExportStatusQuery(projectId: string, enabled = true) {
 export function useRunExport(projectId: string) {
   const queryClient = useQueryClient();
   return useMutation<ExportResult, Error>({
+    mutationKey: exportMutationKey(projectId),
     mutationFn: () => runExport(projectId),
     onSuccess: (result) => {
       const next: ExportStatus = {
@@ -42,6 +53,15 @@ export function useRunExport(projectId: string) {
       queryClient.setQueryData<ExportStatus | null>(exportStatusQueryKey(projectId), () => next);
     },
   });
+}
+
+/**
+ * Is an export running for this project? Read from the mutation cache (not a local
+ * mutation), so it stays true across a tab switch that unmounts the Export tab, and
+ * the remounted tab keeps its button disabled until the running export finishes (M11).
+ */
+export function useIsExporting(projectId: string): boolean {
+  return useIsMutating({ mutationKey: exportMutationKey(projectId) }) > 0;
 }
 
 /** Default download filename per artifact. */
