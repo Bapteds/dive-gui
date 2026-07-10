@@ -13,13 +13,14 @@ async function main(): Promise<void> {
 
   const admin = await prisma.user.upsert({
     where: { email },
-    // On update we keep the account in sync but never weaken its protection.
-    // The password hash is refreshed so the env password always works.
+    // On update, keep the account in sync but DO NOT touch the password: re-seeding
+    // (every deploy) previously reset it to SEED_ADMIN_PASSWORD, silently reverting
+    // a password the admin had changed in the app (L12). The password is only set on
+    // first CREATE; a lost password is recovered out-of-band, not by re-seeding.
     update: {
       fullName: env.SEED_ADMIN_NAME,
       role: 'SUPER_ADMIN',
       isProtected: true,
-      passwordHash,
     },
     create: {
       email,
