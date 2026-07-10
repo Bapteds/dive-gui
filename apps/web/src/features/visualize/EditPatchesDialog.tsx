@@ -273,7 +273,7 @@ function TypeSelect({
         ))}
       </optgroup>
       {allowRoles && (
-        <optgroup label="Flow role — applies a BC preset">
+        <optgroup label="Flow role (applies a BC preset)">
           {PATCH_ROLES.map((role) => (
             <option key={role} value={role}>
               {role}

@@ -478,7 +478,7 @@ function ModelReadout({ modelId, configured }: { modelId: string; configured: bo
       <p className="text-xs text-text-secondary">
         {configured
           ? 'From the project. Change it on the Solver tab to update the highlighted fields.'
-          : 'No model set yet — showing kOmegaSST as a guide. Set one on the Solver tab.'}
+          : 'No model set yet: showing kOmegaSST as a guide. Set one on the Solver tab.'}
       </p>
     </div>
   );

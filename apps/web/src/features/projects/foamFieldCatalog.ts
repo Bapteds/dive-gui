@@ -75,7 +75,7 @@ export const FOAM_FIELD_CATALOG: FoamFileDef[] = [
     className: 'volVectorField',
     title: 'Velocity field (U)',
     description:
-      'Vector velocity field (m/s) — the primary unknown solved by the momentum equation.',
+      'Vector velocity field (m/s), the primary unknown solved by the momentum equation.',
     fields: [
       {
         key: 'dimensions',
@@ -141,7 +141,7 @@ export const FOAM_FIELD_CATALOG: FoamFileDef[] = [
     className: 'volScalarField',
     title: 'Pressure field (p)',
     description:
-      'Kinematic pressure (p/rho, m²/s²) for incompressible solvers — a relative (gauge) pressure.',
+      'Kinematic pressure (p/rho, m²/s²) for incompressible solvers; a relative (gauge) pressure.',
     fields: [
       {
         key: 'dimensions',
@@ -192,7 +192,7 @@ export const FOAM_FIELD_CATALOG: FoamFileDef[] = [
     className: 'volScalarField',
     title: 'Turbulent kinetic energy (k)',
     description:
-      'Turbulent kinetic energy per unit mass (m²/s²) — a transported variable of k-omega / k-epsilon models.',
+      'Turbulent kinetic energy per unit mass (m²/s²), a transported variable of k-omega / k-epsilon models.',
     fields: [
       {
         key: 'dimensions',
@@ -239,7 +239,7 @@ export const FOAM_FIELD_CATALOG: FoamFileDef[] = [
     className: 'volScalarField',
     title: 'Specific dissipation rate (omega)',
     description:
-      'Specific dissipation rate (1/s) — the second transported variable of k-omega / k-omega SST models.',
+      'Specific dissipation rate (1/s), the second transported variable of k-omega / k-omega SST models.',
     fields: [
       {
         key: 'dimensions',
@@ -284,7 +284,7 @@ export const FOAM_FIELD_CATALOG: FoamFileDef[] = [
     className: 'volScalarField',
     title: 'Turbulent viscosity (nut)',
     description:
-      'Kinematic turbulent (eddy) viscosity (m²/s) — a derived field computed from k and omega, not transported.',
+      'Kinematic turbulent (eddy) viscosity (m²/s), a derived field computed from k and omega, not transported.',
     fields: [
       {
         key: 'dimensions',
@@ -333,7 +333,7 @@ export const FOAM_FIELD_CATALOG: FoamFileDef[] = [
     className: 'volScalarField',
     title: 'Turbulent dissipation rate (epsilon)',
     description:
-      'Turbulent kinetic energy dissipation rate (m²/s³) — the second transported variable of k-epsilon models.',
+      'Turbulent kinetic energy dissipation rate (m²/s³), the second transported variable of k-epsilon models.',
     fields: [
       {
         key: 'dimensions',
@@ -378,7 +378,7 @@ export const FOAM_FIELD_CATALOG: FoamFileDef[] = [
     className: 'volScalarField',
     title: 'Spalart-Allmaras variable (nuTilda)',
     description:
-      'Modified kinematic turbulent viscosity (m²/s) — the single transported variable of the Spalart-Allmaras model.',
+      'Modified kinematic turbulent viscosity (m²/s), the single transported variable of the Spalart-Allmaras model.',
     fields: [
       {
         key: 'dimensions',
@@ -1160,7 +1160,7 @@ export const FOAM_FIELD_CATALOG: FoamFileDef[] = [
       {
         key: 'relaxationFactors',
         label: 'Relaxation factors',
-        help: 'Under-relaxation, split into `fields { … }` (e.g. p) and `equations { … }` (e.g. U, k, omega); typically 0.3–0.9, freeform per field.',
+        help: 'Under-relaxation, split into `fields { … }` (e.g. p) and `equations { … }` (e.g. U, k, omega); typically 0.3-0.9, freeform per field.',
         fields: [],
       },
     ],

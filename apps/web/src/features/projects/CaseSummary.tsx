@@ -211,7 +211,7 @@ function FoamEntries({ entries }: { entries: FoamEntry[] }) {
                 {entry.key}
               </dt>
               <dd className="min-w-0 break-words text-right font-mono text-sm text-text" translate="no">
-                {entry.value ?? '—'}
+                {entry.value ?? '-'}
               </dd>
             </div>
           )}

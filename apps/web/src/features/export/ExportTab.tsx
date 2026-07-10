@@ -82,7 +82,8 @@ export function ExportTab({ projectId }: { projectId: string }) {
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-text">Export to CFD-Post (CGNS)</h2>
           <p className="mt-0.5 text-xs text-text-secondary">
-            Convert the solved OpenFOAM results to a CGNS file Ansys CFD-Post can load — no Fluent.
+            Convert the solved OpenFOAM results to a CGNS file Ansys CFD-Post can load, no Fluent
+            needed.
           </p>
         </div>
         <Button type="button" onClick={handleRun} loading={run.isPending} className="shrink-0">
@@ -320,10 +321,10 @@ function ProfileCard({ profile }: { profile: CaseProfile }) {
   const rows: Array<[string, string]> = [
     ['Solver', `${profile.solver} (${profile.steady ? 'steady' : 'transient'})`],
     ['Pressure', profile.incompressible ? 'kinematic (incompressible)' : 'Pa (compressible)'],
-    ['Latest time', profile.latestTime ?? '—'],
+    ['Latest time', profile.latestTime ?? 'None'],
     ['Turbulence', profile.turbulenceModel],
-    ['Fields', profile.fields.join(', ') || '—'],
-    ['Patches', profile.patches.join(', ') || '—'],
+    ['Fields', profile.fields.join(', ') || 'None'],
+    ['Patches', profile.patches.join(', ') || 'None'],
   ];
   return (
     <div className="rounded-md border border-border bg-bg p-4">
@@ -447,14 +448,14 @@ function Downloads({ projectId, artifacts }: { projectId: string; artifacts: Exp
 /** The CFD-Post load caveats (derived from the profile), with the key reminders. */
 function CfdPostMemo({ profile }: { profile: CaseProfile }) {
   const points: string[] = [
-    'Load with File → Load Results (never “Load Case”).',
-    'out.cgns is a single transient CGNS with all time steps — use the CFD-Post time bar (Timestep Selector) to play the evolution.',
+    'Load with File > Load Results (never "Load Case").',
+    'out.cgns is a single transient CGNS with all time steps: use the CFD-Post time bar (Timestep Selector) to play the evolution.',
     profile.incompressible
-      ? `Pressure is kinematic (p/ρ): the solver ${profile.solver} is incompressible, so CFD-Post pressures are ÷ρ. Multiply by density for Pa — not a bug.`
+      ? `Pressure is kinematic (p/rho): the solver ${profile.solver} is incompressible, so CFD-Post pressures are divided by density. Multiply by density for Pa - not a bug.`
       : `Pressure is in Pa (the solver ${profile.solver} is compressible).`,
   ];
   if (profile.emptyPatches.length) {
-    points.push(`Empty patches were excluded (${profile.emptyPatches.join(', ')}) to avoid “Invalid File / empty surfaces”.`);
+    points.push(`Empty patches were excluded (${profile.emptyPatches.join(', ')}) to avoid "Invalid File / empty surfaces".`);
   }
   return (
     <div className="rounded-md border border-primary/30 bg-primary-tint p-4">

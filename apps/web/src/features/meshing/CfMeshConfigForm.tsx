@@ -235,7 +235,7 @@ export function CfMeshConfigForm({
             Extract feature edges
           </label>
           <p className="text-xs text-text-secondary">
-            Captures sharp edges (surfaceFeatureEdges → FMS) before meshing. Recommended for CAD
+            Captures sharp edges (surfaceFeatureEdges to FMS) before meshing. Recommended for CAD
             surfaces.
           </p>
           {extractFeatures && (
@@ -258,7 +258,7 @@ export function CfMeshConfigForm({
         <fieldset className="flex flex-col gap-2">
           <legend className="text-sm font-medium text-text">Boundary types</legend>
           <p className="text-xs text-text-secondary">
-            The OpenFOAM type each boundary gets in the mesh. Defaults to <code>wall</code> — set
+            The OpenFOAM type each boundary gets in the mesh. Defaults to <code>wall</code>; set
             inlets/outlets to <code>patch</code>.
           </p>
           <div className="flex flex-col divide-y divide-border overflow-hidden rounded-md border border-border">

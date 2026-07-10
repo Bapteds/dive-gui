@@ -201,7 +201,7 @@ export function TemplatesPage() {
                     </TableCell>
                     <TableCell className="hidden min-w-0 text-text-secondary md:table-cell">
                       <span className="line-clamp-1 break-words">
-                        {template.description || '—'}
+                        {template.description || '-'}
                       </span>
                     </TableCell>
                     <TableCell className="text-text-secondary">{author}</TableCell>
@@ -380,7 +380,7 @@ function DeleteTemplateDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Delete this template?</AlertDialogTitle>
           <AlertDialogDescription>
-            {template ? `“${template.name}” and its files will be permanently removed. ` : ''}
+            {template ? `"${template.name}" and its files will be permanently removed. ` : ''}
             This cannot be undone.
           </AlertDialogDescription>
         </AlertDialogHeader>

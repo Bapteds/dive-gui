@@ -59,8 +59,8 @@ export function SolverBrowserDialog({ open, onOpenChange, value, onSelect }: Sol
         <DialogHeader>
           <DialogTitle>Choose a solver</DialogTitle>
           <DialogDescription>
-            Every solver on this OpenFOAM build, by physics. All are guided: “Guided” solvers get a
-            complete template, “Base setup” solvers a flow scaffold you extend.
+            Every solver on this OpenFOAM build, by physics. All are guided: "Guided" solvers get a
+            complete template, "Base setup" solvers a flow scaffold you extend.
           </DialogDescription>
         </DialogHeader>
 
@@ -85,7 +85,7 @@ export function SolverBrowserDialog({ open, onOpenChange, value, onSelect }: Sol
         <div className="-mx-1 min-h-0 flex-1 overflow-auto overscroll-contain px-1">
           {groups.length === 0 ? (
             <p className="px-2 py-8 text-center text-sm text-text-secondary">
-              No solver matches “{query}”.
+              No solver matches "{query}".
             </p>
           ) : (
             <div className="flex flex-col gap-4">

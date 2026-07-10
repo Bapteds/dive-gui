@@ -122,7 +122,7 @@ export function TemplateFormDialog({
           <DialogTitle>{isEdit ? 'Edit template' : 'New template'}</DialogTitle>
           <DialogDescription>
             {isEdit
-              ? 'Update this template’s name, tags and description.'
+              ? "Update this template's name, tags and description."
               : 'Name and tag your template. Start empty and add files in the editor, or write a single file now.'}
           </DialogDescription>
         </DialogHeader>

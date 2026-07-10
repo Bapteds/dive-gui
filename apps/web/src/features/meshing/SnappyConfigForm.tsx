@@ -402,7 +402,7 @@ export function SnappyConfigForm({
               helperText={
                 cores > 1
                   ? `Runs snappyHexMesh in parallel across ${cores} cores. ${maxCores} available.`
-                  : `Serial (single core). Raise to mesh in parallel — ${maxCores} available.`
+                  : `Serial (single core). Raise to mesh in parallel (${maxCores} available).`
               }
               className="sm:max-w-xs"
             >
@@ -533,7 +533,7 @@ export function SnappyConfigForm({
                             className="rounded-md bg-accent-tint px-2.5 py-1.5 text-xs text-text"
                             role="status"
                           >
-                            No surface selected — no layers will be grown.
+                            No surface selected, so no layers will be grown.
                           </p>
                         )}
                       </>

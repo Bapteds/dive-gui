@@ -917,7 +917,7 @@ function NewFileDialog({
       return;
     }
     if (trimmed.split('/').some((segment) => segment === '..')) {
-      setError('The path cannot contain “..”.');
+      setError('The path cannot contain "..".');
       return;
     }
     try {
