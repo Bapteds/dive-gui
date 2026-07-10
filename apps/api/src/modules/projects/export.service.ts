@@ -39,6 +39,7 @@ import {
   ensureExportDir,
   exportDirAbsolute,
   exportFilePath,
+  exportFileStat,
   listCgnsFiles,
   readExportBytes,
   readExportJson,
@@ -876,6 +877,28 @@ export async function readExportArtifact(
     throw new AppError(404, 'NOT_FOUND', 'That export artifact has not been produced yet.');
   }
   return bytes;
+}
+
+/**
+ * Resolve an export artifact to its absolute path (+ byte size) after a visibility
+ * and existence check, so the controller can STREAM it to the client rather than
+ * buffering the whole file in memory. The transient `out.cgns` can be multiple GB,
+ * and `res.send(Buffer)` both spikes API memory and throws past the ~2 GB Buffer
+ * limit (M20).
+ *
+ * @throws 404 if the artifact has not been produced, or the project is not visible.
+ */
+export async function resolveExportArtifact(
+  viewer: Viewer,
+  projectId: string,
+  file: keyof typeof EXPORT_FILES,
+): Promise<{ path: string; size: number }> {
+  await assertProjectVisible(viewer, projectId);
+  const info = await exportFileStat(projectId, file);
+  if (!info) {
+    throw new AppError(404, 'NOT_FOUND', 'That export artifact has not been produced yet.');
+  }
+  return info;
 }
 
 /** The ordered step ids, re-exported for callers/tests that assert the sequence. */

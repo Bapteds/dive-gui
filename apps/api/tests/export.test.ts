@@ -220,6 +220,8 @@ describe('GET /projects/:id/export (+ download)', () => {
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('application/octet-stream');
     expect(res.headers['content-disposition']).toContain('out.cgns');
+    // Streamed from disk (M20): a real Content-Length, matching the file bytes.
+    expect(res.headers['content-length']).toBe(String(Buffer.byteLength('fake-transient-cgns')));
     expect(res.body.toString()).toBe('fake-transient-cgns');
   });
 

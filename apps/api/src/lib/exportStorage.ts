@@ -67,6 +67,20 @@ export async function exportFileExists(
   }
 }
 
+/** Absolute path + byte size of a named export artifact, or null when absent/empty. */
+export async function exportFileStat(
+  projectId: string,
+  file: keyof typeof EXPORT_FILES,
+): Promise<{ path: string; size: number } | null> {
+  const filePath = exportFilePath(projectId, file);
+  try {
+    const stat = await fs.stat(filePath);
+    return stat.size > 0 ? { path: filePath, size: stat.size } : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Write a text (or binary) export artifact, creating the directory if needed. */
 export async function writeExportFile(
   projectId: string,

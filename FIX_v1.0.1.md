@@ -220,6 +220,16 @@ Bug : la regex `(\w+)…type\s+(\w+)` de `parse_boundary_types` capturait `wall-
 Ce qui a été fait : regex `([A-Za-z_][\w-]*)…\btype\s+([\w-]+)` (tirets autorisés dans nom + type, `\btype` ancre la vraie clé). Vérifié en Python : `wall-1`/`inlet-1` + `physical... type ...` parsés correctement.
 Fichiers : `apps/api/scripts/extractPatches.py`.
 
+### ✅ M20 (partiel) — Les téléchargements bufferisent tout l'artefact en mémoire
+Bug : `out.cgns` (potentiellement plusieurs Go) était lu entièrement en Buffer puis `res.send(bytes)` — pic mémoire API + `res.send` throw au-delà de ~2 Go (limite Buffer Node).
+Ce qui a été fait (côté serveur, le risque grave = OOM API partagée) : nouveau `resolveExportArtifact` (visibilité + existence → `{path, size}`) + `streamDownload` qui **`createReadStream(path).pipe(res)`** avec `Content-Length` réel ; le cgns ET le fallback zip sont streamés. Mémoire bornée au high-water mark.
+- Test renforcé (`export.test.ts`) : le download cgns renvoie un `Content-Length` correct et les octets exacts.
+Fichiers : `apps/api/src/lib/exportStorage.ts` (`exportFileStat`), `export.service.ts` (`resolveExportArtifact`), `export.controller.ts`, `apps/api/tests/export.test.ts`.
+RESTE (suivi) : le zip du case (`buildCaseArchive`/`zipTreeAt` via `zip.toBuffer()`) et le `getBlob` client (download navigateur d'un gros fichier) bufferisent encore — le streaming zip demande `archiver`, et le download client streamé bute sur l'auth par header (StreamSaver/File System Access API requis).
+
+### ⏸️ M18 — `buildSolverSpec` : mauvais family/requiredFiles pour les solveurs non-RANS (deferred-by-design)
+Constat : interFoam/solidDisplacementFoam… sont décrits avec les fichiers RANS incompressibles (`0/p`, `transportProperties`) au lieu de leurs vrais champs (`0/p_rgh`, `0/alpha.water`). **NON corrigé volontairement** : c'est une décision de conception DÉLIBÉRÉE ET TESTÉE (backlog F4 « tous les solveurs guidés » ; `runnable.test.ts` verrouille explicitement « interFoam gate sur le set incompressible complet » + `runnable:true` après scaffold), avec l'UI qui signale déjà le tier « Base setup » + un hint honnête. La vraie résolution = la feature déjà backloggée « templates par famille pour les familles exotiques (VoF/combustion/…) ». Un fix partiel casserait le design testé pour un gain incomplet ; à traiter comme une feature, hors passe de bugfix.
+
 ## Reste à faire
 
 **Tous les CRITICAL (C1–C4) et HIGH (H1–H10) sont traités.**
