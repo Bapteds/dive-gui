@@ -53,6 +53,9 @@ export function buildPipelinePreview(
   for (let i = 1; i < orderedMeshes.length; i += 1) {
     steps.push({ label: `Combine ${orderedMeshes[i].name}`, tool: 'mergeMeshes' });
   }
+  if (orderedMeshes.length > 1) {
+    steps.push({ label: 'Split combined regions into cellZones', tool: 'splitMeshRegions' });
+  }
   for (const iface of interfaces) {
     const a = `${meshById.get(iface.aMeshId)?.name ?? '?'}.${iface.aPatch}`;
     const b = `${meshById.get(iface.bMeshId)?.name ?? '?'}.${iface.bPatch}`;
@@ -70,6 +73,7 @@ export function buildPipelinePreview(
 /** OpenFOAM tool name shown for the command-backed step kinds. */
 const KIND_TOOL: Partial<Record<MergeStepKind, string>> = {
   mergeMeshes: 'mergeMeshes',
+  splitMeshRegions: 'splitMeshRegions',
   stitchMesh: 'stitchMesh',
   nonConformalCouple: 'nonConformalCouple',
   checkMesh: 'checkMesh',

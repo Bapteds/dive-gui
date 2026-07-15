@@ -51,6 +51,31 @@ describe('parseResiduals', () => {
     expect(parsed.samples).toHaveLength(0); // no finite value to record
   });
 
+  it('flags inf residuals (any case, signed, or inside a vector) as divergence', () => {
+    for (const token of ['inf', '-inf', 'Inf', '(nan', '(nan nan nan)']) {
+      const log = `Time = 5\nGAMG:  Solving for p, Initial residual = ${token}\n`;
+      expect(parseResiduals(log).diverged, token).toBe(true);
+    }
+  });
+
+  it('does NOT diverge when a run reaches its iteration cap with finite residuals', () => {
+    // A steady run that hits endTime prints normal residuals then just stops —
+    // no convergence banner, no nan/inf. It must read as finite, not diverged.
+    const log = `${TWO_ITERATIONS}\nEnd\n`;
+    const parsed = parseResiduals(log);
+    expect(parsed.diverged).toBe(false);
+    expect(parsed.converged).toBe(false);
+  });
+
+  it('records a vector residual (leading "(") without flagging divergence', () => {
+    // Some fields on ESI OpenFOAM print U as a vector: "(0.012 0.008 0.005)".
+    // The captured "(0.012" must be read as a finite component, never diverged.
+    const log = `Time = 3\nsmoothSolver:  Solving for U, Initial residual = (0.012 0.008 0.005), Final residual = (1e-4 1e-4 1e-4)\n`;
+    const parsed = parseResiduals(log);
+    expect(parsed.diverged).toBe(false);
+    expect(parsed.samples[0].values.U).toBeCloseTo(0.012);
+  });
+
   it('flags a FOAM fatal error / floating point exception', () => {
     expect(parseResiduals('Foo\nFloating point exception\n').foamError).toBe(true);
     expect(parseResiduals('--> FOAM FATAL ERROR\n').foamError).toBe(true);

@@ -64,6 +64,7 @@ const successResult: MergeRunResult = {
     { name: 'm1_inlet', type: 'patch', nFaces: 10 },
     { name: 'm2_outlet', type: 'patch', nFaces: 10 },
   ],
+  cellZones: [],
   entries: [{ path: 'constant/polyMesh/boundary', type: 'file', size: 10 }],
 };
 

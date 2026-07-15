@@ -42,6 +42,14 @@ function mergeBoundaries(master: string, add: string): string {
   return buildBoundary([...patchBlocks(master), ...patchBlocks(add)]);
 }
 
+/** Build a cellZones file with the given zone names (real cellZone block shape). */
+function makeCellZones(names: string[]): string {
+  const blocks = names
+    .map((n, i) => `${n}\n{\n    type        cellZone;\n    cellLabels  List<label> \n2(${i * 2} ${i * 2 + 1});\n}`)
+    .join('\n');
+  return `FoamFile { class regIOobject; object cellZones; }\n${names.length}\n(\n${blocks}\n)\n`;
+}
+
 /** Simulate stitchMesh: the two fused patches lose all their faces (nFaces 0). */
 function zeroOutPatches(boundary: string, names: string[]): string {
   const blocks = patchBlocks(boundary).map((b) => {
@@ -102,6 +110,15 @@ const mergeRunner: CommandRunner = async (spec) => {
     const stitched = zeroOutPatches(await fs.readFile(boundaryAbs, 'utf8'), [spec.args[0], spec.args[1]]);
     await fs.writeFile(boundaryAbs, stitched);
     return ok(spec, 'Stitched patches');
+  }
+  if (spec.command === 'splitMeshRegions') {
+    // -makeCellZones keeps one mesh and adds a cellZone per connected region. The
+    // real tool detects regions from connectivity; the fake writes the two zones a
+    // two-part assembly yields (domain0 = base region, domain1 = the added part).
+    const caseDir = spec.args[spec.args.indexOf('-case') + 1];
+    const cz = path.join(caseDir, 'constant', 'polyMesh', 'cellZones');
+    await fs.writeFile(cz, makeCellZones(['domain0', 'domain1']));
+    return ok(spec, 'Detected 2 regions; writing cellZones (domain0 domain1)');
   }
   if (spec.command === 'checkMesh') {
     return ok(spec, 'Mesh stats ...\nMesh OK.\n');
@@ -454,7 +471,7 @@ describe('POST /projects/:id/meshes/merge', () => {
     const result = res.body.result;
     expect(result.success).toBe(true);
     expect(result.steps.map((s: { kind: string }) => s.kind)).toEqual([
-      'prepare', 'prepare', 'mergeMeshes', 'stitchMesh', 'cleanup', 'checkMesh',
+      'prepare', 'prepare', 'mergeMeshes', 'splitMeshRegions', 'stitchMesh', 'cleanup', 'checkMesh',
     ]);
     // The stitched interface patches are fused away; the rest survive with their
     // ORIGINAL names (every name is unique across the two parts — no collision, no prefix).
@@ -663,7 +680,7 @@ describe('POST /projects/:id/meshes/merge (Assembly v2 non-conformal coupling)',
     expect(result.success).toBe(true);
     // The couple step replaces the stitch step; cleanup is present but SKIPPED.
     expect(result.steps.map((s: { kind: string }) => s.kind)).toEqual([
-      'prepare', 'prepare', 'mergeMeshes', 'nonConformalCouple', 'cleanup', 'checkMesh',
+      'prepare', 'prepare', 'mergeMeshes', 'splitMeshRegions', 'nonConformalCouple', 'cleanup', 'checkMesh',
     ]);
     const cleanup = (result.steps as Array<{ kind: string; status: string; stdout: string }>).find((s) => s.kind === 'cleanup')!;
     expect(cleanup.status).toBe('success');
@@ -726,6 +743,86 @@ describe('POST /projects/:id/meshes/merge (Assembly v2 non-conformal coupling)',
     const result = res.body.result;
     expect(result.success).toBe(true);
     expect((result.notes as string[]).some((n) => /overlap|sum\(weights\)|AMI/i.test(n))).toBe(true);
+  });
+
+  it('splits the combined regions into one cellZone per part (named after the parts) for the MRF template', async () => {
+    setCommandRunner(mergeRunner);
+    const { id, auth } = await makeProject('mg-zones@dive-turbinen.test');
+    // A static casing (base) + a rotor to couple non-conformally. Distinct patch
+    // names keep the test focused on the zones, not on collision prefixing.
+    const casing = await importMesh(id, auth, meshFiles('casing', makeBoundary([
+      { name: 'inlet' }, { name: 'ifaceA' }, { name: 'wall', type: 'wall' },
+    ])));
+    const rotor = await importMesh(id, auth, meshFiles('rotor', makeBoundary([
+      { name: 'ifaceB' }, { name: 'outlet' }, { name: 'blades', type: 'wall' },
+    ])));
+    const casingId = casing.body.mesh.id; // 'casing' (base, order[0])
+    const rotorId = rotor.body.mesh.id;   // 'rotor'  (added)
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/merge`)
+      .set('Authorization', auth)
+      .send({
+        order: [casingId, rotorId],
+        interfaces: [{ aMeshId: casingId, aPatch: 'ifaceA', bMeshId: rotorId, bPatch: 'ifaceB', coupling: 'nonConformal' }],
+      });
+
+    expect(res.status).toBe(200);
+    const result = res.body.result;
+    expect(result.success).toBe(true);
+
+    // splitMeshRegions runs right after mergeMeshes and BEFORE the couple, with the
+    // ESI argv: -makeCellZones -overwrite -case <master>.
+    expect(result.steps.map((s: { kind: string }) => s.kind)).toEqual([
+      'prepare', 'prepare', 'mergeMeshes', 'splitMeshRegions', 'nonConformalCouple', 'cleanup', 'checkMesh',
+    ]);
+    const split = recordedCommands.find((c) => c.command === 'splitMeshRegions')!;
+    expect(split.args).toEqual(['-makeCellZones', '-overwrite', '-case', expect.any(String)]);
+
+    // Two parts -> two zones, named after the parts in merge order, surfaced on the
+    // result and explained in a note that points at the MRF rotor cellZone.
+    expect(result.cellZones).toEqual(['casing', 'rotor']);
+    expect((result.notes as string[]).some((n) => /MRF rotor cellZone/i.test(n))).toBe(true);
+
+    // The zones were promoted into the case mesh (so the turbine MRF template no
+    // longer has to warn a zone must be made by hand), with the readable names.
+    const cz = await caseFileContent(id, auth, 'constant/polyMesh/cellZones');
+    expect(cz.status).toBe(200);
+    expect(cz.body.file.content).toContain('rotor');
+    expect(cz.body.file.content).toContain('casing');
+    expect(cz.body.file.content).not.toContain('domain0');
+  });
+
+  it('keeps the generated zone names when the region count does not match the parts', async () => {
+    // A runner whose splitMeshRegions finds THREE regions for a two-part merge (a
+    // part was internally disconnected): the service must not mislabel — it keeps
+    // domainN and says so, rather than forcing a wrong part mapping.
+    const threeZoneRunner: CommandRunner = async (spec) =>
+      spec.command === 'splitMeshRegions'
+        ? await (async () => {
+            const caseDir = spec.args[spec.args.indexOf('-case') + 1];
+            await fs.writeFile(
+              path.join(caseDir, 'constant', 'polyMesh', 'cellZones'),
+              makeCellZones(['domain0', 'domain1', 'domain2']),
+            );
+            return ok(spec, 'Detected 3 regions');
+          })()
+        : mergeRunner(spec);
+    setCommandRunner(threeZoneRunner);
+    const { id, auth } = await makeProject('mg-zones-mismatch@dive-turbinen.test');
+    const { a, b } = await importTwoParts(id, auth);
+
+    const res = await request(app)
+      .post(`/api/v1/projects/${id}/meshes/merge`)
+      .set('Authorization', auth)
+      .send({ order: [a, b], interfaces: [{ aMeshId: a, aPatch: 'ifaceA', bMeshId: b, bPatch: 'ifaceB', coupling: 'nonConformal' }] });
+
+    expect(res.status).toBe(200);
+    const result = res.body.result;
+    expect(result.success).toBe(true);
+    // Generated names kept (not renamed to part slugs), with an explanatory note.
+    expect(result.cellZones).toEqual(['domain0', 'domain1', 'domain2']);
+    expect((result.notes as string[]).some((n) => /but the assembly has 2 part\(s\)/i.test(n))).toBe(true);
   });
 });
 

@@ -17,6 +17,11 @@
 //                   staged from the project's OWN case mesh, so its inlet/outlet/
 //                   interface names (and their 0/ BCs) are preserved as the base.
 //   2. mergeMeshes: combine every additional source into the master mesh.
+//   2b splitMeshRegions: make one cellZone per combined region (one per part).
+//                   Run BEFORE coupling, while the parts are still topologically
+//                   separate, so `-makeCellZones` yields exactly one zone each;
+//                   the zones travel with the mesh through coupling + promote so
+//                   the turbine template can point MRFProperties at the rotor zone.
 //   3. per interface, branch on coupling:
 //        nonConformalCyclic: createNonConformalCouples couples a touching patch
 //                   pair, KEEPING both parts' cells + patches (v12-native, the
@@ -73,8 +78,10 @@ import {
   collapseBoundaryToSinglePatch,
   isValidPatchName,
   parseBoundaryPatchDetails,
+  parseCellZoneNames,
   removeEmptyBoundaryPatches,
   renameBoundaryPatch,
+  renameCellZone,
   renderBaseFile,
   setBoundaryPatchType,
   setCyclicAmiPair,
@@ -763,12 +770,87 @@ async function promoteMasterMesh(projectId: string, masterDir: string): Promise<
   await fs.cp(srcPolyMesh, destPolyMesh, { recursive: true });
 }
 
+/**
+ * After splitMeshRegions has written one cellZone per combined region, give the
+ * zones readable names when we safely can: if the zone count equals the part
+ * count, rename each to its part's slug (the case base -> 'base', a library part
+ * -> its id, sanitized to an OpenFOAM word). regionSplit numbers regions in cell
+ * order, which is the merge (append) order, so region i is part i for
+ * singly-connected parts — the note records this assumption so it can be verified.
+ * When the counts differ (a part is itself disconnected, or fewer regions than
+ * parts) the tool's generated names are kept. Naming is a convenience only: any
+ * read/write hiccup is swallowed and the (unrenamed) zones stand — a labelling
+ * problem must never fail an otherwise-good merge. Returns the final zone names.
+ */
+async function labelCellZones(
+  masterDir: string,
+  order: string[],
+  baseIsCase: boolean,
+  notes: string[],
+): Promise<string[]> {
+  const cellZonesAbs = path.join(masterDir, 'constant', 'polyMesh', 'cellZones');
+  let content: string;
+  try {
+    content = await fs.readFile(cellZonesAbs, 'utf8');
+  } catch {
+    notes.push('splitMeshRegions created no cellZones file — the combined mesh is a single connected region.');
+    return [];
+  }
+  const created = parseCellZoneNames(content);
+  if (created.length === 0) {
+    notes.push('splitMeshRegions produced no cellZones — the combined mesh is a single connected region.');
+    return [];
+  }
+  if (created.length !== order.length) {
+    notes.push(
+      `splitMeshRegions created ${created.length} cellZone(s) (${created.join(', ')}) but the assembly has ${order.length} part(s), so the generated names were kept. Identify each zone in Visualize before using one as the MRF rotor cellZone.`,
+    );
+    return created;
+  }
+  // One zone per part: name each after its part, in merge order.
+  const toWord = (value: string): string => {
+    const word = value.replace(/[^A-Za-z0-9_]/g, '_');
+    return /^[A-Za-z_]/.test(word) ? word : `zone_${word}`;
+  };
+  const targets: string[] = [];
+  const used = new Set<string>();
+  order.forEach((id, index) => {
+    const base = index === 0 && baseIsCase ? 'base' : toWord(id);
+    let name = base;
+    for (let n = 2; used.has(name); n += 1) name = `${base}_${n}`;
+    used.add(name);
+    targets.push(name);
+  });
+  try {
+    // Rename by position, collision-free: first to unique placeholders, then to
+    // the final names (so a target that equals another zone's old name is safe).
+    let next = content;
+    created.forEach((from, i) => {
+      next = renameCellZone(next, from, `__DIVE_ZONE_${i}__`);
+    });
+    created.forEach((_, i) => {
+      next = renameCellZone(next, `__DIVE_ZONE_${i}__`, targets[i]);
+    });
+    await fs.writeFile(cellZonesAbs, next, 'utf8');
+    notes.push(
+      `Created ${targets.length} cellZone(s) (${targets.join(', ')}), one per combined part, so a rotating region can be set as the MRF rotor cellZone in the turbine template. Zone order follows the merge order; confirm which is the rotor in Visualize before running.`,
+    );
+    return targets;
+  } catch {
+    notes.push(
+      `Created ${created.length} cellZone(s) (${created.join(', ')}) but could not rename them after the split; the generated names are kept.`,
+    );
+    return created;
+  }
+}
+
 /** Assemble the final result (boundary patches read back only on success). */
 async function finalizeMerge(
   projectId: string,
   steps: MergeStep[],
   notes: string[],
   promoted: boolean,
+  cellZones: string[] = [],
 ): Promise<MergeRunResult> {
   const success = promoted && steps.every((step) => step.status === 'success');
   let boundaryPatches: MeshPatch[] = [];
@@ -776,7 +858,7 @@ async function finalizeMerge(
     const boundary = await readCaseFile(projectId, BOUNDARY_FILE);
     boundaryPatches = boundary ? parseBoundaryPatchDetails(boundary.toString('utf8')) : [];
   }
-  return { success, steps, notes, boundaryPatches, entries: await listCaseTree(projectId) };
+  return { success, steps, notes, boundaryPatches, cellZones, entries: await listCaseTree(projectId) };
 }
 
 /**
@@ -875,6 +957,9 @@ export async function runMerge(
 
   const notes: string[] = [];
   const steps: MergeStep[] = [];
+  // cellZones splitMeshRegions creates from the combined regions (multi-part only);
+  // surfaced on the result so the turbine MRF template can target the rotor zone.
+  let cellZones: string[] = [];
   const timeoutMs = env.MERGE_STEP_TIMEOUT_MS;
 
   // --- Patch-name resolution: prefix ONLY on a real collision ---------------
@@ -982,6 +1067,38 @@ export async function runMerge(
     if (step.status !== 'success') return finalizeMerge(projectId, steps, notes, false);
   }
   if (order.length > 1) notes.push(`Combined ${order.length} meshes with mergeMeshes.`);
+
+  // --- 2b) splitMeshRegions: one cellZone per combined region --------------
+  // Create a cellZone for each combined mesh so the assembly's parts stay
+  // addressable after the merge — most importantly so the turbine template can
+  // point MRFProperties (Frozen Rotor) at the rotor's zone (renderMrfProperties;
+  // today boundary.service can only WARN that a zone must be made by hand). Run it
+  // HERE, right after mergeMeshes and BEFORE any coupling: at this point the
+  // combined parts are still topologically separate regions, so `-makeCellZones`
+  // (which keeps one mesh and adds a cellZone per connected region) yields exactly
+  // one zone per part. A cyclicAMI couple, done next, would let the region walk
+  // cross the interface and collapse everything into a single zone. `-overwrite`
+  // writes the zones into the master's constant/polyMesh, so they survive coupling
+  // and ride the promote into the case. Only for a real multi-part assembly (a
+  // single mesh has nothing to separate). A tool failure aborts the merge (the
+  // mesh in place may be half-rewritten), consistent with the other steps.
+  if (order.length > 1) {
+    const splitPlan = planOpenfoamCommand(
+      env.SPLIT_MESH_REGIONS_BIN,
+      ['-makeCellZones', '-overwrite', '-case', masterDir],
+      masterDir,
+    );
+    const splitResult = await runCommand({ ...splitPlan, timeoutMs });
+    const splitStep = toStep(
+      'splitMeshRegions',
+      'Split combined regions into cellZones',
+      splitPlan.display,
+      splitResult,
+    );
+    steps.push(splitStep);
+    if (splitStep.status !== 'success') return finalizeMerge(projectId, steps, notes, false);
+    cellZones = await labelCellZones(masterDir, order, baseIsCase, notes);
+  }
 
   // --- 3) couple each interface (branch on coupling) -----------------------
   // nonConformal -> an in-process TEXTUAL cyclicAMI retype of the two interface
@@ -1182,7 +1299,7 @@ export async function runMerge(
     appliedAt: new Date().toISOString(),
   });
 
-  return finalizeMerge(projectId, steps, notes, true);
+  return finalizeMerge(projectId, steps, notes, true, cellZones);
 }
 
 /**

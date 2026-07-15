@@ -570,6 +570,9 @@ export const MESHES_DIRNAME = 'meshes';
  * interface), so each step carries a `kind` (not a unique id) plus a human label.
  *   - prepare:                  stage a source as a case + prefix its patches (collision-free)
  *   - mergeMeshes:              combine an additional mesh into the master (OpenFOAM mergeMeshes)
+ *   - splitMeshRegions:         make one cellZone per combined region (OpenFOAM splitMeshRegions
+ *                               -makeCellZones), so the parts stay addressable after the merge
+ *                               (e.g. as the turbine MRF rotor cellZone). Runs before coupling.
  *   - stitchMesh:               conformally FUSE a chosen patch pair into an internal interface
  *   - nonConformalCouple:       NON-conformally COUPLE a chosen patch pair by retyping both
  *                               interface patches to cyclicAMI in place (keeps both parts'
@@ -580,6 +583,7 @@ export const MESHES_DIRNAME = 'meshes';
 export const MERGE_STEP_KINDS = [
   'prepare',
   'mergeMeshes',
+  'splitMeshRegions',
   'stitchMesh',
   'nonConformalCouple',
   'cleanup',
@@ -751,6 +755,13 @@ export interface MergeResult {
   notes: string[];
   /** Boundary patches of the resulting constant/polyMesh (empty on failure). */
   boundaryPatches: MeshPatch[];
+  /**
+   * cellZones of the resulting mesh — one per combined part, created by
+   * splitMeshRegions on a multi-part assembly (empty for a single mesh or on
+   * failure). These are the zones the turbine template can point MRFProperties at
+   * (a rotating region becomes the MRF rotor cellZone).
+   */
+  cellZones: string[];
 }
 
 // ---------------------------------------------------------------------------

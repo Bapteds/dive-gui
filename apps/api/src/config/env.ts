@@ -139,6 +139,14 @@ const envSchema = z
     // (configurable, sourced via OPENFOAM_BASHRC, absent on a Windows dev box -> a
     // clean per-step "not found" rather than a crash).
     NCC_COUPLE_BIN: z.string().min(1).default('createNonConformalCouples'),
+    // Assembly: OpenFOAM splitMeshRegions, run after mergeMeshes to turn the
+    // combined (still-separate) regions into one cellZone per part — so a rotating
+    // part can be named as the turbine MRF rotor cellZone. Invoked as
+    // `splitMeshRegions -makeCellZones -overwrite -case <master>` (keeps a single
+    // mesh, adds the zones in place). Same operational model as the other OpenFOAM
+    // tools (configurable, sourced via OPENFOAM_BASHRC, absent on a Windows dev box
+    // -> a clean per-step "not found" rather than a crash).
+    SPLIT_MESH_REGIONS_BIN: z.string().min(1).default('splitMeshRegions'),
     // Per-step wall-clock timeout (ms) for a merge command (mergeMeshes /
     // stitchMesh / checkMesh on a large combined mesh). Generous, like conversion.
     MERGE_STEP_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
