@@ -38,7 +38,7 @@ import {
 // picks the pipe wall patch + the two endpoints bounding a segment, traces its
 // centerline, sets a diameter range + step and a loss objective (inlet/outlet
 // pressure drop), and launches a background sweep that morphs the mesh and runs the
-// solver once per diameter — then reads the loss-versus-diameter curve to find the
+// solver once per diameter, then reads the loss-versus-diameter curve to find the
 // least-loss ("water loss") diameter. Light theme, brand tokens only.
 //
 // NOTE: the live interactive 3D pick + morph preview (reusing the Assemble viewer) is
@@ -142,6 +142,7 @@ function NumberField({
       id={id}
       type="number"
       inputMode="decimal"
+      autoComplete="off"
       className={inputClass}
       value={Number.isFinite(value) ? value : ''}
       step={step}
@@ -446,7 +447,7 @@ function SetupForm({
 
   return (
     <div className="flex flex-col gap-5">
-      <Panel title="Geometry — pipe segment" icon={Ruler}>
+      <Panel title="Pipe segment geometry" icon={Ruler}>
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Wall patch" htmlFor="opt-wall" hint="The pipe wall whose diameter varies.">
             <PatchSelect
@@ -460,13 +461,15 @@ function SetupForm({
           <Field
             label="Study name"
             htmlFor="opt-name"
-            hint="Optional — a default name is used otherwise."
+            hint="Optional. A default name is used otherwise."
           >
             <input
               id="opt-name"
               className={inputClass}
               value={s.name}
               placeholder="Diameter study"
+              autoComplete="off"
+              spellCheck={false}
               onChange={(e) => set({ name: e.target.value })}
             />
           </Field>
@@ -525,7 +528,7 @@ function SetupForm({
             Trace centerline
           </SecondaryButton>
           {baselineM !== null && centerlinePts && (
-            <p className="text-sm text-text-secondary">
+            <p className="text-sm text-text-secondary" aria-live="polite">
               Traced{' '}
               <span className="font-semibold text-text tabular-nums">{centerlinePts.length}</span>{' '}
               axis points · measured diameter{' '}
@@ -535,7 +538,7 @@ function SetupForm({
             </p>
           )}
           {extract.isError && (
-            <p className="text-sm text-danger">
+            <p className="text-sm text-danger" role="alert">
               {extract.error instanceof Error
                 ? extract.error.message
                 : 'Centerline tracing failed.'}
@@ -568,12 +571,12 @@ function SetupForm({
         {runCount >= 1 && runCount <= MAX_SWEEP && (
           <p className="mt-3 text-sm text-text-secondary">
             <span className="font-semibold text-text tabular-nums">{runCount}</span> solver run
-            {runCount === 1 ? '' : 's'}, one per diameter — sequential, in the background.
+            {runCount === 1 ? '' : 's'}, one per diameter, run sequentially in the background.
           </p>
         )}
       </Panel>
 
-      <Panel title="Objective — least loss" icon={Target}>
+      <Panel title="Loss objective" icon={Target}>
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Inlet patch" htmlFor="opt-inlet">
             <PatchSelect
@@ -625,7 +628,7 @@ function SetupForm({
 
       <div className="flex flex-wrap items-center justify-end gap-3">
         {(create.isError || run.isError) && (
-          <p className="mr-auto text-sm text-danger">
+          <p className="mr-auto text-sm text-danger" role="alert">
             {(create.error ?? run.error) instanceof Error
               ? (create.error ?? run.error)?.message
               : 'Could not create the study.'}
@@ -667,7 +670,7 @@ function RunMonitor({ projectId, study }: { projectId: string; study: Study }) {
           </DangerButton>
         }
       >
-        <div className="mb-2 flex items-center justify-between text-sm">
+        <div className="mb-2 flex items-center justify-between text-sm" aria-live="polite">
           <span className="text-text-secondary">
             <span className="font-semibold tabular-nums text-text">{done}</span> of{' '}
             <span className="tabular-nums">{study.samples.length}</span> diameters
@@ -693,7 +696,7 @@ function RunMonitor({ projectId, study }: { projectId: string; study: Study }) {
         </div>
       </Panel>
 
-      <Panel title="Live residuals — current run" icon={Gauge}>
+      <Panel title="Live residuals (current run)" icon={Gauge}>
         {study.currentRunId ? (
           <ResidualChart samples={log.data?.series ?? []} />
         ) : (
@@ -748,6 +751,7 @@ function ResultsReport({
 }) {
   const run = useRunStudy(projectId);
   const del = useDeleteStudy(projectId);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const doneSamples = study.samples.filter((x) => x.status === 'done');
   const bestSample = study.samples.find(
     (x) => study.bestDiameterM !== undefined && Math.abs(x.diameterM - study.bestDiameterM) < 1e-12,
@@ -818,13 +822,31 @@ function ResultsReport({
       </Panel>
 
       <div className="flex flex-wrap items-center justify-end gap-3">
-        <DangerButton
-          onClick={() => del.mutate(study.id, { onSuccess: onRerun })}
-          disabled={del.isPending}
-        >
-          <Trash2 size={15} strokeWidth={1.75} aria-hidden="true" />
-          Delete study
-        </DangerButton>
+        {confirmingDelete ? (
+          <div
+            className="mr-auto flex flex-wrap items-center gap-2"
+            role="group"
+            aria-label="Confirm deletion"
+          >
+            <span className="text-sm text-text-secondary">Delete this study and its results?</span>
+            <SecondaryButton className="px-3 py-1.5" onClick={() => setConfirmingDelete(false)}>
+              Cancel
+            </SecondaryButton>
+            <DangerButton
+              className="px-3 py-1.5"
+              onClick={() => del.mutate(study.id, { onSuccess: onRerun })}
+              disabled={del.isPending}
+            >
+              {del.isPending && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+              Confirm delete
+            </DangerButton>
+          </div>
+        ) : (
+          <DangerButton className="mr-auto" onClick={() => setConfirmingDelete(true)}>
+            <Trash2 size={15} strokeWidth={1.75} aria-hidden="true" />
+            Delete study
+          </DangerButton>
+        )}
         <PrimaryButton onClick={() => run.mutate(study.id)} disabled={run.isPending}>
           {run.isPending ? (
             <Loader2 size={15} className="animate-spin" aria-hidden="true" />
@@ -882,7 +904,9 @@ function StudyList({
                 }`}
               >
                 <span className="flex items-center justify-between gap-2">
-                  <span className="truncate text-sm font-medium text-text">{study.name}</span>
+                  <span className="min-w-0 truncate text-sm font-medium text-text">
+                    {study.name}
+                  </span>
                   {isStudyActive(study.status) && (
                     <Loader2 size={13} className="shrink-0 animate-spin text-primary" aria-hidden="true" />
                   )}
