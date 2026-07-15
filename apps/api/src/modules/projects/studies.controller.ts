@@ -10,6 +10,8 @@ import {
   extractStudyCenterline,
   getStudy,
   listStudies,
+  startStudy,
+  stopStudy,
   updateStudy,
 } from './studies.service';
 import type { CenterlineInput, CreateStudyInput, UpdateStudyInput } from './studies.schemas';
@@ -65,4 +67,16 @@ export async function extractCenterlineController(req: Request, res: Response): 
     req.body as CenterlineInput,
   );
   res.status(200).json(result);
+}
+
+/** POST /projects/:id/studies/:studyId/run — launch the diameter sweep. */
+export async function startStudyController(req: Request, res: Response): Promise<void> {
+  const study = await startStudy(requireViewer(req), req.params.id, req.params.studyId);
+  res.status(202).json({ study });
+}
+
+/** POST /projects/:id/studies/:studyId/stop — stop a running sweep. */
+export async function stopStudyController(req: Request, res: Response): Promise<void> {
+  const study = await stopStudy(requireViewer(req), req.params.id, req.params.studyId);
+  res.status(200).json({ study });
 }

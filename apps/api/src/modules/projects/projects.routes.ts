@@ -100,6 +100,8 @@ import {
   extractCenterlineController,
   getStudyController,
   listStudiesController,
+  startStudyController,
+  stopStudyController,
   updateStudyController,
 } from './studies.controller';
 import {
@@ -555,6 +557,16 @@ export function createProjectsRouter(): Router {
     '/:id/studies/:studyId',
     validate({ params: studyIdParamSchema }),
     asyncHandler(deleteStudyController),
+  );
+  router.post(
+    '/:id/studies/:studyId/run',
+    validate({ params: studyIdParamSchema }),
+    asyncHandler(startStudyController),
+  );
+  router.post(
+    '/:id/studies/:studyId/stop',
+    validate({ params: studyIdParamSchema }),
+    asyncHandler(stopStudyController),
   );
 
   return router;

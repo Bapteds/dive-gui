@@ -112,6 +112,22 @@ export function injectObjectiveFunctions(
   return controlDict.slice(0, at) + fnBlock + controlDict.slice(at);
 }
 
+/** Strip the injected objective functionObjects (leave the case clean after a sweep). */
+export function removeObjectiveFunctions(controlDict: string): string {
+  const s = controlDict.indexOf(MARKER_START);
+  if (s < 0) return controlDict;
+  const e = controlDict.indexOf(MARKER_END, s);
+  if (e < 0) return controlDict;
+  let start = s;
+  while (start > 0 && (controlDict[start - 1] === ' ' || controlDict[start - 1] === '\t')) {
+    start -= 1;
+  }
+  let end = e + MARKER_END.length;
+  if (controlDict[end] === '\r') end += 1;
+  if (controlDict[end] === '\n') end += 1;
+  return controlDict.slice(0, start) + controlDict.slice(end);
+}
+
 /**
  * Parse a surfaceFieldValue .dat file: return the LAST data row's last column (the
  * final, converged averaged value), or null when the file has no data rows.

@@ -68,6 +68,18 @@ export async function deleteStudy(projectId: string, studyId: string): Promise<v
   await apiClient.delete<void>(`/projects/${projectId}/studies/${studyId}`);
 }
 
+/** Launch a study's diameter sweep (returns the queued study; it runs in the background). */
+export async function runStudy(projectId: string, studyId: string): Promise<Study> {
+  const data = await apiClient.post<StudyResponse>(`/projects/${projectId}/studies/${studyId}/run`);
+  return data.study;
+}
+
+/** Stop a running study sweep. */
+export async function stopStudy(projectId: string, studyId: string): Promise<Study> {
+  const data = await apiClient.post<StudyResponse>(`/projects/${projectId}/studies/${studyId}/stop`);
+  return data.study;
+}
+
 /**
  * Trace the pipe centerline + radius profile from the case's wall patch between the
  * two clicked endpoints (study prep, before a study exists).
