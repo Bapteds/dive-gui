@@ -1996,6 +1996,252 @@ export interface ResidualSample {
   values: Partial<Record<string, number>>;
 }
 
+// ---------------------------------------------------------------------------
+// Parametric diameter-optimization study (mesh-morphing sweep).
+//
+// A "study" sweeps ONE geometric parameter — the diameter of a (possibly curved)
+// pipe segment — across a fixed [min, max] range by a fixed step, running the
+// project's solver once per value and recording a loss objective (pressure drop,
+// head loss), to find the diameter that minimises hydraulic loss ("water loss").
+// Each value is realised by MORPHING the existing mesh (a radial scale of the
+// segment between two user-placed stations, about an auto-extracted centerline) —
+// NOT by re-meshing — so topology, cell count and boundary conditions are preserved
+// and each run is cheap to prepare.
+//
+// Shared so the API and the web client agree on the study config they exchange, the
+// morph definition the browser preview and the server bake both consume (bit-exact
+// via a single shared morph function — see Phase 1), and the per-value result they
+// render. A study is persisted as a Prisma row (id/status/progress, for listing +
+// boot reconciliation) plus studies/<id>/study.json on disk (the morph/sweep/
+// objective config + per-value samples below), mirroring the Run + on-disk-log split.
+// ---------------------------------------------------------------------------
+
+/**
+ * Directory name (under a project's storage subtree, sibling of `case/`, `meshes/`,
+ * `runs/`, `viz/`, `export/`) holding the project's optimization studies (config +
+ * per-value results). Kept apart from the case so a study never touches case inputs
+ * and a case reset never wipes study history (mirrors the runs/ decision).
+ */
+export const STUDIES_DIRNAME = 'studies';
+
+/**
+ * Length units the UI offers for the diameter target/range. OpenFOAM works in metres
+ * (SI), so every value is converted to metres before morphing; the chosen unit is
+ * kept only to round-trip the user's input in the UI.
+ */
+export const LENGTH_UNITS = ['mm', 'cm', 'm'] as const;
+export type LengthUnit = (typeof LENGTH_UNITS)[number];
+
+/** Metres per one unit of each LengthUnit (multiply a value in that unit to get metres). */
+export const LENGTH_UNIT_TO_METRES: Record<LengthUnit, number> = { mm: 0.001, cm: 0.01, m: 1 };
+
+/**
+ * Lifecycle states of an optimization study, shared so the API (Prisma `status`
+ * String, boot reconciliation) and the web client (status badge, progress) agree.
+ *  - draft:     saved config, not yet launched (editable). Non-active, non-terminal.
+ *  - queued/running: active — the sweep is, or is about to be, executing runs.
+ *  - completed: the sweep finished; at least one value produced a metric.
+ *  - failed:    the sweep aborted (e.g. the morph or every run failed).
+ *  - stopped:   the user stopped the sweep before it finished.
+ */
+export const STUDY_STATUSES = [
+  'draft',
+  'queued',
+  'running',
+  'completed',
+  'failed',
+  'stopped',
+] as const;
+export type StudyStatus = (typeof STUDY_STATUSES)[number];
+
+/** Study statuses that count as "active" — the concurrency guard rejects a new sweep and boot reconciliation revives/aborts these. */
+export const ACTIVE_STUDY_STATUSES = ['queued', 'running'] as const;
+
+/** Is this study status terminal (the sweep is no longer executing and not an editable draft)? */
+export function isTerminalStudyStatus(status: StudyStatus): boolean {
+  return status === 'completed' || status === 'failed' || status === 'stopped';
+}
+
+/**
+ * Loss metrics recorded per swept diameter. All computable ones are stored; the
+ * `ObjectiveConfig.primary` selects the one minimised to pick the optimum.
+ *  - pressureDrop: total-pressure drop inlet→outlet (Pa), the default objective.
+ *  - headLoss:     head loss (metres of fluid column) = Δp / (ρ g), derived from it.
+ */
+export const STUDY_METRICS = ['pressureDrop', 'headLoss'] as const;
+export type StudyMetric = (typeof STUDY_METRICS)[number];
+
+/**
+ * State of one swept-diameter sample.
+ *  - pending:    not attempted yet.
+ *  - meshFailed: the morph produced a mesh checkMesh rejected — the value is skipped.
+ *  - running:    its solver run is executing.
+ *  - done:       the run finished and the objective was measured (`metrics` present).
+ *  - failed:     the run reached a terminal non-success state (diverged/failed).
+ *  - skipped:    not run because the study was stopped before reaching it.
+ */
+export const STUDY_SAMPLE_STATUSES = [
+  'pending',
+  'meshFailed',
+  'running',
+  'done',
+  'failed',
+  'skipped',
+] as const;
+export type StudySampleStatus = (typeof STUDY_SAMPLE_STATUSES)[number];
+
+/**
+ * The centerline of the pipe segment being morphed: an ordered polyline of points
+ * (raw polyMesh coords, metres) running along the pipe axis, extracted once from the
+ * wall patch and then FROZEN in the study, so the browser preview and the server bake
+ * measure the radial scale from the identical axis (parity). Points need not be
+ * equally spaced; arc-length is computed from consecutive segments.
+ */
+export interface Centerline {
+  /** Ordered axis points, raw polyMesh coords (metres). At least 2. */
+  points: [number, number, number][];
+}
+
+/**
+ * The geometric definition of the diameter morph: WHICH pipe (its wall patch), about
+ * WHICH centerline, and BETWEEN which two stations the segment is radially scaled.
+ * Consumed identically by the browser preview and the server bake so what the user
+ * sees is bit-for-bit what gets computed.
+ */
+export interface MorphDefinition {
+  /** The wall patch whose enclosed segment is morphed (identifies the pipe). */
+  wallPatch: string;
+  /** Frozen centerline the radial scale is measured from. */
+  centerline: Centerline;
+  /**
+   * The two stations bounding the fully-scaled zone, as arc-length FRACTIONS along
+   * the centerline (0 = first point, 1 = last), with stationA < stationB. Outside
+   * [stationA, stationB] the mesh is untouched; a cosine blend of half-width `blend`
+   * (also an arc-length fraction) ramps the scale from 1 at each station up to full
+   * inside, so the morphed segment joins the rest of the pipe without a kink.
+   */
+  stationA: number;
+  stationB: number;
+  /** Half-width of the cosine blend band at each station, as an arc-length fraction (>= 0). */
+  blend: number;
+  /**
+   * The segment's current mean diameter in METRES, measured from the mesh at
+   * definition time (2 × mean wall radius from the centerline over the active zone).
+   * The sweep's target diameters are realised as the ratio target / baselineDiameterM.
+   */
+  baselineDiameterM: number;
+}
+
+/**
+ * The diameter values to sweep: the inclusive [minM, maxM] range walked by `stepM`
+ * (all in METRES; the UI collects them in `unit` and converts). The generated values
+ * are minM, minM+stepM, … not exceeding maxM (see `sweepValuesM`).
+ */
+export interface SweepConfig {
+  /** Minimum diameter, metres. */
+  minM: number;
+  /** Maximum diameter, metres. */
+  maxM: number;
+  /** Step between successive diameters, metres (> 0). */
+  stepM: number;
+  /** The unit the user entered the range in (display only; the values above are metres). */
+  unit: LengthUnit;
+}
+
+/**
+ * Enumerate the inclusive sweep diameters in metres: minM, minM+stepM, … up to (but
+ * never exceeding) maxM. Returns [] for a non-positive step or an inverted range. The
+ * count is left unbounded here — callers (zod schema / service) cap it to a sane number
+ * of runs.
+ */
+export function sweepValuesM(sweep: SweepConfig): number[] {
+  const { minM, maxM, stepM } = sweep;
+  if (!(stepM > 0) || !(maxM >= minM)) return [];
+  const eps = stepM * 1e-6;
+  const count = Math.floor((maxM - minM + eps) / stepM) + 1;
+  const values: number[] = [];
+  for (let i = 0; i < count; i += 1) values.push(minM + i * stepM);
+  return values;
+}
+
+/**
+ * What loss the sweep measures and which one decides the optimum. Each run is
+ * post-processed with a `surfaceFieldValue` functionObject on the inlet/outlet patches
+ * to obtain the total-pressure drop; head loss derives from it via the density.
+ */
+export interface ObjectiveConfig {
+  /** Inlet patch name (total pressure measured here). */
+  inletPatch: string;
+  /** Outlet patch name. */
+  outletPatch: string;
+  /** Which recorded metric decides the optimum (the minimised one). */
+  primary: StudyMetric;
+  /**
+   * Fluid density (kg/m³) used to turn the solver's kinematic pressure into Pa and to
+   * derive head loss = Δp / (ρ g). Default 1000 (water). Only meaningful for an
+   * incompressible solver (simpleFoam/pimpleFoam), where `p` is kinematic (p/ρ).
+   */
+  densityKgM3: number;
+}
+
+/** The measured loss metrics for one finished run. */
+export interface StudyMetrics {
+  /** Total-pressure drop inlet→outlet, Pascals. */
+  pressureDropPa: number;
+  /** Head loss, metres of fluid column = Δp / (ρ g). */
+  headLossM: number;
+}
+
+/**
+ * The outcome for ONE swept diameter. `diameterM` is the target diameter (metres);
+ * `metrics` is present only when `status === 'done'`.
+ */
+export interface StudySample {
+  /** Target diameter for this sample, metres. */
+  diameterM: number;
+  /** State of this sample (see STUDY_SAMPLE_STATUSES). */
+  status: StudySampleStatus;
+  /** The Run that computed it (once started), for drill-down into its log/residuals. */
+  runId?: string;
+  /** Measured metrics (present when status === 'done'). */
+  metrics?: StudyMetrics;
+  /** Short explanation when meshFailed / failed / skipped (e.g. the checkMesh reason). */
+  note?: string;
+}
+
+/**
+ * A parametric diameter-optimization study on a project: the morph geometry, the
+ * diameter sweep, the loss objective, plus execution status and per-value results.
+ * The API assembles this from the Prisma row (id/status/progress/timestamps) and the
+ * on-disk studies/<id>/study.json (morph/sweep/objective/samples).
+ */
+export interface Study {
+  id: string;
+  projectId: string;
+  /** Display name (defaults to something like "Diameter study 1"). */
+  name: string;
+  status: StudyStatus;
+  morph: MorphDefinition;
+  sweep: SweepConfig;
+  objective: ObjectiveConfig;
+  /** One entry per swept diameter, in sweep order (filled in as the sweep runs). */
+  samples: StudySample[];
+  /** Optimum diameter (metres) by the primary metric, once at least one sample is done. */
+  bestDiameterM?: number;
+  /** The Run currently executing for this study, while it is running. */
+  currentRunId?: string;
+  /** Short terminal explanation (failed/stopped). */
+  reason?: string;
+  /** ISO 8601 creation timestamp. */
+  createdAt: string;
+  /** ISO 8601 last-update timestamp. */
+  updatedAt: string;
+  /** ISO 8601 sweep-start timestamp (once launched). */
+  startedAt?: string;
+  /** ISO 8601 sweep-finish timestamp (once terminal). */
+  finishedAt?: string;
+}
+
 /**
  * Machine-readable error codes the API may emit in its `{ error: { code } }`
  * envelope. The web client maps these to user-facing messages; it adds its own
@@ -2031,6 +2277,10 @@ export const SERVER_ERROR_CODES = [
   'NOT_RUNNABLE',
   'RUN_IN_PROGRESS',
   'RUN_NOT_FOUND',
+  'STUDY_NOT_FOUND',
+  'INVALID_STUDY',
+  'STUDY_IN_PROGRESS',
+  'STUDY_MORPH_FAILED',
   'NO_STL',
   'INVALID_STL',
   'PAYLOAD_TOO_LARGE',
