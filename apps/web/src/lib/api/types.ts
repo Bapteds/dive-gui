@@ -32,6 +32,17 @@ import type {
   SolverId,
   StitchPair,
   ValidationCheck,
+  // Diameter-optimization ("Optimisation" tab) shapes.
+  Centerline,
+  LengthUnit,
+  MorphDefinition,
+  ObjectiveConfig,
+  Study,
+  StudyMetric,
+  StudyMetrics,
+  StudySample,
+  StudyStatus,
+  SweepConfig,
 } from '@dive/shared';
 
 /** User roles. The super-admin is permanent and cannot be removed or downgraded. */
@@ -463,6 +474,32 @@ export interface MergePlan {
   transforms?: PartTransform[];
   /** @deprecated legacy drafts; interpreted server-side as interfaces with coupling 'stitch'. */
   stitches?: StitchPair[];
+}
+
+// ---- Diameter-optimization studies ("Optimisation" tab) -------------------
+
+/** Re-export of the shared study shapes consumed by the Optimisation feature. */
+export type {
+  Study,
+  StudySample,
+  StudyMetrics,
+  StudyStatus,
+  StudyMetric,
+  MorphDefinition,
+  Centerline,
+  SweepConfig,
+  ObjectiveConfig,
+  LengthUnit,
+};
+
+/** GET /projects/:id/studies -> the project's studies (newest first). */
+export interface StudiesResponse {
+  studies: Study[];
+}
+
+/** GET/POST/PUT /projects/:id/studies[/:studyId] -> a single study. */
+export interface StudyResponse {
+  study: Study;
 }
 
 /**
