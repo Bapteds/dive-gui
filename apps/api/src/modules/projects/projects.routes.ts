@@ -94,6 +94,14 @@ import {
   scaffoldSolverSchema,
 } from './files.schemas';
 import { runIdParamSchema, startRunSchema } from './runs.schemas';
+import {
+  createStudyController,
+  deleteStudyController,
+  getStudyController,
+  listStudiesController,
+  updateStudyController,
+} from './studies.controller';
+import { createStudySchema, studyIdParamSchema, updateStudySchema } from './studies.schemas';
 import { cgnsNameQuerySchema, convertCgnsSchema } from './conversion.schemas';
 import {
   meshIdParamSchema,
@@ -505,6 +513,35 @@ export function createProjectsRouter(): Router {
     '/:id/runs/:runId/stop',
     validate({ params: runIdParamSchema }),
     asyncHandler(stopRunController),
+  );
+
+  // Diameter-optimization studies ("Optimisation" tab). CRUD over a saved
+  // morph + sweep + objective config; launching the sweep (POST .../run) arrives
+  // with the orchestrator in a later phase.
+  router.get(
+    '/:id/studies',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(listStudiesController),
+  );
+  router.post(
+    '/:id/studies',
+    validate({ params: projectIdParamSchema, body: createStudySchema }),
+    asyncHandler(createStudyController),
+  );
+  router.get(
+    '/:id/studies/:studyId',
+    validate({ params: studyIdParamSchema }),
+    asyncHandler(getStudyController),
+  );
+  router.put(
+    '/:id/studies/:studyId',
+    validate({ params: studyIdParamSchema, body: updateStudySchema }),
+    asyncHandler(updateStudyController),
+  );
+  router.delete(
+    '/:id/studies/:studyId',
+    validate({ params: studyIdParamSchema }),
+    asyncHandler(deleteStudyController),
   );
 
   return router;
