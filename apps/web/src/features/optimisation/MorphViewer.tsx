@@ -44,11 +44,13 @@ export function MorphViewer({
   morphPreview,
 }: {
   geometry: ArrayBuffer;
-  endpointA: Vec3;
-  endpointB: Vec3;
+  /** Endpoint markers in raw coords; null hides the marker (not placed yet). */
+  endpointA: Vec3 | null;
+  endpointB: Vec3 | null;
   /** Which endpoint the next mesh click sets, or null (orbit only). */
   pickMode: 'A' | 'B' | null;
-  onPick: (which: 'A' | 'B', point: Vec3) => void;
+  /** Fired on a mesh click: the raw-coord point plus the clicked patch name. */
+  onPick: (which: 'A' | 'B', point: Vec3, patch: string | null) => void;
   centerline: Centerline | null;
   /** When set, deform the surface to this diameter (else show the pristine mesh). */
   morphPreview: MorphPreview | null;
@@ -58,8 +60,8 @@ export function MorphViewer({
   // Latest props read inside imperative handlers / stored callbacks without rebuilding.
   const onPickRef = useRef(onPick);
   const pickModeRef = useRef(pickMode);
-  const aRef = useRef(endpointA);
-  const bRef = useRef(endpointB);
+  const aRef = useRef<Vec3 | null>(endpointA);
+  const bRef = useRef<Vec3 | null>(endpointB);
   const centerlineRef = useRef<Centerline | null>(centerline);
   const previewRef = useRef<MorphPreview | null>(morphPreview);
   onPickRef.current = onPick;
@@ -154,8 +156,14 @@ export function MorphViewer({
     resetViewRef.current = fitView;
 
     const syncOverlay = () => {
-      if (markerA) markerA.position.set(...aRef.current);
-      if (markerB) markerB.position.set(...bRef.current);
+      if (markerA) {
+        markerA.visible = aRef.current !== null;
+        if (aRef.current) markerA.position.set(...aRef.current);
+      }
+      if (markerB) {
+        markerB.visible = bRef.current !== null;
+        if (bRef.current) markerB.position.set(...bRef.current);
+      }
       if (centerlineLine) {
         overlay.remove(centerlineLine);
         centerlineLine.geometry.dispose();
@@ -291,7 +299,10 @@ export function MorphViewer({
         .intersectObjects(meshRoot.children, true)
         .find((i) => (i.object as THREE.Mesh).isMesh);
       if (!hit) return;
-      onPickRef.current(mode, [hit.point.x, hit.point.y, hit.point.z]);
+      // The GLB names each mesh after its boundary patch, so the clicked object
+      // identifies the wall patch with no separate dropdown step.
+      const patch = hit.object.name || hit.object.parent?.name || null;
+      onPickRef.current(mode, [hit.point.x, hit.point.y, hit.point.z], patch);
     };
     renderer.domElement.addEventListener('pointerdown', onDown);
     renderer.domElement.addEventListener('pointerup', onUp);

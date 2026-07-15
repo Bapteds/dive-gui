@@ -1,9 +1,15 @@
-import { useMemo, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ButtonHTMLAttributes,
+  type ReactNode,
+} from 'react';
 import { sweepValuesM, type StudySampleStatus } from '@dive/shared';
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronLeft,
   CircleDashed,
   Crosshair,
   Download,
@@ -36,17 +42,13 @@ import {
 } from './useOptimisation';
 
 // ---------------------------------------------------------------------------
-// The "Optimisation" tab: set up and run a diameter-optimization sweep. An engineer
-// picks the pipe wall patch + the two endpoints bounding a segment, traces its
-// centerline, sets a diameter range + step and a loss objective (inlet/outlet
-// pressure drop), and launches a background sweep that morphs the mesh and runs the
-// solver once per diameter, then reads the loss-versus-diameter curve to find the
-// least-loss ("water loss") diameter. Light theme, brand tokens only.
-//
-// NOTE: the live interactive 3D pick + morph preview (reusing the Assemble viewer) is
-// the one piece that wants live-browser iteration; here the geometry is defined from
-// the mesh manifest (wall patch) + the two endpoint coordinates, which the API traces
-// into a centerline. The 3D preview canvas is a follow-up polish.
+// The "Optimisation" tab, laid out like the Assemble tab: a large 3D stage on the
+// left, a compact configuration/monitor rail on the right. Setting up a diameter
+// sweep is direct: click the pipe twice (the wall patch is inferred from the click),
+// the centerline traces itself, the range pre-fills around the measured diameter,
+// pick the inlet/outlet, and launch. While the sweep runs the rail shows live
+// progress; once it finishes the loss-versus-diameter report takes the stage.
+// Light theme, brand tokens only.
 // ---------------------------------------------------------------------------
 
 const UNITS: LengthUnit[] = ['mm', 'cm', 'm'];
@@ -56,10 +58,14 @@ const METRICS: { id: StudyMetric; label: string }[] = [
   { id: 'headLoss', label: 'Head loss' },
 ];
 const MAX_SWEEP = 200;
+// Blend geometry defaults (arc-length fractions; see MorphDefinition).
+const STATION_A = 0.15;
+const STATION_B = 0.85;
+const BLEND = 0.15;
 
 type Vec3 = [number, number, number];
 
-// ---- small on-brand primitives (native elements + brand token classes) ----
+// ---- small on-brand primitives ---------------------------------------------
 
 function PrimaryButton(props: ButtonHTMLAttributes<HTMLButtonElement>) {
   const { className = '', ...rest } = props;
@@ -91,6 +97,9 @@ function DangerButton(props: ButtonHTMLAttributes<HTMLButtonElement>) {
   );
 }
 
+const inputClass =
+  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text tabular-nums transition-colors focus-visible:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring';
+
 function Field({
   label,
   htmlFor,
@@ -111,7 +120,9 @@ function Field({
       </label>
       {children}
       {error ? (
-        <p className="text-xs text-danger">{error}</p>
+        <p className="text-xs text-danger" role="alert">
+          {error}
+        </p>
       ) : hint ? (
         <p className="text-xs text-text-secondary">{hint}</p>
       ) : null}
@@ -119,16 +130,12 @@ function Field({
   );
 }
 
-const inputClass =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text tabular-nums transition-colors focus-visible:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring';
-
 function NumberField({
   id,
   value,
   onChange,
   step,
   min,
-  disabled,
   'aria-label': ariaLabel,
 }: {
   id?: string;
@@ -136,7 +143,6 @@ function NumberField({
   onChange: (n: number) => void;
   step?: number;
   min?: number;
-  disabled?: boolean;
   'aria-label'?: string;
 }) {
   return (
@@ -149,7 +155,6 @@ function NumberField({
       value={Number.isFinite(value) ? value : ''}
       step={step}
       min={min}
-      disabled={disabled}
       aria-label={ariaLabel}
       onChange={(e) => onChange(Number(e.target.value))}
     />
@@ -170,12 +175,7 @@ function PatchSelect({
   placeholder: string;
 }) {
   return (
-    <select
-      id={id}
-      className={inputClass}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-    >
+    <select id={id} className={inputClass} value={value} onChange={(e) => onChange(e.target.value)}>
       <option value="">{placeholder}</option>
       {patches.map((p) => (
         <option key={p.name} value={p.name}>
@@ -187,7 +187,7 @@ function PatchSelect({
   );
 }
 
-/** Segmented single-choice control (used for the unit + metric toggles). */
+/** Segmented single-choice control (unit + metric toggles). */
 function Segmented<T extends string>({
   options,
   value,
@@ -200,11 +200,7 @@ function Segmented<T extends string>({
   ariaLabel: string;
 }) {
   return (
-    <div
-      role="group"
-      aria-label={ariaLabel}
-      className="inline-flex rounded-md border border-border bg-bg p-0.5"
-    >
+    <div role="group" aria-label={ariaLabel} className="inline-flex rounded-md border border-border bg-bg p-0.5">
       {options.map((opt) => {
         const active = opt.id === value;
         return (
@@ -225,14 +221,16 @@ function Segmented<T extends string>({
   );
 }
 
-/** Toggle button that arms the next mesh click to place endpoint A or B. */
+/** Toggle that arms the next mesh click to place endpoint A or B. */
 function PickToggle({
   which,
   active,
+  placed,
   onToggle,
 }: {
   which: 'A' | 'B';
   active: boolean;
+  placed: boolean;
   onToggle: () => void;
 }) {
   return (
@@ -251,12 +249,12 @@ function PickToggle({
         aria-hidden="true"
       />
       <Crosshair size={13} strokeWidth={1.75} aria-hidden="true" />
-      {active ? `Click to set ${which}` : `Set endpoint ${which}`}
+      {active ? `Click the pipe to set ${which}` : placed ? `Move ${which}` : `Set ${which}`}
     </button>
   );
 }
 
-// ---- status chips (icon + text, never color alone) ------------------------
+// ---- status metadata (icon + text, never color alone) ----------------------
 
 const SAMPLE_META: Record<
   StudySampleStatus,
@@ -270,16 +268,28 @@ const SAMPLE_META: Record<
   skipped: { label: 'Skipped', icon: MinusCircle, className: 'text-text-secondary' },
 };
 
+const STUDY_STATUS_META: Record<Study['status'], { label: string; className: string }> = {
+  draft: { label: 'Draft', className: 'bg-bg text-text-secondary' },
+  queued: { label: 'Queued', className: 'bg-primary-tint text-primary' },
+  running: { label: 'Running', className: 'bg-primary-tint text-primary' },
+  completed: { label: 'Completed', className: 'bg-success-tint text-success' },
+  failed: { label: 'Failed', className: 'bg-danger-tint text-danger' },
+  stopped: { label: 'Stopped', className: 'bg-bg text-text-secondary' },
+};
+
 function fmtDiameter(diameterM: number, unit: LengthUnit): string {
-  const v = diameterM / UNIT_M[unit];
-  return `${Number(v.toPrecision(4))} ${unit}`;
+  return `${Number((diameterM / UNIT_M[unit]).toPrecision(4))} ${unit}`;
+}
+
+function fmtVec(p: Vec3): string {
+  return p.map((n) => Number(n.toPrecision(3))).join(', ');
 }
 
 function SampleChip({ sample, unit }: { sample: StudySample; unit: LengthUnit }) {
   const meta = SAMPLE_META[sample.status];
   const Icon = meta.icon;
   return (
-    <div
+    <li
       className="flex items-center justify-between gap-2 rounded-md border border-border bg-surface px-2.5 py-1.5"
       title={sample.note ?? meta.label}
     >
@@ -287,36 +297,32 @@ function SampleChip({ sample, unit }: { sample: StudySample; unit: LengthUnit })
         {fmtDiameter(sample.diameterM, unit)}
       </span>
       <span className={`inline-flex items-center gap-1 text-xs ${meta.className}`}>
-        <Icon
-          size={13}
-          strokeWidth={2}
-          className={meta.spin ? 'animate-spin' : undefined}
-          aria-hidden="true"
-        />
+        <Icon size={13} strokeWidth={2} className={meta.spin ? 'animate-spin' : undefined} aria-hidden="true" />
         {meta.label}
       </span>
-    </div>
+    </li>
   );
 }
 
-// ---- panel shell ----------------------------------------------------------
+// ---- layout shells ----------------------------------------------------------
 
-function Panel({
+/** One compact section of the right rail (hairline separators, not nested cards). */
+function RailSection({
   title,
   icon: Icon,
-  children,
   aside,
+  children,
 }: {
   title: string;
   icon: typeof Ruler;
-  children: ReactNode;
   aside?: ReactNode;
+  children: ReactNode;
 }) {
   return (
-    <section className="rounded-lg border border-border bg-surface p-5 shadow-[0_1px_2px_rgba(16,24,40,0.05)]">
-      <div className="mb-4 flex items-center justify-between">
+    <section className="border-b border-border px-4 py-4 last:border-b-0">
+      <div className="mb-3 flex items-center justify-between gap-2">
         <h3 className="flex items-center gap-2 text-sm font-semibold text-text">
-          <Icon size={16} strokeWidth={1.75} className="text-primary" aria-hidden="true" />
+          <Icon size={15} strokeWidth={1.75} className="text-primary" aria-hidden="true" />
           {title}
         </h3>
         {aside}
@@ -326,524 +332,95 @@ function Panel({
   );
 }
 
-// ---- setup form -----------------------------------------------------------
-
-interface SetupState {
-  name: string;
-  wallPatch: string;
-  a: Vec3;
-  b: Vec3;
-  unit: LengthUnit;
-  minU: number;
-  maxU: number;
-  stepU: number;
-  inletPatch: string;
-  outletPatch: string;
-  primary: StudyMetric;
-  density: number;
-  stationA: number;
-  stationB: number;
-  blend: number;
-}
-
-function defaultSetup(): SetupState {
-  return {
-    name: '',
-    wallPatch: '',
-    a: [0, 0, 0],
-    b: [0, 0, 0],
-    unit: 'mm',
-    minU: 0,
-    maxU: 0,
-    stepU: 0,
-    inletPatch: '',
-    outletPatch: '',
-    primary: 'pressureDrop',
-    density: 1000,
-    stationA: 0.15,
-    stationB: 0.85,
-    blend: 0.15,
-  };
-}
-
-function SetupForm({
-  projectId,
-  patches,
-  onCreated,
-}: {
-  projectId: string;
-  patches: MeshPatch[];
-  onCreated: (studyId: string) => void;
-}) {
-  const [s, setS] = useState<SetupState>(defaultSetup);
-  const [baselineM, setBaselineM] = useState<number | null>(null);
-  const [centerlinePts, setCenterlinePts] = useState<Vec3[] | null>(null);
-  const [pickMode, setPickMode] = useState<'A' | 'B' | null>(null);
-  const [previewU, setPreviewU] = useState<number | null>(null);
-
-  const geometryQuery = useMeshGeometryQuery(projectId, true);
-  const extract = useExtractCenterline(projectId);
-  const create = useCreateStudy(projectId);
-  const run = useRunStudy(projectId);
-
-  const onPickEndpoint = (which: 'A' | 'B', point: Vec3) => {
-    setS((prev) => (which === 'A' ? { ...prev, a: point } : { ...prev, b: point }));
-    setPickMode(null); // one-shot: place the point, then return to orbit
-  };
-
-  const morphPreview =
-    baselineM !== null && centerlinePts !== null && previewU !== null
-      ? {
-          baselineDiameterM: baselineM,
-          diameterM: previewU * UNIT_M[s.unit],
-          stationA: s.stationA,
-          stationB: s.stationB,
-          blend: s.blend,
-        }
-      : null;
-
-  const walls = patches.filter((p) => p.type === 'wall' || p.type === '?' || !p.type);
-  const set = (patch: Partial<SetupState>) => setS((prev) => ({ ...prev, ...patch }));
-
-  const sweepValues = useMemo(() => {
-    if (!(s.minU > 0) || !(s.maxU >= s.minU) || !(s.stepU > 0)) return [];
-    return sweepValuesM({
-      minM: s.minU * UNIT_M[s.unit],
-      maxM: s.maxU * UNIT_M[s.unit],
-      stepM: s.stepU * UNIT_M[s.unit],
-      unit: s.unit,
-    });
-  }, [s.minU, s.maxU, s.stepU, s.unit]);
-
-  const runCount = sweepValues.length;
-  const sweepError =
-    runCount === 0
-      ? s.minU > 0 && s.maxU > 0 && s.stepU > 0
-        ? 'Check the range: max must be ≥ min and step > 0.'
-        : undefined
-      : runCount > MAX_SWEEP
-        ? `${runCount} runs exceeds the ${MAX_SWEEP}-run cap. Widen the step or narrow the range.`
-        : undefined;
-
-  const canExtract = !!s.wallPatch && (s.a.some((v) => v !== 0) || s.b.some((v) => v !== 0));
-  const ready =
-    baselineM !== null &&
-    centerlinePts !== null &&
-    runCount >= 1 &&
-    runCount <= MAX_SWEEP &&
-    !!s.inletPatch &&
-    !!s.outletPatch &&
-    s.inletPatch !== s.outletPatch &&
-    s.density > 0;
-
-  const buildConfig = () => ({
-    name: s.name.trim() || undefined,
-    morph: {
-      wallPatch: s.wallPatch,
-      centerline: { points: centerlinePts as Vec3[] },
-      stationA: s.stationA,
-      stationB: s.stationB,
-      blend: s.blend,
-      baselineDiameterM: baselineM as number,
-    },
-    sweep: {
-      minM: s.minU * UNIT_M[s.unit],
-      maxM: s.maxU * UNIT_M[s.unit],
-      stepM: s.stepU * UNIT_M[s.unit],
-      unit: s.unit,
-    },
-    objective: {
-      inletPatch: s.inletPatch,
-      outletPatch: s.outletPatch,
-      primary: s.primary,
-      densityKgM3: s.density,
-    },
-  });
-
-  const onExtract = () => {
-    extract.mutate(
-      { wallPatch: s.wallPatch, endpointA: s.a, endpointB: s.b },
-      {
-        onSuccess: (res) => {
-          const mean =
-            res.radii.length > 0
-              ? res.radii.reduce((acc, r) => acc + r, 0) / res.radii.length
-              : 0;
-          const dM = 2 * mean;
-          const dUnit = dM / UNIT_M[s.unit];
-          setBaselineM(dM);
-          setCenterlinePts(res.centerline.points as Vec3[]);
-          setPreviewU(Number(dUnit.toPrecision(4)));
-          // Seed a sensible sweep around the measured diameter if empty.
-          if (!(s.minU > 0)) {
-            set({
-              minU: Number((dUnit * 0.8).toPrecision(3)),
-              maxU: Number((dUnit * 1.2).toPrecision(3)),
-              stepU: Number((dUnit * 0.05).toPrecision(3)),
-            });
-          }
-        },
-      },
-    );
-  };
-
-  const onCreate = (launch: boolean) => {
-    create.mutate(buildConfig(), {
-      onSuccess: (study) => {
-        if (launch) run.mutate(study.id, { onSuccess: () => onCreated(study.id) });
-        else onCreated(study.id);
-      },
-    });
-  };
-
-  const busy = create.isPending || run.isPending;
-
+/** The two-pane frame: a large stage (3D / report) + the config rail. */
+function WorkspaceFrame({ stage, rail }: { stage: ReactNode; rail: ReactNode }) {
   return (
-    <div className="flex flex-col gap-5">
-      <Panel title="Pipe segment geometry" icon={Ruler}>
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Wall patch" htmlFor="opt-wall" hint="The pipe wall whose diameter varies.">
-            <PatchSelect
-              id="opt-wall"
-              value={s.wallPatch}
-              onChange={(v) => set({ wallPatch: v })}
-              patches={walls}
-              placeholder="Select a wall patch…"
-            />
-          </Field>
-          <Field
-            label="Study name"
-            htmlFor="opt-name"
-            hint="Optional. A default name is used otherwise."
-          >
-            <input
-              id="opt-name"
-              className={inputClass}
-              value={s.name}
-              placeholder="Diameter study"
-              autoComplete="off"
-              spellCheck={false}
-              onChange={(e) => set({ name: e.target.value })}
-            />
-          </Field>
-        </div>
+    <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_minmax(300px,340px)]">
+      <div className="flex min-h-[26rem] flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-[0_1px_2px_rgba(16,24,40,0.05)] lg:min-h-0">
+        {stage}
+      </div>
+      <aside className="flex flex-col overflow-y-auto overscroll-contain rounded-lg border border-border bg-surface shadow-[0_1px_2px_rgba(16,24,40,0.05)] lg:min-h-0">
+        {rail}
+      </aside>
+    </div>
+  );
+}
 
-        {/* 3D view: click the pipe to place the two endpoints; drag the slider to
-            preview the morph. Everything renders in raw polyMesh coords. */}
-        {geometryQuery.data ? (
-          <div className="mt-4 flex flex-col gap-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-text-secondary">
-                Click the pipe to place an endpoint:
-              </span>
-              <PickToggle
-                which="A"
-                active={pickMode === 'A'}
-                onToggle={() => setPickMode((m) => (m === 'A' ? null : 'A'))}
-              />
-              <PickToggle
-                which="B"
-                active={pickMode === 'B'}
-                onToggle={() => setPickMode((m) => (m === 'B' ? null : 'B'))}
-              />
-            </div>
-            <div className="h-80 sm:h-[26rem]">
-              <MorphViewer
-                geometry={geometryQuery.data}
-                endpointA={s.a}
-                endpointB={s.b}
-                pickMode={pickMode}
-                onPick={onPickEndpoint}
-                centerline={centerlinePts ? { points: centerlinePts } : null}
-                morphPreview={morphPreview}
-              />
-            </div>
-          </div>
-        ) : geometryQuery.isError ? (
-          <p className="mt-4 text-sm text-text-secondary">
-            The 3D preview is unavailable on this host; set the endpoint coordinates below.
-          </p>
-        ) : (
-          <div className="mt-4 h-80 animate-pulse rounded-md border border-border bg-bg sm:h-[26rem]" />
-        )}
+/** The study switcher pinned at the top of the rail (every mode). */
+function StudySwitcher({
+  studies,
+  selectedId,
+  onSelect,
+  onNew,
+}: {
+  studies: Study[];
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+  onNew: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+      <label htmlFor="opt-study" className="sr-only">
+        Study
+      </label>
+      <select
+        id="opt-study"
+        className={`${inputClass} min-w-0 flex-1`}
+        value={selectedId ?? ''}
+        onChange={(e) => onSelect(e.target.value || null)}
+      >
+        <option value="">New study…</option>
+        {studies.map((study) => (
+          <option key={study.id} value={study.id}>
+            {study.name} ({STUDY_STATUS_META[study.status].label})
+          </option>
+        ))}
+      </select>
+      <SecondaryButton className="shrink-0 px-3 py-2" onClick={onNew} aria-label="New study">
+        <Plus size={15} strokeWidth={2} aria-hidden="true" />
+      </SecondaryButton>
+    </div>
+  );
+}
 
-        <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <fieldset className="flex flex-col gap-2 rounded-md border border-border p-3">
-            <legend className="px-1 text-xs font-medium text-text-secondary">
-              Endpoint A (x, y, z, m)
-            </legend>
-            <div className="grid grid-cols-3 gap-2">
-              {(['x', 'y', 'z'] as const).map((axis, i) => (
-                <NumberField
-                  key={axis}
-                  value={s.a[i]}
-                  aria-label={`Endpoint A ${axis}`}
-                  step={0.001}
-                  onChange={(n) => {
-                    const a = [...s.a] as Vec3;
-                    a[i] = n;
-                    set({ a });
-                  }}
-                />
-              ))}
-            </div>
-          </fieldset>
-          <fieldset className="flex flex-col gap-2 rounded-md border border-border p-3">
-            <legend className="px-1 text-xs font-medium text-text-secondary">
-              Endpoint B (x, y, z, m)
-            </legend>
-            <div className="grid grid-cols-3 gap-2">
-              {(['x', 'y', 'z'] as const).map((axis, i) => (
-                <NumberField
-                  key={axis}
-                  value={s.b[i]}
-                  aria-label={`Endpoint B ${axis}`}
-                  step={0.001}
-                  onChange={(n) => {
-                    const b = [...s.b] as Vec3;
-                    b[i] = n;
-                    set({ b });
-                  }}
-                />
-              ))}
-            </div>
-          </fieldset>
-        </div>
-
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <SecondaryButton onClick={onExtract} disabled={!canExtract || extract.isPending}>
-            {extract.isPending ? (
-              <Loader2 size={15} className="animate-spin" aria-hidden="true" />
-            ) : (
-              <Target size={15} strokeWidth={1.75} aria-hidden="true" />
-            )}
-            Trace centerline
-          </SecondaryButton>
-          {baselineM !== null && centerlinePts && (
-            <p className="text-sm text-text-secondary" aria-live="polite">
-              Traced{' '}
-              <span className="font-semibold text-text tabular-nums">{centerlinePts.length}</span>{' '}
-              axis points · measured diameter{' '}
-              <span className="font-semibold text-text tabular-nums">
-                {fmtDiameter(baselineM, s.unit)}
-              </span>
-            </p>
-          )}
-          {extract.isError && (
-            <p className="text-sm text-danger" role="alert">
-              {extract.error instanceof Error
-                ? extract.error.message
-                : 'Centerline tracing failed.'}
-            </p>
-          )}
-        </div>
-
-        {baselineM !== null && centerlinePts !== null && previewU !== null && s.maxU > s.minU && (
-          <div className="mt-4 flex flex-col gap-1.5 border-t border-border pt-4">
-            <label
-              htmlFor="opt-preview"
-              className="flex items-center justify-between text-sm font-medium text-text"
-            >
-              <span>Preview diameter</span>
-              <span className="tabular-nums text-primary">
-                {Number(previewU.toPrecision(4))} {s.unit}
-              </span>
-            </label>
-            <input
-              id="opt-preview"
-              type="range"
-              min={s.minU}
-              max={s.maxU}
-              step={(s.maxU - s.minU) / 100 || 0.001}
-              value={previewU}
-              onChange={(e) => setPreviewU(Number(e.target.value))}
-              className="w-full"
-              style={{ accentColor: 'var(--color-primary)' }}
-            />
-            <p className="text-xs text-text-secondary">
-              Drag to watch the segment between the two endpoints morph. This is only a preview; the
-              sweep still solves every diameter in the range.
-            </p>
-          </div>
-        )}
-      </Panel>
-
-      <Panel title="Diameter sweep" icon={Gauge}>
-        <div className="mb-4 flex items-center gap-3">
-          <span className="text-sm font-medium text-text">Unit</span>
-          <Segmented
-            ariaLabel="Length unit"
-            options={UNITS.map((u) => ({ id: u, label: u }))}
-            value={s.unit}
-            onChange={(unit) => set({ unit })}
-          />
-        </div>
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Field label={`Min (${s.unit})`} htmlFor="opt-min">
-            <NumberField id="opt-min" value={s.minU} min={0} onChange={(minU) => set({ minU })} />
-          </Field>
-          <Field label={`Max (${s.unit})`} htmlFor="opt-max">
-            <NumberField id="opt-max" value={s.maxU} min={0} onChange={(maxU) => set({ maxU })} />
-          </Field>
-          <Field label={`Step (${s.unit})`} htmlFor="opt-step" error={sweepError}>
-            <NumberField id="opt-step" value={s.stepU} min={0} onChange={(stepU) => set({ stepU })} />
-          </Field>
-        </div>
-        {runCount >= 1 && runCount <= MAX_SWEEP && (
-          <p className="mt-3 text-sm text-text-secondary">
-            <span className="font-semibold text-text tabular-nums">{runCount}</span> solver run
-            {runCount === 1 ? '' : 's'}, one per diameter, run sequentially in the background.
-          </p>
-        )}
-      </Panel>
-
-      <Panel title="Loss objective" icon={Target}>
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Inlet patch" htmlFor="opt-inlet">
-            <PatchSelect
-              id="opt-inlet"
-              value={s.inletPatch}
-              onChange={(v) => set({ inletPatch: v })}
-              patches={patches}
-              placeholder="Select the inlet…"
-            />
-          </Field>
-          <Field
-            label="Outlet patch"
-            htmlFor="opt-outlet"
-            error={
-              s.inletPatch && s.inletPatch === s.outletPatch
-                ? 'Inlet and outlet must differ.'
-                : undefined
-            }
-          >
-            <PatchSelect
-              id="opt-outlet"
-              value={s.outletPatch}
-              onChange={(v) => set({ outletPatch: v })}
-              patches={patches}
-              placeholder="Select the outlet…"
-            />
-          </Field>
-        </div>
-        <div className="mt-4 flex flex-wrap items-end gap-6">
-          <div className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium text-text">Optimise for</span>
-            <Segmented
-              ariaLabel="Primary loss metric"
-              options={METRICS}
-              value={s.primary}
-              onChange={(primary) => set({ primary })}
-            />
-          </div>
-          <Field label="Fluid density (kg/m³)" htmlFor="opt-density" hint="Water = 1000.">
-            <NumberField
-              id="opt-density"
-              value={s.density}
-              min={1}
-              onChange={(density) => set({ density })}
-            />
-          </Field>
-        </div>
-      </Panel>
-
-      <div className="flex flex-wrap items-center justify-end gap-3">
-        {(create.isError || run.isError) && (
-          <p className="mr-auto text-sm text-danger" role="alert">
-            {(create.error ?? run.error) instanceof Error
-              ? (create.error ?? run.error)?.message
-              : 'Could not create the study.'}
-          </p>
-        )}
-        <SecondaryButton onClick={() => onCreate(false)} disabled={!ready || busy}>
-          Save draft
+/** Two-step inline confirmation for deleting a study (destructive action). */
+function DeleteStudyButton({ onConfirm, pending }: { onConfirm: () => void; pending: boolean }) {
+  const [confirming, setConfirming] = useState(false);
+  if (!confirming) {
+    return (
+      <DangerButton className="w-full" onClick={() => setConfirming(true)}>
+        <Trash2 size={15} strokeWidth={1.75} aria-hidden="true" />
+        Delete study
+      </DangerButton>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2" role="group" aria-label="Confirm deletion">
+      <p className="text-sm text-text-secondary">Delete this study and its results?</p>
+      <div className="flex gap-2">
+        <SecondaryButton className="flex-1 px-3 py-1.5" onClick={() => setConfirming(false)}>
+          Cancel
         </SecondaryButton>
-        <PrimaryButton onClick={() => onCreate(true)} disabled={!ready || busy}>
-          {busy ? (
-            <Loader2 size={15} className="animate-spin" aria-hidden="true" />
-          ) : (
-            <Play size={15} strokeWidth={2} aria-hidden="true" />
-          )}
-          Create and launch
-        </PrimaryButton>
+        <DangerButton className="flex-1 px-3 py-1.5" onClick={onConfirm} disabled={pending}>
+          {pending && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+          Confirm
+        </DangerButton>
       </div>
     </div>
   );
 }
 
-// ---- run monitor ----------------------------------------------------------
-
-function RunMonitor({ projectId, study }: { projectId: string; study: Study }) {
-  const stop = useStopStudy(projectId);
-  const log = useRunLogQuery(projectId, study.currentRunId ?? null);
-  const done = study.samples.filter((x) => x.status !== 'pending').length;
-  const pct = study.samples.length > 0 ? Math.round((done / study.samples.length) * 100) : 0;
-
+/** Label/value row used in the rail summaries. */
+function SummaryRow({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="flex flex-col gap-5">
-      <Panel
-        title="Sweep in progress"
-        icon={Loader2}
-        aside={
-          <DangerButton onClick={() => stop.mutate(study.id)} disabled={stop.isPending}>
-            <Square size={14} strokeWidth={2} aria-hidden="true" />
-            Stop
-          </DangerButton>
-        }
-      >
-        <div className="mb-2 flex items-center justify-between text-sm" aria-live="polite">
-          <span className="text-text-secondary">
-            <span className="font-semibold tabular-nums text-text">{done}</span> of{' '}
-            <span className="tabular-nums">{study.samples.length}</span> diameters
-          </span>
-          <span className="font-semibold tabular-nums text-primary">{pct}%</span>
-        </div>
-        <div
-          className="h-2 w-full overflow-hidden rounded-full bg-primary-tint"
-          role="progressbar"
-          aria-valuenow={pct}
-          aria-valuemin={0}
-          aria-valuemax={100}
-        >
-          <div
-            className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
-            style={{ width: `${pct}%` }}
-          />
-        </div>
-        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {study.samples.map((sample, i) => (
-            <SampleChip key={i} sample={sample} unit={study.sweep.unit} />
-          ))}
-        </div>
-      </Panel>
-
-      <Panel title="Live residuals (current run)" icon={Gauge}>
-        {study.currentRunId ? (
-          <ResidualChart samples={log.data?.series ?? []} />
-        ) : (
-          <p className="py-6 text-center text-sm text-text-secondary">
-            Preparing the next diameter…
-          </p>
-        )}
-      </Panel>
+    <div className="flex items-baseline justify-between gap-3 text-sm">
+      <span className="shrink-0 text-text-secondary">{label}</span>
+      <span className="min-w-0 truncate text-right font-medium tabular-nums text-text">{value}</span>
     </div>
   );
 }
 
-// ---- results --------------------------------------------------------------
-
-function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-xs text-text-secondary">{label}</span>
-      <span
-        className={`text-lg font-semibold tabular-nums ${accent ? 'text-accent-hover' : 'text-text'}`}
-      >
-        {value}
-      </span>
-    </div>
-  );
-}
+// ---- CSV export -------------------------------------------------------------
 
 function toCsv(study: Study): string {
   const u = study.sweep.unit;
@@ -861,18 +438,705 @@ function toCsv(study: Study): string {
   return [header.join(','), ...lines].join('\n');
 }
 
-function ResultsReport({
+function downloadCsv(study: Study): void {
+  const blob = new Blob([toCsv(study)], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${study.name.replace(/[^\w.-]+/g, '-')}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+// ---- setup mode (new study) -------------------------------------------------
+
+interface SetupSweep {
+  name: string;
+  unit: LengthUnit;
+  minU: number;
+  maxU: number;
+  stepU: number;
+  inletPatch: string;
+  outletPatch: string;
+  primary: StudyMetric;
+  density: number;
+}
+
+function defaultSweep(): SetupSweep {
+  return {
+    name: '',
+    unit: 'mm',
+    minU: 0,
+    maxU: 0,
+    stepU: 0,
+    inletPatch: '',
+    outletPatch: '',
+    primary: 'pressureDrop',
+    density: 1000,
+  };
+}
+
+function SetupFlow({
+  projectId,
+  patches,
+  geometry,
+  geometryError,
+  switcher,
+  onCreated,
+}: {
+  projectId: string;
+  patches: MeshPatch[];
+  geometry: ArrayBuffer | null;
+  geometryError: boolean;
+  switcher: ReactNode;
+  onCreated: (studyId: string) => void;
+}) {
+  // Geometry: the two clicked endpoints + the wall patch inferred from the click.
+  const [a, setA] = useState<Vec3 | null>(null);
+  const [b, setB] = useState<Vec3 | null>(null);
+  const [wallPatch, setWallPatch] = useState<string>('');
+  const [pickMode, setPickMode] = useState<'A' | 'B' | null>('A');
+  // Trace result.
+  const [baselineM, setBaselineM] = useState<number | null>(null);
+  const [centerlinePts, setCenterlinePts] = useState<Vec3[] | null>(null);
+  const [previewU, setPreviewU] = useState<number | null>(null);
+  // Sweep + objective.
+  const [s, setS] = useState<SetupSweep>(defaultSweep);
+  const set = (patch: Partial<SetupSweep>) => setS((prev) => ({ ...prev, ...patch }));
+
+  const extract = useExtractCenterline(projectId);
+  const create = useCreateStudy(projectId);
+  const run = useRunStudy(projectId);
+
+  const onPick = (which: 'A' | 'B', point: Vec3, patch: string | null) => {
+    if (which === 'A') {
+      setA(point);
+      if (patch) setWallPatch(patch); // A's patch wins (both clicks land on the pipe wall)
+      setPickMode(b === null ? 'B' : null); // guide straight to the second click
+    } else {
+      setB(point);
+      if (patch) setWallPatch((prev) => prev || patch);
+      setPickMode(null);
+    }
+  };
+
+  // Auto-trace: as soon as both endpoints and the wall patch are known, trace the
+  // centerline (debounced; re-traces when an endpoint moves). A failed trace can be
+  // retried manually.
+  const traceKey = useMemo(
+    () => (a && b && wallPatch ? JSON.stringify([wallPatch, a, b]) : null),
+    [a, b, wallPatch],
+  );
+  const lastTraced = useRef<string | null>(null);
+  const doTraceRef = useRef<() => void>(() => {});
+  doTraceRef.current = () => {
+    if (!a || !b || !wallPatch) return;
+    extract.mutate(
+      { wallPatch, endpointA: a, endpointB: b },
+      {
+        onSuccess: (res) => {
+          const mean =
+            res.radii.length > 0 ? res.radii.reduce((acc, r) => acc + r, 0) / res.radii.length : 0;
+          const dM = 2 * mean;
+          const dUnit = dM / UNIT_M[s.unit];
+          setBaselineM(dM);
+          setCenterlinePts(res.centerline.points as Vec3[]);
+          setPreviewU(Number(dUnit.toPrecision(4)));
+          // Pre-fill a sensible range around the measured diameter (only when empty,
+          // so a user-tuned range survives a re-trace).
+          setS((prev) =>
+            prev.minU > 0
+              ? prev
+              : {
+                  ...prev,
+                  minU: Number((dUnit * 0.8).toPrecision(3)),
+                  maxU: Number((dUnit * 1.2).toPrecision(3)),
+                  stepU: Number((dUnit * 0.05).toPrecision(3)),
+                },
+          );
+        },
+        onError: () => {
+          lastTraced.current = null; // allow an automatic retry after the endpoints move
+        },
+      },
+    );
+  };
+  useEffect(() => {
+    if (!traceKey || traceKey === lastTraced.current) return;
+    const timer = setTimeout(() => {
+      lastTraced.current = traceKey;
+      doTraceRef.current();
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [traceKey]);
+
+  const sweepValues = useMemo(() => {
+    if (!(s.minU > 0) || !(s.maxU >= s.minU) || !(s.stepU > 0)) return [];
+    return sweepValuesM({
+      minM: s.minU * UNIT_M[s.unit],
+      maxM: s.maxU * UNIT_M[s.unit],
+      stepM: s.stepU * UNIT_M[s.unit],
+      unit: s.unit,
+    });
+  }, [s.minU, s.maxU, s.stepU, s.unit]);
+  const runCount = sweepValues.length;
+  const sweepError =
+    runCount === 0
+      ? s.minU > 0 && s.maxU > 0 && s.stepU > 0
+        ? 'Check the range: max must be ≥ min and step > 0.'
+        : undefined
+      : runCount > MAX_SWEEP
+        ? `${runCount} runs exceeds the ${MAX_SWEEP}-run cap. Widen the step or narrow the range.`
+        : undefined;
+
+  const traced = baselineM !== null && centerlinePts !== null;
+  const ready =
+    traced &&
+    runCount >= 1 &&
+    runCount <= MAX_SWEEP &&
+    !!s.inletPatch &&
+    !!s.outletPatch &&
+    s.inletPatch !== s.outletPatch &&
+    s.density > 0;
+
+  const buildConfig = () => ({
+    name: s.name.trim() || undefined,
+    morph: {
+      wallPatch,
+      centerline: { points: centerlinePts as Vec3[] },
+      stationA: STATION_A,
+      stationB: STATION_B,
+      blend: BLEND,
+      baselineDiameterM: baselineM as number,
+    },
+    sweep: {
+      minM: s.minU * UNIT_M[s.unit],
+      maxM: s.maxU * UNIT_M[s.unit],
+      stepM: s.stepU * UNIT_M[s.unit],
+      unit: s.unit,
+    },
+    objective: {
+      inletPatch: s.inletPatch,
+      outletPatch: s.outletPatch,
+      primary: s.primary,
+      densityKgM3: s.density,
+    },
+  });
+
+  const onLaunch = (launch: boolean) => {
+    create.mutate(buildConfig(), {
+      onSuccess: (study) => {
+        if (launch) run.mutate(study.id, { onSuccess: () => onCreated(study.id) });
+        else onCreated(study.id);
+      },
+    });
+  };
+  const busy = create.isPending || run.isPending;
+
+  const morphPreview =
+    traced && previewU !== null
+      ? {
+          baselineDiameterM: baselineM as number,
+          diameterM: previewU * UNIT_M[s.unit],
+          stationA: STATION_A,
+          stationB: STATION_B,
+          blend: BLEND,
+        }
+      : null;
+
+  const stage = (
+    <>
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
+        <PickToggle
+          which="A"
+          active={pickMode === 'A'}
+          placed={a !== null}
+          onToggle={() => setPickMode((m) => (m === 'A' ? null : 'A'))}
+        />
+        <PickToggle
+          which="B"
+          active={pickMode === 'B'}
+          placed={b !== null}
+          onToggle={() => setPickMode((m) => (m === 'B' ? null : 'B'))}
+        />
+        <span className="ml-auto text-xs text-text-secondary">
+          Drag to orbit, scroll to zoom.
+        </span>
+      </div>
+      <div className="min-h-0 flex-1 p-3">
+        {geometry ? (
+          <MorphViewer
+            geometry={geometry}
+            endpointA={a}
+            endpointB={b}
+            pickMode={pickMode}
+            onPick={onPick}
+            centerline={centerlinePts ? { points: centerlinePts } : null}
+            morphPreview={morphPreview}
+          />
+        ) : geometryError ? (
+          <div className="flex h-full min-h-64 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border bg-bg p-8 text-center">
+            <AlertTriangle size={20} strokeWidth={1.5} className="text-neutral" aria-hidden="true" />
+            <p className="text-sm font-medium text-text">3D preview unavailable</p>
+            <p className="max-w-sm text-xs text-text-secondary">
+              The mesh render could not be built on this host. Enter the endpoint coordinates in
+              the Geometry section instead.
+            </p>
+          </div>
+        ) : (
+          <div className="h-full min-h-64 animate-pulse rounded-md border border-border bg-bg" />
+        )}
+      </div>
+      {traced && previewU !== null && s.maxU > s.minU && (
+        <div className="border-t border-border px-4 py-3">
+          <label
+            htmlFor="opt-preview"
+            className="mb-1.5 flex items-center justify-between text-sm font-medium text-text"
+          >
+            <span>Preview diameter</span>
+            <span className="tabular-nums text-primary">
+              {Number(previewU.toPrecision(4))} {s.unit}
+            </span>
+          </label>
+          <input
+            id="opt-preview"
+            type="range"
+            min={Math.min(s.minU, previewU)}
+            max={Math.max(s.maxU, previewU)}
+            step={(s.maxU - s.minU) / 100 || 0.001}
+            value={previewU}
+            onChange={(e) => setPreviewU(Number(e.target.value))}
+            className="w-full"
+            style={{ accentColor: 'var(--color-primary)' }}
+          />
+        </div>
+      )}
+    </>
+  );
+
+  const rail = (
+    <>
+      {switcher}
+      <RailSection title="Pipe segment" icon={Ruler}>
+        <div className="flex flex-col gap-2">
+          <SummaryRow
+            label="Endpoint A"
+            value={a ? fmtVec(a) : <span className="font-normal text-text-secondary">click the pipe</span>}
+          />
+          <SummaryRow
+            label="Endpoint B"
+            value={b ? fmtVec(b) : <span className="font-normal text-text-secondary">click the pipe</span>}
+          />
+          <SummaryRow
+            label="Wall patch"
+            value={
+              wallPatch ? (
+                <span translate="no">{wallPatch}</span>
+              ) : (
+                <span className="font-normal text-text-secondary">from your click</span>
+              )
+            }
+          />
+          <div aria-live="polite">
+            {extract.isPending ? (
+              <p className="flex items-center gap-1.5 text-sm text-text-secondary">
+                <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+                Tracing the centerline…
+              </p>
+            ) : traced ? (
+              <SummaryRow label="Measured Ø" value={fmtDiameter(baselineM as number, s.unit)} />
+            ) : null}
+          </div>
+          {extract.isError && (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs text-danger" role="alert">
+                {extract.error instanceof Error ? extract.error.message : 'Centerline tracing failed.'}
+              </p>
+              <SecondaryButton className="px-3 py-1.5" onClick={() => doTraceRef.current()}>
+                Retrace
+              </SecondaryButton>
+            </div>
+          )}
+        </div>
+        <details className="mt-3 text-xs">
+          <summary className="cursor-pointer rounded-sm text-text-secondary transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2">
+            Edit coordinates manually
+          </summary>
+          <div className="mt-2 flex flex-col gap-3">
+            {(
+              [
+                ['A', a, setA],
+                ['B', b, setB],
+              ] as const
+            ).map(([which, point, setPoint]) => (
+              <fieldset key={which} className="flex flex-col gap-1.5 rounded-md border border-border p-2.5">
+                <legend className="px-1 text-xs font-medium text-text-secondary">
+                  Endpoint {which} (x, y, z, m)
+                </legend>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {([0, 1, 2] as const).map((i) => (
+                    <NumberField
+                      key={i}
+                      value={point ? point[i] : 0}
+                      aria-label={`Endpoint ${which} ${['x', 'y', 'z'][i]}`}
+                      step={0.001}
+                      onChange={(n) => {
+                        const next = (point ? [...point] : [0, 0, 0]) as Vec3;
+                        next[i] = n;
+                        setPoint(next);
+                      }}
+                    />
+                  ))}
+                </div>
+              </fieldset>
+            ))}
+            <Field label="Wall patch" htmlFor="opt-wall">
+              <PatchSelect
+                id="opt-wall"
+                value={wallPatch}
+                onChange={setWallPatch}
+                patches={patches}
+                placeholder="Select the pipe wall…"
+              />
+            </Field>
+          </div>
+        </details>
+      </RailSection>
+
+      <RailSection
+        title="Diameter sweep"
+        icon={Gauge}
+        aside={
+          <Segmented
+            ariaLabel="Length unit"
+            options={UNITS.map((u) => ({ id: u, label: u }))}
+            value={s.unit}
+            onChange={(unit) => set({ unit })}
+          />
+        }
+      >
+        <div className="grid grid-cols-3 gap-2">
+          <Field label={`Min (${s.unit})`} htmlFor="opt-min">
+            <NumberField id="opt-min" value={s.minU} min={0} onChange={(minU) => set({ minU })} />
+          </Field>
+          <Field label={`Max (${s.unit})`} htmlFor="opt-max">
+            <NumberField id="opt-max" value={s.maxU} min={0} onChange={(maxU) => set({ maxU })} />
+          </Field>
+          <Field label={`Step (${s.unit})`} htmlFor="opt-step">
+            <NumberField id="opt-step" value={s.stepU} min={0} onChange={(stepU) => set({ stepU })} />
+          </Field>
+        </div>
+        {sweepError ? (
+          <p className="mt-2 text-xs text-danger" role="alert">
+            {sweepError}
+          </p>
+        ) : runCount >= 1 ? (
+          <p className="mt-2 text-xs text-text-secondary" aria-live="polite">
+            <span className="font-semibold tabular-nums text-text">{runCount}</span> solver run
+            {runCount === 1 ? '' : 's'}, one per diameter, sequential in the background.
+          </p>
+        ) : (
+          <p className="mt-2 text-xs text-text-secondary">
+            Pre-filled around the measured diameter after the trace.
+          </p>
+        )}
+      </RailSection>
+
+      <RailSection title="Loss objective" icon={Target}>
+        <div className="flex flex-col gap-3">
+          <Field label="Inlet patch" htmlFor="opt-inlet">
+            <PatchSelect
+              id="opt-inlet"
+              value={s.inletPatch}
+              onChange={(v) => set({ inletPatch: v })}
+              patches={patches}
+              placeholder="Select the inlet…"
+            />
+          </Field>
+          <Field
+            label="Outlet patch"
+            htmlFor="opt-outlet"
+            error={
+              s.inletPatch && s.inletPatch === s.outletPatch ? 'Inlet and outlet must differ.' : undefined
+            }
+          >
+            <PatchSelect
+              id="opt-outlet"
+              value={s.outletPatch}
+              onChange={(v) => set({ outletPatch: v })}
+              patches={patches}
+              placeholder="Select the outlet…"
+            />
+          </Field>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium text-text">Optimise for</span>
+            <Segmented
+              ariaLabel="Primary loss metric"
+              options={METRICS}
+              value={s.primary}
+              onChange={(primary) => set({ primary })}
+            />
+          </div>
+          <Field label="Fluid density (kg/m³)" htmlFor="opt-density" hint="Water = 1000.">
+            <NumberField id="opt-density" value={s.density} min={1} onChange={(density) => set({ density })} />
+          </Field>
+          <Field label="Study name" htmlFor="opt-name" hint="Optional. A default name is used otherwise.">
+            <input
+              id="opt-name"
+              className={inputClass}
+              value={s.name}
+              placeholder="Diameter study"
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(e) => set({ name: e.target.value })}
+            />
+          </Field>
+        </div>
+      </RailSection>
+
+      <div className="mt-auto flex flex-col gap-2 px-4 py-4">
+        {(create.isError || run.isError) && (
+          <p className="text-xs text-danger" role="alert">
+            {(create.error ?? run.error) instanceof Error
+              ? (create.error ?? run.error)?.message
+              : 'Could not create the study.'}
+          </p>
+        )}
+        {!traced && (
+          <p className="text-xs text-text-secondary">
+            Place both endpoints on the pipe to unlock the launch.
+          </p>
+        )}
+        <PrimaryButton onClick={() => onLaunch(true)} disabled={!ready || busy}>
+          {busy ? (
+            <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+          ) : (
+            <Play size={15} strokeWidth={2} aria-hidden="true" />
+          )}
+          Launch sweep
+        </PrimaryButton>
+        <SecondaryButton onClick={() => onLaunch(false)} disabled={!ready || busy}>
+          Save as draft
+        </SecondaryButton>
+      </div>
+    </>
+  );
+
+  return <WorkspaceFrame stage={stage} rail={rail} />;
+}
+
+// ---- study modes (draft / running / finished) --------------------------------
+
+/** Compact recap of a study's configuration, shown in the rail for every mode. */
+function StudySummary({ study }: { study: Study }) {
+  const meta = STUDY_STATUS_META[study.status];
+  const u = study.sweep.unit;
+  return (
+    <RailSection
+      title={study.name}
+      icon={Target}
+      aside={
+        <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${meta.className}`}>
+          {meta.label}
+        </span>
+      }
+    >
+      <div className="flex flex-col gap-2">
+        <SummaryRow label="Wall patch" value={<span translate="no">{study.morph.wallPatch}</span>} />
+        <SummaryRow label="Baseline Ø" value={fmtDiameter(study.morph.baselineDiameterM, u)} />
+        <SummaryRow
+          label="Range"
+          value={`${Number((study.sweep.minM / UNIT_M[u]).toPrecision(4))} to ${Number(
+            (study.sweep.maxM / UNIT_M[u]).toPrecision(4),
+          )} ${u}`}
+        />
+        <SummaryRow label="Diameters" value={study.samples.length} />
+        <SummaryRow
+          label="Objective"
+          value={study.objective.primary === 'headLoss' ? 'Head loss' : 'Pressure drop'}
+        />
+        <SummaryRow
+          label="Inlet / outlet"
+          value={
+            <span translate="no">
+              {study.objective.inletPatch} / {study.objective.outletPatch}
+            </span>
+          }
+        />
+      </div>
+    </RailSection>
+  );
+}
+
+/** Stage while a study is selected but not finished: the mesh + its centerline. */
+function StudyStage({
+  study,
+  geometry,
+  banner,
+}: {
+  study: Study;
+  geometry: ArrayBuffer | null;
+  banner?: ReactNode;
+}) {
+  return (
+    <>
+      {banner}
+      <div className="min-h-0 flex-1 p-3">
+        {geometry ? (
+          <MorphViewer
+            geometry={geometry}
+            endpointA={null}
+            endpointB={null}
+            pickMode={null}
+            onPick={() => {}}
+            centerline={study.morph.centerline}
+            morphPreview={null}
+          />
+        ) : (
+          <div className="h-full min-h-64 animate-pulse rounded-md border border-border bg-bg" />
+        )}
+      </div>
+    </>
+  );
+}
+
+function RunningView({
   projectId,
   study,
-  onRerun,
+  geometry,
+  switcher,
 }: {
   projectId: string;
   study: Study;
-  onRerun: () => void;
+  geometry: ArrayBuffer | null;
+  switcher: ReactNode;
+}) {
+  const stop = useStopStudy(projectId);
+  const log = useRunLogQuery(projectId, study.currentRunId ?? null);
+  const done = study.samples.filter((x) => x.status !== 'pending' && x.status !== 'running').length;
+  const pct = study.samples.length > 0 ? Math.round((done / study.samples.length) * 100) : 0;
+  const current = study.samples.find((x) => x.status === 'running');
+
+  const stage = (
+    <StudyStage
+      study={study}
+      geometry={geometry}
+      banner={
+        <div className="flex items-center gap-2 border-b border-border px-4 py-2.5" aria-live="polite">
+          <Loader2 size={15} className="animate-spin text-primary" aria-hidden="true" />
+          <span className="text-sm font-medium text-text">
+            Sweeping{current ? `: solving ${fmtDiameter(current.diameterM, study.sweep.unit)}` : '…'}
+          </span>
+          <span className="ml-auto text-sm font-semibold tabular-nums text-primary">{pct}%</span>
+        </div>
+      }
+    />
+  );
+
+  const rail = (
+    <>
+      {switcher}
+      <StudySummary study={study} />
+      <RailSection
+        title="Progress"
+        icon={Gauge}
+        aside={
+          <DangerButton className="px-3 py-1.5" onClick={() => stop.mutate(study.id)} disabled={stop.isPending}>
+            <Square size={13} strokeWidth={2} aria-hidden="true" />
+            Stop
+          </DangerButton>
+        }
+      >
+        <p className="mb-2 text-sm text-text-secondary" aria-live="polite">
+          <span className="font-semibold tabular-nums text-text">{done}</span> of{' '}
+          <span className="tabular-nums">{study.samples.length}</span> diameters settled
+        </p>
+        <div
+          className="h-2 w-full overflow-hidden rounded-full bg-primary-tint"
+          role="progressbar"
+          aria-valuenow={pct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          <div
+            className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <ul className="mt-3 flex max-h-56 flex-col gap-1.5 overflow-y-auto overscroll-contain">
+          {study.samples.map((sample, i) => (
+            <SampleChip key={i} sample={sample} unit={study.sweep.unit} />
+          ))}
+        </ul>
+      </RailSection>
+      <RailSection title="Live residuals" icon={Play}>
+        {study.currentRunId ? (
+          <ResidualChart samples={log.data?.series ?? []} />
+        ) : (
+          <p className="py-4 text-center text-sm text-text-secondary">Preparing the next diameter…</p>
+        )}
+      </RailSection>
+    </>
+  );
+
+  return <WorkspaceFrame stage={stage} rail={rail} />;
+}
+
+function DraftView({
+  projectId,
+  study,
+  geometry,
+  switcher,
+  onDeleted,
+}: {
+  projectId: string;
+  study: Study;
+  geometry: ArrayBuffer | null;
+  switcher: ReactNode;
+  onDeleted: () => void;
 }) {
   const run = useRunStudy(projectId);
   const del = useDeleteStudy(projectId);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  const rail = (
+    <>
+      {switcher}
+      <StudySummary study={study} />
+      <div className="mt-auto flex flex-col gap-2 px-4 py-4">
+        {run.isError && (
+          <p className="text-xs text-danger" role="alert">
+            {run.error instanceof Error ? run.error.message : 'Could not launch the sweep.'}
+          </p>
+        )}
+        <PrimaryButton onClick={() => run.mutate(study.id)} disabled={run.isPending}>
+          {run.isPending ? (
+            <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+          ) : (
+            <Play size={15} strokeWidth={2} aria-hidden="true" />
+          )}
+          Launch sweep
+        </PrimaryButton>
+        <DeleteStudyButton onConfirm={() => del.mutate(study.id, { onSuccess: onDeleted })} pending={del.isPending} />
+      </div>
+    </>
+  );
+
+  return <WorkspaceFrame stage={<StudyStage study={study} geometry={geometry} />} rail={rail} />;
+}
+
+function FinishedView({
+  projectId,
+  study,
+  switcher,
+  onDeleted,
+}: {
+  projectId: string;
+  study: Study;
+  switcher: ReactNode;
+  onDeleted: () => void;
+}) {
+  const run = useRunStudy(projectId);
+  const del = useDeleteStudy(projectId);
   const doneSamples = study.samples.filter((x) => x.status === 'done');
   const bestSample = study.samples.find(
     (x) => study.bestDiameterM !== undefined && Math.abs(x.diameterM - study.bestDiameterM) < 1e-12,
@@ -883,91 +1147,63 @@ function ResultsReport({
       : `${Number(bestSample.metrics.pressureDropPa.toPrecision(4))} Pa`
     : '-';
 
-  const downloadCsv = () => {
-    const blob = new Blob([toCsv(study)], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${study.name.replace(/[^\w.-]+/g, '-')}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  return (
-    <div className="flex flex-col gap-5">
+  const stage = (
+    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5">
       {study.status === 'failed' && (
-        <div className="flex items-start gap-2 rounded-md border border-border bg-danger-tint px-4 py-3 text-sm text-danger">
+        <div className="mb-4 flex items-start gap-2 rounded-md border border-border bg-danger-tint px-4 py-3 text-sm text-danger">
           <AlertTriangle size={16} strokeWidth={1.75} className="mt-0.5 shrink-0" aria-hidden="true" />
           <span>{study.reason ?? 'The sweep did not produce a result.'}</span>
         </div>
       )}
-
-      <Panel
-        title="Loss versus diameter"
-        icon={Target}
-        aside={
-          <SecondaryButton onClick={downloadCsv} className="px-3 py-1.5">
-            <Download size={14} strokeWidth={1.75} aria-hidden="true" />
-            CSV
-          </SecondaryButton>
-        }
-      >
-        <div className="mb-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <Stat
-            label="Optimal diameter"
-            value={
-              study.bestDiameterM !== undefined
-                ? fmtDiameter(study.bestDiameterM, study.sweep.unit)
-                : '-'
-            }
-            accent
-          />
-          <Stat
-            label={study.objective.primary === 'headLoss' ? 'Least head loss' : 'Least Δp'}
-            value={bestLoss}
-          />
-          <Stat label="Solved" value={`${doneSamples.length} / ${study.samples.length}`} />
-          <Stat
-            label="Skipped / failed"
-            value={String(
-              study.samples.filter((x) => x.status === 'meshFailed' || x.status === 'failed').length,
-            )}
-          />
+      <div className="mb-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-xs text-text-secondary">Optimal diameter</span>
+          <span className="text-lg font-semibold tabular-nums text-accent-hover">
+            {study.bestDiameterM !== undefined ? fmtDiameter(study.bestDiameterM, study.sweep.unit) : '-'}
+          </span>
         </div>
-        <LossChart
-          samples={study.samples}
-          primary={study.objective.primary}
-          unit={study.sweep.unit}
-          bestDiameterM={study.bestDiameterM}
-        />
-      </Panel>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-xs text-text-secondary">
+            {study.objective.primary === 'headLoss' ? 'Least head loss' : 'Least Δp'}
+          </span>
+          <span className="text-lg font-semibold tabular-nums text-text">{bestLoss}</span>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-xs text-text-secondary">Solved</span>
+          <span className="text-lg font-semibold tabular-nums text-text">
+            {doneSamples.length} / {study.samples.length}
+          </span>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-xs text-text-secondary">Skipped / failed</span>
+          <span className="text-lg font-semibold tabular-nums text-text">
+            {study.samples.filter((x) => x.status === 'meshFailed' || x.status === 'failed').length}
+          </span>
+        </div>
+      </div>
+      <LossChart
+        samples={study.samples}
+        primary={study.objective.primary}
+        unit={study.sweep.unit}
+        bestDiameterM={study.bestDiameterM}
+      />
+    </div>
+  );
 
-      <div className="flex flex-wrap items-center justify-end gap-3">
-        {confirmingDelete ? (
-          <div
-            className="mr-auto flex flex-wrap items-center gap-2"
-            role="group"
-            aria-label="Confirm deletion"
-          >
-            <span className="text-sm text-text-secondary">Delete this study and its results?</span>
-            <SecondaryButton className="px-3 py-1.5" onClick={() => setConfirmingDelete(false)}>
-              Cancel
-            </SecondaryButton>
-            <DangerButton
-              className="px-3 py-1.5"
-              onClick={() => del.mutate(study.id, { onSuccess: onRerun })}
-              disabled={del.isPending}
-            >
-              {del.isPending && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
-              Confirm delete
-            </DangerButton>
-          </div>
-        ) : (
-          <DangerButton className="mr-auto" onClick={() => setConfirmingDelete(true)}>
-            <Trash2 size={15} strokeWidth={1.75} aria-hidden="true" />
-            Delete study
-          </DangerButton>
+  const rail = (
+    <>
+      {switcher}
+      <StudySummary study={study} />
+      <div className="mt-auto flex flex-col gap-2 px-4 py-4">
+        {run.isError && (
+          <p className="text-xs text-danger" role="alert">
+            {run.error instanceof Error ? run.error.message : 'Could not relaunch the sweep.'}
+          </p>
         )}
+        <SecondaryButton onClick={() => downloadCsv(study)}>
+          <Download size={15} strokeWidth={1.75} aria-hidden="true" />
+          Export CSV
+        </SecondaryButton>
         <PrimaryButton onClick={() => run.mutate(study.id)} disabled={run.isPending}>
           {run.isPending ? (
             <Loader2 size={15} className="animate-spin" aria-hidden="true" />
@@ -976,82 +1212,15 @@ function ResultsReport({
           )}
           Run again
         </PrimaryButton>
+        <DeleteStudyButton onConfirm={() => del.mutate(study.id, { onSuccess: onDeleted })} pending={del.isPending} />
       </div>
-    </div>
+    </>
   );
+
+  return <WorkspaceFrame stage={stage} rail={rail} />;
 }
 
-// ---- sidebar list ---------------------------------------------------------
-
-const STUDY_STATUS_META: Record<Study['status'], { label: string; className: string }> = {
-  draft: { label: 'Draft', className: 'bg-bg text-text-secondary' },
-  queued: { label: 'Queued', className: 'bg-primary-tint text-primary' },
-  running: { label: 'Running', className: 'bg-primary-tint text-primary' },
-  completed: { label: 'Completed', className: 'bg-success-tint text-success' },
-  failed: { label: 'Failed', className: 'bg-danger-tint text-danger' },
-  stopped: { label: 'Stopped', className: 'bg-bg text-text-secondary' },
-};
-
-function StudyList({
-  studies,
-  selectedId,
-  onSelect,
-  onNew,
-}: {
-  studies: Study[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-  onNew: () => void;
-}) {
-  return (
-    <div className="flex flex-col gap-3">
-      <PrimaryButton onClick={onNew} className="w-full">
-        <Plus size={15} strokeWidth={2} aria-hidden="true" />
-        New study
-      </PrimaryButton>
-      <ul className="flex flex-col gap-1.5">
-        {studies.map((study) => {
-          const meta = STUDY_STATUS_META[study.status];
-          const active = study.id === selectedId;
-          return (
-            <li key={study.id}>
-              <button
-                type="button"
-                onClick={() => onSelect(study.id)}
-                className={`flex w-full flex-col gap-1 rounded-md border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring ${
-                  active
-                    ? 'border-primary bg-primary-tint'
-                    : 'border-border bg-surface hover:border-border-strong'
-                }`}
-              >
-                <span className="flex items-center justify-between gap-2">
-                  <span className="min-w-0 truncate text-sm font-medium text-text">
-                    {study.name}
-                  </span>
-                  {isStudyActive(study.status) && (
-                    <Loader2 size={13} className="shrink-0 animate-spin text-primary" aria-hidden="true" />
-                  )}
-                </span>
-                <span className="flex items-center gap-2">
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${meta.className}`}
-                  >
-                    {meta.label}
-                  </span>
-                  <span className="text-xs tabular-nums text-text-secondary">
-                    {study.samples.length} pt
-                  </span>
-                </span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-}
-
-// ---- workspace root -------------------------------------------------------
+// ---- workspace root ----------------------------------------------------------
 
 function EmptyMesh() {
   return (
@@ -1069,17 +1238,19 @@ function EmptyMesh() {
 export function OptimisationWorkspace({ projectId }: { projectId: string }) {
   const studiesQuery = useStudiesQuery(projectId);
   const manifest = useMeshManifestQuery(projectId);
+  const geometryQuery = useMeshGeometryQuery(projectId, true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
 
-  const selectedQuery = useStudyQuery(projectId, !creating ? selectedId : null);
+  const selectedQuery = useStudyQuery(projectId, selectedId);
   const patches = manifest.data?.patches ?? [];
+  const studies = studiesQuery.data ?? [];
+  const geometry = geometryQuery.data ?? null;
 
   if (manifest.isPending || studiesQuery.isPending) {
     return (
-      <div className="flex flex-col gap-3">
-        <div className="h-9 w-40 animate-pulse rounded-md bg-primary-tint" />
-        <div className="h-64 animate-pulse rounded-lg border border-border bg-surface" />
+      <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_minmax(300px,340px)]">
+        <div className="min-h-[26rem] animate-pulse rounded-lg border border-border bg-surface" />
+        <div className="animate-pulse rounded-lg border border-border bg-surface" />
       </div>
     );
   }
@@ -1088,72 +1259,61 @@ export function OptimisationWorkspace({ projectId }: { projectId: string }) {
     return <EmptyMesh />;
   }
 
-  const studies = studiesQuery.data ?? [];
-  const selected = selectedQuery.data;
+  const switcher = (
+    <StudySwitcher
+      studies={studies}
+      selectedId={selectedId}
+      onSelect={setSelectedId}
+      onNew={() => setSelectedId(null)}
+    />
+  );
 
-  const showSetup = creating || (selected?.status === 'draft' && !isStudyActive(selected.status));
+  const selected = selectedId ? selectedQuery.data : undefined;
 
-  return (
-    <div className="grid gap-6 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(220px,280px)_1fr]">
-      <aside className="lg:overflow-y-auto lg:pr-1">
-        <StudyList
-          studies={studies}
-          selectedId={creating ? null : selectedId}
-          onSelect={(id) => {
-            setCreating(false);
-            setSelectedId(id);
-          }}
-          onNew={() => {
-            setCreating(true);
-            setSelectedId(null);
-          }}
-        />
-      </aside>
-
-      <div className="min-w-0 lg:overflow-y-auto lg:pr-1">
-        {creating ? (
-          <div className="flex flex-col gap-4">
-            <button
-              type="button"
-              onClick={() => setCreating(false)}
-              className="inline-flex w-fit items-center gap-1 text-sm text-text-secondary transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
-            >
-              <ChevronLeft size={15} aria-hidden="true" />
-              Back to studies
-            </button>
-            <SetupForm
-              projectId={projectId}
-              patches={patches}
-              onCreated={(id) => {
-                setCreating(false);
-                setSelectedId(id);
-              }}
-            />
-          </div>
-        ) : !selected ? (
-          <div className="flex h-full min-h-64 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-surface p-10 text-center">
-            <Gauge size={22} strokeWidth={1.5} className="text-neutral" aria-hidden="true" />
-            <p className="text-base font-medium text-text">Select or create a study</p>
-            <p className="max-w-sm text-sm text-text-secondary">
-              A study sweeps a pipe diameter across a range and finds the value with the least loss.
-            </p>
-          </div>
-        ) : showSetup ? (
-          <SetupForm
-            projectId={projectId}
-            patches={patches}
-            onCreated={(id) => setSelectedId(id)}
-          />
-        ) : isStudyActive(selected.status) ? (
-          <RunMonitor projectId={projectId} study={selected} />
-        ) : (
-          <ResultsReport
-            projectId={projectId}
-            study={selected}
-            onRerun={() => setSelectedId(selected.id)}
-          />
-        )}
+  // A selected study still loading: keep the frame instead of flashing the setup.
+  if (selectedId && !selected) {
+    return (
+      <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_minmax(300px,340px)]">
+        <div className="min-h-[26rem] animate-pulse rounded-lg border border-border bg-surface" />
+        <div className="animate-pulse rounded-lg border border-border bg-surface" />
       </div>
-    </div>
+    );
+  }
+
+  if (!selectedId || !selected) {
+    return (
+      <SetupFlow
+        projectId={projectId}
+        patches={patches}
+        geometry={geometry}
+        geometryError={geometryQuery.isError}
+        switcher={switcher}
+        onCreated={setSelectedId}
+      />
+    );
+  }
+  if (isStudyActive(selected.status)) {
+    return (
+      <RunningView projectId={projectId} study={selected} geometry={geometry} switcher={switcher} />
+    );
+  }
+  if (selected.status === 'draft') {
+    return (
+      <DraftView
+        projectId={projectId}
+        study={selected}
+        geometry={geometry}
+        switcher={switcher}
+        onDeleted={() => setSelectedId(null)}
+      />
+    );
+  }
+  return (
+    <FinishedView
+      projectId={projectId}
+      study={selected}
+      switcher={switcher}
+      onDeleted={() => setSelectedId(null)}
+    />
   );
 }
