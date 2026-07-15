@@ -11,6 +11,7 @@ import {
   Loader2,
   Play,
   Settings,
+  Target,
   Trash2,
   Upload,
   UserPlus,
@@ -100,6 +101,16 @@ const AssemblyWorkspace = lazy(() =>
 );
 
 /**
+ * The Optimisation tab runs a diameter-optimization sweep (mesh morphing + repeated
+ * solves), polling study progress while active. Code-split like the other heavy tabs.
+ */
+const OptimisationWorkspace = lazy(() =>
+  import('@/features/optimisation/OptimisationWorkspace').then((module) => ({
+    default: module.OptimisationWorkspace,
+  })),
+);
+
+/**
  * ProjectDetailPage - a single project's details and case files.
  *
  * Owners and super-admins get a settings "gear" in the header that opens a small
@@ -180,7 +191,7 @@ export function ProjectDetailPage() {
  * Opening it swaps the whole detail body for the lazy-loaded Visualize panel
  * (mesh picker + 3D viewer), which fills the pinned region at lg+.
  */
-type ProjectView = 'detail' | 'visualize' | 'assemble' | 'solver' | 'export';
+type ProjectView = 'detail' | 'visualize' | 'assemble' | 'solver' | 'optimisation' | 'export';
 
 function ProjectTabs({ project }: { project: Project }) {
   const [view, setView] = useState<ProjectView>('detail');
@@ -205,6 +216,7 @@ function ProjectTabs({ project }: { project: Project }) {
         <VisualizeTab disabled={!(hasPolyMesh || hasSources)} />
         <AssembleTab disabled={!hasSources} />
         <SolverTabTrigger disabled={!hasPolyMesh} />
+        <OptimisationTab disabled={!hasPolyMesh} />
         <ExportTabTrigger disabled={!hasPolyMesh} />
       </TabsList>
 
@@ -251,6 +263,18 @@ function ProjectTabs({ project }: { project: Project }) {
         {view === 'solver' && (
           <Suspense fallback={<ViewerLoading />}>
             <SolverTab projectId={project.id} />
+          </Suspense>
+        )}
+      </TabsContent>
+
+      <TabsContent
+        value="optimisation"
+        className="mt-0 flex-col data-[state=active]:flex lg:min-h-0 lg:flex-1"
+      >
+        {/* Mount only when open: the tab polls study progress while a sweep runs. */}
+        {view === 'optimisation' && (
+          <Suspense fallback={<ViewerLoading />}>
+            <OptimisationWorkspace projectId={project.id} />
           </Suspense>
         )}
       </TabsContent>
@@ -328,6 +352,35 @@ function AssembleTab({ disabled }: { disabled: boolean }) {
         </span>
       </TooltipTrigger>
       <TooltipContent>Import a mesh part to enable assembly</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * The Optimisation trigger. Gated on the project having a mesh (the sweep morphs the
+ * case mesh across diameters); when disabled, a tooltip explains how to enable it.
+ */
+function OptimisationTab({ disabled }: { disabled: boolean }) {
+  const trigger = (
+    <TabsTrigger value="optimisation" disabled={disabled}>
+      <Target strokeWidth={1.75} aria-hidden="true" />
+      Optimisation
+    </TabsTrigger>
+  );
+
+  if (!disabled) return trigger;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          className="inline-flex rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
+        >
+          {trigger}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>Import a mesh to enable optimisation</TooltipContent>
     </Tooltip>
   );
 }
