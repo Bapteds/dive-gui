@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   CircleDashed,
+  Crosshair,
   Download,
   Gauge,
   Loader2,
@@ -18,10 +19,11 @@ import {
   XCircle,
 } from 'lucide-react';
 import type { LengthUnit, MeshPatch, Study, StudyMetric, StudySample } from '@/lib/api/types';
-import { useMeshManifestQuery } from '@/features/visualize/useMesh';
+import { useMeshGeometryQuery, useMeshManifestQuery } from '@/features/visualize/useMesh';
 import { useRunLogQuery } from '@/features/solver/useRuns';
 import { ResidualChart } from '@/features/solver/ResidualChart';
 import { LossChart } from './LossChart';
+import { MorphViewer } from './MorphViewer';
 import {
   isStudyActive,
   useCreateStudy,
@@ -223,6 +225,37 @@ function Segmented<T extends string>({
   );
 }
 
+/** Toggle button that arms the next mesh click to place endpoint A or B. */
+function PickToggle({
+  which,
+  active,
+  onToggle,
+}: {
+  which: 'A' | 'B';
+  active: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onToggle}
+      className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring ${
+        active
+          ? 'border-primary bg-primary-tint text-primary'
+          : 'border-border-strong bg-surface text-text hover:bg-primary-tint'
+      }`}
+    >
+      <span
+        className={`size-2 rounded-full ${which === 'A' ? 'bg-accent' : 'bg-primary'}`}
+        aria-hidden="true"
+      />
+      <Crosshair size={13} strokeWidth={1.75} aria-hidden="true" />
+      {active ? `Click to set ${which}` : `Set endpoint ${which}`}
+    </button>
+  );
+}
+
 // ---- status chips (icon + text, never color alone) ------------------------
 
 const SAMPLE_META: Record<
@@ -345,10 +378,29 @@ function SetupForm({
   const [s, setS] = useState<SetupState>(defaultSetup);
   const [baselineM, setBaselineM] = useState<number | null>(null);
   const [centerlinePts, setCenterlinePts] = useState<Vec3[] | null>(null);
+  const [pickMode, setPickMode] = useState<'A' | 'B' | null>(null);
+  const [previewU, setPreviewU] = useState<number | null>(null);
 
+  const geometryQuery = useMeshGeometryQuery(projectId, true);
   const extract = useExtractCenterline(projectId);
   const create = useCreateStudy(projectId);
   const run = useRunStudy(projectId);
+
+  const onPickEndpoint = (which: 'A' | 'B', point: Vec3) => {
+    setS((prev) => (which === 'A' ? { ...prev, a: point } : { ...prev, b: point }));
+    setPickMode(null); // one-shot: place the point, then return to orbit
+  };
+
+  const morphPreview =
+    baselineM !== null && centerlinePts !== null && previewU !== null
+      ? {
+          baselineDiameterM: baselineM,
+          diameterM: previewU * UNIT_M[s.unit],
+          stationA: s.stationA,
+          stationB: s.stationB,
+          blend: s.blend,
+        }
+      : null;
 
   const walls = patches.filter((p) => p.type === 'wall' || p.type === '?' || !p.type);
   const set = (patch: Partial<SetupState>) => setS((prev) => ({ ...prev, ...patch }));
@@ -418,11 +470,12 @@ function SetupForm({
               ? res.radii.reduce((acc, r) => acc + r, 0) / res.radii.length
               : 0;
           const dM = 2 * mean;
+          const dUnit = dM / UNIT_M[s.unit];
           setBaselineM(dM);
           setCenterlinePts(res.centerline.points as Vec3[]);
+          setPreviewU(Number(dUnit.toPrecision(4)));
           // Seed a sensible sweep around the measured diameter if empty.
           if (!(s.minU > 0)) {
-            const dUnit = dM / UNIT_M[s.unit];
             set({
               minU: Number((dUnit * 0.8).toPrecision(3)),
               maxU: Number((dUnit * 1.2).toPrecision(3)),
@@ -474,6 +527,45 @@ function SetupForm({
             />
           </Field>
         </div>
+
+        {/* 3D view: click the pipe to place the two endpoints; drag the slider to
+            preview the morph. Everything renders in raw polyMesh coords. */}
+        {geometryQuery.data ? (
+          <div className="mt-4 flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-text-secondary">
+                Click the pipe to place an endpoint:
+              </span>
+              <PickToggle
+                which="A"
+                active={pickMode === 'A'}
+                onToggle={() => setPickMode((m) => (m === 'A' ? null : 'A'))}
+              />
+              <PickToggle
+                which="B"
+                active={pickMode === 'B'}
+                onToggle={() => setPickMode((m) => (m === 'B' ? null : 'B'))}
+              />
+            </div>
+            <div className="h-80 sm:h-[26rem]">
+              <MorphViewer
+                geometry={geometryQuery.data}
+                endpointA={s.a}
+                endpointB={s.b}
+                pickMode={pickMode}
+                onPick={onPickEndpoint}
+                centerline={centerlinePts ? { points: centerlinePts } : null}
+                morphPreview={morphPreview}
+              />
+            </div>
+          </div>
+        ) : geometryQuery.isError ? (
+          <p className="mt-4 text-sm text-text-secondary">
+            The 3D preview is unavailable on this host; set the endpoint coordinates below.
+          </p>
+        ) : (
+          <div className="mt-4 h-80 animate-pulse rounded-md border border-border bg-bg sm:h-[26rem]" />
+        )}
 
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <fieldset className="flex flex-col gap-2 rounded-md border border-border p-3">
@@ -545,6 +637,35 @@ function SetupForm({
             </p>
           )}
         </div>
+
+        {baselineM !== null && centerlinePts !== null && previewU !== null && s.maxU > s.minU && (
+          <div className="mt-4 flex flex-col gap-1.5 border-t border-border pt-4">
+            <label
+              htmlFor="opt-preview"
+              className="flex items-center justify-between text-sm font-medium text-text"
+            >
+              <span>Preview diameter</span>
+              <span className="tabular-nums text-primary">
+                {Number(previewU.toPrecision(4))} {s.unit}
+              </span>
+            </label>
+            <input
+              id="opt-preview"
+              type="range"
+              min={s.minU}
+              max={s.maxU}
+              step={(s.maxU - s.minU) / 100 || 0.001}
+              value={previewU}
+              onChange={(e) => setPreviewU(Number(e.target.value))}
+              className="w-full"
+              style={{ accentColor: 'var(--color-primary)' }}
+            />
+            <p className="text-xs text-text-secondary">
+              Drag to watch the segment between the two endpoints morph. This is only a preview; the
+              sweep still solves every diameter in the range.
+            </p>
+          </div>
+        )}
       </Panel>
 
       <Panel title="Diameter sweep" icon={Gauge}>
