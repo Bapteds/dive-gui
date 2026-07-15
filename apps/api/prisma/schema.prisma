@@ -55,6 +55,7 @@ model Project {
   owner         User     @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   collaborators User[]   @relation("ProjectCollaborators")
   runs          Run[]
+  studies       Study[]
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -88,6 +89,38 @@ model Run {
 
   @@index([projectId])
   @@index([projectId, status]) // the "is a run active?" concurrency guard
+}
+
+/// One parametric diameter-optimization study on a project's case: a sweep of the
+/// solver across a range of pipe diameters (each realised by MORPHING the mesh, not
+/// re-meshing) to find the diameter with the least hydraulic loss ("water loss").
+/// This row carries the study's lifecycle/status + denormalized progress for cheap
+/// listing and boot reconciliation; the morph/sweep/objective config and the
+/// per-value samples live on disk under studies/<id>/study.json (mirrors Run and its
+/// on-disk solver.log split).
+///
+/// `status` is a String (SQLite has no native enum), validated at the app layer and
+/// mirrored by the `StudyStatus` union in @dive/shared — same pattern as Run.status.
+/// A study spawns Runs (one per swept diameter) but does not foreign-key them: a run
+/// stays a first-class project run, and `currentRunId` just points at the active one.
+model Study {
+  id            String    @id @default(cuid())
+  projectId     String
+  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name          String
+  status        String    @default("draft") // see STUDY_STATUSES
+  totalSamples  Int       @default(0) // number of diameter values in the sweep
+  doneSamples   Int       @default(0) // values that reached a terminal sample state
+  bestDiameterM Float? // optimum diameter (metres) by the primary metric, once known
+  currentRunId  String? // the Run currently executing for this study, if any
+  reason        String? // short terminal explanation (failed/stopped)
+  startedAt     DateTime? // sweep start, once launched
+  finishedAt    DateTime? // sweep finish, once terminal
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([projectId])
+  @@index([projectId, status]) // the "is a study active?" concurrency guard
 }
 
 /// A reusable file template: a named, free-form tree of files (stored on disk
