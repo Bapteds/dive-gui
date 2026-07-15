@@ -97,11 +97,17 @@ import { runIdParamSchema, startRunSchema } from './runs.schemas';
 import {
   createStudyController,
   deleteStudyController,
+  extractCenterlineController,
   getStudyController,
   listStudiesController,
   updateStudyController,
 } from './studies.controller';
-import { createStudySchema, studyIdParamSchema, updateStudySchema } from './studies.schemas';
+import {
+  createStudySchema,
+  extractCenterlineSchema,
+  studyIdParamSchema,
+  updateStudySchema,
+} from './studies.schemas';
 import { cgnsNameQuerySchema, convertCgnsSchema } from './conversion.schemas';
 import {
   meshIdParamSchema,
@@ -527,6 +533,13 @@ export function createProjectsRouter(): Router {
     '/:id/studies',
     validate({ params: projectIdParamSchema, body: createStudySchema }),
     asyncHandler(createStudyController),
+  );
+  // Static sub-path BEFORE the dynamic :studyId routes so "centerline" is not
+  // captured as a study id.
+  router.post(
+    '/:id/studies/centerline',
+    validate({ params: projectIdParamSchema, body: extractCenterlineSchema }),
+    asyncHandler(extractCenterlineController),
   );
   router.get(
     '/:id/studies/:studyId',

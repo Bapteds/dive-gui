@@ -72,6 +72,17 @@ export const updateStudySchema = z.object({
 });
 export type UpdateStudyInput = z.infer<typeof updateStudySchema>;
 
+/**
+ * Body for the centerline-extraction helper (POST /studies/centerline): the wall
+ * patch to trace and the two endpoints the user clicked bounding the pipe segment.
+ */
+export const extractCenterlineSchema = z.object({
+  wallPatch: z.string().min(1, 'A wall patch is required'),
+  endpointA: vec3Schema,
+  endpointB: vec3Schema,
+});
+export type CenterlineInput = z.infer<typeof extractCenterlineSchema>;
+
 /** Route params carrying a project id and a study id. */
 export const studyIdParamSchema = z.object({
   id: z.string().min(1, 'Project id is required'),

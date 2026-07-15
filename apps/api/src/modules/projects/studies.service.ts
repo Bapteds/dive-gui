@@ -21,8 +21,10 @@ import type { Study as StudyRow } from '@prisma/client';
 import { AppError } from '../../lib/AppError';
 import { prisma } from '../../lib/prisma';
 import { deleteStudyDir, readStudyDoc, writeStudyDoc, type StudyDoc } from '../../lib/studyStorage';
+import { caseDirAbsolute, caseFileExists } from '../../lib/caseStorage';
+import { extractCenterline, type CenterlineResult } from '../../lib/centerlineExtract';
 import { assertProjectVisible, type Viewer } from './projects.service';
-import type { CreateStudyInput, UpdateStudyInput } from './studies.schemas';
+import type { CenterlineInput, CreateStudyInput, UpdateStudyInput } from './studies.schemas';
 
 /** Assemble the wire `Study` from its Prisma row + on-disk doc. */
 function toPublicStudy(row: StudyRow, doc: StudyDoc): Study {
@@ -154,4 +156,26 @@ export async function deleteStudy(
   }
   await prisma.study.delete({ where: { id: studyId } });
   await deleteStudyDir(projectId, studyId);
+}
+
+/**
+ * Extract the pipe centerline + radius profile from the case's wall patch between the
+ * two clicked endpoints, so the "Optimisation" UI can build a morph before a study
+ * exists. Requires a built case mesh.
+ */
+export async function extractStudyCenterline(
+  viewer: Viewer,
+  projectId: string,
+  input: CenterlineInput,
+): Promise<CenterlineResult> {
+  await assertProjectVisible(viewer, projectId);
+  if (!(await caseFileExists(projectId, 'constant/polyMesh/points'))) {
+    throw new AppError(409, 'NO_MESH', 'The project has no mesh to trace a centerline from');
+  }
+  return extractCenterline(
+    caseDirAbsolute(projectId),
+    input.wallPatch,
+    input.endpointA,
+    input.endpointB,
+  );
 }

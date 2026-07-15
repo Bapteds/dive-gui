@@ -4,8 +4,15 @@
 import type { Request, Response } from 'express';
 import { AppError } from '../../lib/AppError';
 import type { Viewer } from './projects.service';
-import { createStudy, deleteStudy, getStudy, listStudies, updateStudy } from './studies.service';
-import type { CreateStudyInput, UpdateStudyInput } from './studies.schemas';
+import {
+  createStudy,
+  deleteStudy,
+  extractStudyCenterline,
+  getStudy,
+  listStudies,
+  updateStudy,
+} from './studies.service';
+import type { CenterlineInput, CreateStudyInput, UpdateStudyInput } from './studies.schemas';
 
 /** Build the acting viewer (id + role) or fail defensively. */
 function requireViewer(req: Request): Viewer {
@@ -48,4 +55,14 @@ export async function updateStudyController(req: Request, res: Response): Promis
 export async function deleteStudyController(req: Request, res: Response): Promise<void> {
   await deleteStudy(requireViewer(req), req.params.id, req.params.studyId);
   res.status(204).end();
+}
+
+/** POST /projects/:id/studies/centerline — trace the pipe centerline (study prep). */
+export async function extractCenterlineController(req: Request, res: Response): Promise<void> {
+  const result = await extractStudyCenterline(
+    requireViewer(req),
+    req.params.id,
+    req.body as CenterlineInput,
+  );
+  res.status(200).json(result);
 }

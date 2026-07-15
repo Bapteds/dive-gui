@@ -1,5 +1,6 @@
 import { apiClient } from './client';
 import type {
+  Centerline,
   MorphDefinition,
   ObjectiveConfig,
   StudiesResponse,
@@ -7,6 +8,15 @@ import type {
   StudyResponse,
   SweepConfig,
 } from './types';
+
+/** Result of the centerline-extraction helper (POST /studies/centerline). */
+export interface CenterlineResult {
+  centerline: Centerline;
+  /** Mean wall radius (metres) at each centerline point; diameter = 2*radius. */
+  radii: number[];
+  /** Total polyline arc-length (metres). */
+  length: number;
+}
 
 /**
  * studies.ts - diameter-optimization ("Optimisation" tab) endpoints
@@ -56,4 +66,21 @@ export async function updateStudy(
 /** Delete a study. */
 export async function deleteStudy(projectId: string, studyId: string): Promise<void> {
   await apiClient.delete<void>(`/projects/${projectId}/studies/${studyId}`);
+}
+
+/**
+ * Trace the pipe centerline + radius profile from the case's wall patch between the
+ * two clicked endpoints (study prep, before a study exists).
+ */
+export async function extractCenterline(
+  projectId: string,
+  wallPatch: string,
+  endpointA: [number, number, number],
+  endpointB: [number, number, number],
+): Promise<CenterlineResult> {
+  return apiClient.post<CenterlineResult>(`/projects/${projectId}/studies/centerline`, {
+    wallPatch,
+    endpointA,
+    endpointB,
+  });
 }
