@@ -394,6 +394,7 @@ export type {
 export type MergeStepKind =
   | 'prepare'
   | 'mergeMeshes'
+  | 'splitMeshRegions'
   | 'stitchMesh'
   | 'nonConformalCouple'
   | 'cleanup'
