@@ -2242,6 +2242,139 @@ export interface Study {
   finishedAt?: string;
 }
 
+// --- Morph engine (shared so the browser preview and the server bake agree) ---
+//
+// The diameter morph is a curvilinear radial scale: each mesh point is projected
+// onto the centerline, and its perpendicular offset from that axis is scaled by a
+// factor that ramps (cosine blend) from 1 at each station up to `ratio =
+// target/baseline` in the core of the [stationA, stationB] zone. The axial position
+// is preserved, so the pipe keeps its length and only its diameter changes. This is
+// a PURE, framework-free per-point function: the three.js preview and the Node
+// server-side bake (apps/api lib/meshTransform.morphMeshPoints) import the SAME
+// prepareCenterline + morphPoint, so what the user previews is bit-for-bit the mesh
+// that gets solved — the parity Assembly hand-mirrors with a matrix, here for free.
+// Non-linear (unlike a rigid transform), so a large scale can distort near-wall
+// cells; the sweep gates every morphed mesh through checkMesh.
+
+/**
+ * A centerline with precomputed cumulative arc-lengths, so projecting many mesh
+ * points onto it does not recompute segment lengths each time. Produced by
+ * prepareCenterline, consumed by morphPoint.
+ */
+export interface PreparedCenterline {
+  points: readonly (readonly [number, number, number])[];
+  /** Cumulative arc-length at each point; cumLen[0] = 0. */
+  cumLen: readonly number[];
+  /** Total arc-length (0 for a degenerate single-point / zero-length line). */
+  total: number;
+}
+
+/** Straight-line distance between two raw points. */
+function segLength(
+  a: readonly [number, number, number],
+  b: readonly [number, number, number],
+): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const dz = b[2] - a[2];
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+/** Precompute a centerline's cumulative arc-lengths for repeated projection. */
+export function prepareCenterline(centerline: Centerline): PreparedCenterline {
+  const points = centerline.points;
+  const cumLen: number[] = new Array(points.length);
+  cumLen[0] = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    cumLen[i] = cumLen[i - 1] + segLength(points[i - 1], points[i]);
+  }
+  return { points, cumLen, total: points.length > 0 ? cumLen[points.length - 1] : 0 };
+}
+
+/**
+ * Cosine blend weight at arc-length fraction `sFrac` (0..1): 0 outside the
+ * [stationA, stationB] zone; a half-cosine ramp from 0 at each station up to 1 once
+ * `blend` (a fraction of total arc-length) inside; 1 in the core. When the zone is
+ * narrower than 2·blend the two ramps meet and the weight peaks below 1 (a smooth
+ * hump), never above 1. `blend <= 0` gives a hard step (1 strictly inside).
+ */
+export function blendWeight(
+  sFrac: number,
+  stationA: number,
+  stationB: number,
+  blend: number,
+): number {
+  if (sFrac <= stationA || sFrac >= stationB) return 0;
+  if (blend <= 0) return 1;
+  const intoZone = Math.min(sFrac - stationA, stationB - sFrac);
+  if (intoZone >= blend) return 1;
+  return 0.5 - 0.5 * Math.cos((Math.PI * intoZone) / blend);
+}
+
+/**
+ * Morph one point for a target/baseline `ratio`: project it onto the centerline,
+ * weight by blendWeight along the axis, and scale its radial offset from the axis.
+ * Returns the new raw coordinates (unchanged when the point is outside the zone or
+ * ratio is 1). Pure and framework-free — the browser preview and the server bake
+ * call this identically, so the preview is bit-for-bit the baked mesh.
+ */
+export function morphPoint(
+  p: readonly [number, number, number],
+  centerline: PreparedCenterline,
+  stationA: number,
+  stationB: number,
+  blend: number,
+  ratio: number,
+): [number, number, number] {
+  const { points, cumLen, total } = centerline;
+  const px = p[0];
+  const py = p[1];
+  const pz = p[2];
+  if (points.length < 2 || total <= 0) return [px, py, pz];
+
+  // Nearest point on the polyline: foot F (bestF*) and its arc-length (bestS).
+  let bestDist2 = Infinity;
+  let bestFx = px;
+  let bestFy = py;
+  let bestFz = pz;
+  let bestS = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    const ax = points[i - 1][0];
+    const ay = points[i - 1][1];
+    const az = points[i - 1][2];
+    const dx = points[i][0] - ax;
+    const dy = points[i][1] - ay;
+    const dz = points[i][2] - az;
+    const segLen2 = dx * dx + dy * dy + dz * dz;
+    let t = 0;
+    if (segLen2 > 0) {
+      t = ((px - ax) * dx + (py - ay) * dy + (pz - az) * dz) / segLen2;
+      if (t < 0) t = 0;
+      else if (t > 1) t = 1;
+    }
+    const fx = ax + t * dx;
+    const fy = ay + t * dy;
+    const fz = az + t * dz;
+    const ex = px - fx;
+    const ey = py - fy;
+    const ez = pz - fz;
+    const dist2 = ex * ex + ey * ey + ez * ez;
+    if (dist2 < bestDist2) {
+      bestDist2 = dist2;
+      bestFx = fx;
+      bestFy = fy;
+      bestFz = fz;
+      bestS = cumLen[i - 1] + t * Math.sqrt(segLen2);
+    }
+  }
+
+  const w = blendWeight(bestS / total, stationA, stationB, blend);
+  if (w === 0) return [px, py, pz];
+  // Scale only the radial offset (p - F); the axial position F is preserved.
+  const k = w * (ratio - 1);
+  return [px + (px - bestFx) * k, py + (py - bestFy) * k, pz + (pz - bestFz) * k];
+}
+
 /**
  * Machine-readable error codes the API may emit in its `{ error: { code } }`
  * envelope. The web client maps these to user-facing messages; it adds its own

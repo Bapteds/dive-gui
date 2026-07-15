@@ -19,7 +19,12 @@
 // stored precision/format) and the vertex count are preserved. Pure: the only
 // state is the passed buffer, and a fresh buffer/string is returned.
 import { Buffer } from 'node:buffer';
-import type { PartTransform } from '@dive/shared';
+import {
+  morphPoint,
+  prepareCenterline,
+  type MorphDefinition,
+  type PartTransform,
+} from '@dive/shared';
 
 /** A 3×3 rotation matrix, row-major: [m00,m01,m02, m10,m11,m12, m20,m21,m22]. */
 type Mat3 = [number, number, number, number, number, number, number, number, number];
@@ -27,6 +32,9 @@ type Mat3 = [number, number, number, number, number, number, number, number, num
 /** A quaternion (x, y, z, w) and a translation (x, y, z), as in PartTransform. */
 type Quat = readonly [number, number, number, number];
 type Vec3 = readonly [number, number, number];
+
+/** A per-point coordinate map (x, y, z) -> (x', y', z'): the kernel of a rewrite. */
+type PointMap = (x: number, y: number, z: number) => [number, number, number];
 
 /** The identity placement: no rotation, no translation (today's behaviour). */
 export function isIdentityTransform(transform: PartTransform): boolean {
@@ -125,12 +133,12 @@ function formatScalar(n: number): string {
  * the FoamFile header is touched (the header carries no such triples), so the
  * banner, header, point count and list delimiters are left byte-for-byte intact.
  */
-function transformAscii(text: string, m: Mat3, t: Vec3): string {
+function transformAscii(text: string, map: PointMap): string {
   const headerEnd = foamFileHeaderEnd(text);
   const head = text.slice(0, headerEnd);
   const body = text.slice(headerEnd);
   const rewritten = body.replace(VECTOR_RE, (_match, sx: string, sy: string, sz: string) => {
-    const [nx, ny, nz] = applyPoint(m, t, Number(sx), Number(sy), Number(sz));
+    const [nx, ny, nz] = map(Number(sx), Number(sy), Number(sz));
     return `(${formatScalar(nx)} ${formatScalar(ny)} ${formatScalar(nz)})`;
   });
   return head + rewritten;
@@ -143,7 +151,7 @@ function transformAscii(text: string, m: Mat3, t: Vec3): string {
  * the header, count and opening `(` can be located while their string indices
  * still equal byte offsets in the buffer.
  */
-function transformBinary(buffer: Buffer, latin1: string, m: Mat3, t: Vec3): Buffer {
+function transformBinary(buffer: Buffer, latin1: string, map: PointMap): Buffer {
   const headerEnd = foamFileHeaderEnd(latin1);
   const openParen = latin1.indexOf('(', headerEnd);
   if (openParen < 0) {
@@ -172,7 +180,7 @@ function transformBinary(buffer: Buffer, latin1: string, m: Mat3, t: Vec3): Buff
     const px = buffer.readDoubleLE(off);
     const py = buffer.readDoubleLE(off + 8);
     const pz = buffer.readDoubleLE(off + 16);
-    const [nx, ny, nz] = applyPoint(m, t, px, py, pz);
+    const [nx, ny, nz] = map(px, py, pz);
     out.writeDoubleLE(nx, off);
     out.writeDoubleLE(ny, off + 8);
     out.writeDoubleLE(nz, off + 16);
@@ -181,12 +189,26 @@ function transformBinary(buffer: Buffer, latin1: string, m: Mat3, t: Vec3): Buff
 }
 
 /**
- * Apply a rigid transform (p' = R(rotation)·p + translation) to every vertex of
- * an OpenFOAM `constant/polyMesh/points` file, returning the rewritten file. The
- * `format` (ascii | binary) is read from the FoamFile header and BOTH are
- * handled; the header, precision and vertex count are preserved. Rotation is
- * built with three.js's exact `Matrix4.compose` formula (§2e) for bit-exact
- * parity with the browser preview. Pure — no I/O beyond the passed buffer.
+ * Rewrite every vertex of an OpenFOAM `constant/polyMesh/points` file through a pure
+ * per-point map, returning the rewritten file. The `format` (ascii | binary) is read
+ * from the FoamFile header and BOTH are handled; the header, precision and vertex
+ * count are preserved. Pure — no I/O beyond the passed buffer.
+ */
+function rewriteMeshPoints(pointsBuffer: Buffer, map: PointMap): Buffer {
+  // latin1 keeps char index == byte index and safely decodes the ASCII header of
+  // either format (the binary data block is never interpreted as text here).
+  const latin1 = pointsBuffer.toString('latin1');
+  if (detectFormat(latin1) === 'binary') {
+    return transformBinary(pointsBuffer, latin1, map);
+  }
+  // ASCII points are pure ASCII, so decode as UTF-8 for the textual rewrite.
+  return Buffer.from(transformAscii(pointsBuffer.toString('utf8'), map), 'utf8');
+}
+
+/**
+ * Apply a rigid transform (p' = R(rotation)·p + translation) to every vertex of an
+ * OpenFOAM `constant/polyMesh/points` file. Rotation is built with three.js's exact
+ * `Matrix4.compose` formula (§2e) for bit-exact parity with the browser preview.
  */
 export function transformMeshPoints(
   pointsBuffer: Buffer,
@@ -194,12 +216,26 @@ export function transformMeshPoints(
   translation: Vec3,
 ): Buffer {
   const m = rotationMatrix(rotation);
-  // latin1 keeps char index == byte index and safely decodes the ASCII header of
-  // either format (the binary data block is never interpreted as text here).
-  const latin1 = pointsBuffer.toString('latin1');
-  if (detectFormat(latin1) === 'binary') {
-    return transformBinary(pointsBuffer, latin1, m, translation);
-  }
-  // ASCII points are pure ASCII, so decode as UTF-8 for the textual rewrite.
-  return Buffer.from(transformAscii(pointsBuffer.toString('utf8'), m, translation), 'utf8');
+  return rewriteMeshPoints(pointsBuffer, (x, y, z) => applyPoint(m, translation, x, y, z));
+}
+
+/**
+ * Morph every vertex to realise a target `diameterM` for the pipe segment described
+ * by `def`: a curvilinear radial scale of ratio `diameterM / def.baselineDiameterM`
+ * about the frozen centerline, cosine-blended to 1 at the two stations so the segment
+ * joins the rest of the pipe without a kink. Uses the SAME shared `morphPoint` the
+ * browser preview runs, so the baked mesh matches the preview bit-for-bit. Both ASCII
+ * and BINARY encodings are handled; header, precision and vertex count are preserved.
+ * Pure — no I/O beyond the passed buffer.
+ */
+export function morphMeshPoints(
+  pointsBuffer: Buffer,
+  def: MorphDefinition,
+  diameterM: number,
+): Buffer {
+  const centerline = prepareCenterline(def.centerline);
+  const ratio = def.baselineDiameterM > 0 ? diameterM / def.baselineDiameterM : 1;
+  return rewriteMeshPoints(pointsBuffer, (x, y, z) =>
+    morphPoint([x, y, z], centerline, def.stationA, def.stationB, def.blend, ratio),
+  );
 }
