@@ -27,6 +27,8 @@ import type {
   MeshBackupResponse,
   MeshManifest,
   MeshManifestResponse,
+  MeshQualityResponse,
+  MeshQualityResult,
   MeshPatchEdit,
   MeshPatchType,
   Project,
@@ -307,6 +309,23 @@ export async function getExportStatus(id: string): Promise<ExportStatus | null> 
 /** Download a produced export artifact (out.cgns / session.cse / memo / report) as a Blob. */
 export async function downloadExportArtifact(id: string, artifact: ExportArtifact): Promise<Blob> {
   return apiClient.getBlob(`/projects/${id}/export/download/${artifact}`);
+}
+
+// ---- Mesh quality rating ("Notation" tab) ----------------------------------
+
+/** The last persisted mesh quality rating, or null when none has run. */
+export async function getMeshQuality(id: string): Promise<MeshQualityResult | null> {
+  const data = await apiClient.get<MeshQualityResponse>(`/projects/${id}/mesh/quality`);
+  return data.quality;
+}
+
+/**
+ * Run checkMesh -allGeometry on the case mesh and grade it. A poor mesh still
+ * resolves (the rating IS the result); only access/pre-condition errors reject.
+ */
+export async function runMeshQuality(id: string): Promise<MeshQualityResult> {
+  const data = await apiClient.post<{ quality: MeshQualityResult }>(`/projects/${id}/mesh/quality`);
+  return data.quality;
 }
 
 // ---- Applying a shared template to this project's case ----

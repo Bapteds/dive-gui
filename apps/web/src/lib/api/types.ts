@@ -24,6 +24,10 @@ import type {
   MeshPatchEdit,
   MeshPatchSetting,
   MeshPatchType,
+  MeshQualityCriterionId,
+  MeshQualityGrade,
+  MeshQualityMetric,
+  MeshQualityResult,
   MeshSource,
   ResidualSample,
   Role,
@@ -671,6 +675,16 @@ export interface ExportRunResponse {
 /** `GET /projects/:id/export` response. */
 export interface ExportStatusResponse {
   status: ExportStatus | null;
+}
+
+// ---- Mesh quality rating ("Notation" tab) ----------------------------------
+
+/** Re-export of the shared mesh quality rating shapes. */
+export type { MeshQualityResult, MeshQualityMetric, MeshQualityCriterionId, MeshQualityGrade };
+
+/** `GET`/`POST /projects/:id/mesh/quality` response (null when none has run). */
+export interface MeshQualityResponse {
+  quality: MeshQualityResult | null;
 }
 
 // ---- Solver runs ("Solver" tab) -------------------------------------------

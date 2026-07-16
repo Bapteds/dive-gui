@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   Box,
   Boxes,
+  Gauge,
   Info,
   Loader2,
   Play,
@@ -88,6 +89,14 @@ const SolverTab = lazy(() =>
  */
 const ExportTab = lazy(() =>
   import('@/features/export/ExportTab').then((module) => ({ default: module.ExportTab })),
+);
+
+/**
+ * The Notation tab runs checkMesh -allGeometry server-side and renders the mesh
+ * quality rating; code-split so its machinery only loads when the tab is opened.
+ */
+const NotationTab = lazy(() =>
+  import('@/features/notation/NotationTab').then((module) => ({ default: module.NotationTab })),
 );
 
 /**
@@ -191,7 +200,14 @@ export function ProjectDetailPage() {
  * Opening it swaps the whole detail body for the lazy-loaded Visualize panel
  * (mesh picker + 3D viewer), which fills the pinned region at lg+.
  */
-type ProjectView = 'detail' | 'visualize' | 'assemble' | 'solver' | 'optimisation' | 'export';
+type ProjectView =
+  | 'detail'
+  | 'visualize'
+  | 'notation'
+  | 'assemble'
+  | 'solver'
+  | 'optimisation'
+  | 'export';
 
 function ProjectTabs({ project }: { project: Project }) {
   const [view, setView] = useState<ProjectView>('detail');
@@ -214,6 +230,7 @@ function ProjectTabs({ project }: { project: Project }) {
           Detail
         </TabsTrigger>
         <VisualizeTab disabled={!(hasPolyMesh || hasSources)} />
+        <NotationTabTrigger disabled={!hasPolyMesh} />
         <AssembleTab disabled={!hasSources} />
         <SolverTabTrigger disabled={!hasPolyMesh} />
         <OptimisationTab disabled={!hasPolyMesh} />
@@ -238,6 +255,19 @@ function ProjectTabs({ project }: { project: Project }) {
         {view === 'visualize' && (
           <Suspense fallback={<ViewerLoading />}>
             <VisualizePanel projectId={project.id} />
+          </Suspense>
+        )}
+      </TabsContent>
+
+      <TabsContent
+        value="notation"
+        className="mt-0 flex-col data-[state=active]:flex lg:min-h-0 lg:flex-1"
+      >
+        {/* Mount only when open: revisiting must not re-run checkMesh, only the
+            cheap GET of the persisted rating. */}
+        {view === 'notation' && (
+          <Suspense fallback={<ViewerLoading />}>
+            <NotationTab projectId={project.id} />
           </Suspense>
         )}
       </TabsContent>
@@ -321,6 +351,35 @@ function VisualizeTab({ disabled }: { disabled: boolean }) {
         </span>
       </TooltipTrigger>
       <TooltipContent>Import a polyMesh or a mesh part to enable 3D</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * The Notation trigger. Gated on the project having a case mesh (checkMesh rates
+ * constant/polyMesh); when disabled, a tooltip explains how to enable it.
+ */
+function NotationTabTrigger({ disabled }: { disabled: boolean }) {
+  const trigger = (
+    <TabsTrigger value="notation" disabled={disabled}>
+      <Gauge strokeWidth={1.75} aria-hidden="true" />
+      Notation
+    </TabsTrigger>
+  );
+
+  if (!disabled) return trigger;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          className="inline-flex rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
+        >
+          {trigger}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>Import a polyMesh to enable the quality rating</TooltipContent>
     </Tooltip>
   );
 }
