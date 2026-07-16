@@ -45,7 +45,12 @@ import {
 } from '../../lib/studyStorage';
 import { assertProjectVisible, type Viewer } from './projects.service';
 import { getRun, startRun, stopRun } from './runs.service';
-import type { CenterlineInput, CreateStudyInput, UpdateStudyInput } from './studies.schemas';
+import {
+  MAX_SWEEP_VALUES,
+  type CenterlineInput,
+  type CreateStudyInput,
+  type UpdateStudyInput,
+} from './studies.schemas';
 
 /** Assemble the wire `Study` from its Prisma row + on-disk doc. */
 function toPublicStudy(row: StudyRow, doc: StudyDoc): Study {
@@ -399,9 +404,8 @@ async function runSweep(viewer: Viewer, projectId: string, studyId: string): Pro
   let bestValue = Number.POSITIVE_INFINITY;
   let bestDiameter: number | null = null;
 
-  // 2) One solver run per swept diameter, sequential.
-  for (let i = 0; i < doc.samples.length; i += 1) {
-    if (stopRequestedStudies.has(studyId)) break;
+  /** Morph + gate + run + read the objective for sample `i` (one swept diameter). */
+  const runOneSample = async (i: number): Promise<void> => {
     const diameterM = doc.samples[i].diameterM;
 
     // a) Morph from the pristine original (never compound).
@@ -412,7 +416,7 @@ async function runSweep(viewer: Viewer, projectId: string, studyId: string): Pro
     if (!gate.ok) {
       doc.samples[i] = { diameterM, status: 'meshFailed', note: gate.note };
       await persistSweep(projectId, studyId, doc);
-      continue;
+      return;
     }
 
     // c) Fresh run (clean prior time dirs + FO output so we read only this solve).
@@ -428,7 +432,7 @@ async function runSweep(viewer: Viewer, projectId: string, studyId: string): Pro
         note: err instanceof Error ? err.message : 'run failed to start',
       };
       await persistSweep(projectId, studyId, doc);
-      continue;
+      return;
     }
     doc.samples[i] = { diameterM, status: 'running', runId };
     await persistSweep(projectId, studyId, doc, { currentRunId: runId });
@@ -458,6 +462,39 @@ async function runSweep(viewer: Viewer, projectId: string, studyId: string): Pro
       doc.samples[i] = { diameterM, status: 'failed', runId, note: `run ${finalStatus}` };
     }
     await persistSweep(projectId, studyId, doc, { currentRunId: null, bestDiameterM: bestDiameter });
+  };
+
+  // 2) One solver run per swept diameter, sequential.
+  for (let i = 0; i < doc.samples.length; i += 1) {
+    if (stopRequestedStudies.has(studyId)) break;
+    await runOneSample(i);
+  }
+
+  // 2b) Refinement zoom: sweep a finer second pass (stepM/4) around the coarse
+  // optimum, new values only, still capped by the run limit. The coarse grid can
+  // only locate the optimum to +/- one step; the zoom pins it ~4x tighter for a
+  // handful of extra runs.
+  if (doc.sweep.refine && bestDiameter !== null && !stopRequestedStudies.has(studyId)) {
+    const fine = doc.sweep.stepM / 4;
+    const seen = new Set(doc.samples.map((s) => s.diameterM.toPrecision(12)));
+    const firstZoom = doc.samples.length;
+    for (let k = -3; k <= 3; k += 1) {
+      if (k === 0) continue; // the coarse best itself is already sampled
+      const d = Number((bestDiameter + k * fine).toPrecision(12));
+      const inRange = d > 0 && d >= doc.sweep.minM - 1e-12 && d <= doc.sweep.maxM + 1e-12;
+      if (!inRange || seen.has(d.toPrecision(12))) continue;
+      if (doc.samples.length >= MAX_SWEEP_VALUES) break;
+      seen.add(d.toPrecision(12));
+      doc.samples.push({ diameterM: d, status: 'pending' });
+    }
+    if (doc.samples.length > firstZoom) {
+      // Keep the DB total in step so the UI progress bar never exceeds 100%.
+      await persistSweep(projectId, studyId, doc, { totalSamples: doc.samples.length });
+      for (let i = firstZoom; i < doc.samples.length; i += 1) {
+        if (stopRequestedStudies.has(studyId)) break;
+        await runOneSample(i);
+      }
+    }
   }
 
   // Any samples never reached (stopped early) become `skipped`.

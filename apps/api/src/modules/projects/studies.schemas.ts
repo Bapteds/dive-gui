@@ -47,6 +47,8 @@ const sweepSchema = z
     maxM: z.number().finite().positive(),
     stepM: z.number().finite().positive(),
     unit: z.enum(LENGTH_UNITS),
+    /** Auto-zoom: a finer second pass (stepM/4) around the coarse optimum. */
+    refine: z.boolean().optional(),
   })
   .refine((s) => s.maxM >= s.minM, { message: 'maxM must be >= minM', path: ['maxM'] })
   .refine(
