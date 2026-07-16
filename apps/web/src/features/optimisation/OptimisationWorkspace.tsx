@@ -243,10 +243,10 @@ function PickToggle({
         ? 'Click a face on the channel'
         : 'Pick channel'
       : active
-        ? `Click to place circle ${n}`
+        ? `Click to place ring ${n}`
         : placed
-          ? `Move circle ${n}`
-          : `Place circle ${n}`;
+          ? `Move ring ${n}`
+          : `Place ring ${n}`;
   return (
     <button
       type="button"
@@ -544,6 +544,7 @@ function SetupFlow({
   // Fit result.
   const [baselineM, setBaselineM] = useState<number | null>(null);
   const [centerlinePts, setCenterlinePts] = useState<Vec3[] | null>(null);
+  const [centerlineRadii, setCenterlineRadii] = useState<number[] | null>(null);
   const [fittedShape, setFittedShape] = useState<'straight' | 'ring' | null>(null);
   const [previewU, setPreviewU] = useState<number | null>(null);
   // The two circles bounding the morph zone (arc-length fractions 0..1 along the axis).
@@ -588,6 +589,7 @@ function SetupFlow({
           const dUnit = dM / UNIT_M[s.unit];
           setBaselineM(dM);
           setCenterlinePts(res.centerline.points as Vec3[]);
+          setCenterlineRadii(res.radii);
           setFittedShape(res.shape);
           setPreviewU(Number(dUnit.toPrecision(4)));
           // Seed the two circles the first time (a sensible zone the user then moves).
@@ -703,18 +705,27 @@ function SetupFlow({
   };
   const busy = create.isPending || run.isPending;
 
-  const morphPreview =
-    traced && previewU !== null
-      ? {
-          baselineDiameterM: baselineM as number,
-          diameterM: previewU * UNIT_M[s.unit],
-          stationA: stations.stationA,
-          stationB: stations.stationB,
-          blend: stations.blend,
-          falloffStartM,
-          falloffEndM,
-        }
-      : null;
+  // Stable across unrelated re-renders so the viewer only re-fits/re-morphs when the
+  // geometry or the zone actually changes.
+  const centerlineObj = useMemo(
+    () => (centerlinePts ? { points: centerlinePts } : null),
+    [centerlinePts],
+  );
+  const morphPreview = useMemo(
+    () =>
+      traced && previewU !== null
+        ? {
+            baselineDiameterM: baselineM as number,
+            diameterM: previewU * UNIT_M[s.unit],
+            stationA,
+            stationB,
+            blend,
+            falloffStartM,
+            falloffEndM,
+          }
+        : null,
+    [traced, previewU, baselineM, s.unit, stationA, stationB, blend, falloffStartM, falloffEndM],
+  );
 
   const stage = (
     <>
@@ -742,13 +753,16 @@ function SetupFlow({
             />
           </>
         )}
-        <span className="ml-auto text-xs text-text-secondary">Drag to orbit, scroll to zoom.</span>
+        <span className="ml-auto text-xs text-text-secondary">
+          Grab a ring to slide it; drag elsewhere to orbit.
+        </span>
       </div>
       <div className="min-h-0 flex-1 p-3">
         {geometry ? (
           <MorphViewer
             geometry={geometry}
-            centerline={centerlinePts ? { points: centerlinePts } : null}
+            centerline={centerlineObj}
+            radii={centerlineRadii ?? undefined}
             station1={station1}
             station2={station2}
             ringRadiusM={baselineM ? baselineM / 2 : 0}
@@ -776,24 +790,24 @@ function SetupFlow({
             <div className="flex items-baseline justify-between">
               <span className="text-sm font-medium text-text">Morph zone</span>
               <span className="text-xs tabular-nums text-text-secondary">
-                between the circles, {Math.round(stationA * 100)} to {Math.round(stationB * 100)}%
+                between the rings, {Math.round(stationA * 100)} to {Math.round(stationB * 100)}%
               </span>
             </div>
             <ZoneSlider
-              label="Circle A"
+              label="Ring A"
               color="var(--color-accent)"
               value={station1 ?? 0.25}
               onChange={setStation1}
             />
             <ZoneSlider
-              label="Circle B"
+              label="Ring B"
               color="var(--color-primary)"
               value={station2 ?? 0.75}
               onChange={setStation2}
             />
             {!zoneValid && (
               <p className="text-xs text-danger" role="alert">
-                Move the two circles apart to define a zone to grow.
+                Move the two rings apart to define a zone to grow.
               </p>
             )}
           </div>
@@ -884,8 +898,9 @@ function SetupFlow({
             </div>
           )}
           <p className="text-xs text-text-secondary">
-            Click a face to fit the axis (Auto detects straight vs ring). Then place the two circles
-            along it, or drag the Circle A/B sliders: the zone between them is what the sweep grows.
+            Click a face to fit the axis (Auto detects straight vs ring). Two rings drop around the
+            tube: grab a ring on the 3D to slide it, or use the Ring A/B sliders. The highlighted
+            band between the rings is what the sweep grows.
           </p>
         </div>
         <details className="mt-3 text-xs">
@@ -1007,11 +1022,11 @@ function SetupFlow({
         )}
         {!traced ? (
           <p className="text-xs text-text-secondary">
-            Click a face on the channel to fit its axis, then place the two circles.
+            Click a face on the channel to fit its axis, then place the two rings.
           </p>
         ) : !zoneValid ? (
           <p className="text-xs text-text-secondary">
-            Move the two circles apart to set the zone that grows.
+            Move the two rings apart to set the zone that grows.
           </p>
         ) : null}
         <PrimaryButton onClick={() => onLaunch(true)} disabled={!ready || busy}>
