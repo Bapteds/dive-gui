@@ -2190,6 +2190,14 @@ export interface SweepConfig {
    * the deployment's OpenFOAM build.
    */
   autoStop?: boolean;
+  /**
+   * How many diameters to solve AT ONCE (1 = sequential, the default). Values > 1
+   * clone the case per sample (disk cost: case size x concurrency) and run each
+   * clone as its own serial solver, still gated by the machine's global core
+   * budget. With warm start on, the FIRST value runs alone and seeds the rest
+   * (neighbour-to-neighbour seeding is inherently sequential).
+   */
+  maxConcurrent?: number;
 }
 
 /**

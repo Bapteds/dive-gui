@@ -597,6 +597,8 @@ interface SetupSweep {
   warmStart: boolean;
   /** Stop runs early once the objective stabilises (verify once on the box). */
   autoStop: boolean;
+  /** Diameters solved at once (1 = sequential; clones the case per sample). */
+  maxConcurrent: number;
   inletPatch: string;
   outletPatch: string;
   primary: StudyMetric;
@@ -622,6 +624,7 @@ function defaultSweep(): SetupSweep {
     refine: true,
     warmStart: true,
     autoStop: false,
+    maxConcurrent: 1,
     inletPatch: '',
     outletPatch: '',
     primary: 'pressureDrop',
@@ -764,6 +767,7 @@ function SetupFlow({
       refine: s.refine,
       warmStart: s.warmStart,
       autoStop: s.autoStop,
+      maxConcurrent: Math.max(1, Math.min(8, Math.round(s.maxConcurrent) || 1)),
     },
     objective: {
       inletPatch: s.inletPatch,
@@ -1123,6 +1127,19 @@ function SetupFlow({
               </span>
             </span>
           </label>
+          <Field
+            label="Parallel runs"
+            htmlFor="opt-concurrent"
+            hint="1 = one diameter at a time. Higher solves several at once in per-sample copies of the case (disk: case size x N; still capped by the machine's cores). With warm start, the first value runs alone and seeds the rest."
+          >
+            <NumberField
+              id="opt-concurrent"
+              value={s.maxConcurrent}
+              min={1}
+              step={1}
+              onChange={(maxConcurrent) => set({ maxConcurrent })}
+            />
+          </Field>
         </div>
       </RailSection>
 

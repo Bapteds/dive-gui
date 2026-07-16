@@ -289,7 +289,7 @@ async function cleanRunArtifacts(caseDir: string): Promise<void> {
  * Subdirectories (the `uniform/` time metadata) are skipped. Returns false when
  * there is nothing to harvest (no time dir past 0, or no field files).
  */
-async function harvestLatestFields(caseDir: string): Promise<boolean> {
+async function harvestLatestFields(caseDir: string, destDir?: string): Promise<boolean> {
   let entries;
   try {
     entries = await fs.readdir(caseDir, { withFileTypes: true });
@@ -303,7 +303,8 @@ async function harvestLatestFields(caseDir: string): Promise<boolean> {
     .sort((a, b) => b.t - a.t);
   if (times.length === 0) return false;
   const latest = path.join(caseDir, times[0].name);
-  const zero = path.join(caseDir, '0');
+  const dest = destDir ?? path.join(caseDir, '0');
+  await fs.mkdir(dest, { recursive: true }).catch(() => undefined);
   let files;
   try {
     files = await fs.readdir(latest, { withFileTypes: true });
@@ -314,13 +315,35 @@ async function harvestLatestFields(caseDir: string): Promise<boolean> {
   for (const f of files) {
     if (!f.isFile()) continue;
     try {
-      await fs.copyFile(path.join(latest, f.name), path.join(zero, f.name));
+      await fs.copyFile(path.join(latest, f.name), path.join(dest, f.name));
       copied += 1;
     } catch {
       /* an unreadable field never blocks the sweep; the run just starts colder */
     }
   }
   return copied > 0;
+}
+
+/**
+ * Copy 0/ + constant/ + system/ of the case into a fresh clone directory (a
+ * per-sample sandbox for the parallel sweep). The clone's controlDict is sanitised
+ * (a persisted `stopAt writeNow;` from an earlier graceful stop would make the run
+ * exit after one iteration).
+ */
+async function cloneCase(caseDir: string, cloneDir: string): Promise<void> {
+  await fs.rm(cloneDir, { recursive: true, force: true }).catch(() => undefined);
+  await fs.mkdir(cloneDir, { recursive: true });
+  for (const dir of ['0', 'constant', 'system']) {
+    await fs.cp(path.join(caseDir, dir), path.join(cloneDir, dir), { recursive: true });
+  }
+  const dictPath = path.join(cloneDir, 'system', 'controlDict');
+  try {
+    const dict = await fs.readFile(dictPath, 'utf8');
+    const next = dict.replace(/stopAt\s+writeNow\s*;/, 'stopAt          endTime;');
+    if (next !== dict) await fs.writeFile(dictPath, next);
+  } catch {
+    /* no controlDict — the run will fail per-sample, surfaced there */
+  }
 }
 
 /** Poll a run to a terminal state, honouring a study stop request (which stops it). */
@@ -342,17 +365,25 @@ async function pollRunToTerminal(
   }
 }
 
-/** Persist the samples (disk) + denormalized progress (row); tolerant of a deleted study. */
-async function persistSweep(
+/**
+ * Persist the samples (disk) + denormalized progress (row); tolerant of a deleted
+ * study. Serialised through a promise chain: with concurrent samples (parallel
+ * sweep) two in-flight persists must never interleave their doc writes.
+ */
+let persistChain: Promise<void> = Promise.resolve();
+function persistSweep(
   projectId: string,
   studyId: string,
   doc: StudyDoc,
   extra: Prisma.StudyUpdateInput = {},
 ): Promise<void> {
-  await writeStudyDoc(projectId, studyId, doc).catch(() => undefined);
-  await prisma.study
-    .update({ where: { id: studyId }, data: { doneSamples: countSettled(doc.samples), ...extra } })
-    .catch(() => undefined);
+  persistChain = persistChain.then(async () => {
+    await writeStudyDoc(projectId, studyId, doc).catch(() => undefined);
+    await prisma.study
+      .update({ where: { id: studyId }, data: { doneSamples: countSettled(doc.samples), ...extra } })
+      .catch(() => undefined);
+  });
+  return persistChain;
 }
 
 /** Launch (or re-launch) a study's diameter sweep. Returns immediately; runs in the background. */
@@ -538,11 +569,174 @@ async function runSweep(viewer: Viewer, projectId: string, studyId: string): Pro
     await persistSweep(projectId, studyId, doc, { currentRunId: null, bestDiameterM: bestDiameter });
   };
 
-  // 2) One solver run per swept diameter, sequential.
-  for (let i = 0; i < doc.samples.length; i += 1) {
-    if (stopRequestedStudies.has(studyId)) break;
-    await runOneSample(i);
+  /**
+   * Clone-sandbox variant of runOneSample for the PARALLEL sweep: the sample gets
+   * its own copy of the case (0/ + constant/ + system/), so several diameters solve
+   * at once without ever sharing a directory. The project case is never morphed in
+   * this mode. `seed` overlays the shared warm-start fields onto the clone's 0/;
+   * `harvestSeed` saves this sample's converged fields as that seed (the first
+   * value runs alone for this when warm start is on).
+   */
+  const studyDir = path.dirname(origAbs);
+  const seedZeroDir = path.join(studyDir, 'seed0');
+  const runCloneSample = async (
+    i: number,
+    opts: { seed: boolean; harvestSeed: boolean },
+  ): Promise<void> => {
+    const diameterM = doc.samples[i].diameterM;
+    const cloneDir = path.join(studyDir, `case-${i}`);
+    try {
+      try {
+        await cloneCase(caseDir, cloneDir);
+      } catch (err) {
+        doc.samples[i] = {
+          diameterM,
+          status: 'failed',
+          note: `case clone failed: ${err instanceof Error ? err.message : String(err)}`,
+        };
+        await persistSweep(projectId, studyId, doc);
+        return;
+      }
+      if (opts.seed) {
+        // Overlay the warm-start fields (best-effort: a cold clone still solves).
+        const files = await fs.readdir(seedZeroDir, { withFileTypes: true }).catch(() => []);
+        for (const f of files) {
+          if (!f.isFile()) continue;
+          await fs
+            .copyFile(path.join(seedZeroDir, f.name), path.join(cloneDir, '0', f.name))
+            .catch(() => undefined);
+        }
+      }
+      await fs.writeFile(
+        path.join(cloneDir, 'constant', 'polyMesh', 'points'),
+        morphMeshPoints(original, doc.morph, diameterM),
+      );
+
+      const gate = await runCheckMeshGate(cloneDir);
+      const quality =
+        gate.available && (gate.maxNonOrtho !== undefined || gate.maxSkewness !== undefined)
+          ? { maxNonOrtho: gate.maxNonOrtho, maxSkewness: gate.maxSkewness }
+          : undefined;
+      if (!gate.ok) {
+        doc.samples[i] = { diameterM, status: 'meshFailed', quality, note: gate.note };
+        await persistSweep(projectId, studyId, doc);
+        return;
+      }
+
+      // Start the run in the clone. The global core budget still applies: when the
+      // machine is full, wait and retry instead of failing the sample.
+      let runId: string | null = null;
+      while (runId === null) {
+        if (stopRequestedStudies.has(studyId)) {
+          doc.samples[i] = { diameterM, status: 'skipped', note: 'study stopped' };
+          await persistSweep(projectId, studyId, doc);
+          return;
+        }
+        try {
+          const run = await startRun(viewer, projectId, {}, { caseDir: cloneDir });
+          runId = run.id;
+        } catch (err) {
+          if (err instanceof AppError && err.code === 'NOT_ENOUGH_CORES') {
+            await sleep(POLL_INTERVAL_MS);
+            continue;
+          }
+          doc.samples[i] = {
+            diameterM,
+            status: 'failed',
+            note: err instanceof Error ? err.message : 'run failed to start',
+          };
+          await persistSweep(projectId, studyId, doc);
+          return;
+        }
+      }
+      doc.samples[i] = { diameterM, status: 'running', runId };
+      await persistSweep(projectId, studyId, doc, { currentRunId: runId });
+
+      const finalStatus = await pollRunToTerminal(viewer, projectId, studyId, runId);
+      if (finalStatus === 'converged' || finalStatus === 'completed') {
+        const metrics = await readObjective(cloneDir, doc.objective.densityKgM3);
+        if (metrics) {
+          const yLog = await readRunLog(projectId, runId, 0, 262144).catch(() => null);
+          const yEntries = yLog ? parseYPlus(yLog.content) : [];
+          const yPlus =
+            yEntries.length > 0
+              ? yEntries.reduce((worst, e) => (e.avg > worst.avg ? e : worst))
+              : undefined;
+          doc.samples[i] = { diameterM, status: 'done', runId, metrics, quality, yPlus };
+          const value = primaryMetricValue(metrics, doc.objective.primary);
+          if (value < bestValue) {
+            bestValue = value;
+            bestDiameter = diameterM;
+          }
+          if (opts.harvestSeed) await harvestLatestFields(cloneDir, seedZeroDir);
+        } else {
+          doc.samples[i] = {
+            diameterM,
+            status: 'failed',
+            runId,
+            note: 'objective output not found (check the inlet/outlet patch names)',
+          };
+        }
+      } else if (finalStatus === 'stopped') {
+        doc.samples[i] = { diameterM, status: 'skipped', runId, note: 'run stopped' };
+      } else {
+        doc.samples[i] = { diameterM, status: 'failed', runId, note: `run ${finalStatus}` };
+      }
+      await persistSweep(projectId, studyId, doc, { currentRunId: null, bestDiameterM: bestDiameter });
+    } finally {
+      await fs.rm(cloneDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  };
+
+  /**
+   * Run a batch of sample indices honouring sweep.maxConcurrent: sequentially in
+   * the project case (with neighbour-to-neighbour warm starts) at 1, else in
+   * per-sample clones with up to N solving at once. With warm start on, the first
+   * value of the whole sweep runs alone and seeds the rest.
+   */
+  const maxConcurrent = Math.max(1, Math.min(8, doc.sweep.maxConcurrent ?? 1));
+  let seedReady = false;
+  const runSamples = async (indices: number[]): Promise<void> => {
+    if (maxConcurrent <= 1) {
+      for (const i of indices) {
+        if (stopRequestedStudies.has(studyId)) break;
+        await runOneSample(i);
+      }
+      return;
+    }
+    let rest = indices;
+    if (warmStart && !seedReady && rest.length > 0) {
+      if (stopRequestedStudies.has(studyId)) return;
+      await runCloneSample(rest[0], { seed: false, harvestSeed: true });
+      seedReady = true; // even if the harvest found nothing, never re-run the solo pass
+      rest = rest.slice(1);
+    }
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        if (stopRequestedStudies.has(studyId)) return;
+        const k = cursor;
+        cursor += 1;
+        if (k >= rest.length) return;
+        await runCloneSample(rest[k], { seed: warmStart && seedReady, harvestSeed: false });
+      }
+    };
+    const workers = Math.min(maxConcurrent, rest.length);
+    await Promise.all(Array.from({ length: workers }, () => worker()));
+  };
+
+  // Stale sandboxes from a crashed earlier run of this study.
+  if (maxConcurrent > 1) {
+    const stale = await fs.readdir(studyDir, { withFileTypes: true }).catch(() => []);
+    for (const e of stale) {
+      if (e.isDirectory() && (/^case-\d+$/.test(e.name) || e.name === 'seed0')) {
+        await fs.rm(path.join(studyDir, e.name), { recursive: true, force: true }).catch(() => undefined);
+      }
+    }
   }
+
+  // 2) One solver run per swept diameter (sequential, or maxConcurrent at once).
+  await runSamples(doc.samples.map((_, i) => i));
 
   // 2b) Refinement zoom: sweep a finer second pass (stepM/4) around the coarse
   // optimum, new values only, still capped by the run limit. The coarse grid can
@@ -564,12 +758,12 @@ async function runSweep(viewer: Viewer, projectId: string, studyId: string): Pro
     if (doc.samples.length > firstZoom) {
       // Keep the DB total in step so the UI progress bar never exceeds 100%.
       await persistSweep(projectId, studyId, doc, { totalSamples: doc.samples.length });
-      for (let i = firstZoom; i < doc.samples.length; i += 1) {
-        if (stopRequestedStudies.has(studyId)) break;
-        await runOneSample(i);
-      }
+      await runSamples(doc.samples.map((_, i) => i).filter((i) => i >= firstZoom));
     }
   }
+
+  // Parallel mode: drop the shared warm-start seed (the clones are already gone).
+  await fs.rm(seedZeroDir, { recursive: true, force: true }).catch(() => undefined);
 
   // Any samples never reached (stopped early) become `skipped`.
   for (let i = 0; i < doc.samples.length; i += 1) {

@@ -53,6 +53,8 @@ const sweepSchema = z
     warmStart: z.boolean().optional(),
     /** Stop runs early once the objective stabilises (runTimeControl FO). */
     autoStop: z.boolean().optional(),
+    /** Diameters solved at once (1 = sequential; clones the case per sample). */
+    maxConcurrent: z.number().int().min(1).max(8).optional(),
   })
   .refine((s) => s.maxM >= s.minM, { message: 'maxM must be >= minM', path: ['maxM'] })
   .refine(

@@ -402,15 +402,30 @@ export async function startRun(
   viewer: Viewer,
   projectId: string,
   input: StartRunInput,
+  /**
+   * INTERNAL (the sweep only, not exposed over HTTP): run the solver in this case
+   * directory instead of the project's. The per-project one-active-run guard exists
+   * to protect the SHARED project case dir; a caller providing its own isolated dir
+   * (a per-sample clone) manages its own exclusivity, so that guard is skipped -
+   * the GLOBAL core budget still applies. Serial (1-core) runs only: the parallel
+   * launch path writes decomposeParDict through the project-file API.
+   */
+  internal?: { caseDir: string },
 ): Promise<PublicRun> {
   await assertProjectVisible(viewer, projectId);
 
+  if (internal && (input.cores ?? 1) > 1) {
+    throw new AppError(422, 'TOO_MANY_CORES', 'A clone-directory run must be serial (1 core).');
+  }
+
   // One active run per project (the case directory must not be shared).
-  const active = await prisma.run.count({
-    where: { projectId, status: { in: [...ACTIVE_RUN_STATUSES] } },
-  });
-  if (active >= env.SOLVER_MAX_CONCURRENT_RUNS) {
-    throw new AppError(409, 'RUN_IN_PROGRESS', 'A run is already active for this project.');
+  if (!internal) {
+    const active = await prisma.run.count({
+      where: { projectId, status: { in: [...ACTIVE_RUN_STATUSES] } },
+    });
+    if (active >= env.SOLVER_MAX_CONCURRENT_RUNS) {
+      throw new AppError(409, 'RUN_IN_PROGRESS', 'A run is already active for this project.');
+    }
   }
 
   // The case must be runnable (mesh + solver files present).
@@ -440,9 +455,12 @@ export async function startRun(
   const solver = resolveSolver(runnable.solver, input.solver);
   // A prior stop persisted `stopAt writeNow;` in the controlDict; undo it (and
   // ensure runTimeModifiable) so this run runs to completion instead of writing
-  // once and exiting after a single iteration.
-  await clearGracefulStop(projectId);
-  await ensureRunTimeModifiable(projectId);
+  // once and exiting after a single iteration. These write through the PROJECT
+  // file API, so a clone-directory caller sanitises its own controlDict instead.
+  if (!internal) {
+    await clearGracefulStop(projectId);
+    await ensureRunTimeModifiable(projectId);
+  }
 
   // Resolve the requested cores and enforce the GLOBAL core budget: the sum of all
   // active runs' cores (across every project) plus this request must fit, so two
@@ -463,11 +481,13 @@ export async function startRun(
   // directory (corrupt case), or two projects oversubscribe the machine (H2).
   // Serialise in-process — the whole run subsystem is already process-local.
   const created = await runExclusive('startRun', async () => {
-    const activeNow = await prisma.run.count({
-      where: { projectId, status: { in: [...ACTIVE_RUN_STATUSES] } },
-    });
-    if (activeNow >= env.SOLVER_MAX_CONCURRENT_RUNS) {
-      throw new AppError(409, 'RUN_IN_PROGRESS', 'A run is already active for this project.');
+    if (!internal) {
+      const activeNow = await prisma.run.count({
+        where: { projectId, status: { in: [...ACTIVE_RUN_STATUSES] } },
+      });
+      if (activeNow >= env.SOLVER_MAX_CONCURRENT_RUNS) {
+        throw new AppError(409, 'RUN_IN_PROGRESS', 'A run is already active for this project.');
+      }
     }
     const used =
       (
@@ -490,7 +510,7 @@ export async function startRun(
     });
   });
 
-  const caseDir = caseDirAbsolute(projectId);
+  const caseDir = internal?.caseDir ?? caseDirAbsolute(projectId);
   const logAbs = runLogAbsolute(projectId, created.id);
   await ensureRunDir(projectId, created.id);
 
