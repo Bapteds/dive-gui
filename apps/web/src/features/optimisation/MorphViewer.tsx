@@ -83,6 +83,7 @@ export function MorphViewer({
   ringB,
   tiltA,
   tiltB,
+  falloffEndM,
   pickMode,
   onPlaceRing,
   morphPreview,
@@ -95,6 +96,11 @@ export function MorphViewer({
   /** Each ring's cut-plane tilt (degrees off the chord). */
   tiltA: Tilt;
   tiltB: Tilt;
+  /**
+   * Radial reach of the morph (metres from the axis) for the zone highlight; falls
+   * back to FALLOFF_END_FACTOR x the mean ring radius when absent.
+   */
+  falloffEndM?: number;
   /** Which ring the next click drops (null = clicks just orbit). */
   pickMode: 'A' | 'B' | null;
   /** Fired when a ring is dropped or dragged to a new spot on the shape. */
@@ -111,6 +117,7 @@ export function MorphViewer({
   const ringBRef = useRef<RingPlacement | null>(ringB);
   const tiltARef = useRef<Tilt>(tiltA);
   const tiltBRef = useRef<Tilt>(tiltB);
+  const falloffEndRef = useRef<number | undefined>(falloffEndM);
   const previewRef = useRef<MorphPreview | null>(morphPreview);
   onPlaceRingRef.current = onPlaceRing;
   pickModeRef.current = pickMode;
@@ -119,6 +126,7 @@ export function MorphViewer({
   ringBRef.current = ringB;
   tiltARef.current = tiltA;
   tiltBRef.current = tiltB;
+  falloffEndRef.current = falloffEndM;
   previewRef.current = morphPreview;
 
   const resetViewRef = useRef<() => void>(() => {});
@@ -288,7 +296,9 @@ export function MorphViewer({
     const recolorZone = (cl: Centerline | null, a: RingPlacement | null, b: RingPlacement | null) => {
       const pts = (cl?.points ?? null) as Vec3[] | null;
       const active = !!pts && pts.length >= 2 && !!a && !!b;
-      const falloffEnd = active ? meanRadius(a, b) * FALLOFF_END_FACTOR : 0;
+      const falloffEnd = active
+        ? (falloffEndRef.current ?? meanRadius(a, b) * FALLOFF_END_FACTOR)
+        : 0;
       const cum: number[] = [0];
       let total = 0;
       if (active) {
@@ -588,10 +598,10 @@ export function MorphViewer({
     };
   }, [geometry]);
 
-  // Redraw the rings + zone highlight when a placement or a tilt changes.
+  // Redraw the rings + zone highlight when a placement, tilt, or reach changes.
   useEffect(() => {
     syncOverlayRef.current();
-  }, [centerline, ringA, ringB, tiltA, tiltB]);
+  }, [centerline, ringA, ringB, tiltA, tiltB, falloffEndM]);
 
   // Re-deform the surface when the preview (diameter or zone) changes.
   useEffect(() => {

@@ -591,6 +591,15 @@ interface SetupSweep {
   outletPatch: string;
   primary: StudyMetric;
   density: number;
+  /**
+   * Radial confinement of the morph, as multiples of the measured radius R: full
+   * effect within startF*R, cosine-faded to zero at endF*R. The gap between them is
+   * the buffer band that absorbs the growth; a wider band permits a LARGER diameter
+   * increase before cells invert (~+37% at the 1.3/2.2 defaults), at the cost of the
+   * morph reaching further into the surrounding mesh.
+   */
+  falloffStartF: number;
+  falloffEndF: number;
 }
 
 function defaultSweep(): SetupSweep {
@@ -605,6 +614,8 @@ function defaultSweep(): SetupSweep {
     outletPatch: '',
     primary: 'pressureDrop',
     density: 1000,
+    falloffStartF: FALLOFF_START_FACTOR,
+    falloffEndF: FALLOFF_END_FACTOR,
   };
 }
 
@@ -661,10 +672,11 @@ function SetupFlow({
   // The two rings must be far enough apart to bound a real band of wall.
   const zoneValid = meanR !== null && chordM !== null && meanR > 0 && chordM > meanR * 0.05;
 
-  const falloffStartM =
-    meanR !== null ? Number((meanR * FALLOFF_START_FACTOR).toPrecision(6)) : undefined;
-  const falloffEndM =
-    meanR !== null ? Number((meanR * FALLOFF_END_FACTOR).toPrecision(6)) : undefined;
+  const falloffValid = s.falloffEndF > s.falloffStartF && s.falloffStartF >= 1;
+  const startF = falloffValid ? s.falloffStartF : FALLOFF_START_FACTOR;
+  const endF = falloffValid ? s.falloffEndF : FALLOFF_END_FACTOR;
+  const falloffStartM = meanR !== null ? Number((meanR * startF).toPrecision(6)) : undefined;
+  const falloffEndM = meanR !== null ? Number((meanR * endF).toPrecision(6)) : undefined;
 
   // Pre-fill the sweep around the measured diameter the first time both rings land (a
   // user-tuned range survives a later ring move).
@@ -823,6 +835,7 @@ function SetupFlow({
             ringB={ringB}
             tiltA={tiltA}
             tiltB={tiltB}
+            falloffEndM={falloffEndM}
             pickMode={pickMode}
             onPlaceRing={onPlaceRing}
             morphPreview={morphPreview}
@@ -972,6 +985,43 @@ function SetupFlow({
             </p>
           </div>
         )}
+
+        <details className="mt-3 text-xs">
+          <summary className="cursor-pointer rounded-sm text-text-secondary transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2">
+            Advanced: morph reach (falloff)
+          </summary>
+          <div className="mt-2 flex flex-col gap-2">
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Full effect within (× R)" htmlFor="opt-falloff-start">
+                <NumberField
+                  id="opt-falloff-start"
+                  value={s.falloffStartF}
+                  min={1}
+                  step={0.1}
+                  onChange={(falloffStartF) => set({ falloffStartF })}
+                />
+              </Field>
+              <Field
+                label="No effect beyond (× R)"
+                htmlFor="opt-falloff-end"
+                error={!falloffValid ? 'Must be greater than the inner factor (min 1).' : undefined}
+              >
+                <NumberField
+                  id="opt-falloff-end"
+                  value={s.falloffEndF}
+                  min={1}
+                  step={0.1}
+                  onChange={(falloffEndF) => set({ falloffEndF })}
+                />
+              </Field>
+            </div>
+            <p className="text-text-secondary">
+              R is the measured radius. The band between the two factors absorbs the growth: a
+              wider band allows a larger diameter increase before cells invert (the checkMesh gate
+              rejects those), but the morph reaches further into the surrounding mesh.
+            </p>
+          </div>
+        </details>
       </RailSection>
 
       <RailSection
