@@ -2,27 +2,46 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { morphPoint, prepareCenterline, type Centerline } from '@dive/shared';
+import { blendWeight, morphPoint, prepareCenterline, type Centerline } from '@dive/shared';
 import { bakedRootTransform } from '@/features/assemble/placement';
 
 /**
- * MorphViewer - the 3D stage of the Optimisation setup: the translucent case mesh, the
- * fitted channel axis, and TWO big rings (hoops) the user drops around the tube. The
- * wall BAND between the two rings is the morph zone: it is highlighted on the surface
- * and grows/shrinks live with the diameter preview.
+ * MorphViewer - the 3D stage of the Optimisation setup.
  *
- * Two ways to move a ring: grab it on the 3D and slide it along the axis, or use the
- * Circle A/B sliders (both drive the same station fractions).
+ * NO fitted axis, by design. The engineer drops TWO rings ANYWHERE on the shape: each
+ * click is probed across the channel (shoot along the inward wall normal, hit the far
+ * wall) to measure that section's CENTRE and RADIUS right where they clicked. The two
+ * measured centres are the whole axis: the wall band BETWEEN the two rings is the morph
+ * zone, highlighted on the surface and grown live by the diameter preview. Rings are
+ * dragged freely across the surface (each move re-probes), never along a rail.
  *
  * Coordinate frame: extractPatches exports points with process=False, so each mesh's
  * LOCAL vertices ARE the raw polyMesh coords. Neutralising the GLB's baked Z-up->Y-up
  * flip (a wrapper group with the inverse of bakedRootTransform, same trick as the
- * Assemble viewer) makes the rendered world frame == raw coords, so a raycast hit is a
- * raw point, the axis/rings live in raw coords, and applying the SHARED morphPoint to
- * the local vertices previews exactly what the server bakes.
+ * Assemble viewer) makes the rendered world frame == raw coords, so a raycast hit, the
+ * probed centres and the rings all live in raw coords, and applying the SHARED
+ * morphPoint to the local vertices previews exactly what the server bakes.
  */
 
 type Vec3 = [number, number, number];
+
+/** One ring the user dropped on the shape: the section measured at that exact spot. */
+export interface RingPlacement {
+  /** Centre of the local cross-section (raw coords), from the wall-to-wall probe. */
+  center: Vec3;
+  /** Local radius (metres) = half the probed wall-to-wall distance. */
+  radius: number;
+  /** The patch that was clicked (the wall the sweep morphs). */
+  patch: string | null;
+}
+
+/**
+ * Morph-zone shape constants. Exported so the workspace builds the SERVER config from
+ * the very same numbers the preview renders with (parity by construction).
+ */
+export const ZONE_BLEND = 0.15;
+export const FALLOFF_START_FACTOR = 1.3;
+export const FALLOFF_END_FACTOR = 2.2;
 
 interface MorphPreview {
   baselineDiameterM: number;
@@ -34,20 +53,14 @@ interface MorphPreview {
   falloffEndM?: number;
 }
 
-interface Arc {
-  points: THREE.Vector3[];
-  cum: number[];
-  total: number;
-}
-
-/** A mesh + its pristine positions + each vertex's arc-length fraction along the axis. */
+/** A mesh + its pristine positions (raw coords). */
 interface Tracked {
   mesh: THREE.Mesh;
   positions: Float32Array;
-  fractions: Float32Array | null;
 }
 
-const RING_SCALE = 1.28; // ring radius vs local wall radius (a visible hoop AROUND it)
+const RING_TUBE = 0.1; // hoop thickness as a fraction of its radius
+const RING_SCALE = 1.15; // hoop radius vs the measured wall radius (a visible collar)
 const AXIS_Z = new THREE.Vector3(0, 0, 1);
 
 function readToken(name: string, fallback: string): string {
@@ -55,156 +68,49 @@ function readToken(name: string, fallback: string): string {
   return value || fallback;
 }
 
-/** Cumulative arc-length of a raw-coord polyline. */
-function buildArc(pts: Vec3[]): Arc {
-  const points = pts.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
-  const cum = [0];
-  for (let i = 1; i < points.length; i += 1) cum.push(cum[i - 1] + points[i].distanceTo(points[i - 1]));
-  return { points, cum, total: cum[cum.length - 1] ?? 0 };
+function toVector(v: Vec3): THREE.Vector3 {
+  return new THREE.Vector3(v[0], v[1], v[2]);
 }
 
-/** Segment index + local t (0..1) at an arc-length fraction of the polyline. */
-function locate(arc: Arc, fraction: number): { i: number; t: number } {
-  const { cum, total } = arc;
-  const s = Math.max(0, Math.min(1, fraction)) * total;
-  let i = 0;
-  while (i < cum.length - 2 && cum[i + 1] < s) i += 1;
-  const seg = (cum[i + 1] ?? cum[i]) - cum[i] || 1;
-  return { i, t: (s - cum[i]) / seg };
-}
-
-/** Position + local tangent at an arc-length fraction. */
-function frameAt(arc: Arc, fraction: number): { center: THREE.Vector3; tangent: THREE.Vector3 } {
-  const { points } = arc;
-  if (points.length === 0) return { center: new THREE.Vector3(), tangent: AXIS_Z.clone() };
-  const { i, t } = locate(arc, fraction);
-  const next = points[i + 1] ?? points[i];
-  const center = points[i].clone().lerp(next, t);
-  const tangent = next.clone().sub(points[i]);
-  if (tangent.lengthSq() === 0) tangent.set(0, 0, 1);
-  return { center, tangent: tangent.normalize() };
-}
-
-/** Local wall radius (metres) at a fraction, interpolated from the radius profile. */
-function radiusAt(arc: Arc, radii: number[] | null, fraction: number, fallback: number): number {
-  if (!radii || radii.length === 0) return fallback;
-  const { i, t } = locate(arc, fraction);
-  const a = radii[Math.min(i, radii.length - 1)];
-  const b = radii[Math.min(i + 1, radii.length - 1)];
-  const r = a + (b - a) * t;
-  return r > 1e-6 ? r : fallback;
-}
-
-/** Arc-length fraction of the polyline point nearest a raw point. */
-function projectFraction(arc: Arc, point: THREE.Vector3): number {
-  const { points, cum, total } = arc;
-  if (total <= 0) return 0;
-  let bestD2 = Infinity;
-  let bestS = 0;
-  const ab = new THREE.Vector3();
-  const ap = new THREE.Vector3();
-  for (let i = 0; i < points.length - 1; i += 1) {
-    const a = points[i];
-    ab.subVectors(points[i + 1], a);
-    const seg2 = ab.dot(ab);
-    let t = seg2 > 0 ? ap.subVectors(point, a).dot(ab) / seg2 : 0;
-    t = Math.max(0, Math.min(1, t));
-    const fx = a.x + ab.x * t;
-    const fy = a.y + ab.y * t;
-    const fz = a.z + ab.z * t;
-    const d2 = (fx - point.x) ** 2 + (fy - point.y) ** 2 + (fz - point.z) ** 2;
-    if (d2 < bestD2) {
-      bestD2 = d2;
-      bestS = cum[i] + t * Math.sqrt(seg2);
-    }
-  }
-  return bestS / total;
-}
-
-/** Fraction of the axis point nearest a camera ray (drag fallback off the mesh). */
-function projectRayFraction(arc: Arc, ray: THREE.Ray): number {
-  const { points, cum, total } = arc;
-  if (total <= 0) return 0;
-  let bestD2 = Infinity;
-  let bestS = 0;
-  const u = new THREE.Vector3();
-  const w0 = new THREE.Vector3();
-  const pRay = new THREE.Vector3();
-  const pSeg = new THREE.Vector3();
-  const d = ray.direction; // normalised
-  for (let i = 0; i < points.length - 1; i += 1) {
-    const a = points[i];
-    u.subVectors(points[i + 1], a);
-    const b = d.dot(u);
-    const c = u.dot(u);
-    w0.subVectors(ray.origin, a);
-    const dd = d.dot(w0);
-    const e = u.dot(w0);
-    const denom = c - b * b; // a = d·d = 1
-    let s = denom > 1e-9 ? (e - b * dd) / denom : 0;
-    s = Math.max(0, Math.min(1, s));
-    let tRay = b * s - dd; // param along the ray
-    tRay = Math.max(0, tRay);
-    pRay.copy(ray.origin).addScaledVector(d, tRay);
-    pSeg.copy(a).addScaledVector(u, s);
-    const d2 = pRay.distanceToSquared(pSeg);
-    if (d2 < bestD2) {
-      bestD2 = d2;
-      bestS = cum[i] + s * Math.sqrt(c);
-    }
-  }
-  return bestS / total;
+/** Mean radius of the two rings (drives the baseline diameter + the radial falloff). */
+export function meanRadius(a: RingPlacement, b: RingPlacement): number {
+  return (a.radius + b.radius) / 2;
 }
 
 export function MorphViewer({
   geometry,
   centerline,
-  radii,
-  station1,
-  station2,
-  ringRadiusM,
+  ringA,
+  ringB,
   pickMode,
-  onPick,
-  onPickStation,
+  onPlaceRing,
   morphPreview,
 }: {
   geometry: ArrayBuffer;
+  /** The 2-point axis [ringA.center, ringB.center], or null until both are placed. */
   centerline: Centerline | null;
-  /** Wall radius (metres) at each centerline point (sizes the rings locally). */
-  radii?: number[];
-  /** The two ring positions as arc-length fractions (0..1), or null. */
-  station1: number | null;
-  station2: number | null;
-  /** Mean wall radius (metres) - ring-size fallback when `radii` is absent. */
-  ringRadiusM: number;
-  /** What a mesh click does: pick the wall patch, place a ring, or orbit. */
-  pickMode: 'patch' | 'c1' | 'c2' | null;
-  /** Fired on a mesh click in 'patch' mode: the raw point + the clicked patch name. */
-  onPick: (point: Vec3, patch: string | null) => void;
-  /** Fired when a ring is placed/dragged: which ring + its arc-length fraction. */
-  onPickStation: (which: 'c1' | 'c2', fraction: number) => void;
+  ringA: RingPlacement | null;
+  ringB: RingPlacement | null;
+  /** Which ring the next click drops (null = clicks just orbit). */
+  pickMode: 'A' | 'B' | null;
+  /** Fired when a ring is dropped or dragged to a new spot on the shape. */
+  onPlaceRing: (which: 'A' | 'B', placement: RingPlacement) => void;
   /** When set, deform the surface to this diameter (else show the pristine mesh). */
   morphPreview: MorphPreview | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const onPickRef = useRef(onPick);
-  const onPickStationRef = useRef(onPickStation);
+  const onPlaceRingRef = useRef(onPlaceRing);
   const pickModeRef = useRef(pickMode);
   const centerlineRef = useRef<Centerline | null>(centerline);
-  const radiiRef = useRef<number[] | null>(radii ?? null);
-  const station1Ref = useRef<number | null>(station1);
-  const station2Ref = useRef<number | null>(station2);
-  const ringRadiusRef = useRef(ringRadiusM);
+  const ringARef = useRef<RingPlacement | null>(ringA);
+  const ringBRef = useRef<RingPlacement | null>(ringB);
   const previewRef = useRef<MorphPreview | null>(morphPreview);
-  onPickRef.current = onPick;
-  onPickStationRef.current = onPickStation;
+  onPlaceRingRef.current = onPlaceRing;
   pickModeRef.current = pickMode;
   centerlineRef.current = centerline;
-  radiiRef.current = radii ?? null;
-  station1Ref.current = station1;
-  station2Ref.current = station2;
-  ringRadiusRef.current = ringRadiusM;
+  ringARef.current = ringA;
+  ringBRef.current = ringB;
   previewRef.current = morphPreview;
 
   const resetViewRef = useRef<() => void>(() => {});
@@ -228,7 +134,7 @@ export function MorphViewer({
     container.appendChild(renderer.domElement);
     renderer.domElement.classList.add('block', 'size-full');
     renderer.domElement.style.touchAction = 'none';
-    renderer.domElement.style.cursor = 'grab';
+    renderer.domElement.style.cursor = 'crosshair';
 
     scene.add(new THREE.HemisphereLight(0xffffff, 0xcfd3da, 1.1));
     const key = new THREE.DirectionalLight(0xffffff, 0.6);
@@ -240,7 +146,7 @@ export function MorphViewer({
     controls.dampingFactor = 0.12;
 
     const meshRoot = new THREE.Group(); // raw-coord frame (baked flip neutralised)
-    const overlay = new THREE.Group(); // axis + rings, also raw coords
+    const overlay = new THREE.Group(); // rings, also raw coords
     scene.add(meshRoot);
     scene.add(overlay);
 
@@ -249,7 +155,7 @@ export function MorphViewer({
     let rafId = 0;
     const renderFrame = () => {
       frameQueued = false;
-      if (disposed) return; // a frame queued just before teardown must not render
+      if (disposed) return;
       controls.update();
       renderer.render(scene, camera);
     };
@@ -260,34 +166,35 @@ export function MorphViewer({
     };
     controls.addEventListener('change', requestRender);
 
-    // Axis line + the two ring hoops (unit tori, scaled to the local wall radius).
-    let axisLine: THREE.Line | null = null;
-    // Rings are BLUE (deep A / light B) so they stand out from the ORANGE grow zone.
-    const ringGeom = new THREE.TorusGeometry(1, 0.12, 12, 48);
-    const ring1 = new THREE.Mesh(ringGeom, new THREE.MeshBasicMaterial({ color: primary.clone() }));
-    const ring2 = new THREE.Mesh(ringGeom, new THREE.MeshBasicMaterial({ color: primaryLight.clone() }));
-    ring1.visible = false;
-    ring2.visible = false;
-    ring1.renderOrder = 2;
-    ring2.renderOrder = 2;
-    overlay.add(ring1);
-    overlay.add(ring2);
+    // Ring hoops (unit tori scaled to the measured radius) + dot markers for a lone
+    // ring, whose section plane is unknown until the second ring gives the direction.
+    const ringGeom = new THREE.TorusGeometry(1, RING_TUBE, 12, 48);
+    const dotGeom = new THREE.SphereGeometry(1, 16, 12);
+    const matA = new THREE.MeshBasicMaterial({ color: primary.clone() });
+    const matB = new THREE.MeshBasicMaterial({ color: primaryLight.clone() });
+    const hoopA = new THREE.Mesh(ringGeom, matA);
+    const hoopB = new THREE.Mesh(ringGeom, matB);
+    const dotA = new THREE.Mesh(dotGeom, matA);
+    const dotB = new THREE.Mesh(dotGeom, matB);
+    [hoopA, hoopB, dotA, dotB].forEach((m) => {
+      m.visible = false;
+      m.renderOrder = 2;
+      overlay.add(m);
+    });
 
-    const zoneColor = accent.clone();
     const tracked: Tracked[] = [];
-    let arc: Arc | null = null;
-    let fractionsFor: Centerline['points'] | null = null; // which points the fractions are for
+    let modelRadius = 1;
 
     const fitView = () => {
       const box = new THREE.Box3().setFromObject(meshRoot);
       if (box.isEmpty()) return;
       const sphere = box.getBoundingSphere(new THREE.Sphere());
-      const radius = sphere.radius || 1;
-      const distance = radius / Math.sin((camera.fov * Math.PI) / 180 / 2);
+      modelRadius = sphere.radius || 1;
+      const distance = modelRadius / Math.sin((camera.fov * Math.PI) / 180 / 2);
       const dir = new THREE.Vector3(0.8, 0.5, 1).normalize();
       camera.position.copy(sphere.center).addScaledVector(dir, distance * 1.3);
-      camera.near = radius / 100;
-      camera.far = radius * 100;
+      camera.near = modelRadius / 100;
+      camera.far = modelRadius * 100;
       camera.updateProjectionMatrix();
       controls.target.copy(sphere.center);
       controls.update();
@@ -295,35 +202,98 @@ export function MorphViewer({
     };
     resetViewRef.current = fitView;
 
-    /** Recompute each vertex's arc-length fraction (only when the axis changes). */
-    const computeFractions = () => {
-      const tmp = new THREE.Vector3();
-      tracked.forEach((t) => {
-        if (!arc) {
-          t.fractions = null;
-          return;
+    /**
+     * Measure the channel section at a surface hit: shoot from just inside the wall
+     * along the inward normal (and, failing that, the outward one) until the opposite
+     * wall of the SAME patch is hit. Centre = midpoint, radius = half the span. This
+     * is what makes free placement work with no fitted axis anywhere.
+     */
+    const probeRaycaster = new THREE.Raycaster();
+    const probeSection = (hit: THREE.Intersection): RingPlacement | null => {
+      const object = hit.object as THREE.Mesh;
+      if (!hit.face) return null;
+      const eps = modelRadius * 1e-4;
+      const normal = hit.face.normal.clone().transformDirection(object.matrixWorld).normalize();
+      let best: { center: THREE.Vector3; radius: number } | null = null;
+      for (const dir of [normal.clone().negate(), normal.clone()]) {
+        probeRaycaster.set(hit.point.clone().addScaledVector(dir, eps), dir);
+        probeRaycaster.near = 0;
+        probeRaycaster.far = modelRadius * 4;
+        const far = probeRaycaster.intersectObject(object, false).find((h) => h.distance > eps);
+        if (!far) continue;
+        const radius = far.distance / 2;
+        // Prefer the SHORTER span: on a tube that is the true bore, not a far-away limb.
+        if (!best || radius < best.radius) {
+          best = { center: hit.point.clone().addScaledVector(dir, radius), radius };
         }
-        const n = t.positions.length / 3;
-        const fr = new Float32Array(n);
-        for (let i = 0; i < n; i += 1) {
-          tmp.set(t.positions[3 * i], t.positions[3 * i + 1], t.positions[3 * i + 2]);
-          fr[i] = projectFraction(arc, tmp);
-        }
-        t.fractions = fr;
-      });
+      }
+      if (!best || !(best.radius > 0)) return null;
+      return {
+        center: [best.center.x, best.center.y, best.center.z],
+        radius: best.radius,
+        patch: object.name || object.parent?.name || null,
+      };
     };
 
-    /** Tint the wall band between two fractions; the rest stays neutral. */
-    const recolorZone = (lo: number | null, hi: number | null) => {
-      const active = lo !== null && hi !== null && hi > lo;
+    /** Draw the two rings from the given placements (hoops once the axis is known). */
+    const drawRings = (a: RingPlacement | null, b: RingPlacement | null) => {
+      const axis = a && b ? toVector(b.center).sub(toVector(a.center)) : null;
+      const haveAxis = !!axis && axis.lengthSq() > 0;
+      if (haveAxis) axis!.normalize();
+      const place = (ring: RingPlacement | null, hoop: THREE.Mesh, dot: THREE.Mesh) => {
+        if (!ring) {
+          hoop.visible = false;
+          dot.visible = false;
+          return;
+        }
+        if (haveAxis) {
+          hoop.position.copy(toVector(ring.center));
+          hoop.quaternion.setFromUnitVectors(AXIS_Z, axis!);
+          hoop.scale.setScalar(ring.radius * RING_SCALE);
+          hoop.visible = true;
+          dot.visible = false;
+        } else {
+          // Only one ring so far: its section plane is undetermined, show a marker.
+          dot.position.copy(toVector(ring.center));
+          dot.scale.setScalar(Math.max(ring.radius * 0.22, modelRadius * 1e-3));
+          dot.visible = true;
+          hoop.visible = false;
+        }
+      };
+      place(a, hoopA, dotA);
+      place(b, hoopB, dotB);
+    };
+
+    /**
+     * Tint exactly what the morph will move: blendWeight > 0 along the 2-point axis
+     * AND inside the radial falloff. Cheap (one segment), so it tracks a live drag.
+     */
+    const recolorZone = (cl: Centerline | null, a: RingPlacement | null, b: RingPlacement | null) => {
+      const active = !!cl && cl.points.length >= 2 && !!a && !!b;
+      const falloffEnd = active ? meanRadius(a!, b!) * FALLOFF_END_FACTOR : 0;
+      const A = active ? toVector(cl!.points[0] as Vec3) : null;
+      const B = active ? toVector(cl!.points[1] as Vec3) : null;
+      const ab = active ? B!.clone().sub(A!) : null;
+      const len2 = ab ? ab.dot(ab) : 0;
+      const p = new THREE.Vector3();
+      const foot = new THREE.Vector3();
       tracked.forEach((t) => {
         const attr = t.mesh.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
         if (!attr) return;
         const arr = attr.array as Float32Array;
         const n = arr.length / 3;
         for (let i = 0; i < n; i += 1) {
-          const inZone = active && t.fractions ? t.fractions[i] >= lo! && t.fractions[i] <= hi! : false;
-          const c = inZone ? zoneColor : neutral;
+          let inZone = false;
+          if (active && len2 > 0) {
+            p.set(t.positions[3 * i], t.positions[3 * i + 1], t.positions[3 * i + 2]);
+            let s = p.clone().sub(A!).dot(ab!) / len2;
+            s = Math.max(0, Math.min(1, s));
+            if (blendWeight(s, 0, 1, ZONE_BLEND) > 0) {
+              foot.copy(A!).addScaledVector(ab!, s);
+              inZone = foot.distanceTo(p) <= falloffEnd;
+            }
+          }
+          const c = inZone ? accent : neutral;
           arr[3 * i] = c.r;
           arr[3 * i + 1] = c.g;
           arr[3 * i + 2] = c.b;
@@ -332,53 +302,9 @@ export function MorphViewer({
       });
     };
 
-    /** Move a ring to a fraction (position + orient + scale to the local wall). */
-    const placeRing = (mesh: THREE.Mesh, fraction: number | null) => {
-      if (!arc || fraction === null) {
-        mesh.visible = false;
-        return;
-      }
-      const f = frameAt(arc, fraction);
-      const r =
-        radiusAt(arc, radiiRef.current, fraction, Math.max(ringRadiusRef.current, 1e-4)) * RING_SCALE;
-      mesh.position.copy(f.center);
-      mesh.quaternion.setFromUnitVectors(AXIS_Z, f.tangent);
-      mesh.scale.setScalar(r);
-      mesh.visible = true;
-    };
-
-    /** Rebuild the axis line + reposition both rings + recolor the zone. */
     const syncOverlay = () => {
-      const cl = centerlineRef.current;
-      if (axisLine) {
-        overlay.remove(axisLine);
-        axisLine.geometry.dispose();
-        (axisLine.material as THREE.Material).dispose();
-        axisLine = null;
-      }
-      arc = cl && cl.points.length >= 2 ? buildArc(cl.points as Vec3[]) : null;
-      if (arc && cl) {
-        axisLine = new THREE.Line(
-          new THREE.BufferGeometry().setFromPoints(arc.points),
-          new THREE.LineBasicMaterial({ color: neutral.clone() }),
-        );
-        overlay.add(axisLine);
-        // Recompute per-vertex fractions only when the axis itself changes (keyed on
-        // the points array identity, not the wrapper object the parent recreates).
-        if (cl.points !== fractionsFor) {
-          computeFractions();
-          fractionsFor = cl.points;
-        }
-      } else {
-        fractionsFor = null;
-      }
-      placeRing(ring1, station1Ref.current);
-      placeRing(ring2, station2Ref.current);
-      const bothSet = station1Ref.current !== null && station2Ref.current !== null;
-      recolorZone(
-        bothSet ? Math.min(station1Ref.current!, station2Ref.current!) : null,
-        bothSet ? Math.max(station1Ref.current!, station2Ref.current!) : null,
-      );
+      drawRings(ringARef.current, ringBRef.current);
+      recolorZone(centerlineRef.current, ringARef.current, ringBRef.current);
       requestRender();
     };
     syncOverlayRef.current = syncOverlay;
@@ -404,7 +330,7 @@ export function MorphViewer({
         const attr = mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
         const out = attr.array as Float32Array;
         for (let i = 0; i < positions.length; i += 3) {
-          const p = morphPoint(
+          const q = morphPoint(
             [positions[i], positions[i + 1], positions[i + 2]],
             prep,
             preview.stationA,
@@ -414,9 +340,9 @@ export function MorphViewer({
             preview.falloffStartM,
             preview.falloffEndM,
           );
-          out[i] = p[0];
-          out[i + 1] = p[1];
-          out[i + 2] = p[2];
+          out[i] = q[0];
+          out[i + 1] = q[1];
+          out[i + 2] = q[2];
         }
         attr.needsUpdate = true;
         mesh.geometry.computeVertexNormals();
@@ -442,6 +368,7 @@ export function MorphViewer({
       neutralGroup.matrixWorldNeedsUpdate = true;
       neutralGroup.add(loaded);
       meshRoot.add(neutralGroup);
+      meshRoot.updateMatrixWorld(true); // probes need current world matrices
 
       meshes.forEach((mesh) => {
         if (!mesh.geometry.getAttribute('normal')) mesh.geometry.computeVertexNormals();
@@ -454,19 +381,18 @@ export function MorphViewer({
           depthWrite: false,
         });
         const posAttr = mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
-        const count = posAttr.count;
-        const colors = new Float32Array(count * 3);
-        for (let i = 0; i < count; i += 1) {
+        const colors = new Float32Array(posAttr.count * 3);
+        for (let i = 0; i < posAttr.count; i += 1) {
           colors[3 * i] = neutral.r;
           colors[3 * i + 1] = neutral.g;
           colors[3 * i + 2] = neutral.b;
         }
         mesh.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-        tracked.push({ mesh, positions: Float32Array.from(posAttr.array as Float32Array), fractions: null });
+        tracked.push({ mesh, positions: Float32Array.from(posAttr.array as Float32Array) });
       });
 
       fitView();
-      syncOverlay(); // computes the vertex fractions once the axis is known
+      syncOverlay();
       applyMorph();
     };
     try {
@@ -475,13 +401,13 @@ export function MorphViewer({
       /* a bad GLB just leaves an empty canvas here (the setup form still works) */
     }
 
-    // ---- pointer: orbit / click-to-place / grab-and-drag a ring -----------------
+    // ---- pointer: orbit / drop a ring / grab-and-drag a ring freely ---------------
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     let downX = 0;
     let downY = 0;
-    let dragging: 'c1' | 'c2' | null = null;
-    let dragFraction = 0;
+    let dragging: 'A' | 'B' | null = null;
+    let dragPlacement: RingPlacement | null = null;
 
     const toPointer = (event: PointerEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
@@ -490,94 +416,77 @@ export function MorphViewer({
       raycaster.setFromCamera(pointer, camera);
     };
 
-    /** Fraction under the pointer: the mesh hit projected to the axis, else ray-nearest. */
-    const fractionUnderPointer = (): number | null => {
-      if (!arc) return null;
+    /** The section under the pointer, probed on the surface (null when off-mesh). */
+    const sectionUnderPointer = (): RingPlacement | null => {
       const hit = raycaster
         .intersectObjects(meshRoot.children, true)
         .find((i) => (i.object as THREE.Mesh).isMesh);
-      return hit ? projectFraction(arc, hit.point) : projectRayFraction(arc, raycaster.ray);
+      return hit ? probeSection(hit) : null;
     };
 
     const onDown = (event: PointerEvent) => {
       downX = event.clientX;
       downY = event.clientY;
       toPointer(event);
-      // Grab a ring? (takes priority over orbit / click-to-place)
-      const ringHit = raycaster
-        .intersectObjects([ring1, ring2].filter((r) => r.visible), false)
-        .at(0);
+      const grabbable = [hoopA, hoopB, dotA, dotB].filter((m) => m.visible);
+      const ringHit = raycaster.intersectObjects(grabbable, false).at(0);
       if (ringHit) {
-        dragging = ringHit.object === ring1 ? 'c1' : 'c2';
-        dragFraction = (dragging === 'c1' ? station1Ref.current : station2Ref.current) ?? 0;
+        dragging = ringHit.object === hoopA || ringHit.object === dotA ? 'A' : 'B';
+        dragPlacement = (dragging === 'A' ? ringARef.current : ringBRef.current) ?? null;
         controls.enabled = false;
         renderer.domElement.style.cursor = 'grabbing';
         renderer.domElement.setPointerCapture(event.pointerId);
-        return;
       }
-      renderer.domElement.style.cursor = 'grabbing';
     };
 
     const onMove = (event: PointerEvent) => {
       if (!dragging) return;
       toPointer(event);
-      const f = fractionUnderPointer();
-      if (f === null) return;
-      dragFraction = f;
-      const mesh = dragging === 'c1' ? ring1 : ring2;
-      placeRing(mesh, f);
-      const other = (dragging === 'c1' ? station2Ref.current : station1Ref.current) ?? f;
-      recolorZone(Math.min(f, other), Math.max(f, other));
+      const section = sectionUnderPointer();
+      if (!section) return; // pointer left the shape: keep the last good spot
+      dragPlacement = section;
+      const a = dragging === 'A' ? section : ringARef.current;
+      const b = dragging === 'B' ? section : ringBRef.current;
+      drawRings(a, b);
+      const cl = a && b ? { points: [a.center, b.center] } : null;
+      recolorZone(cl, a, b);
       requestRender();
+    };
+
+    const endDrag = (event: PointerEvent, commit: boolean) => {
+      const which = dragging;
+      const placement = dragPlacement;
+      dragging = null;
+      dragPlacement = null;
+      controls.enabled = true;
+      renderer.domElement.style.cursor = 'crosshair';
+      try {
+        renderer.domElement.releasePointerCapture(event.pointerId);
+      } catch {
+        /* capture may already be gone */
+      }
+      if (commit && which && placement) onPlaceRingRef.current(which, placement);
+      else syncOverlay(); // aborted: snap back to the committed placements
     };
 
     const onUp = (event: PointerEvent) => {
       if (dragging) {
-        const which = dragging;
-        dragging = null;
-        controls.enabled = true;
-        renderer.domElement.style.cursor = 'grab';
-        try {
-          renderer.domElement.releasePointerCapture(event.pointerId);
-        } catch {
-          /* pointer capture may already be gone */
-        }
-        onPickStationRef.current(which, dragFraction); // commit on release
+        endDrag(event, true);
         return;
       }
-      renderer.domElement.style.cursor = 'grab';
       const dx = event.clientX - downX;
       const dy = event.clientY - downY;
       if (dx * dx + dy * dy > 36) return; // it was an orbit drag
       const mode = pickModeRef.current;
       if (!mode) return;
       toPointer(event);
-      const hit = raycaster
-        .intersectObjects(meshRoot.children, true)
-        .find((i) => (i.object as THREE.Mesh).isMesh);
-      if (!hit) return;
-      if (mode === 'patch') {
-        const patch = hit.object.name || hit.object.parent?.name || null;
-        onPickRef.current([hit.point.x, hit.point.y, hit.point.z], patch);
-        return;
-      }
-      if (!arc) return;
-      onPickStationRef.current(mode, projectFraction(arc, hit.point));
+      const section = sectionUnderPointer();
+      if (!section) return;
+      onPlaceRingRef.current(mode, section);
     };
 
-    // If the OS reclaims the pointer mid-drag (touch/pen), pointerup never fires:
-    // abort the drag, re-enable orbit, and snap the ring back to its committed spot.
     const onCancel = (event: PointerEvent) => {
-      if (!dragging) return;
-      dragging = null;
-      controls.enabled = true;
-      renderer.domElement.style.cursor = 'grab';
-      try {
-        renderer.domElement.releasePointerCapture(event.pointerId);
-      } catch {
-        /* capture may already be gone */
-      }
-      syncOverlay(); // discard the in-flight move
+      if (dragging) endDrag(event, false);
     };
 
     renderer.domElement.addEventListener('pointerdown', onDown);
@@ -608,13 +517,13 @@ export function MorphViewer({
       renderer.domElement.removeEventListener('pointercancel', onCancel);
       controls.dispose();
       ringGeom.dispose();
-      (ring1.material as THREE.Material).dispose();
-      (ring2.material as THREE.Material).dispose();
+      dotGeom.dispose();
+      matA.dispose();
+      matB.dispose();
       scene.traverse((object) => {
         const mesh = object as THREE.Mesh;
-        const line = object as THREE.Line;
-        if (mesh.isMesh || line.isLine) mesh.geometry?.dispose?.();
-        const material = (object as THREE.Mesh).material;
+        if (mesh.isMesh) mesh.geometry?.dispose?.();
+        const material = mesh.material;
         if (Array.isArray(material)) material.forEach((m) => m.dispose());
         else material?.dispose();
       });
@@ -635,12 +544,12 @@ export function MorphViewer({
     };
   }, [geometry]);
 
-  // Redraw the axis + rings + zone highlight when the trace or ring positions change.
+  // Redraw the rings + zone highlight when a placement changes.
   useEffect(() => {
     syncOverlayRef.current();
-  }, [centerline, radii, station1, station2, ringRadiusM]);
+  }, [centerline, ringA, ringB]);
 
-  // Re-deform the surface when the preview (diameter or committed zone) changes.
+  // Re-deform the surface when the preview (diameter or zone) changes.
   useEffect(() => {
     applyMorphRef.current();
   }, [morphPreview, centerline]);

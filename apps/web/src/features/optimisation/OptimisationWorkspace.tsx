@@ -1,7 +1,6 @@
 import {
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ButtonHTMLAttributes,
   type ReactNode,
@@ -28,14 +27,19 @@ import type { LengthUnit, MeshPatch, Study, StudyMetric, StudySample } from '@/l
 import { useMeshGeometryQuery, useMeshManifestQuery } from '@/features/visualize/useMesh';
 import { useRunLogQuery } from '@/features/solver/useRuns';
 import { ResidualChart } from '@/features/solver/ResidualChart';
-import type { ChannelShape } from '@/lib/api/studies';
 import { LossChart } from './LossChart';
-import { MorphViewer } from './MorphViewer';
+import {
+  FALLOFF_END_FACTOR,
+  FALLOFF_START_FACTOR,
+  MorphViewer,
+  ZONE_BLEND,
+  meanRadius,
+  type RingPlacement,
+} from './MorphViewer';
 import {
   isStudyActive,
   useCreateStudy,
   useDeleteStudy,
-  useExtractCenterline,
   useRunStudy,
   useStopStudy,
   useStudiesQuery,
@@ -59,13 +63,35 @@ const METRICS: { id: StudyMetric; label: string }[] = [
   { id: 'headLoss', label: 'Head loss' },
 ];
 const MAX_SWEEP = 200;
-const SHAPES: { id: ChannelShape; label: string }[] = [
-  { id: 'auto', label: 'Auto' },
-  { id: 'straight', label: 'Straight' },
-  { id: 'ring', label: 'Ring' },
-];
 
 type Vec3 = [number, number, number];
+
+/** Straight-line distance between two raw points (metres). */
+function dist3(a: Vec3, b: Vec3): number {
+  return Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+}
+
+/**
+ * Point at an arc-length fraction of a raw polyline. Used to rebuild a saved study's
+ * two rings from its stored morph (stations 0/1 on the 2-point axis a new study
+ * writes, and any station on the longer axis older studies carry).
+ */
+function pointAtFraction(points: Vec3[], f: number): Vec3 {
+  if (points.length === 0) return [0, 0, 0];
+  if (points.length === 1) return points[0];
+  const cum = [0];
+  for (let i = 1; i < points.length; i += 1) cum.push(cum[i - 1] + dist3(points[i - 1], points[i]));
+  const total = cum[cum.length - 1];
+  if (!(total > 0)) return points[0];
+  const s = Math.max(0, Math.min(1, f)) * total;
+  let i = 0;
+  while (i < cum.length - 2 && cum[i + 1] < s) i += 1;
+  const seg = cum[i + 1] - cum[i] || 1;
+  const t = (s - cum[i]) / seg;
+  const a = points[i];
+  const b = points[i + 1];
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+}
 
 // ---- small on-brand primitives ---------------------------------------------
 
@@ -230,23 +256,17 @@ function PickToggle({
   placed,
   onToggle,
 }: {
-  which: 'patch' | 'c1' | 'c2';
+  which: 'A' | 'B';
   active: boolean;
   placed: boolean;
   onToggle: () => void;
 }) {
-  const dot = which === 'c1' ? 'bg-primary' : which === 'c2' ? 'bg-primary-light' : 'bg-neutral';
-  const n = which === 'c1' ? 'A' : 'B';
-  const label =
-    which === 'patch'
-      ? active
-        ? 'Click a face on the channel'
-        : 'Pick channel'
-      : active
-        ? `Click to place ring ${n}`
-        : placed
-          ? `Move ring ${n}`
-          : `Place ring ${n}`;
+  const dot = which === 'A' ? 'bg-primary' : 'bg-primary-light';
+  const label = active
+    ? `Click the shape to place ring ${which}`
+    : placed
+      ? `Replace ring ${which}`
+      : `Place ring ${which}`;
   return (
     <button
       type="button"
@@ -262,46 +282,6 @@ function PickToggle({
       <Crosshair size={13} strokeWidth={1.75} aria-hidden="true" />
       {label}
     </button>
-  );
-}
-
-/** Position of one ring along the axis (0..1), as a labelled slider + physical readout. */
-function ZoneSlider({
-  label,
-  color,
-  value,
-  display,
-  onChange,
-}: {
-  label: string;
-  color: string;
-  value: number;
-  /** Human-readable position ("3 cm"), or "not set" before the ring is placed. */
-  display: string;
-  onChange: (v: number) => void;
-}) {
-  const id = `opt-zone-${label.replace(/\s+/g, '-').toLowerCase()}`;
-  return (
-    <div className="flex items-center gap-2">
-      <label htmlFor={id} className="flex w-[4.5rem] shrink-0 items-center gap-1.5 text-xs text-text-secondary">
-        <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} aria-hidden="true" />
-        {label}
-      </label>
-      <input
-        id={id}
-        type="range"
-        min={0}
-        max={1}
-        step={0.01}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full"
-        style={{ accentColor: color }}
-      />
-      <span className="w-16 shrink-0 text-right text-xs tabular-nums text-text-secondary">
-        {display}
-      </span>
-    </div>
   );
 }
 
@@ -538,113 +518,64 @@ function SetupFlow({
   switcher: ReactNode;
   onCreated: (studyId: string) => void;
 }) {
-  // Pick a face (-> the wall patch), choose the channel SHAPE, and the axis is fitted
-  // automatically. Then place TWO cross-section circles along it: the zone BETWEEN the
-  // circles is what the sweep grows/shrinks.
-  const [wallPatch, setWallPatch] = useState<string>('');
-  const [shape, setShape] = useState<ChannelShape>('auto');
-  const [pickMode, setPickMode] = useState<'patch' | 'c1' | 'c2' | null>('patch');
-  // Fit result.
-  const [baselineM, setBaselineM] = useState<number | null>(null);
-  const [centerlinePts, setCenterlinePts] = useState<Vec3[] | null>(null);
-  const [centerlineRadii, setCenterlineRadii] = useState<number[] | null>(null);
-  const [fittedShape, setFittedShape] = useState<'straight' | 'ring' | null>(null);
-  const [axisLenM, setAxisLenM] = useState<number | null>(null);
+  // NO fitted axis, no rail. The engineer drops TWO rings ANYWHERE on the shape: each
+  // click is probed across the channel (wall -> opposite wall) to measure that section's
+  // centre + radius right where they clicked. The two measured centres ARE the axis, and
+  // the wall between them is the zone whose diameter the sweep changes.
+  const [ringA, setRingA] = useState<RingPlacement | null>(null);
+  const [ringB, setRingB] = useState<RingPlacement | null>(null);
+  const [pickMode, setPickMode] = useState<'A' | 'B' | null>('A');
   const [previewU, setPreviewU] = useState<number | null>(null);
-  // The two circles bounding the morph zone (arc-length fractions 0..1 along the axis).
-  const [station1, setStation1] = useState<number | null>(null);
-  const [station2, setStation2] = useState<number | null>(null);
   // Sweep + objective.
   const [s, setS] = useState<SetupSweep>(defaultSweep);
   const set = (patch: Partial<SetupSweep>) => setS((prev) => ({ ...prev, ...patch }));
 
-  const extract = useExtractCenterline(projectId);
   const create = useCreateStudy(projectId);
   const run = useRunStudy(projectId);
 
-  const onPick = (_point: Vec3, patch: string | null) => {
-    if (patch) setWallPatch(patch); // clicking a face selects the channel wall
-    setPickMode(null);
-  };
-  const onPickStation = (which: 'c1' | 'c2', fraction: number) => {
-    const f = Number(fraction.toFixed(4));
-    if (which === 'c1') {
-      setStation1(f);
-      // Guided flow: after dropping ring A, the next click drops ring B.
-      setPickMode(station2 === null ? 'c2' : null);
+  const onPlaceRing = (which: 'A' | 'B', placement: RingPlacement) => {
+    if (which === 'A') {
+      setRingA(placement);
+      setPickMode(ringB === null ? 'B' : null); // guide straight to the second ring
     } else {
-      setStation2(f);
+      setRingB(placement);
       setPickMode(null);
     }
   };
 
-  // Auto-fit: once a wall patch is chosen, fit the axis for the current shape
-  // (debounced; re-fits when the shape changes). Retry on error.
-  const traceKey = useMemo(
-    () => (wallPatch ? JSON.stringify([wallPatch, shape]) : null),
-    [wallPatch, shape],
-  );
-  const lastTraced = useRef<string | null>(null);
-  const doTraceRef = useRef<() => void>(() => {});
-  doTraceRef.current = () => {
-    if (!wallPatch) return;
-    extract.mutate(
-      { wallPatch, shape },
-      {
-        onSuccess: (res) => {
-          const mean =
-            res.radii.length > 0 ? res.radii.reduce((acc, r) => acc + r, 0) / res.radii.length : 0;
-          const dM = 2 * mean;
-          const dUnit = dM / UNIT_M[s.unit];
-          setBaselineM(dM);
-          setCenterlinePts(res.centerline.points as Vec3[]);
-          setCenterlineRadii(res.radii);
-          setFittedShape(res.shape);
-          setPreviewU(Number(dUnit.toPrecision(4)));
-          setAxisLenM(res.length);
-          // Pre-fill a sensible range around the measured diameter (only when empty,
-          // so a user-tuned range survives a re-fit).
-          setS((prev) =>
-            prev.minU > 0
-              ? prev
-              : {
-                  ...prev,
-                  minU: Number((dUnit * 0.8).toPrecision(3)),
-                  maxU: Number((dUnit * 1.2).toPrecision(3)),
-                  stepU: Number((dUnit * 0.05).toPrecision(3)),
-                },
-          );
-        },
-        onError: () => {
-          lastTraced.current = null;
-        },
-      },
-    );
-  };
+  // Everything below derives from the two placements. No server fit involved.
+  const bothPlaced = ringA !== null && ringB !== null;
+  const wallPatch = ringA?.patch ?? ringB?.patch ?? '';
+  const meanR = ringA && ringB ? meanRadius(ringA, ringB) : null;
+  const baselineM = meanR !== null ? 2 * meanR : null; // the MEASURED diameter
+  const zoneLenM = ringA && ringB ? dist3(ringA.center, ringB.center) : null;
+  // The two rings must be far enough apart to bound a real band of wall.
+  const zoneValid = meanR !== null && zoneLenM !== null && meanR > 0 && zoneLenM > meanR * 0.05;
+
+  const falloffStartM =
+    meanR !== null ? Number((meanR * FALLOFF_START_FACTOR).toPrecision(6)) : undefined;
+  const falloffEndM =
+    meanR !== null ? Number((meanR * FALLOFF_END_FACTOR).toPrecision(6)) : undefined;
+
+  // Pre-fill the sweep around the measured diameter the first time both rings land (a
+  // user-tuned range survives a later ring move).
   useEffect(() => {
-    if (!traceKey || traceKey === lastTraced.current) return;
-    const timer = setTimeout(() => {
-      lastTraced.current = traceKey;
-      doTraceRef.current();
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [traceKey]);
+    if (baselineM === null || !(baselineM > 0)) return;
+    const dUnit = baselineM / UNIT_M[s.unit];
+    setPreviewU((prev) => (prev === null ? Number(dUnit.toPrecision(4)) : prev));
+    setS((prev) =>
+      prev.minU > 0
+        ? prev
+        : {
+            ...prev,
+            minU: Number((dUnit * 0.8).toPrecision(3)),
+            maxU: Number((dUnit * 1.2).toPrecision(3)),
+            stepU: Number((dUnit * 0.05).toPrecision(3)),
+          },
+    );
+  }, [baselineM]); // eslint-disable-line react-hooks/exhaustive-deps -- prefill once per measure
 
-  // The morph zone = between the two rings, with a small taper (blend) at each so the
-  // grown segment rejoins the untouched mesh smoothly. Order-independent (min/max), and
-  // NOTHING morphs until the user has placed BOTH rings.
-  const stationA = Math.min(station1 ?? 0.25, station2 ?? 0.75);
-  const stationB = Math.max(station1 ?? 0.25, station2 ?? 0.75);
-  const bothPlaced = station1 !== null && station2 !== null;
-  const zoneValid = bothPlaced && stationB - stationA > 0.01;
-  const blend = Math.min(0.12, Math.max(0.02, (stationB - stationA) * 0.3));
-  const stations = { stationA, stationB, blend };
-
-  // Ring positions in the user's unit ("a ring at 3 cm"), not abstract fractions.
-  const fmtAlong = (f: number) =>
-    axisLenM !== null
-      ? `${Number(((f * axisLenM) / UNIT_M[s.unit]).toPrecision(3))} ${s.unit}`
-      : `${Math.round(f * 100)}%`;
+  const fmtLen = (m: number) => `${Number((m / UNIT_M[s.unit]).toPrecision(3))} ${s.unit}`;
 
   const sweepValues = useMemo(() => {
     if (!(s.minU > 0) || !(s.maxU >= s.minU) || !(s.stepU > 0)) return [];
@@ -665,10 +596,9 @@ function SetupFlow({
         ? `${runCount} runs exceeds the ${MAX_SWEEP}-run cap. Widen the step or narrow the range.`
         : undefined;
 
-  const traced = baselineM !== null && centerlinePts !== null;
   const ready =
-    traced &&
     zoneValid &&
+    !!wallPatch &&
     runCount >= 1 &&
     runCount <= MAX_SWEEP &&
     !!s.inletPatch &&
@@ -676,27 +606,18 @@ function SetupFlow({
     s.inletPatch !== s.outletPatch &&
     s.density > 0;
 
-  // Fresh fit with no rings yet: arm the two placement clicks (A, then B via onPickStation).
-  useEffect(() => {
-    if (traced && station1 === null && station2 === null) setPickMode('c1');
-  }, [traced, station1, station2]);
-
-  // Radial confinement derived from the measured wall radius: full scale over the
-  // channel itself, fading to zero a little beyond it, so a complex machine mesh
-  // (a spiral casing) never drags distant parts. Mirrors what the server bakes.
-  const falloffStartM =
-    baselineM !== null ? Number(((baselineM / 2) * 1.3).toPrecision(6)) : undefined;
-  const falloffEndM =
-    baselineM !== null ? Number(((baselineM / 2) * 2.2).toPrecision(6)) : undefined;
-
   const buildConfig = () => ({
     name: s.name.trim() || undefined,
     morph: {
       wallPatch,
-      centerline: { points: centerlinePts as Vec3[] },
-      stationA: stations.stationA,
-      stationB: stations.stationB,
-      blend: stations.blend,
+      // The axis IS the two measured section centres. Stations 0->1 span the whole gap
+      // between the rings; blendWeight tapers to zero AT each ring, so the grown band
+      // rejoins the untouched wall smoothly and nothing beyond a ring ever moves. The
+      // radial falloff keeps distant parts of a complex mesh out of it.
+      centerline: { points: [(ringA as RingPlacement).center, (ringB as RingPlacement).center] },
+      stationA: 0,
+      stationB: 1,
+      blend: ZONE_BLEND,
       baselineDiameterM: baselineM as number,
       falloffStartM,
       falloffEndM,
@@ -725,56 +646,57 @@ function SetupFlow({
   };
   const busy = create.isPending || run.isPending;
 
-  // Stable across unrelated re-renders so the viewer only re-fits/re-morphs when the
-  // geometry or the zone actually changes.
+  // Stable across unrelated re-renders so the viewer only redraws / re-morphs when a
+  // ring placement or the preview diameter actually changes.
   const centerlineObj = useMemo(
-    () => (centerlinePts ? { points: centerlinePts } : null),
-    [centerlinePts],
+    () => (ringA && ringB ? { points: [ringA.center, ringB.center] } : null),
+    [ringA, ringB],
   );
   const morphPreview = useMemo(
     () =>
-      traced && zoneValid && previewU !== null
+      zoneValid && previewU !== null
         ? {
             baselineDiameterM: baselineM as number,
             diameterM: previewU * UNIT_M[s.unit],
-            stationA,
-            stationB,
-            blend,
+            stationA: 0,
+            stationB: 1,
+            blend: ZONE_BLEND,
             falloffStartM,
             falloffEndM,
           }
         : null,
-    [traced, zoneValid, previewU, baselineM, s.unit, stationA, stationB, blend, falloffStartM, falloffEndM],
+    [zoneValid, previewU, baselineM, s.unit, falloffStartM, falloffEndM],
   );
 
   const stage = (
     <>
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
-        <Segmented ariaLabel="Channel shape" options={SHAPES} value={shape} onChange={setShape} />
         <PickToggle
-          which="patch"
-          active={pickMode === 'patch'}
-          placed={!!wallPatch}
-          onToggle={() => setPickMode((m) => (m === 'patch' ? null : 'patch'))}
+          which="A"
+          active={pickMode === 'A'}
+          placed={ringA !== null}
+          onToggle={() => setPickMode((m) => (m === 'A' ? null : 'A'))}
         />
-        {traced && (
-          <>
-            <PickToggle
-              which="c1"
-              active={pickMode === 'c1'}
-              placed={station1 !== null}
-              onToggle={() => setPickMode((m) => (m === 'c1' ? null : 'c1'))}
-            />
-            <PickToggle
-              which="c2"
-              active={pickMode === 'c2'}
-              placed={station2 !== null}
-              onToggle={() => setPickMode((m) => (m === 'c2' ? null : 'c2'))}
-            />
-          </>
+        <PickToggle
+          which="B"
+          active={pickMode === 'B'}
+          placed={ringB !== null}
+          onToggle={() => setPickMode((m) => (m === 'B' ? null : 'B'))}
+        />
+        {bothPlaced && (
+          <SecondaryButton
+            className="px-2.5 py-1.5 text-xs"
+            onClick={() => {
+              setRingA(null);
+              setRingB(null);
+              setPickMode('A');
+            }}
+          >
+            Clear rings
+          </SecondaryButton>
         )}
         <span className="ml-auto text-xs text-text-secondary">
-          Grab a ring to slide it; drag elsewhere to orbit.
+          Click the shape to drop a ring; drag a ring to move it anywhere.
         </span>
       </div>
       <div className="min-h-0 flex-1 p-3">
@@ -782,13 +704,10 @@ function SetupFlow({
           <MorphViewer
             geometry={geometry}
             centerline={centerlineObj}
-            radii={centerlineRadii ?? undefined}
-            station1={station1}
-            station2={station2}
-            ringRadiusM={baselineM ? baselineM / 2 : 0}
+            ringA={ringA}
+            ringB={ringB}
             pickMode={pickMode}
-            onPick={onPick}
-            onPickStation={onPickStation}
+            onPlaceRing={onPlaceRing}
             morphPreview={morphPreview}
           />
         ) : geometryError ? (
@@ -796,84 +715,71 @@ function SetupFlow({
             <AlertTriangle size={20} strokeWidth={1.5} className="text-neutral" aria-hidden="true" />
             <p className="text-sm font-medium text-text">3D preview unavailable</p>
             <p className="max-w-sm text-xs text-text-secondary">
-              The mesh render could not be built on this host. Select the wall patch in the Pipe
-              segment section instead; the axis is still fitted automatically.
+              The mesh render could not be built on this host, so the rings cannot be placed. A
+              diameter study needs the 3D view; try reloading, or rebuild the mesh geometry.
             </p>
           </div>
         ) : (
           <div className="h-full min-h-64 animate-pulse rounded-md border border-border bg-bg" />
         )}
       </div>
-      {traced && (
-        <div className="flex flex-col gap-3 border-t border-border px-4 py-3">
-          <div className="flex flex-col gap-2">
-            <div className="flex items-baseline justify-between">
-              <span className="text-sm font-medium text-text">Morph zone</span>
+      <div className="flex flex-col gap-3 border-t border-border px-4 py-3">
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="text-sm font-medium text-text">Morph zone</span>
+            {zoneValid && (
               <span className="text-xs tabular-nums text-text-secondary">
-                {zoneValid
-                  ? `${fmtAlong(stationA)} to ${fmtAlong(stationB)} (${fmtAlong(stationB - stationA)} long)`
-                  : 'place both rings on the tube'}
+                {fmtLen(zoneLenM as number)} of wall, measured Ø{' '}
+                {fmtDiameter(baselineM as number, s.unit)}
               </span>
-            </div>
-            <ZoneSlider
-              label="Ring A"
-              color="var(--color-primary)"
-              value={station1 ?? 0.25}
-              display={station1 !== null ? fmtAlong(station1) : 'not set'}
-              onChange={setStation1}
-            />
-            <ZoneSlider
-              label="Ring B"
-              color="var(--color-primary-light)"
-              value={station2 ?? 0.75}
-              display={station2 !== null ? fmtAlong(station2) : 'not set'}
-              onChange={setStation2}
-            />
-            {!bothPlaced ? (
-              <p className="text-xs text-text-secondary" aria-live="polite">
-                {station1 === null
-                  ? 'Click the tube where you want ring A.'
-                  : 'Now click where you want ring B; the band between them will grow.'}
-              </p>
-            ) : !zoneValid ? (
-              <p className="text-xs text-danger" role="alert">
-                Move the two rings apart to define a zone to grow.
-              </p>
-            ) : null}
+            )}
           </div>
-          {zoneValid && previewU !== null && s.maxU > s.minU && (
-            <div>
-              <label
-                htmlFor="opt-preview"
-                className="mb-1.5 flex items-center justify-between text-sm font-medium text-text"
-              >
-                <span>Preview diameter</span>
-                <span className="tabular-nums text-primary">
-                  {Number(previewU.toPrecision(4))} {s.unit}
-                </span>
-              </label>
-              <input
-                id="opt-preview"
-                type="range"
-                min={Math.min(s.minU, previewU)}
-                max={Math.max(s.maxU, previewU)}
-                step={(s.maxU - s.minU) / 100 || 0.001}
-                value={previewU}
-                onChange={(e) => setPreviewU(Number(e.target.value))}
-                className="w-full"
-                style={{ accentColor: 'var(--color-primary)' }}
-              />
-            </div>
+          {bothPlaced && !zoneValid ? (
+            <p className="text-xs text-danger" role="alert">
+              The two rings are almost on top of each other; move one further along the shape.
+            </p>
+          ) : (
+            <p className="text-xs text-text-secondary" aria-live="polite">
+              {!ringA
+                ? 'Click the shape wherever you want ring A.'
+                : !ringB
+                  ? 'Now click wherever you want ring B: the wall between the two rings is what changes diameter.'
+                  : 'Drag either ring to move it anywhere on the shape.'}
+            </p>
           )}
         </div>
-      )}
+        {zoneValid && previewU !== null && s.maxU > s.minU && (
+          <div>
+            <label
+              htmlFor="opt-preview"
+              className="mb-1.5 flex items-center justify-between text-sm font-medium text-text"
+            >
+              <span>Preview diameter</span>
+              <span className="tabular-nums text-primary">
+                {Number(previewU.toPrecision(4))} {s.unit}
+              </span>
+            </label>
+            <input
+              id="opt-preview"
+              type="range"
+              min={Math.min(s.minU, previewU)}
+              max={Math.max(s.maxU, previewU)}
+              step={(s.maxU - s.minU) / 100 || 0.001}
+              value={previewU}
+              onChange={(e) => setPreviewU(Number(e.target.value))}
+              className="w-full"
+              style={{ accentColor: 'var(--color-primary)' }}
+            />
+          </div>
+        )}
+      </div>
     </>
   );
 
   const rail = (
     <>
       {switcher}
-      <RailSection title="Pipe segment" icon={Ruler}>
+      <RailSection title="The two rings" icon={Ruler}>
         <div className="flex flex-col gap-2">
           <SummaryRow
             label="Wall patch"
@@ -881,78 +787,42 @@ function SetupFlow({
               wallPatch ? (
                 <span translate="no">{wallPatch}</span>
               ) : (
-                <span className="font-normal text-text-secondary">click a face</span>
+                <span className="font-normal text-text-secondary">from your click</span>
               )
             }
           />
           <SummaryRow
-            label="Fitted shape"
+            label="Ring A"
             value={
-              fittedShape ? (
-                `${fittedShape === 'ring' ? 'Ring (full loop)' : 'Straight'}${shape === 'auto' ? ', auto' : ''}`
+              ringA ? (
+                `Ø ${fmtDiameter(2 * ringA.radius, s.unit)}`
               ) : (
-                <span className="font-normal text-text-secondary">
-                  {SHAPES.find((x) => x.id === shape)?.label}
-                </span>
+                <span className="font-normal text-text-secondary">not placed</span>
               )
             }
           />
-          <div aria-live="polite">
-            {extract.isPending ? (
-              <p className="flex items-center gap-1.5 text-sm text-text-secondary">
-                <Loader2 size={14} className="animate-spin" aria-hidden="true" />
-                Fitting the axis…
-              </p>
-            ) : traced ? (
-              <SummaryRow label="Measured Ø" value={fmtDiameter(baselineM as number, s.unit)} />
-            ) : null}
-          </div>
-          {traced && (
-            <SummaryRow
-              label="Morph zone"
-              value={
-                zoneValid ? (
-                  <span className="tabular-nums">
-                    {fmtAlong(stationA)} to {fmtAlong(stationB)}
-                  </span>
-                ) : (
-                  <span className="font-normal text-text-secondary">place the two rings</span>
-                )
-              }
-            />
-          )}
-          {extract.isError && (
-            <div className="flex flex-col gap-2">
-              <p className="text-xs text-danger" role="alert">
-                {extract.error instanceof Error ? extract.error.message : 'Axis fit failed.'}
-              </p>
-              <SecondaryButton className="px-3 py-1.5" onClick={() => doTraceRef.current()}>
-                Retry fit
-              </SecondaryButton>
-            </div>
+          <SummaryRow
+            label="Ring B"
+            value={
+              ringB ? (
+                `Ø ${fmtDiameter(2 * ringB.radius, s.unit)}`
+              ) : (
+                <span className="font-normal text-text-secondary">not placed</span>
+              )
+            }
+          />
+          {zoneValid && (
+            <>
+              <SummaryRow label="Zone length" value={fmtLen(zoneLenM as number)} />
+              <SummaryRow label="Baseline Ø" value={fmtDiameter(baselineM as number, s.unit)} />
+            </>
           )}
           <p className="text-xs text-text-secondary">
-            Click a face to fit the axis (Auto detects straight vs ring). Then click the tube
-            twice, where YOU want: the first click drops ring A, the second ring B. The highlighted
-            band between them is what the sweep grows. Drag a ring or use the sliders to adjust.
+            Click the shape wherever you want each ring: the channel is measured across at that
+            exact spot, so there is no axis to follow and nothing snaps. The highlighted wall
+            between the two rings is what the sweep grows. Drag a ring to move it anywhere.
           </p>
         </div>
-        <details className="mt-3 text-xs">
-          <summary className="cursor-pointer rounded-sm text-text-secondary transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2">
-            Choose the wall patch from a list
-          </summary>
-          <div className="mt-2">
-            <Field label="Wall patch" htmlFor="opt-wall">
-              <PatchSelect
-                id="opt-wall"
-                value={wallPatch}
-                onChange={setWallPatch}
-                patches={patches}
-                placeholder="Select the channel wall…"
-              />
-            </Field>
-          </div>
-        </details>
       </RailSection>
 
       <RailSection
@@ -1054,15 +924,11 @@ function SetupFlow({
               : 'Could not create the study.'}
           </p>
         )}
-        {!traced ? (
+        {!zoneValid && (
           <p className="text-xs text-text-secondary">
-            Click a face on the channel to fit its axis, then place the two rings.
+            Click the shape to place ring A and ring B; the wall between them is what grows.
           </p>
-        ) : !zoneValid ? (
-          <p className="text-xs text-text-secondary">
-            Click the tube to place ring A and ring B; the band between them is what grows.
-          </p>
-        ) : null}
+        )}
         <PrimaryButton onClick={() => onLaunch(true)} disabled={!ready || busy}>
           {busy ? (
             <Loader2 size={15} className="animate-spin" aria-hidden="true" />
@@ -1134,6 +1000,19 @@ function StudyStage({
   geometry: ArrayBuffer | null;
   banner?: ReactNode;
 }) {
+  const m = study.morph;
+  // Rebuild the saved rings for a read-only view. Keyed on the study (its morph is
+  // immutable once created) so a 2s status poll never re-runs the viewer's heavy work.
+  const view = useMemo(() => {
+    const pts = m.centerline.points as Vec3[];
+    const radius = m.baselineDiameterM / 2;
+    return {
+      centerline: m.centerline,
+      ringA: { center: pointAtFraction(pts, m.stationA), radius, patch: m.wallPatch },
+      ringB: { center: pointAtFraction(pts, m.stationB), radius, patch: m.wallPatch },
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- morph is fixed per study
+  }, [study.id, m.stationA, m.stationB, m.baselineDiameterM, m.wallPatch]);
   return (
     <>
       {banner}
@@ -1141,13 +1020,11 @@ function StudyStage({
         {geometry ? (
           <MorphViewer
             geometry={geometry}
-            centerline={study.morph.centerline}
-            station1={study.morph.stationA}
-            station2={study.morph.stationB}
-            ringRadiusM={study.morph.baselineDiameterM / 2}
+            centerline={view.centerline}
+            ringA={view.ringA}
+            ringB={view.ringB}
             pickMode={null}
-            onPick={() => {}}
-            onPickStation={() => {}}
+            onPlaceRing={() => {}}
             morphPreview={null}
           />
         ) : (
