@@ -33,8 +33,17 @@ const FOAM_ERROR_RE = /FOAM FATAL|Floating point exception|#0\s+Foam::error/i;
 export interface ParsedResiduals {
   /** One record per iteration, in order. */
   samples: ResidualSample[];
-  /** A residual went to nan/inf (the solution blew up). */
+  /**
+   * The solution blew up: the LAST iteration in the log had a nan/inf residual.
+   * Judged on the run's final state, not its history, because a blow-up never
+   * recovers (nan propagates) while a one-off non-finite residual can appear on an
+   * early iteration and clear - typically the 0/0 residual normalisation of a field
+   * that starts uniform. A sticky "saw nan once" flag condemned runs that went on to
+   * finish perfectly well; see `nonFiniteSeen` for that weaker signal.
+   */
   diverged: boolean;
+  /** A nan/inf residual appeared at SOME point (even if the run recovered). */
+  nonFiniteSeen: boolean;
   /** The solver printed its steady-convergence banner. */
   converged: boolean;
   /** A FOAM fatal error / floating-point exception appeared. */
@@ -48,21 +57,27 @@ export function parseResiduals(log: string): ParsedResiduals {
   const lines = log.split(/\r?\n/);
   const samples: ResidualSample[] = [];
   let current: ResidualSample | null = null;
-  let diverged = false;
   let converged = false;
   let foamError = false;
   let lastTime: number | null = null;
+  let nonFiniteSeen = false; // a nan/inf residual anywhere in the log
+  let currentNonFinite = false; // ... in the iteration being read right now
+  let lastNonFinite = false; // ... in the last iteration the log completed
 
   const flush = (): void => {
-    if (current && Object.keys(current.values).length > 0) {
+    if (!current) return;
+    if (Object.keys(current.values).length > 0) {
       samples.push(current);
     }
+    // Close this iteration out: only its verdict survives as the run's final state.
+    lastNonFinite = currentNonFinite;
   };
 
   for (const line of lines) {
     const timeMatch = TIME_RE.exec(line);
     if (timeMatch) {
       flush();
+      currentNonFinite = false; // a fresh iteration starts clean
       const time = Number(timeMatch[1]);
       const index = Number.isFinite(time) ? time : samples.length + 1;
       current = { time: index, values: {} };
@@ -77,8 +92,11 @@ export function parseResiduals(log: string): ParsedResiduals {
     if (fieldMatch && current) {
       const raw = fieldMatch[2];
       if (NONFINITE_RESIDUAL_RE.test(raw)) {
-        // nan / inf — the run has genuinely diverged. Don't record the point.
-        diverged = true;
+        // nan / inf. Only a blow-up that is STILL non-finite on the last iteration
+        // counts as divergence, so note it against this iteration and move on.
+        // Don't record the point (there is no finite value to chart).
+        nonFiniteSeen = true;
+        currentNonFinite = true;
         continue;
       }
       // Strip a leading "(" so a vector residual like "(0.012 0.008 0.005)"
@@ -95,7 +113,7 @@ export function parseResiduals(log: string): ParsedResiduals {
   }
   flush();
 
-  return { samples, diverged, converged, foamError, lastTime };
+  return { samples, diverged: lastNonFinite, converged, foamError, nonFiniteSeen, lastTime };
 }
 
 /**

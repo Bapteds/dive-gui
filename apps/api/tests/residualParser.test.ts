@@ -58,6 +58,39 @@ describe('parseResiduals', () => {
     }
   });
 
+  it('does NOT diverge when an early non-finite residual clears and the run finishes', () => {
+    // A field that starts uniform can print a 0/0 normalised residual on the first
+    // iteration and then read finite forever after. That run finished fine: a sticky
+    // "saw nan once" flag is what reported a healthy run as "diverged".
+    const log = [
+      'Time = 1',
+      'GAMG:  Solving for p, Initial residual = nan, Final residual = nan, No Iterations 0',
+      'Time = 2',
+      'GAMG:  Solving for p, Initial residual = 0.02, Final residual = 1e-7, No Iterations 4',
+      'Time = 3',
+      'GAMG:  Solving for p, Initial residual = 0.001, Final residual = 1e-8, No Iterations 3',
+      'End',
+    ].join('\n');
+    const parsed = parseResiduals(log);
+    expect(parsed.diverged).toBe(false);
+    expect(parsed.nonFiniteSeen).toBe(true); // still reported, just not fatal
+    expect(parsed.samples).toHaveLength(2); // the nan iteration has nothing to chart
+  });
+
+  it('DOES diverge when the residuals go non-finite and never recover', () => {
+    const log = [
+      'Time = 1',
+      'GAMG:  Solving for p, Initial residual = 0.5, Final residual = 1e-5, No Iterations 2',
+      'Time = 2',
+      'GAMG:  Solving for p, Initial residual = nan, Final residual = nan, No Iterations 0',
+      'Time = 3',
+      'GAMG:  Solving for p, Initial residual = nan, Final residual = nan, No Iterations 0',
+    ].join('\n');
+    const parsed = parseResiduals(log);
+    expect(parsed.diverged).toBe(true);
+    expect(parsed.nonFiniteSeen).toBe(true);
+  });
+
   it('does NOT diverge when a run reaches its iteration cap with finite residuals', () => {
     // A steady run that hits endTime prints normal residuals then just stops —
     // no convergence banner, no nan/inf. It must read as finite, not diverged.
