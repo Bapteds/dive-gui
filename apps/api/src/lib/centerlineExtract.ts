@@ -5,13 +5,13 @@
 // AppError on failure — the UI needs the centerline to build a morph, so there is no
 // "degraded step" to report.
 //
-//   MESH_PYTHON_BIN extractCenterline.py <caseDir> <wallPatch> <out.json> \
-//       <ax ay az> [<vx vy vz> ...] <bx by bz>
-//     -> { centerline: [[x,y,z], ...], radii: [...], length }
+//   MESH_PYTHON_BIN extractCenterline.py <caseDir> <wallPatch> <shape> <out.json> \
+//       [<ax ay az> <bx by bz>]
+//     -> { centerline: [[x,y,z], ...], radii: [...], length, shape, closed }
 //
-// Two or more ORDERED waypoints: the wall path is walked leg by leg, so via
-// points between A and B disambiguate the route (the far side of a closed ring
-// for a full tour, or which way around a spiral).
+// The axis is obtained by fitting a parametric SHAPE (auto | straight | ring) to
+// the wall cloud - robust, needs no clicked points. Optional A/B hint points
+// reposition/clip the axis (straight: their region; ring: the arc).
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -20,6 +20,9 @@ import { env } from '../config/env';
 import { AppError } from './AppError';
 import { runCommand } from './commandRunner';
 
+/** Channel shape the axis is fitted as. */
+export type ChannelShape = 'auto' | 'straight' | 'ring';
+
 export interface CenterlineResult {
   /** The extracted axis polyline (raw polyMesh coords, metres). */
   centerline: Centerline;
@@ -27,6 +30,10 @@ export interface CenterlineResult {
   radii: number[];
   /** Total polyline arc-length (metres). */
   length: number;
+  /** The shape actually fitted (auto resolves to straight or ring). */
+  shape: 'straight' | 'ring';
+  /** True when the axis is a closed loop (a ring): the morph spans the whole loop. */
+  closed: boolean;
 }
 
 /** Does an absolute path exist on disk? */
@@ -49,40 +56,33 @@ function centerlineScript(): string {
 }
 
 /**
- * Run extractCenterline.py on `caseDir`'s wall patch through the ORDERED
- * `waypoints` (first = A, last = B, any between are via points), returning the
- * centerline polyline + radius profile. Throws AppError on any failure (missing
- * script/interpreter, patch not found, degenerate input).
+ * Fit a centerline to `caseDir`'s wall patch as the given `shape`, returning the
+ * axis polyline + radius profile. Optional `a`/`b` hint points reposition/clip it.
+ * Throws AppError on any failure (missing script/interpreter, patch not found,
+ * degenerate input).
  */
 export async function extractCenterline(
   caseDir: string,
   wallPatch: string,
-  waypoints: readonly (readonly [number, number, number])[],
+  shape: ChannelShape,
+  a?: readonly [number, number, number],
+  b?: readonly [number, number, number],
 ): Promise<CenterlineResult> {
-  if (waypoints.length < 2) {
-    throw new AppError(422, 'STUDY_MORPH_FAILED', 'A centerline needs at least two waypoints');
-  }
   const scriptPath = centerlineScript();
   if (!(await pathExists(scriptPath))) {
-    throw new AppError(
-      500,
-      'SCRIPT_MISSING',
-      `extractCenterline.py not found at ${scriptPath}`,
-    );
+    throw new AppError(500, 'SCRIPT_MISSING', `extractCenterline.py not found at ${scriptPath}`);
   }
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dive-centerline-'));
   const outFile = path.join(tmpDir, 'centerline.json');
+  const hint =
+    a && b
+      ? [String(a[0]), String(a[1]), String(a[2]), String(b[0]), String(b[1]), String(b[2])]
+      : [];
   try {
     const result = await runCommand({
       command: env.MESH_PYTHON_BIN,
-      args: [
-        scriptPath,
-        caseDir,
-        wallPatch,
-        outFile,
-        ...waypoints.flatMap((w) => [String(w[0]), String(w[1]), String(w[2])]),
-      ],
+      args: [scriptPath, caseDir, wallPatch, shape, outFile, ...hint],
       cwd: caseDir,
       env: process.env,
       timeoutMs: env.MESH_BUILD_TIMEOUT_MS,
@@ -104,18 +104,22 @@ export async function extractCenterline(
       centerline?: [number, number, number][];
       radii?: number[];
       length?: number;
+      shape?: 'straight' | 'ring';
+      closed?: boolean;
     };
     if (!parsed.centerline || parsed.centerline.length < 2) {
       throw new AppError(
         422,
         'STUDY_MORPH_FAILED',
-        'Centerline extraction returned too few points (pick a clearer wall patch or endpoints)',
+        'Centerline fit returned too few points (try a clearer wall patch or a different shape)',
       );
     }
     return {
       centerline: { points: parsed.centerline },
       radii: parsed.radii ?? [],
       length: parsed.length ?? 0,
+      shape: parsed.shape === 'ring' ? 'ring' : 'straight',
+      closed: !!parsed.closed,
     };
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);

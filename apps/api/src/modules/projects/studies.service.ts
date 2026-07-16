@@ -193,12 +193,14 @@ export async function extractStudyCenterline(
   if (!(await caseFileExists(projectId, 'constant/polyMesh/points'))) {
     throw new AppError(409, 'NO_MESH', 'The project has no mesh to trace a centerline from');
   }
-  // Ordered route: A, then the via points, then B (vias disambiguate closed loops).
-  return extractCenterline(caseDirAbsolute(projectId), input.wallPatch, [
+  // Fit the chosen shape to the wall patch; A/B (if given) reposition/clip the axis.
+  return extractCenterline(
+    caseDirAbsolute(projectId),
+    input.wallPatch,
+    input.shape,
     input.endpointA,
-    ...(input.vias ?? []),
     input.endpointB,
-  ]);
+  );
 }
 
 // ---- Sweep orchestration ----------------------------------------------------
