@@ -265,16 +265,19 @@ function PickToggle({
   );
 }
 
-/** Position of one cross-section circle along the axis (0..1), as a labelled slider. */
+/** Position of one ring along the axis (0..1), as a labelled slider + physical readout. */
 function ZoneSlider({
   label,
   color,
   value,
+  display,
   onChange,
 }: {
   label: string;
   color: string;
   value: number;
+  /** Human-readable position ("3 cm"), or "not set" before the ring is placed. */
+  display: string;
   onChange: (v: number) => void;
 }) {
   const id = `opt-zone-${label.replace(/\s+/g, '-').toLowerCase()}`;
@@ -295,8 +298,8 @@ function ZoneSlider({
         className="w-full"
         style={{ accentColor: color }}
       />
-      <span className="w-9 shrink-0 text-right text-xs tabular-nums text-text-secondary">
-        {Math.round(value * 100)}%
+      <span className="w-16 shrink-0 text-right text-xs tabular-nums text-text-secondary">
+        {display}
       </span>
     </div>
   );
@@ -546,6 +549,7 @@ function SetupFlow({
   const [centerlinePts, setCenterlinePts] = useState<Vec3[] | null>(null);
   const [centerlineRadii, setCenterlineRadii] = useState<number[] | null>(null);
   const [fittedShape, setFittedShape] = useState<'straight' | 'ring' | null>(null);
+  const [axisLenM, setAxisLenM] = useState<number | null>(null);
   const [previewU, setPreviewU] = useState<number | null>(null);
   // The two circles bounding the morph zone (arc-length fractions 0..1 along the axis).
   const [station1, setStation1] = useState<number | null>(null);
@@ -564,9 +568,14 @@ function SetupFlow({
   };
   const onPickStation = (which: 'c1' | 'c2', fraction: number) => {
     const f = Number(fraction.toFixed(4));
-    if (which === 'c1') setStation1(f);
-    else setStation2(f);
-    setPickMode(null);
+    if (which === 'c1') {
+      setStation1(f);
+      // Guided flow: after dropping ring A, the next click drops ring B.
+      setPickMode(station2 === null ? 'c2' : null);
+    } else {
+      setStation2(f);
+      setPickMode(null);
+    }
   };
 
   // Auto-fit: once a wall patch is chosen, fit the axis for the current shape
@@ -592,9 +601,7 @@ function SetupFlow({
           setCenterlineRadii(res.radii);
           setFittedShape(res.shape);
           setPreviewU(Number(dUnit.toPrecision(4)));
-          // Seed the two circles the first time (a sensible zone the user then moves).
-          setStation1((prev) => (prev === null ? 0.25 : prev));
-          setStation2((prev) => (prev === null ? 0.75 : prev));
+          setAxisLenM(res.length);
           // Pre-fill a sensible range around the measured diameter (only when empty,
           // so a user-tuned range survives a re-fit).
           setS((prev) =>
@@ -623,13 +630,21 @@ function SetupFlow({
     return () => clearTimeout(timer);
   }, [traceKey]);
 
-  // The morph zone = between the two circles, with a small taper (blend) at each so the
-  // grown segment rejoins the untouched mesh smoothly. Order-independent (min/max).
+  // The morph zone = between the two rings, with a small taper (blend) at each so the
+  // grown segment rejoins the untouched mesh smoothly. Order-independent (min/max), and
+  // NOTHING morphs until the user has placed BOTH rings.
   const stationA = Math.min(station1 ?? 0.25, station2 ?? 0.75);
   const stationB = Math.max(station1 ?? 0.25, station2 ?? 0.75);
-  const zoneValid = stationB - stationA > 0.01;
+  const bothPlaced = station1 !== null && station2 !== null;
+  const zoneValid = bothPlaced && stationB - stationA > 0.01;
   const blend = Math.min(0.12, Math.max(0.02, (stationB - stationA) * 0.3));
   const stations = { stationA, stationB, blend };
+
+  // Ring positions in the user's unit ("a ring at 3 cm"), not abstract fractions.
+  const fmtAlong = (f: number) =>
+    axisLenM !== null
+      ? `${Number(((f * axisLenM) / UNIT_M[s.unit]).toPrecision(3))} ${s.unit}`
+      : `${Math.round(f * 100)}%`;
 
   const sweepValues = useMemo(() => {
     if (!(s.minU > 0) || !(s.maxU >= s.minU) || !(s.stepU > 0)) return [];
@@ -660,6 +675,11 @@ function SetupFlow({
     !!s.outletPatch &&
     s.inletPatch !== s.outletPatch &&
     s.density > 0;
+
+  // Fresh fit with no rings yet: arm the two placement clicks (A, then B via onPickStation).
+  useEffect(() => {
+    if (traced && station1 === null && station2 === null) setPickMode('c1');
+  }, [traced, station1, station2]);
 
   // Radial confinement derived from the measured wall radius: full scale over the
   // channel itself, fading to zero a little beyond it, so a complex machine mesh
@@ -713,7 +733,7 @@ function SetupFlow({
   );
   const morphPreview = useMemo(
     () =>
-      traced && previewU !== null
+      traced && zoneValid && previewU !== null
         ? {
             baselineDiameterM: baselineM as number,
             diameterM: previewU * UNIT_M[s.unit],
@@ -724,7 +744,7 @@ function SetupFlow({
             falloffEndM,
           }
         : null,
-    [traced, previewU, baselineM, s.unit, stationA, stationB, blend, falloffStartM, falloffEndM],
+    [traced, zoneValid, previewU, baselineM, s.unit, stationA, stationB, blend, falloffStartM, falloffEndM],
   );
 
   const stage = (
@@ -790,28 +810,38 @@ function SetupFlow({
             <div className="flex items-baseline justify-between">
               <span className="text-sm font-medium text-text">Morph zone</span>
               <span className="text-xs tabular-nums text-text-secondary">
-                between the rings, {Math.round(stationA * 100)} to {Math.round(stationB * 100)}%
+                {zoneValid
+                  ? `${fmtAlong(stationA)} to ${fmtAlong(stationB)} (${fmtAlong(stationB - stationA)} long)`
+                  : 'place both rings on the tube'}
               </span>
             </div>
             <ZoneSlider
               label="Ring A"
               color="var(--color-primary)"
               value={station1 ?? 0.25}
+              display={station1 !== null ? fmtAlong(station1) : 'not set'}
               onChange={setStation1}
             />
             <ZoneSlider
               label="Ring B"
               color="var(--color-primary-light)"
               value={station2 ?? 0.75}
+              display={station2 !== null ? fmtAlong(station2) : 'not set'}
               onChange={setStation2}
             />
-            {!zoneValid && (
+            {!bothPlaced ? (
+              <p className="text-xs text-text-secondary" aria-live="polite">
+                {station1 === null
+                  ? 'Click the tube where you want ring A.'
+                  : 'Now click where you want ring B; the band between them will grow.'}
+              </p>
+            ) : !zoneValid ? (
               <p className="text-xs text-danger" role="alert">
                 Move the two rings apart to define a zone to grow.
               </p>
-            )}
+            ) : null}
           </div>
-          {previewU !== null && s.maxU > s.minU && (
+          {zoneValid && previewU !== null && s.maxU > s.minU && (
             <div>
               <label
                 htmlFor="opt-preview"
@@ -881,9 +911,13 @@ function SetupFlow({
             <SummaryRow
               label="Morph zone"
               value={
-                <span className="tabular-nums">
-                  {Math.round(stationA * 100)} to {Math.round(stationB * 100)}% of the axis
-                </span>
+                zoneValid ? (
+                  <span className="tabular-nums">
+                    {fmtAlong(stationA)} to {fmtAlong(stationB)}
+                  </span>
+                ) : (
+                  <span className="font-normal text-text-secondary">place the two rings</span>
+                )
               }
             />
           )}
@@ -898,9 +932,9 @@ function SetupFlow({
             </div>
           )}
           <p className="text-xs text-text-secondary">
-            Click a face to fit the axis (Auto detects straight vs ring). Two rings drop around the
-            tube: grab a ring on the 3D to slide it, or use the Ring A/B sliders. The highlighted
-            band between the rings is what the sweep grows.
+            Click a face to fit the axis (Auto detects straight vs ring). Then click the tube
+            twice, where YOU want: the first click drops ring A, the second ring B. The highlighted
+            band between them is what the sweep grows. Drag a ring or use the sliders to adjust.
           </p>
         </div>
         <details className="mt-3 text-xs">
@@ -1026,7 +1060,7 @@ function SetupFlow({
           </p>
         ) : !zoneValid ? (
           <p className="text-xs text-text-secondary">
-            Move the two rings apart to set the zone that grows.
+            Click the tube to place ring A and ring B; the band between them is what grows.
           </p>
         ) : null}
         <PrimaryButton onClick={() => onLaunch(true)} disabled={!ready || busy}>
