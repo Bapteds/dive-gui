@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { blendWeight, morphPoint, prepareCenterline, type Centerline } from '@dive/shared';
 import { bakedRootTransform } from '@/features/assemble/placement';
+import { axisEndTangents, buildAxis, dist3, type Tilt, type Vec3 } from './ringAxis';
 
 /**
  * MorphViewer - the 3D stage of the Optimisation setup.
@@ -22,8 +23,6 @@ import { bakedRootTransform } from '@/features/assemble/placement';
  * probed centres and the rings all live in raw coords, and applying the SHARED
  * morphPoint to the local vertices previews exactly what the server bakes.
  */
-
-type Vec3 = [number, number, number];
 
 /** One ring the user dropped on the shape: the section measured at that exact spot. */
 export interface RingPlacement {
@@ -82,15 +81,20 @@ export function MorphViewer({
   centerline,
   ringA,
   ringB,
+  tiltA,
+  tiltB,
   pickMode,
   onPlaceRing,
   morphPreview,
 }: {
   geometry: ArrayBuffer;
-  /** The 2-point axis [ringA.center, ringB.center], or null until both are placed. */
+  /** The axis between the two rings (straight, or Hermite-curved once tilted). */
   centerline: Centerline | null;
   ringA: RingPlacement | null;
   ringB: RingPlacement | null;
+  /** Each ring's cut-plane tilt (degrees off the chord). */
+  tiltA: Tilt;
+  tiltB: Tilt;
   /** Which ring the next click drops (null = clicks just orbit). */
   pickMode: 'A' | 'B' | null;
   /** Fired when a ring is dropped or dragged to a new spot on the shape. */
@@ -105,12 +109,16 @@ export function MorphViewer({
   const centerlineRef = useRef<Centerline | null>(centerline);
   const ringARef = useRef<RingPlacement | null>(ringA);
   const ringBRef = useRef<RingPlacement | null>(ringB);
+  const tiltARef = useRef<Tilt>(tiltA);
+  const tiltBRef = useRef<Tilt>(tiltB);
   const previewRef = useRef<MorphPreview | null>(morphPreview);
   onPlaceRingRef.current = onPlaceRing;
   pickModeRef.current = pickMode;
   centerlineRef.current = centerline;
   ringARef.current = ringA;
   ringBRef.current = ringB;
+  tiltARef.current = tiltA;
+  tiltBRef.current = tiltB;
   previewRef.current = morphPreview;
 
   const resetViewRef = useRef<() => void>(() => {});
@@ -235,63 +243,94 @@ export function MorphViewer({
       };
     };
 
-    /** Draw the two rings from the given placements (hoops once the axis is known). */
-    const drawRings = (a: RingPlacement | null, b: RingPlacement | null) => {
-      const axis = a && b ? toVector(b.center).sub(toVector(a.center)) : null;
-      const haveAxis = !!axis && axis.lengthSq() > 0;
-      if (haveAxis) axis!.normalize();
-      const place = (ring: RingPlacement | null, hoop: THREE.Mesh, dot: THREE.Mesh) => {
+    /**
+     * Draw the two rings. Each hoop sits in its own CUT PLANE, whose normal is the axis
+     * tangent at that end - read straight off the axis, so a ring can never disagree
+     * with the zone it bounds (and a saved study's baked-in tilt renders correctly).
+     */
+    const drawRings = (a: RingPlacement | null, b: RingPlacement | null, axis: Vec3[] | null) => {
+      const normals =
+        a && b && axis && dist3(a.center, b.center) > 0 ? axisEndTangents(axis) : null;
+      const place = (
+        ring: RingPlacement | null,
+        normal: Vec3 | null,
+        hoop: THREE.Mesh,
+        dot: THREE.Mesh,
+      ) => {
         if (!ring) {
           hoop.visible = false;
           dot.visible = false;
           return;
         }
-        if (haveAxis) {
+        if (normal) {
           hoop.position.copy(toVector(ring.center));
-          hoop.quaternion.setFromUnitVectors(AXIS_Z, axis!);
+          hoop.quaternion.setFromUnitVectors(AXIS_Z, toVector(normal));
           hoop.scale.setScalar(ring.radius * RING_SCALE);
           hoop.visible = true;
           dot.visible = false;
         } else {
-          // Only one ring so far: its section plane is undetermined, show a marker.
+          // Only one ring so far: its cut plane is undetermined, show a marker.
           dot.position.copy(toVector(ring.center));
           dot.scale.setScalar(Math.max(ring.radius * 0.22, modelRadius * 1e-3));
           dot.visible = true;
           hoop.visible = false;
         }
       };
-      place(a, hoopA, dotA);
-      place(b, hoopB, dotB);
+      place(a, normals?.nA ?? null, hoopA, dotA);
+      place(b, normals?.nB ?? null, hoopB, dotB);
     };
 
     /**
-     * Tint exactly what the morph will move: blendWeight > 0 along the 2-point axis
-     * AND inside the radial falloff. Cheap (one segment), so it tracks a live drag.
+     * Tint exactly what the morph will move: blendWeight > 0 along the axis AND inside
+     * the radial falloff, projecting onto the FULL polyline (one segment while
+     * untilted, the Hermite curve once tilted) exactly like morphPoint does.
      */
     const recolorZone = (cl: Centerline | null, a: RingPlacement | null, b: RingPlacement | null) => {
-      const active = !!cl && cl.points.length >= 2 && !!a && !!b;
-      const falloffEnd = active ? meanRadius(a!, b!) * FALLOFF_END_FACTOR : 0;
-      const A = active ? toVector(cl!.points[0] as Vec3) : null;
-      const B = active ? toVector(cl!.points[1] as Vec3) : null;
-      const ab = active ? B!.clone().sub(A!) : null;
-      const len2 = ab ? ab.dot(ab) : 0;
-      const p = new THREE.Vector3();
-      const foot = new THREE.Vector3();
+      const pts = (cl?.points ?? null) as Vec3[] | null;
+      const active = !!pts && pts.length >= 2 && !!a && !!b;
+      const falloffEnd = active ? meanRadius(a, b) * FALLOFF_END_FACTOR : 0;
+      const cum: number[] = [0];
+      let total = 0;
+      if (active) {
+        for (let i = 1; i < pts.length; i += 1) {
+          total += dist3(pts[i - 1], pts[i]);
+          cum.push(total);
+        }
+      }
       tracked.forEach((t) => {
         const attr = t.mesh.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
         if (!attr) return;
         const arr = attr.array as Float32Array;
-        const n = arr.length / 3;
-        for (let i = 0; i < n; i += 1) {
+        const count = arr.length / 3;
+        for (let i = 0; i < count; i += 1) {
           let inZone = false;
-          if (active && len2 > 0) {
-            p.set(t.positions[3 * i], t.positions[3 * i + 1], t.positions[3 * i + 2]);
-            let s = p.clone().sub(A!).dot(ab!) / len2;
-            s = Math.max(0, Math.min(1, s));
-            if (blendWeight(s, 0, 1, ZONE_BLEND) > 0) {
-              foot.copy(A!).addScaledVector(ab!, s);
-              inZone = foot.distanceTo(p) <= falloffEnd;
+          if (active && total > 0) {
+            const px = t.positions[3 * i];
+            const py = t.positions[3 * i + 1];
+            const pz = t.positions[3 * i + 2];
+            let bestD2 = Infinity;
+            let bestS = 0;
+            for (let k = 1; k < pts.length; k += 1) {
+              const ax = pts[k - 1][0];
+              const ay = pts[k - 1][1];
+              const az = pts[k - 1][2];
+              const dx = pts[k][0] - ax;
+              const dy = pts[k][1] - ay;
+              const dz = pts[k][2] - az;
+              const seg2 = dx * dx + dy * dy + dz * dz;
+              let u = seg2 > 0 ? ((px - ax) * dx + (py - ay) * dy + (pz - az) * dz) / seg2 : 0;
+              u = u < 0 ? 0 : u > 1 ? 1 : u;
+              const ex = px - (ax + u * dx);
+              const ey = py - (ay + u * dy);
+              const ez = pz - (az + u * dz);
+              const d2 = ex * ex + ey * ey + ez * ez;
+              if (d2 < bestD2) {
+                bestD2 = d2;
+                bestS = cum[k - 1] + u * Math.sqrt(seg2);
+              }
             }
+            inZone =
+              blendWeight(bestS / total, 0, 1, ZONE_BLEND) > 0 && Math.sqrt(bestD2) <= falloffEnd;
           }
           const c = inZone ? accent : neutral;
           arr[3 * i] = c.r;
@@ -303,7 +342,11 @@ export function MorphViewer({
     };
 
     const syncOverlay = () => {
-      drawRings(ringARef.current, ringBRef.current);
+      drawRings(
+        ringARef.current,
+        ringBRef.current,
+        (centerlineRef.current?.points as Vec3[] | undefined) ?? null,
+      );
       recolorZone(centerlineRef.current, ringARef.current, ringBRef.current);
       requestRender();
     };
@@ -447,9 +490,10 @@ export function MorphViewer({
       dragPlacement = section;
       const a = dragging === 'A' ? section : ringARef.current;
       const b = dragging === 'B' ? section : ringBRef.current;
-      drawRings(a, b);
-      const cl = a && b ? { points: [a.center, b.center] } : null;
-      recolorZone(cl, a, b);
+      // Same builder the workspace uses for the config: the live preview cannot drift.
+      const axis = a && b ? buildAxis(a.center, b.center, tiltARef.current, tiltBRef.current) : null;
+      drawRings(a, b, axis);
+      recolorZone(axis ? { points: axis } : null, a, b);
       requestRender();
     };
 
@@ -544,10 +588,10 @@ export function MorphViewer({
     };
   }, [geometry]);
 
-  // Redraw the rings + zone highlight when a placement changes.
+  // Redraw the rings + zone highlight when a placement or a tilt changes.
   useEffect(() => {
     syncOverlayRef.current();
-  }, [centerline, ringA, ringB]);
+  }, [centerline, ringA, ringB, tiltA, tiltB]);
 
   // Re-deform the surface when the preview (diameter or zone) changes.
   useEffect(() => {

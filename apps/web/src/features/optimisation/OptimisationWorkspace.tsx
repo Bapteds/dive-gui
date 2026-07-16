@@ -37,6 +37,15 @@ import {
   type RingPlacement,
 } from './MorphViewer';
 import {
+  NO_TILT,
+  TILT_LIMIT,
+  axisLength,
+  buildAxis,
+  dist3,
+  type Tilt,
+  type Vec3,
+} from './ringAxis';
+import {
   isStudyActive,
   useCreateStudy,
   useDeleteStudy,
@@ -63,13 +72,6 @@ const METRICS: { id: StudyMetric; label: string }[] = [
   { id: 'headLoss', label: 'Head loss' },
 ];
 const MAX_SWEEP = 200;
-
-type Vec3 = [number, number, number];
-
-/** Straight-line distance between two raw points (metres). */
-function dist3(a: Vec3, b: Vec3): number {
-  return Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
-}
 
 /**
  * Point at an arc-length fraction of a raw polyline. Used to rebuild a saved study's
@@ -282,6 +284,53 @@ function PickToggle({
       <Crosshair size={13} strokeWidth={1.75} aria-hidden="true" />
       {label}
     </button>
+  );
+}
+
+/** The X/Y tilt of one ring's cut plane, in degrees. */
+function TiltRow({
+  label,
+  color,
+  tilt,
+  onChange,
+}: {
+  label: string;
+  color: string;
+  tilt: Tilt;
+  onChange: (t: Tilt) => void;
+}) {
+  const slug = label.toLowerCase().replace(/\s+/g, '-');
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="flex items-center gap-1.5 text-xs font-medium text-text">
+        <span className="size-2 rounded-full" style={{ backgroundColor: color }} aria-hidden="true" />
+        {label}
+      </span>
+      {(['x', 'y'] as const).map((axis) => (
+        <div key={axis} className="flex items-center gap-2">
+          <label
+            htmlFor={`tilt-${slug}-${axis}`}
+            className="w-3 shrink-0 text-xs uppercase text-text-secondary"
+          >
+            {axis}
+          </label>
+          <input
+            id={`tilt-${slug}-${axis}`}
+            type="range"
+            min={-TILT_LIMIT}
+            max={TILT_LIMIT}
+            step={1}
+            value={tilt[axis]}
+            onChange={(e) => onChange({ ...tilt, [axis]: Number(e.target.value) })}
+            className="w-full"
+            style={{ accentColor: color }}
+          />
+          <span className="w-9 shrink-0 text-right text-xs tabular-nums text-text-secondary">
+            {tilt[axis]}°
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -524,6 +573,10 @@ function SetupFlow({
   // the wall between them is the zone whose diameter the sweep changes.
   const [ringA, setRingA] = useState<RingPlacement | null>(null);
   const [ringB, setRingB] = useState<RingPlacement | null>(null);
+  // Each ring's cut-plane tilt. Tilting a ring bends the axis to leave/arrive along that
+  // plane's normal, so the zone boundary really does follow the ring (see ringAxis.ts).
+  const [tiltA, setTiltA] = useState<Tilt>(NO_TILT);
+  const [tiltB, setTiltB] = useState<Tilt>(NO_TILT);
   const [pickMode, setPickMode] = useState<'A' | 'B' | null>('A');
   const [previewU, setPreviewU] = useState<number | null>(null);
   // Sweep + objective.
@@ -543,14 +596,14 @@ function SetupFlow({
     }
   };
 
-  // Everything below derives from the two placements. No server fit involved.
+  // Everything below derives from the two placements + their tilts. No server fit.
   const bothPlaced = ringA !== null && ringB !== null;
   const wallPatch = ringA?.patch ?? ringB?.patch ?? '';
   const meanR = ringA && ringB ? meanRadius(ringA, ringB) : null;
   const baselineM = meanR !== null ? 2 * meanR : null; // the MEASURED diameter
-  const zoneLenM = ringA && ringB ? dist3(ringA.center, ringB.center) : null;
+  const chordM = ringA && ringB ? dist3(ringA.center, ringB.center) : null;
   // The two rings must be far enough apart to bound a real band of wall.
-  const zoneValid = meanR !== null && zoneLenM !== null && meanR > 0 && zoneLenM > meanR * 0.05;
+  const zoneValid = meanR !== null && chordM !== null && meanR > 0 && chordM > meanR * 0.05;
 
   const falloffStartM =
     meanR !== null ? Number((meanR * FALLOFF_START_FACTOR).toPrecision(6)) : undefined;
@@ -610,11 +663,12 @@ function SetupFlow({
     name: s.name.trim() || undefined,
     morph: {
       wallPatch,
-      // The axis IS the two measured section centres. Stations 0->1 span the whole gap
-      // between the rings; blendWeight tapers to zero AT each ring, so the grown band
-      // rejoins the untouched wall smoothly and nothing beyond a ring ever moves. The
-      // radial falloff keeps distant parts of a complex mesh out of it.
-      centerline: { points: [(ringA as RingPlacement).center, (ringB as RingPlacement).center] },
+      // The axis comes from the two measured section centres (straight, or bent by the
+      // ring tilts). Stations 0->1 span the whole gap between the rings; blendWeight
+      // tapers to zero AT each ring, so the grown band rejoins the untouched wall
+      // smoothly and nothing beyond a ring ever moves. The radial falloff keeps distant
+      // parts of a complex mesh out of it. Same object the viewer previews with.
+      centerline: { points: (centerlineObj as { points: Vec3[] }).points },
       stationA: 0,
       stationB: 1,
       blend: ZONE_BLEND,
@@ -647,11 +701,13 @@ function SetupFlow({
   const busy = create.isPending || run.isPending;
 
   // Stable across unrelated re-renders so the viewer only redraws / re-morphs when a
-  // ring placement or the preview diameter actually changes.
+  // ring placement, a tilt, or the preview diameter actually changes. This ONE axis is
+  // what the viewer previews AND what buildConfig ships, so they cannot disagree.
   const centerlineObj = useMemo(
-    () => (ringA && ringB ? { points: [ringA.center, ringB.center] } : null),
-    [ringA, ringB],
+    () => (ringA && ringB ? { points: buildAxis(ringA.center, ringB.center, tiltA, tiltB) } : null),
+    [ringA, ringB, tiltA, tiltB],
   );
+  const zoneLenM = centerlineObj ? axisLength(centerlineObj.points) : null;
   const morphPreview = useMemo(
     () =>
       zoneValid && previewU !== null
@@ -689,6 +745,8 @@ function SetupFlow({
             onClick={() => {
               setRingA(null);
               setRingB(null);
+              setTiltA(NO_TILT);
+              setTiltB(NO_TILT);
               setPickMode('A');
             }}
           >
@@ -706,6 +764,8 @@ function SetupFlow({
             centerline={centerlineObj}
             ringA={ringA}
             ringB={ringB}
+            tiltA={tiltA}
+            tiltB={tiltB}
             pickMode={pickMode}
             onPlaceRing={onPlaceRing}
             morphPreview={morphPreview}
@@ -823,6 +883,38 @@ function SetupFlow({
             between the two rings is what the sweep grows. Drag a ring to move it anywhere.
           </p>
         </div>
+
+        {bothPlaced && (
+          <div className="mt-3 flex flex-col gap-2 border-t border-border pt-3">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-sm font-medium text-text">Tilt the cut planes</span>
+              {(tiltA.x || tiltA.y || tiltB.x || tiltB.y) !== 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTiltA(NO_TILT);
+                    setTiltB(NO_TILT);
+                  }}
+                  className="rounded-sm text-xs text-text-secondary underline-offset-2 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                >
+                  reset
+                </button>
+              )}
+            </div>
+            <TiltRow label="Ring A" color="var(--color-primary)" tilt={tiltA} onChange={setTiltA} />
+            <TiltRow
+              label="Ring B"
+              color="var(--color-primary-light)"
+              tilt={tiltB}
+              onChange={setTiltB}
+            />
+            <p className="text-xs text-text-secondary">
+              Tip a ring so its cut sits square across the channel. The axis leaves each ring
+              along its own plane, so on a bend the zone follows the curve instead of cutting the
+              corner.
+            </p>
+          </div>
+        )}
       </RailSection>
 
       <RailSection
@@ -1023,6 +1115,10 @@ function StudyStage({
             centerline={view.centerline}
             ringA={view.ringA}
             ringB={view.ringB}
+            // Read-only: the saved axis already carries any tilt, and its end tangents
+            // orient the rings, so no tilt needs replaying here.
+            tiltA={NO_TILT}
+            tiltB={NO_TILT}
             pickMode={null}
             onPlaceRing={() => {}}
             morphPreview={null}
