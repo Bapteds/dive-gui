@@ -26,8 +26,26 @@ const FIELD_RE = /Solving for (\w+),\s+Initial residual\s*=\s*([^\s,]+)/;
 const NONFINITE_RESIDUAL_RE = /nan|inf/i;
 /** The steady-solver convergence banner. */
 const CONVERGED_RE = /solution converged in \d+ iterations/i;
-/** A hard solver error / floating-point crash in the log. */
-const FOAM_ERROR_RE = /FOAM FATAL|Floating point exception|#0\s+Foam::error/i;
+/** A FOAM fatal error: bad config, a missing patch or file, a caught exception. */
+const FOAM_FATAL_RE = /FOAM FATAL|#0\s+Foam::error/i;
+/**
+ * A floating-point exception actually FIRING: the signal handler in the stack trace,
+ * or the shell's notice when the solver dies on SIGFPE.
+ */
+const FPE_CRASH_RE = /Foam::sigFpe::sigHandler|floating point exception/i;
+/**
+ * ...but OpenFOAM announces FPE TRAPPING at startup whenever FOAM_SIGFPE is set (the
+ * default), and that banner contains the very same phrase:
+ *   "trapFpe: Floating point exception trapping enabled (FOAM_SIGFPE)."
+ * It means the trap is ARMED, not that anything went wrong. Matching the bare phrase
+ * classified EVERY healthy run as diverged, so the banner must be excluded.
+ */
+const FPE_BANNER_RE = /trapfpe|trapping enabled/i;
+
+/** Does this line show a floating-point exception that really fired? */
+function isFpeCrash(line: string): boolean {
+  return FPE_CRASH_RE.test(line) && !FPE_BANNER_RE.test(line);
+}
 
 /** Outcome of parsing a (partial or full) solver log. */
 export interface ParsedResiduals {
@@ -46,8 +64,13 @@ export interface ParsedResiduals {
   nonFiniteSeen: boolean;
   /** The solver printed its steady-convergence banner. */
   converged: boolean;
-  /** A FOAM fatal error / floating-point exception appeared. */
+  /** A FOAM fatal error / a floating-point exception that really fired. */
   foamError: boolean;
+  /**
+   * A floating-point exception FIRED (the solution blew up). False for the harmless
+   * "trapping enabled" startup banner, which is present in every run's log.
+   */
+  fpe: boolean;
   /** The last iteration index seen, or null when none. */
   lastTime: number | null;
 }
@@ -59,6 +82,7 @@ export function parseResiduals(log: string): ParsedResiduals {
   let current: ResidualSample | null = null;
   let converged = false;
   let foamError = false;
+  let fpe = false;
   let lastTime: number | null = null;
   let nonFiniteSeen = false; // a nan/inf residual anywhere in the log
   let currentNonFinite = false; // ... in the iteration being read right now
@@ -86,7 +110,8 @@ export function parseResiduals(log: string): ParsedResiduals {
     }
 
     if (CONVERGED_RE.test(line)) converged = true;
-    if (FOAM_ERROR_RE.test(line)) foamError = true;
+    if (isFpeCrash(line)) fpe = true;
+    if (FOAM_FATAL_RE.test(line) || isFpeCrash(line)) foamError = true;
 
     const fieldMatch = FIELD_RE.exec(line);
     if (fieldMatch && current) {
@@ -113,7 +138,7 @@ export function parseResiduals(log: string): ParsedResiduals {
   }
   flush();
 
-  return { samples, diverged: lastNonFinite, converged, foamError, nonFiniteSeen, lastTime };
+  return { samples, diverged: lastNonFinite, converged, foamError, fpe, nonFiniteSeen, lastTime };
 }
 
 /**

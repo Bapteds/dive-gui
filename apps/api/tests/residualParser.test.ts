@@ -109,6 +109,32 @@ describe('parseResiduals', () => {
     expect(parsed.samples[0].values.U).toBeCloseTo(0.012);
   });
 
+  it('does NOT flag the trapFpe startup banner as a floating point exception', () => {
+    // OpenFOAM prints this at the top of EVERY run when FOAM_SIGFPE is set (default).
+    // It says the trap is ARMED, not that it fired. Matching the bare phrase
+    // "floating point exception" classified every healthy run as diverged.
+    const log = [
+      'trapFpe: Floating point exception trapping enabled (FOAM_SIGFPE).',
+      TWO_ITERATIONS,
+      'End',
+    ].join('\n');
+    const parsed = parseResiduals(log);
+    expect(parsed.fpe).toBe(false);
+    expect(parsed.foamError).toBe(false);
+    expect(parsed.diverged).toBe(false);
+  });
+
+  it('DOES flag a floating point exception that actually fired', () => {
+    for (const line of [
+      '#1  Foam::sigFpe::sigHandler(int) at ??:?',
+      'Floating point exception (core dumped)',
+    ]) {
+      const parsed = parseResiduals(`${TWO_ITERATIONS}\n${line}\n`);
+      expect(parsed.fpe, line).toBe(true);
+      expect(parsed.foamError, line).toBe(true);
+    }
+  });
+
   it('flags a FOAM fatal error / floating point exception', () => {
     expect(parseResiduals('Foo\nFloating point exception\n').foamError).toBe(true);
     expect(parseResiduals('--> FOAM FATAL ERROR\n').foamError).toBe(true);

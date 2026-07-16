@@ -196,9 +196,13 @@ function classifyExit(
   if (exit.timedOut) {
     return { status: 'failed', reason: 'Run exceeded the maximum runtime' };
   }
-  // Divergence: a residual went to nan/inf, or a floating-point exception — the
-  // solution blew up.
-  if (parsed.diverged || /floating point exception/i.test(log)) {
+  // Divergence: the residuals ended at nan/inf, or a floating-point exception fired —
+  // the solution blew up. `parsed.fpe` is used rather than searching the raw log for
+  // "floating point exception": OpenFOAM prints
+  //   "trapFpe: Floating point exception trapping enabled (FOAM_SIGFPE)."
+  // at STARTUP of every run when FOAM_SIGFPE is set (the default), and matching that
+  // banner classified every healthy run as diverged.
+  if (parsed.diverged || parsed.fpe) {
     return { status: 'diverged', reason: 'Residuals diverged (the solution blew up).' };
   }
   // A FOAM fatal error (bad config, a missing patch or file, ...) is a failure,
