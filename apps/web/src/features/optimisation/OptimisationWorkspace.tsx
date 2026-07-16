@@ -230,22 +230,23 @@ function PickToggle({
   placed,
   onToggle,
 }: {
-  which: 'patch' | 'A' | 'B';
+  which: 'patch' | 'c1' | 'c2';
   active: boolean;
   placed: boolean;
   onToggle: () => void;
 }) {
-  const dot = which === 'A' ? 'bg-accent' : which === 'B' ? 'bg-primary' : 'bg-neutral';
+  const dot = which === 'c1' ? 'bg-accent' : which === 'c2' ? 'bg-primary' : 'bg-neutral';
+  const n = which === 'c1' ? 'A' : 'B';
   const label =
     which === 'patch'
       ? active
         ? 'Click a face on the channel'
         : 'Pick channel'
       : active
-        ? `Click to set end ${which}`
+        ? `Click to place circle ${n}`
         : placed
-          ? `Move end ${which}`
-          : `Set end ${which}`;
+          ? `Move circle ${n}`
+          : `Place circle ${n}`;
   return (
     <button
       type="button"
@@ -261,6 +262,43 @@ function PickToggle({
       <Crosshair size={13} strokeWidth={1.75} aria-hidden="true" />
       {label}
     </button>
+  );
+}
+
+/** Position of one cross-section circle along the axis (0..1), as a labelled slider. */
+function ZoneSlider({
+  label,
+  color,
+  value,
+  onChange,
+}: {
+  label: string;
+  color: string;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  const id = `opt-zone-${label.replace(/\s+/g, '-').toLowerCase()}`;
+  return (
+    <div className="flex items-center gap-2">
+      <label htmlFor={id} className="flex w-[4.5rem] shrink-0 items-center gap-1.5 text-xs text-text-secondary">
+        <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} aria-hidden="true" />
+        {label}
+      </label>
+      <input
+        id={id}
+        type="range"
+        min={0}
+        max={1}
+        step={0.01}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full"
+        style={{ accentColor: color }}
+      />
+      <span className="w-9 shrink-0 text-right text-xs tabular-nums text-text-secondary">
+        {Math.round(value * 100)}%
+      </span>
+    </div>
   );
 }
 
@@ -289,10 +327,6 @@ const STUDY_STATUS_META: Record<Study['status'], { label: string; className: str
 
 function fmtDiameter(diameterM: number, unit: LengthUnit): string {
   return `${Number((diameterM / UNIT_M[unit]).toPrecision(4))} ${unit}`;
-}
-
-function fmtVec(p: Vec3): string {
-  return p.map((n) => Number(n.toPrecision(3))).join(', ');
 }
 
 function SampleChip({ sample, unit }: { sample: StudySample; unit: LengthUnit }) {
@@ -501,19 +535,20 @@ function SetupFlow({
   switcher: ReactNode;
   onCreated: (studyId: string) => void;
 }) {
-  // Geometry: pick a face (-> the wall patch), choose the channel SHAPE, and the axis
-  // is fitted automatically. Optional A/B hints reposition/clip a straight axis.
+  // Pick a face (-> the wall patch), choose the channel SHAPE, and the axis is fitted
+  // automatically. Then place TWO cross-section circles along it: the zone BETWEEN the
+  // circles is what the sweep grows/shrinks.
   const [wallPatch, setWallPatch] = useState<string>('');
   const [shape, setShape] = useState<ChannelShape>('auto');
-  const [a, setA] = useState<Vec3 | null>(null);
-  const [b, setB] = useState<Vec3 | null>(null);
-  const [pickMode, setPickMode] = useState<'patch' | 'A' | 'B' | null>('patch');
+  const [pickMode, setPickMode] = useState<'patch' | 'c1' | 'c2' | null>('patch');
   // Fit result.
   const [baselineM, setBaselineM] = useState<number | null>(null);
   const [centerlinePts, setCenterlinePts] = useState<Vec3[] | null>(null);
-  const [closed, setClosed] = useState(false);
   const [fittedShape, setFittedShape] = useState<'straight' | 'ring' | null>(null);
   const [previewU, setPreviewU] = useState<number | null>(null);
+  // The two circles bounding the morph zone (arc-length fractions 0..1 along the axis).
+  const [station1, setStation1] = useState<number | null>(null);
+  const [station2, setStation2] = useState<number | null>(null);
   // Sweep + objective.
   const [s, setS] = useState<SetupSweep>(defaultSweep);
   const set = (patch: Partial<SetupSweep>) => setS((prev) => ({ ...prev, ...patch }));
@@ -522,36 +557,29 @@ function SetupFlow({
   const create = useCreateStudy(projectId);
   const run = useRunStudy(projectId);
 
-  const onPick = (which: 'patch' | 'A' | 'B', point: Vec3, patch: string | null) => {
-    if (which === 'patch') {
-      if (patch) setWallPatch(patch); // clicking a face selects the channel wall
-      setPickMode(null);
-    } else if (which === 'A') {
-      setA(point);
-      if (patch) setWallPatch((prev) => prev || patch);
-      setPickMode(null);
-    } else {
-      setB(point);
-      if (patch) setWallPatch((prev) => prev || patch);
-      setPickMode(null);
-    }
+  const onPick = (_point: Vec3, patch: string | null) => {
+    if (patch) setWallPatch(patch); // clicking a face selects the channel wall
+    setPickMode(null);
+  };
+  const onPickStation = (which: 'c1' | 'c2', fraction: number) => {
+    const f = Number(fraction.toFixed(4));
+    if (which === 'c1') setStation1(f);
+    else setStation2(f);
+    setPickMode(null);
   };
 
   // Auto-fit: once a wall patch is chosen, fit the axis for the current shape
-  // (debounced; re-fits when the shape or the A/B hints change). Retry on error.
+  // (debounced; re-fits when the shape changes). Retry on error.
   const traceKey = useMemo(
-    () => (wallPatch ? JSON.stringify([wallPatch, shape, a, b]) : null),
-    [wallPatch, shape, a, b],
+    () => (wallPatch ? JSON.stringify([wallPatch, shape]) : null),
+    [wallPatch, shape],
   );
   const lastTraced = useRef<string | null>(null);
   const doTraceRef = useRef<() => void>(() => {});
   doTraceRef.current = () => {
     if (!wallPatch) return;
-    // A and B are hints only when BOTH are placed (they clip/reposition the axis).
-    const hintA = a && b ? a : undefined;
-    const hintB = a && b ? b : undefined;
     extract.mutate(
-      { wallPatch, shape, endpointA: hintA, endpointB: hintB },
+      { wallPatch, shape },
       {
         onSuccess: (res) => {
           const mean =
@@ -560,9 +588,11 @@ function SetupFlow({
           const dUnit = dM / UNIT_M[s.unit];
           setBaselineM(dM);
           setCenterlinePts(res.centerline.points as Vec3[]);
-          setClosed(res.closed);
           setFittedShape(res.shape);
           setPreviewU(Number(dUnit.toPrecision(4)));
+          // Seed the two circles the first time (a sensible zone the user then moves).
+          setStation1((prev) => (prev === null ? 0.25 : prev));
+          setStation2((prev) => (prev === null ? 0.75 : prev));
           // Pre-fill a sensible range around the measured diameter (only when empty,
           // so a user-tuned range survives a re-fit).
           setS((prev) =>
@@ -591,11 +621,13 @@ function SetupFlow({
     return () => clearTimeout(timer);
   }, [traceKey]);
 
-  // Morph zone: a ring spans the whole loop (tiny blend at the seam); an open axis
-  // blends its two ends so the morphed segment joins the rest smoothly.
-  const stations = closed
-    ? { stationA: 0, stationB: 1, blend: 0.03 }
-    : { stationA: 0.1, stationB: 0.9, blend: 0.12 };
+  // The morph zone = between the two circles, with a small taper (blend) at each so the
+  // grown segment rejoins the untouched mesh smoothly. Order-independent (min/max).
+  const stationA = Math.min(station1 ?? 0.25, station2 ?? 0.75);
+  const stationB = Math.max(station1 ?? 0.25, station2 ?? 0.75);
+  const zoneValid = stationB - stationA > 0.01;
+  const blend = Math.min(0.12, Math.max(0.02, (stationB - stationA) * 0.3));
+  const stations = { stationA, stationB, blend };
 
   const sweepValues = useMemo(() => {
     if (!(s.minU > 0) || !(s.maxU >= s.minU) || !(s.stepU > 0)) return [];
@@ -619,6 +651,7 @@ function SetupFlow({
   const traced = baselineM !== null && centerlinePts !== null;
   const ready =
     traced &&
+    zoneValid &&
     runCount >= 1 &&
     runCount <= MAX_SWEEP &&
     !!s.inletPatch &&
@@ -696,16 +729,16 @@ function SetupFlow({
         {traced && (
           <>
             <PickToggle
-              which="A"
-              active={pickMode === 'A'}
-              placed={a !== null}
-              onToggle={() => setPickMode((m) => (m === 'A' ? null : 'A'))}
+              which="c1"
+              active={pickMode === 'c1'}
+              placed={station1 !== null}
+              onToggle={() => setPickMode((m) => (m === 'c1' ? null : 'c1'))}
             />
             <PickToggle
-              which="B"
-              active={pickMode === 'B'}
-              placed={b !== null}
-              onToggle={() => setPickMode((m) => (m === 'B' ? null : 'B'))}
+              which="c2"
+              active={pickMode === 'c2'}
+              placed={station2 !== null}
+              onToggle={() => setPickMode((m) => (m === 'c2' ? null : 'c2'))}
             />
           </>
         )}
@@ -715,11 +748,13 @@ function SetupFlow({
         {geometry ? (
           <MorphViewer
             geometry={geometry}
-            endpointA={a}
-            endpointB={b}
+            centerline={centerlinePts ? { points: centerlinePts } : null}
+            station1={station1}
+            station2={station2}
+            ringRadiusM={baselineM ? baselineM / 2 : 0}
             pickMode={pickMode}
             onPick={onPick}
-            centerline={centerlinePts ? { points: centerlinePts } : null}
+            onPickStation={onPickStation}
             morphPreview={morphPreview}
           />
         ) : geometryError ? (
@@ -735,28 +770,57 @@ function SetupFlow({
           <div className="h-full min-h-64 animate-pulse rounded-md border border-border bg-bg" />
         )}
       </div>
-      {traced && previewU !== null && s.maxU > s.minU && (
-        <div className="border-t border-border px-4 py-3">
-          <label
-            htmlFor="opt-preview"
-            className="mb-1.5 flex items-center justify-between text-sm font-medium text-text"
-          >
-            <span>Preview diameter</span>
-            <span className="tabular-nums text-primary">
-              {Number(previewU.toPrecision(4))} {s.unit}
-            </span>
-          </label>
-          <input
-            id="opt-preview"
-            type="range"
-            min={Math.min(s.minU, previewU)}
-            max={Math.max(s.maxU, previewU)}
-            step={(s.maxU - s.minU) / 100 || 0.001}
-            value={previewU}
-            onChange={(e) => setPreviewU(Number(e.target.value))}
-            className="w-full"
-            style={{ accentColor: 'var(--color-primary)' }}
-          />
+      {traced && (
+        <div className="flex flex-col gap-3 border-t border-border px-4 py-3">
+          <div className="flex flex-col gap-2">
+            <div className="flex items-baseline justify-between">
+              <span className="text-sm font-medium text-text">Morph zone</span>
+              <span className="text-xs tabular-nums text-text-secondary">
+                between the circles, {Math.round(stationA * 100)} to {Math.round(stationB * 100)}%
+              </span>
+            </div>
+            <ZoneSlider
+              label="Circle A"
+              color="var(--color-accent)"
+              value={station1 ?? 0.25}
+              onChange={setStation1}
+            />
+            <ZoneSlider
+              label="Circle B"
+              color="var(--color-primary)"
+              value={station2 ?? 0.75}
+              onChange={setStation2}
+            />
+            {!zoneValid && (
+              <p className="text-xs text-danger" role="alert">
+                Move the two circles apart to define a zone to grow.
+              </p>
+            )}
+          </div>
+          {previewU !== null && s.maxU > s.minU && (
+            <div>
+              <label
+                htmlFor="opt-preview"
+                className="mb-1.5 flex items-center justify-between text-sm font-medium text-text"
+              >
+                <span>Preview diameter</span>
+                <span className="tabular-nums text-primary">
+                  {Number(previewU.toPrecision(4))} {s.unit}
+                </span>
+              </label>
+              <input
+                id="opt-preview"
+                type="range"
+                min={Math.min(s.minU, previewU)}
+                max={Math.max(s.maxU, previewU)}
+                step={(s.maxU - s.minU) / 100 || 0.001}
+                value={previewU}
+                onChange={(e) => setPreviewU(Number(e.target.value))}
+                className="w-full"
+                style={{ accentColor: 'var(--color-primary)' }}
+              />
+            </div>
+          )}
         </div>
       )}
     </>
@@ -799,22 +863,15 @@ function SetupFlow({
               <SummaryRow label="Measured Ø" value={fmtDiameter(baselineM as number, s.unit)} />
             ) : null}
           </div>
-          {(a || b) && (
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-              <span className="text-text-secondary">Axis ends:</span>
-              {a && <span className="tabular-nums text-text">A {fmtVec(a)}</span>}
-              {b && <span className="tabular-nums text-text">B {fmtVec(b)}</span>}
-              <button
-                type="button"
-                onClick={() => {
-                  setA(null);
-                  setB(null);
-                }}
-                className="rounded-sm text-text-secondary underline-offset-2 transition-colors hover:text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-              >
-                clear
-              </button>
-            </div>
+          {traced && (
+            <SummaryRow
+              label="Morph zone"
+              value={
+                <span className="tabular-nums">
+                  {Math.round(stationA * 100)} to {Math.round(stationB * 100)}% of the axis
+                </span>
+              }
+            />
           )}
           {extract.isError && (
             <div className="flex flex-col gap-2">
@@ -827,8 +884,8 @@ function SetupFlow({
             </div>
           )}
           <p className="text-xs text-text-secondary">
-            Click a face on the channel and the axis is fitted automatically. Auto detects straight
-            vs ring; a ring is traced as the full loop. Nudge the two ends to trim a straight axis.
+            Click a face to fit the axis (Auto detects straight vs ring). Then place the two circles
+            along it, or drag the Circle A/B sliders: the zone between them is what the sweep grows.
           </p>
         </div>
         <details className="mt-3 text-xs">
@@ -948,11 +1005,15 @@ function SetupFlow({
               : 'Could not create the study.'}
           </p>
         )}
-        {!traced && (
+        {!traced ? (
           <p className="text-xs text-text-secondary">
-            Click a face on the channel to fit its axis, then launch.
+            Click a face on the channel to fit its axis, then place the two circles.
           </p>
-        )}
+        ) : !zoneValid ? (
+          <p className="text-xs text-text-secondary">
+            Move the two circles apart to set the zone that grows.
+          </p>
+        ) : null}
         <PrimaryButton onClick={() => onLaunch(true)} disabled={!ready || busy}>
           {busy ? (
             <Loader2 size={15} className="animate-spin" aria-hidden="true" />
@@ -1031,11 +1092,13 @@ function StudyStage({
         {geometry ? (
           <MorphViewer
             geometry={geometry}
-            endpointA={null}
-            endpointB={null}
+            centerline={study.morph.centerline}
+            station1={study.morph.stationA}
+            station2={study.morph.stationB}
+            ringRadiusM={study.morph.baselineDiameterM / 2}
             pickMode={null}
             onPick={() => {}}
-            centerline={study.morph.centerline}
+            onPickStation={() => {}}
             morphPreview={null}
           />
         ) : (
