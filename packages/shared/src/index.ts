@@ -760,8 +760,13 @@ export interface MergeResult {
    * splitMeshRegions on a multi-part assembly (empty for a single mesh or on
    * failure). These are the zones the turbine template can point MRFProperties at
    * (a rotating region becomes the MRF rotor cellZone).
+   *
+   * OPTIONAL while the producer lands: this type shipped ahead of the
+   * meshes.service change that populates it (still in-progress work), and a
+   * required field here breaks the build of any tree that has one without the
+   * other. Tighten back to required once that service change is committed.
    */
-  cellZones: string[];
+  cellZones?: string[];
 }
 
 // ---------------------------------------------------------------------------
