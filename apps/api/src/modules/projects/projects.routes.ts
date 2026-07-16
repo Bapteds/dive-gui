@@ -67,6 +67,7 @@ import {
   saveMeshBackupController,
   setMeshPatchTypeController,
 } from './mesh.controller';
+import { getMeshQualityController, runMeshQualityController } from './meshQuality.controller';
 import { applyBoundaryConditionsController, parseBoundaryUpload } from './boundary.controller';
 import {
   getRunController,
@@ -427,6 +428,19 @@ export function createProjectsRouter(): Router {
     '/:id/mesh/patches',
     validate({ params: projectIdParamSchema, body: editPatchesSchema }),
     asyncHandler(editMeshPatchesController),
+  );
+  // Mesh quality rating ("Notation" tab). POST runs checkMesh -allGeometry on
+  // the case mesh and grades it per criterion; GET re-serves the last persisted
+  // rating (or null) without re-running the tool.
+  router.get(
+    '/:id/mesh/quality',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(getMeshQualityController),
+  );
+  router.post(
+    '/:id/mesh/quality',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(runMeshQualityController),
   );
   // "Boundary conditions" overlay: apply a component BC preset (Turbine / Pipe /
   // DraftTube / Chamber + driving mode) to the case's 0/ fields. Multipart: a JSON

@@ -2484,6 +2484,79 @@ export function morphPoint(
   return [px + (px - bestFx) * k, py + (py - bestFy) * k, pz + (pz - bestFz) * k];
 }
 
+// ---------------------------------------------------------------------------
+// Mesh quality rating ("Notation" tab).
+//
+// The API runs `checkMesh -allGeometry` on the project's case mesh, parses the
+// per-criterion figures (skewness, non-orthogonality, min volume, cell-size
+// uniformity, face twisting/folding, aspect ratio, openness) and converts each
+// into a 0-100 score + letter grade so the web app can render a rating card per
+// criterion. A metric checkMesh did not print stays null (shown as "not
+// measured"), never a fabricated score.
+
+/** The criteria the rating grades, in display order. */
+export const MESH_QUALITY_CRITERIA = [
+  'skewness',
+  'nonOrthogonality',
+  'minVolume',
+  'sizeUniformity',
+  'twisting',
+  'aspectRatio',
+  'openness',
+] as const;
+export type MeshQualityCriterionId = (typeof MESH_QUALITY_CRITERIA)[number];
+
+/** Letter grade bands over the 0-100 score: A>=85, B>=70, C>=50, D>=30, E<30. */
+export type MeshQualityGrade = 'A' | 'B' | 'C' | 'D' | 'E';
+
+/** One graded criterion of the mesh rating. */
+export interface MeshQualityMetric {
+  id: MeshQualityCriterionId;
+  /**
+   * The figure checkMesh reported for this criterion (max skewness, max
+   * non-orthogonality in degrees, min cell volume in m^3, min face volume
+   * ratio, min face flatness, max aspect ratio, max cell openness). Null when
+   * checkMesh did not print it on this mesh.
+   */
+  value: number | null;
+  /** Secondary measured context for the detail line (e.g. the average). */
+  detail: string;
+  /** 0-100, higher is better; null when the metric was not measured. */
+  score: number | null;
+  /** Letter grade derived from the score; null when not measured. */
+  grade: MeshQualityGrade | null;
+  /** True when the value crossed OpenFOAM's own alarm level for this check. */
+  flagged: boolean;
+}
+
+/** The full rating produced by one checkMesh run on the case mesh. */
+export interface MeshQualityResult {
+  /** False when the checkMesh binary is missing on this host (nothing graded). */
+  available: boolean;
+  /** ISO timestamp of the run (results are persisted and re-served on GET). */
+  ranAt: string;
+  /** The logical command line, surfaced in the UI for transparency. */
+  command: string;
+  /** Did checkMesh print "Mesh OK."? */
+  meshOk: boolean;
+  /** Count from "Failed N mesh checks." (0 when the mesh passed). */
+  failedChecks: number;
+  /** Mesh size, when printed. */
+  cells: number | null;
+  points: number | null;
+  faces: number | null;
+  /** Inverted cells — fatal for any solve, forces the overall grade to E/0. */
+  negativeVolumeCells: number;
+  /** Weighted mean of the measured criterion scores (null when none measured). */
+  overall: { score: number | null; grade: MeshQualityGrade | null };
+  /** One entry per criterion, in MESH_QUALITY_CRITERIA order. */
+  metrics: MeshQualityMetric[];
+  /** Human notes (fatal defects, unmeasured criteria, OpenFOAM warnings). */
+  notes: string[];
+  /** Tail of the raw checkMesh output, for the log disclosure. */
+  log: string;
+}
+
 /**
  * Machine-readable error codes the API may emit in its `{ error: { code } }`
  * envelope. The web client maps these to user-facing messages; it adds its own
