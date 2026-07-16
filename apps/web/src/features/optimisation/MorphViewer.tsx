@@ -246,15 +246,17 @@ export function MorphViewer({
 
     let disposed = false;
     let frameQueued = false;
+    let rafId = 0;
     const renderFrame = () => {
       frameQueued = false;
+      if (disposed) return; // a frame queued just before teardown must not render
       controls.update();
       renderer.render(scene, camera);
     };
     const requestRender = () => {
       if (disposed || frameQueued) return;
       frameQueued = true;
-      requestAnimationFrame(renderFrame);
+      rafId = requestAnimationFrame(renderFrame);
     };
     controls.addEventListener('change', requestRender);
 
@@ -563,9 +565,25 @@ export function MorphViewer({
       onPickStationRef.current(mode, projectFraction(arc, hit.point));
     };
 
+    // If the OS reclaims the pointer mid-drag (touch/pen), pointerup never fires:
+    // abort the drag, re-enable orbit, and snap the ring back to its committed spot.
+    const onCancel = (event: PointerEvent) => {
+      if (!dragging) return;
+      dragging = null;
+      controls.enabled = true;
+      renderer.domElement.style.cursor = 'grab';
+      try {
+        renderer.domElement.releasePointerCapture(event.pointerId);
+      } catch {
+        /* capture may already be gone */
+      }
+      syncOverlay(); // discard the in-flight move
+    };
+
     renderer.domElement.addEventListener('pointerdown', onDown);
     renderer.domElement.addEventListener('pointermove', onMove);
     renderer.domElement.addEventListener('pointerup', onUp);
+    renderer.domElement.addEventListener('pointercancel', onCancel);
 
     const resize = () => {
       const { clientWidth, clientHeight } = container;
@@ -581,11 +599,13 @@ export function MorphViewer({
 
     return () => {
       disposed = true;
+      cancelAnimationFrame(rafId);
       controls.removeEventListener('change', requestRender);
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener('pointerdown', onDown);
       renderer.domElement.removeEventListener('pointermove', onMove);
       renderer.domElement.removeEventListener('pointerup', onUp);
+      renderer.domElement.removeEventListener('pointercancel', onCancel);
       controls.dispose();
       ringGeom.dispose();
       (ring1.material as THREE.Material).dispose();
@@ -602,6 +622,13 @@ export function MorphViewer({
       syncOverlayRef.current = () => {};
       applyMorphRef.current = () => {};
       renderer.dispose();
+      // dispose() frees buffers/programs but NOT the GL context; release it so we do
+      // not hit the browser's live-context cap after many tab/study remounts.
+      try {
+        renderer.forceContextLoss();
+      } catch {
+        /* not supported in every environment (e.g. headless tests) */
+      }
       if (renderer.domElement.parentNode === container) {
         container.removeChild(renderer.domElement);
       }
