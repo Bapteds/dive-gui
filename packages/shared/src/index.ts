@@ -2173,6 +2173,23 @@ export interface SweepConfig {
    * the run limit). Locates the optimum ~4x more precisely for a handful of extra runs.
    */
   refine?: boolean;
+  /**
+   * Seed each run's initial fields (0/) with the previous diameter's converged
+   * solution instead of the case's cold initial fields. Successive diameters differ
+   * by a few percent, so their flows are near-identical: warm starts cut the
+   * iterations to convergence severalfold and damp the startup transient (fewer
+   * early nan/oscillation artifacts). Valid because the morph preserves topology
+   * (same cells, fields map 1:1). Default ON; the pristine 0/ is restored after the
+   * sweep. (false to disable.)
+   */
+  warmStart?: boolean;
+  /**
+   * Stop each run early once the objective has stabilised (an OpenFOAM
+   * runTimeControl functionObject watching the inlet/outlet probes). Cuts run time
+   * on values that converge before endTime. OFF by default until verified once on
+   * the deployment's OpenFOAM build.
+   */
+  autoStop?: boolean;
 }
 
 /**

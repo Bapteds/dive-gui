@@ -593,6 +593,10 @@ interface SetupSweep {
   stepU: number;
   /** Auto-zoom: a finer second pass (step/4) around the coarse optimum. */
   refine: boolean;
+  /** Seed each run's 0/ from the previous diameter's converged fields. */
+  warmStart: boolean;
+  /** Stop runs early once the objective stabilises (verify once on the box). */
+  autoStop: boolean;
   inletPatch: string;
   outletPatch: string;
   primary: StudyMetric;
@@ -616,6 +620,8 @@ function defaultSweep(): SetupSweep {
     maxU: 0,
     stepU: 0,
     refine: true,
+    warmStart: true,
+    autoStop: false,
     inletPatch: '',
     outletPatch: '',
     primary: 'pressureDrop',
@@ -756,6 +762,8 @@ function SetupFlow({
       stepM: s.stepU * UNIT_M[s.unit],
       unit: s.unit,
       refine: s.refine,
+      warmStart: s.warmStart,
+      autoStop: s.autoStop,
     },
     objective: {
       inletPatch: s.inletPatch,
@@ -1067,21 +1075,55 @@ function SetupFlow({
             Pre-filled around the measured diameter after the trace.
           </p>
         )}
-        <label className="mt-3 flex cursor-pointer items-start gap-2 text-sm text-text">
-          <input
-            type="checkbox"
-            checked={s.refine}
-            onChange={(e) => set({ refine: e.target.checked })}
-            className="mt-0.5 size-4 shrink-0 cursor-pointer accent-[var(--color-primary)]"
-          />
-          <span>
-            Refine around the optimum
-            <span className="block text-xs font-normal text-text-secondary">
-              After the sweep, re-sample at step/4 around the best value (up to 6 extra runs) to
-              pin the optimum ~4x more precisely.
+        <div className="mt-3 flex flex-col gap-2.5">
+          <label className="flex cursor-pointer items-start gap-2 text-sm text-text">
+            <input
+              type="checkbox"
+              checked={s.refine}
+              onChange={(e) => set({ refine: e.target.checked })}
+              className="mt-0.5 size-4 shrink-0 cursor-pointer accent-[var(--color-primary)]"
+            />
+            <span>
+              Refine around the optimum
+              <span className="block text-xs font-normal text-text-secondary">
+                After the sweep, re-sample at step/4 around the best value (up to 6 extra runs) to
+                pin the optimum ~4x more precisely.
+              </span>
             </span>
-          </span>
-        </label>
+          </label>
+          <label className="flex cursor-pointer items-start gap-2 text-sm text-text">
+            <input
+              type="checkbox"
+              checked={s.warmStart}
+              onChange={(e) => set({ warmStart: e.target.checked })}
+              className="mt-0.5 size-4 shrink-0 cursor-pointer accent-[var(--color-primary)]"
+            />
+            <span>
+              Warm-start each run
+              <span className="block text-xs font-normal text-text-secondary">
+                Start every run from the previous diameter's converged flow instead of cold
+                initial fields: several times fewer iterations and a calmer startup. The original
+                initial fields are restored after the sweep.
+              </span>
+            </span>
+          </label>
+          <label className="flex cursor-pointer items-start gap-2 text-sm text-text">
+            <input
+              type="checkbox"
+              checked={s.autoStop}
+              onChange={(e) => set({ autoStop: e.target.checked })}
+              className="mt-0.5 size-4 shrink-0 cursor-pointer accent-[var(--color-primary)]"
+            />
+            <span>
+              Auto-stop stabilised runs
+              <span className="block text-xs font-normal text-text-secondary">
+                End a run early once the objective has stabilised (OpenFOAM runTimeControl). Off
+                by default: verify once on your OpenFOAM install; if every run fails at startup
+                with a FATAL error, untick this.
+              </span>
+            </span>
+          </label>
+        </div>
       </RailSection>
 
       <RailSection title="Loss objective" icon={Target}>

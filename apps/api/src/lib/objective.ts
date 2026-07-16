@@ -48,8 +48,37 @@ function probe(name: string, patch: string): string {
   );
 }
 
+/**
+ * Early-exit control: an ESI runTimeControl functionObject that ENDS the run once
+ * BOTH probes' averaged values have stabilised (running mean stable to `tolerance`
+ * over `window` iterations). Cuts wall-clock on values that converge before endTime.
+ * VERIFY once on the deployment's OpenFOAM build (opt-in until then): the watched
+ * result name is the surfaceFieldValue result "weightedAverage(<field>)".
+ */
+function autoStopBlock(): string {
+  const condition = (name: string, fo: string): string =>
+    `            ${name}\n            {\n` +
+    `                type            average;\n` +
+    `                functionObject  ${fo};\n` +
+    `                fields          (weightedAverage(${PTOTAL_RESULT}));\n` +
+    `                tolerance       2e-3;\n` +
+    `                window          40;\n` +
+    `                windowType      exact;\n` +
+    `            }\n`;
+  return (
+    `    diveAutoStop\n    {\n` +
+    `        type            runTimeControl;\n` +
+    `        libs            (utilityFunctionObjects);\n` +
+    `        conditions\n        {\n` +
+    condition('inletStable', INLET_FO) +
+    condition('outletStable', OUTLET_FO) +
+    `        }\n` +
+    `    }\n`
+  );
+}
+
 /** The full objective block (total-pressure FO + inlet/outlet probes), marked. */
-function objectiveBlock(inletPatch: string, outletPatch: string): string {
+function objectiveBlock(inletPatch: string, outletPatch: string, autoStop: boolean): string {
   return (
     `    ${MARKER_START}\n` +
     `    diveObjPTotal\n    {\n` +
@@ -66,6 +95,7 @@ function objectiveBlock(inletPatch: string, outletPatch: string): string {
     `    }\n` +
     probe(INLET_FO, inletPatch) +
     probe(OUTLET_FO, outletPatch) +
+    (autoStop ? autoStopBlock() : '') +
     `    ${MARKER_END}\n`
   );
 }
@@ -79,8 +109,9 @@ export function injectObjectiveFunctions(
   controlDict: string,
   inletPatch: string,
   outletPatch: string,
+  autoStop = false,
 ): string {
-  const block = objectiveBlock(inletPatch, outletPatch);
+  const block = objectiveBlock(inletPatch, outletPatch, autoStop);
 
   // 1) Replace a previously-injected marked region (with its leading indent + trailing newline).
   const s = controlDict.indexOf(MARKER_START);

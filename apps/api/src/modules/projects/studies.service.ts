@@ -282,6 +282,47 @@ async function cleanRunArtifacts(caseDir: string): Promise<void> {
   );
 }
 
+/**
+ * Warm start: copy the latest written time's field files over 0/, so the NEXT run
+ * starts from this converged solution instead of the cold initial fields. Valid
+ * because the morph preserves topology (identical cell count, fields map 1:1).
+ * Subdirectories (the `uniform/` time metadata) are skipped. Returns false when
+ * there is nothing to harvest (no time dir past 0, or no field files).
+ */
+async function harvestLatestFields(caseDir: string): Promise<boolean> {
+  let entries;
+  try {
+    entries = await fs.readdir(caseDir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  const times = entries
+    .filter((e) => e.isDirectory())
+    .map((e) => ({ name: e.name, t: Number(e.name) }))
+    .filter((x) => Number.isFinite(x.t) && x.t > 0)
+    .sort((a, b) => b.t - a.t);
+  if (times.length === 0) return false;
+  const latest = path.join(caseDir, times[0].name);
+  const zero = path.join(caseDir, '0');
+  let files;
+  try {
+    files = await fs.readdir(latest, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  let copied = 0;
+  for (const f of files) {
+    if (!f.isFile()) continue;
+    try {
+      await fs.copyFile(path.join(latest, f.name), path.join(zero, f.name));
+      copied += 1;
+    } catch {
+      /* an unreadable field never blocks the sweep; the run just starts colder */
+    }
+  }
+  return copied > 0;
+}
+
 /** Poll a run to a terminal state, honouring a study stop request (which stops it). */
 async function pollRunToTerminal(
   viewer: Viewer,
@@ -392,11 +433,25 @@ async function runSweep(viewer: Viewer, projectId: string, studyId: string): Pro
   const origAbs = studyOrigPointsAbsolute(projectId, studyId);
   await fs.mkdir(path.dirname(origAbs), { recursive: true });
   await fs.writeFile(origAbs, original);
+  // Warm start (default ON): snapshot the pristine 0/ so successive runs can be
+  // seeded with the previous diameter's converged fields and 0/ restored at the end.
+  const warmStart = doc.sweep.warmStart !== false;
+  const zeroDir = path.join(caseDir, '0');
+  const orig0Abs = path.join(path.dirname(origAbs), 'orig0');
+  if (warmStart) {
+    await fs.rm(orig0Abs, { recursive: true, force: true }).catch(() => undefined);
+    await fs.cp(zeroDir, orig0Abs, { recursive: true }).catch(() => undefined);
+  }
   try {
     const controlDict = await fs.readFile(controlDictPath, 'utf8');
     await fs.writeFile(
       controlDictPath,
-      injectObjectiveFunctions(controlDict, doc.objective.inletPatch, doc.objective.outletPatch),
+      injectObjectiveFunctions(
+        controlDict,
+        doc.objective.inletPatch,
+        doc.objective.outletPatch,
+        doc.sweep.autoStop === true,
+      ),
     );
   } catch {
     /* no controlDict — the run will fail per-sample, surfaced there */
@@ -464,6 +519,9 @@ async function runSweep(viewer: Viewer, projectId: string, studyId: string): Pro
           bestValue = value;
           bestDiameter = diameterM;
         }
+        // Seed the NEXT diameter's run with this converged solution (harvest now:
+        // the next sample's cleanRunArtifacts deletes the time dirs).
+        if (warmStart) await harvestLatestFields(caseDir);
       } else {
         doc.samples[i] = {
           diameterM,
@@ -520,8 +578,19 @@ async function runSweep(viewer: Viewer, projectId: string, studyId: string): Pro
     }
   }
 
-  // 3) Restore the original mesh + strip the objective FOs (leave the case as found).
+  // 3) Restore the original mesh + initial fields + strip the objective FOs (leave
+  // the case as found).
   await fs.writeFile(pointsPath, original).catch(() => undefined);
+  if (warmStart) {
+    try {
+      await fs.access(orig0Abs); // only restore when the snapshot actually exists
+      await fs.rm(zeroDir, { recursive: true, force: true });
+      await fs.cp(orig0Abs, zeroDir, { recursive: true });
+      await fs.rm(orig0Abs, { recursive: true, force: true });
+    } catch {
+      /* best-effort: a missing snapshot leaves 0/ as the last solve's fields */
+    }
+  }
   await cleanRunArtifacts(caseDir);
   try {
     const controlDict = await fs.readFile(controlDictPath, 'utf8');

@@ -6,6 +6,7 @@ import {
   computeMetrics,
   injectObjectiveFunctions,
   parseSurfaceFieldValueDat,
+  removeObjectiveFunctions,
 } from '../src/lib/objective';
 
 const CONTROLDICT_NO_FUNCTIONS = `FoamFile
@@ -67,6 +68,22 @@ describe('injectObjectiveFunctions', () => {
     expect(twice).toContain('name        in2;');
     expect(twice).not.toContain('name        in;'); // old patch names gone
     expect(twice).toContain('solverInfo'); // still preserved
+  });
+
+  it('omits the auto-stop control by default, includes it when asked', () => {
+    const plain = injectObjectiveFunctions(CONTROLDICT_WITH_FUNCTIONS, 'in', 'out');
+    expect(plain).not.toContain('runTimeControl');
+    const withStop = injectObjectiveFunctions(CONTROLDICT_WITH_FUNCTIONS, 'in', 'out', true);
+    expect(withStop).toContain('diveAutoStop');
+    expect(withStop).toContain('type            runTimeControl');
+    expect(withStop).toContain('functionObject  diveObjInlet');
+    expect(withStop).toContain('functionObject  diveObjOutlet');
+    // Inside the marked region, so removeObjectiveFunctions strips it too.
+    const cleaned = removeObjectiveFunctions(withStop);
+    expect(cleaned).not.toContain('runTimeControl');
+    // And re-injecting WITHOUT the flag drops it (idempotent replace).
+    const downgraded = injectObjectiveFunctions(withStop, 'in', 'out', false);
+    expect(downgraded).not.toContain('runTimeControl');
   });
 });
 

@@ -49,6 +49,10 @@ const sweepSchema = z
     unit: z.enum(LENGTH_UNITS),
     /** Auto-zoom: a finer second pass (stepM/4) around the coarse optimum. */
     refine: z.boolean().optional(),
+    /** Seed each run's 0/ from the previous diameter's converged fields. */
+    warmStart: z.boolean().optional(),
+    /** Stop runs early once the objective stabilises (runTimeControl FO). */
+    autoStop: z.boolean().optional(),
   })
   .refine((s) => s.maxM >= s.minM, { message: 'maxM must be >= minM', path: ['maxM'] })
   .refine(
