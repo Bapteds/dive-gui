@@ -90,6 +90,13 @@ export const extractCenterlineSchema = z.object({
   wallPatch: z.string().min(1, 'A wall patch is required'),
   endpointA: vec3Schema,
   endpointB: vec3Schema,
+  /**
+   * Optional ordered via points between A and B. A shortest wall path between two
+   * clicks covers at most half of a CLOSED channel, so a full tour of a ring needs
+   * A and B side by side plus a via on the far side; a via also picks the
+   * direction around a spiral.
+   */
+  vias: z.array(vec3Schema).max(6).default([]),
 });
 export type CenterlineInput = z.infer<typeof extractCenterlineSchema>;
 

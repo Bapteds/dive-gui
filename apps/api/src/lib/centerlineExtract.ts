@@ -5,8 +5,13 @@
 // AppError on failure — the UI needs the centerline to build a morph, so there is no
 // "degraded step" to report.
 //
-//   MESH_PYTHON_BIN extractCenterline.py <caseDir> <wallPatch> <ax..bz> <out.json>
+//   MESH_PYTHON_BIN extractCenterline.py <caseDir> <wallPatch> <out.json> \
+//       <ax ay az> [<vx vy vz> ...] <bx by bz>
 //     -> { centerline: [[x,y,z], ...], radii: [...], length }
+//
+// Two or more ORDERED waypoints: the wall path is walked leg by leg, so via
+// points between A and B disambiguate the route (the far side of a closed ring
+// for a full tour, or which way around a spiral).
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -44,16 +49,19 @@ function centerlineScript(): string {
 }
 
 /**
- * Run extractCenterline.py on `caseDir`'s wall patch between endpoints `a` and `b`,
- * returning the centerline polyline + radius profile. Throws AppError on any failure
- * (missing script/interpreter, patch not found, degenerate input).
+ * Run extractCenterline.py on `caseDir`'s wall patch through the ORDERED
+ * `waypoints` (first = A, last = B, any between are via points), returning the
+ * centerline polyline + radius profile. Throws AppError on any failure (missing
+ * script/interpreter, patch not found, degenerate input).
  */
 export async function extractCenterline(
   caseDir: string,
   wallPatch: string,
-  a: readonly [number, number, number],
-  b: readonly [number, number, number],
+  waypoints: readonly (readonly [number, number, number])[],
 ): Promise<CenterlineResult> {
+  if (waypoints.length < 2) {
+    throw new AppError(422, 'STUDY_MORPH_FAILED', 'A centerline needs at least two waypoints');
+  }
   const scriptPath = centerlineScript();
   if (!(await pathExists(scriptPath))) {
     throw new AppError(
@@ -72,13 +80,8 @@ export async function extractCenterline(
         scriptPath,
         caseDir,
         wallPatch,
-        String(a[0]),
-        String(a[1]),
-        String(a[2]),
-        String(b[0]),
-        String(b[1]),
-        String(b[2]),
         outFile,
+        ...waypoints.flatMap((w) => [String(w[0]), String(w[1]), String(w[2])]),
       ],
       cwd: caseDir,
       env: process.env,
