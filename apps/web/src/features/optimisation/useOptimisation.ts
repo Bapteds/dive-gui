@@ -126,14 +126,20 @@ export function useStopStudy(projectId: string) {
   });
 }
 
-/** Trace the pipe centerline from the wall patch + two endpoints (study prep). */
+/** Trace the pipe centerline from the wall patch + waypoints (study prep). */
 export function useExtractCenterline(projectId: string) {
   return useMutation<
     CenterlineResult,
     Error,
-    { wallPatch: string; endpointA: [number, number, number]; endpointB: [number, number, number] }
+    {
+      wallPatch: string;
+      endpointA: [number, number, number];
+      endpointB: [number, number, number];
+      /** Ordered via points between A and B (full tour of a ring, spiral direction). */
+      vias?: [number, number, number][];
+    }
   >({
-    mutationFn: ({ wallPatch, endpointA, endpointB }) =>
-      extractCenterline(projectId, wallPatch, endpointA, endpointB),
+    mutationFn: ({ wallPatch, endpointA, endpointB, vias }) =>
+      extractCenterline(projectId, wallPatch, endpointA, endpointB, vias ?? []),
   });
 }

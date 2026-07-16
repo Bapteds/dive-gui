@@ -82,17 +82,21 @@ export async function stopStudy(projectId: string, studyId: string): Promise<Stu
 
 /**
  * Trace the pipe centerline + radius profile from the case's wall patch between the
- * two clicked endpoints (study prep, before a study exists).
+ * two clicked endpoints (study prep, before a study exists). Ordered `vias` between
+ * A and B disambiguate the route: the far side of a closed ring for a full tour, or
+ * which way around a spiral.
  */
 export async function extractCenterline(
   projectId: string,
   wallPatch: string,
   endpointA: [number, number, number],
   endpointB: [number, number, number],
+  vias: [number, number, number][] = [],
 ): Promise<CenterlineResult> {
   return apiClient.post<CenterlineResult>(`/projects/${projectId}/studies/centerline`, {
     wallPatch,
     endpointA,
     endpointB,
+    vias,
   });
 }

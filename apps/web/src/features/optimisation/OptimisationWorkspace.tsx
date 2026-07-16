@@ -221,18 +221,29 @@ function Segmented<T extends string>({
   );
 }
 
-/** Toggle that arms the next mesh click to place endpoint A or B. */
+/** Toggle that arms the next mesh click to place endpoint A/B or add a via point. */
 function PickToggle({
   which,
   active,
   placed,
   onToggle,
 }: {
-  which: 'A' | 'B';
+  which: 'A' | 'B' | 'via';
   active: boolean;
   placed: boolean;
   onToggle: () => void;
 }) {
+  const dot = which === 'A' ? 'bg-accent' : which === 'B' ? 'bg-primary' : 'bg-neutral';
+  const label =
+    which === 'via'
+      ? active
+        ? 'Click the pipe to add a via'
+        : 'Add via'
+      : active
+        ? `Click the pipe to set ${which}`
+        : placed
+          ? `Move ${which}`
+          : `Set ${which}`;
   return (
     <button
       type="button"
@@ -244,12 +255,9 @@ function PickToggle({
           : 'border-border-strong bg-surface text-text hover:bg-primary-tint'
       }`}
     >
-      <span
-        className={`size-2 rounded-full ${which === 'A' ? 'bg-accent' : 'bg-primary'}`}
-        aria-hidden="true"
-      />
+      <span className={`size-2 rounded-full ${dot}`} aria-hidden="true" />
       <Crosshair size={13} strokeWidth={1.75} aria-hidden="true" />
-      {active ? `Click the pipe to set ${which}` : placed ? `Move ${which}` : `Set ${which}`}
+      {label}
     </button>
   );
 }
@@ -491,11 +499,13 @@ function SetupFlow({
   switcher: ReactNode;
   onCreated: (studyId: string) => void;
 }) {
-  // Geometry: the two clicked endpoints + the wall patch inferred from the click.
+  // Geometry: the two clicked endpoints + ordered via points + the wall patch
+  // inferred from the click.
   const [a, setA] = useState<Vec3 | null>(null);
   const [b, setB] = useState<Vec3 | null>(null);
+  const [vias, setVias] = useState<Vec3[]>([]);
   const [wallPatch, setWallPatch] = useState<string>('');
-  const [pickMode, setPickMode] = useState<'A' | 'B' | null>('A');
+  const [pickMode, setPickMode] = useState<'A' | 'B' | 'via' | null>('A');
   // Trace result.
   const [baselineM, setBaselineM] = useState<number | null>(null);
   const [centerlinePts, setCenterlinePts] = useState<Vec3[] | null>(null);
@@ -508,14 +518,17 @@ function SetupFlow({
   const create = useCreateStudy(projectId);
   const run = useRunStudy(projectId);
 
-  const onPick = (which: 'A' | 'B', point: Vec3, patch: string | null) => {
+  const onPick = (which: 'A' | 'B' | 'via', point: Vec3, patch: string | null) => {
     if (which === 'A') {
       setA(point);
-      if (patch) setWallPatch(patch); // A's patch wins (both clicks land on the pipe wall)
+      if (patch) setWallPatch(patch); // A's patch wins (all clicks land on the pipe wall)
       setPickMode(b === null ? 'B' : null); // guide straight to the second click
-    } else {
+    } else if (which === 'B') {
       setB(point);
       if (patch) setWallPatch((prev) => prev || patch);
+      setPickMode(null);
+    } else {
+      setVias((prev) => [...prev, point]);
       setPickMode(null);
     }
   };
@@ -524,15 +537,15 @@ function SetupFlow({
   // centerline (debounced; re-traces when an endpoint moves). A failed trace can be
   // retried manually.
   const traceKey = useMemo(
-    () => (a && b && wallPatch ? JSON.stringify([wallPatch, a, b]) : null),
-    [a, b, wallPatch],
+    () => (a && b && wallPatch ? JSON.stringify([wallPatch, a, b, vias]) : null),
+    [a, b, vias, wallPatch],
   );
   const lastTraced = useRef<string | null>(null);
   const doTraceRef = useRef<() => void>(() => {});
   doTraceRef.current = () => {
     if (!a || !b || !wallPatch) return;
     extract.mutate(
-      { wallPatch, endpointA: a, endpointB: b },
+      { wallPatch, endpointA: a, endpointB: b, vias },
       {
         onSuccess: (res) => {
           const mean =
@@ -671,6 +684,12 @@ function SetupFlow({
           placed={b !== null}
           onToggle={() => setPickMode((m) => (m === 'B' ? null : 'B'))}
         />
+        <PickToggle
+          which="via"
+          active={pickMode === 'via'}
+          placed={vias.length > 0}
+          onToggle={() => setPickMode((m) => (m === 'via' ? null : 'via'))}
+        />
         <span className="ml-auto text-xs text-text-secondary">
           Drag to orbit, scroll to zoom.
         </span>
@@ -681,6 +700,7 @@ function SetupFlow({
             geometry={geometry}
             endpointA={a}
             endpointB={b}
+            vias={vias}
             pickMode={pickMode}
             onPick={onPick}
             centerline={centerlinePts ? { points: centerlinePts } : null}
@@ -749,6 +769,31 @@ function SetupFlow({
               )
             }
           />
+          {vias.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <span className="text-sm text-text-secondary">Via points</span>
+              <ul className="flex flex-wrap gap-1.5">
+                {vias.map((via, i) => (
+                  <li key={i}>
+                    <button
+                      type="button"
+                      onClick={() => setVias((prev) => prev.filter((_, j) => j !== i))}
+                      className="inline-flex items-center gap-1 rounded-md border border-border bg-bg px-2 py-1 text-xs tabular-nums text-text transition-colors hover:bg-danger-tint hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                      aria-label={`Remove via point ${i + 1} (${fmtVec(via)})`}
+                      title="Remove this via point"
+                    >
+                      {i + 1}. {fmtVec(via)}
+                      <XCircle size={12} strokeWidth={2} aria-hidden="true" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <p className="text-xs text-text-secondary">
+            Closed channel (a ring)? Place A and B side by side, then add a via on the far side to
+            trace the full tour. A via also picks the direction around a spiral.
+          </p>
           <div aria-live="polite">
             {extract.isPending ? (
               <p className="flex items-center gap-1.5 text-sm text-text-secondary">
