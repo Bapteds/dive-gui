@@ -28,9 +28,10 @@ algorithm follows the WALL instead:
 If A and B are not connected along the wall (degenerate patch), it falls back to
 the original chord binning.
 
-CLI usage:
+CLI usage (two or more waypoints, in order; intermediate ones are via points that
+disambiguate the route - e.g. the far side of a closed ring for a full tour):
     python extractCenterline.py <caseDirOrFoamFile> <wallPatch> \
-        <ax> <ay> <az> <bx> <by> <bz> <out_centerline.json>
+        <out_centerline.json> <ax> <ay> <az> [<vx> <vy> <vz> ...] <bx> <by> <bz>
 
 Success/failure contract (mirrors extractPatches.py):
   * On success: print "OK: ..." to stdout, write the JSON, exit 0.
@@ -288,28 +289,41 @@ def _chord_centerline(points, a, b, n_samples):
 # Public entry point
 # --------------------------------------------------------------------------
 
-def extract_centerline(points, a, b, n_samples=DEFAULT_SAMPLES):
+def extract_centerline(points, waypoints, n_samples=DEFAULT_SAMPLES):
     """Recover the centerline polyline + per-point radius from a wall point cloud.
 
-    points: (N,3) wall vertices. a, b: the clicked endpoints (3,). Returns
+    points: (N,3) wall vertices. waypoints: (K>=2, 3) clicked points, in order -
+    the wall path is walked leg by leg (A -> via1 -> ... -> B). Intermediate via
+    points disambiguate the route: a shortest path between just two points on a
+    CLOSED channel (a ring) can never cover more than half the loop, so a full
+    tour needs A and B side by side plus a via on the far side. Returns
     (centers (M,3), radii (M,), length) or raises ValueError on degenerate input.
     """
     points = np.asarray(points, dtype=float)
-    a = np.asarray(a, dtype=float)
-    b = np.asarray(b, dtype=float)
+    waypoints = np.asarray(waypoints, dtype=float)
     if points.ndim != 2 or points.shape[1] != 3 or points.shape[0] < MIN_RING_POINTS:
         raise ValueError("need at least a few 3D wall points")
-    if float(np.linalg.norm(b - a)) <= 0.0:
+    if waypoints.ndim != 2 or waypoints.shape[1] != 3 or waypoints.shape[0] < 2:
+        raise ValueError("need at least two waypoints")
+    a = waypoints[0]
+    b = waypoints[-1]
+    if float(np.linalg.norm(b - a)) <= 0.0 and waypoints.shape[0] == 2:
         raise ValueError("the two endpoints coincide")
 
-    # 1) Walk the wall from A to B.
+    # 1) Walk the wall leg by leg through the waypoints.
     Q = _subsample(points, MAX_GRAPH_POINTS)
-    start = int(np.linalg.norm(Q - a, axis=1).argmin())
-    goal = int(np.linalg.norm(Q - b, axis=1).argmin())
-    if start == goal:
-        raise ValueError("the two endpoints land on the same wall point")
     nbrs, nbrd = _knn(Q, KNN)
-    wall_path = _dijkstra_path(Q, start, goal, nbrs, nbrd)
+    stops = [int(np.linalg.norm(Q - w, axis=1).argmin()) for w in waypoints]
+    legs = []
+    for i in range(len(stops) - 1):
+        if stops[i] == stops[i + 1]:
+            continue  # two clicks snapped to the same wall point: skip the empty leg
+        leg = _dijkstra_path(Q, stops[i], stops[i + 1], nbrs, nbrd)
+        if leg is None:
+            legs = None
+            break
+        legs.append(leg if not legs else leg[1:])  # drop the duplicated joint node
+    wall_path = np.vstack(legs) if legs else None
     if wall_path is None or wall_path.shape[0] < 3:
         return _chord_centerline(points, a, b, n_samples)
 
@@ -376,22 +390,24 @@ def _read_wall_points(case_dir, patch):
 
 
 def main():
-    if len(sys.argv) != 10:
+    # argv: <caseDirOrFoamFile> <wallPatch> <out_centerline.json> <x y z> <x y z> [...]
+    # At least two waypoints (A and B); intermediate ones are via points, in order.
+    if len(sys.argv) < 4 + 6 or (len(sys.argv) - 4) % 3 != 0:
         sys.stderr.write(
             "usage: python extractCenterline.py <caseDirOrFoamFile> <wallPatch> "
-            "<ax> <ay> <az> <bx> <by> <bz> <out_centerline.json>\n"
+            "<out_centerline.json> <ax> <ay> <az> [<vx> <vy> <vz> ...] <bx> <by> <bz>\n"
         )
         sys.exit(2)
 
     arg_case = sys.argv[1]
     patch = sys.argv[2]
+    out_json = sys.argv[3]
     try:
-        a = [float(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5])]
-        b = [float(sys.argv[6]), float(sys.argv[7]), float(sys.argv[8])]
+        flat = [float(v) for v in sys.argv[4:]]
     except ValueError:
-        sys.stderr.write("KO: endpoint coordinates must be numbers\n")
+        sys.stderr.write("KO: waypoint coordinates must be numbers\n")
         sys.exit(1)
-    out_json = sys.argv[9]
+    waypoints = [flat[i : i + 3] for i in range(0, len(flat), 3)]
 
     try:
         if os.path.isfile(arg_case) and arg_case.lower().endswith(".foam"):
@@ -400,7 +416,7 @@ def main():
             case_dir = os.path.abspath(arg_case)
 
         points = _read_wall_points(case_dir, patch)
-        centers, radii, length = extract_centerline(points, a, b)
+        centers, radii, length = extract_centerline(points, waypoints)
         with open(out_json, "w") as fh:
             json.dump(
                 {
