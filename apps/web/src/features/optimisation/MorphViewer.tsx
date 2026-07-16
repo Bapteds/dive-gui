@@ -27,6 +27,9 @@ interface MorphPreview {
   stationA: number;
   stationB: number;
   blend: number;
+  /** Optional radial confinement (metres from the axis), like MorphDefinition. */
+  falloffStartM?: number;
+  falloffEndM?: number;
 }
 
 function readToken(name: string, fallback: string): string {
@@ -214,6 +217,8 @@ export function MorphViewer({
             preview.stationB,
             preview.blend,
             ratio,
+            preview.falloffStartM,
+            preview.falloffEndM,
           );
           out[i] = p[0];
           out[i + 1] = p[1];

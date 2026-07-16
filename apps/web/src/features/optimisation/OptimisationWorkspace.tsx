@@ -599,6 +599,14 @@ function SetupFlow({
     s.inletPatch !== s.outletPatch &&
     s.density > 0;
 
+  // Radial confinement derived from the measured wall radius: full scale over the
+  // channel itself, fading to zero a little beyond it, so a complex machine mesh
+  // (a spiral casing) never drags distant parts. Mirrors what the server bakes.
+  const falloffStartM =
+    baselineM !== null ? Number(((baselineM / 2) * 1.3).toPrecision(6)) : undefined;
+  const falloffEndM =
+    baselineM !== null ? Number(((baselineM / 2) * 2.2).toPrecision(6)) : undefined;
+
   const buildConfig = () => ({
     name: s.name.trim() || undefined,
     morph: {
@@ -608,6 +616,8 @@ function SetupFlow({
       stationB: STATION_B,
       blend: BLEND,
       baselineDiameterM: baselineM as number,
+      falloffStartM,
+      falloffEndM,
     },
     sweep: {
       minM: s.minU * UNIT_M[s.unit],
@@ -641,6 +651,8 @@ function SetupFlow({
           stationA: STATION_A,
           stationB: STATION_B,
           blend: BLEND,
+          falloffStartM,
+          falloffEndM,
         }
       : null;
 
