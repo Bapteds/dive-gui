@@ -570,6 +570,9 @@ export const MESHES_DIRNAME = 'meshes';
  * interface), so each step carries a `kind` (not a unique id) plus a human label.
  *   - prepare:                  stage a source as a case + prefix its patches (collision-free)
  *   - mergeMeshes:              combine an additional mesh into the master (OpenFOAM mergeMeshes)
+ *   - splitMeshRegions:         make one cellZone per combined region (OpenFOAM splitMeshRegions
+ *                               -makeCellZones), so the parts stay addressable after the merge
+ *                               (e.g. as the turbine MRF rotor cellZone). Runs before coupling.
  *   - stitchMesh:               conformally FUSE a chosen patch pair into an internal interface
  *   - nonConformalCouple:       NON-conformally COUPLE a chosen patch pair by retyping both
  *                               interface patches to cyclicAMI in place (keeps both parts'
@@ -580,6 +583,7 @@ export const MESHES_DIRNAME = 'meshes';
 export const MERGE_STEP_KINDS = [
   'prepare',
   'mergeMeshes',
+  'splitMeshRegions',
   'stitchMesh',
   'nonConformalCouple',
   'cleanup',
@@ -751,6 +755,13 @@ export interface MergeResult {
   notes: string[];
   /** Boundary patches of the resulting constant/polyMesh (empty on failure). */
   boundaryPatches: MeshPatch[];
+  /**
+   * cellZones of the resulting mesh — one per combined part, created by
+   * splitMeshRegions on a multi-part assembly (empty for a single mesh or on
+   * failure). These are the zones the turbine template can point MRFProperties at
+   * (a rotating region becomes the MRF rotor cellZone).
+   */
+  cellZones: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -2156,6 +2167,12 @@ export interface SweepConfig {
   stepM: number;
   /** The unit the user entered the range in (display only; the values above are metres). */
   unit: LengthUnit;
+  /**
+   * After the coarse pass, automatically zoom on the best value: sweep a second pass
+   * at stepM/4 within ±stepM of the coarse optimum (new values only, still capped by
+   * the run limit). Locates the optimum ~4x more precisely for a handful of extra runs.
+   */
+  refine?: boolean;
 }
 
 /**
@@ -2200,6 +2217,19 @@ export interface StudyMetrics {
   pressureDropPa: number;
   /** Head loss, metres of fluid column = Δp / (ρ g). */
   headLossM: number;
+  /**
+   * One standard deviation of the drop over the averaging window, Pascals. The drop
+   * is TAIL-AVERAGED over the last half of the run's iterations rather than read at
+   * the final one: on a run whose objective still oscillates (common for steady RANS
+   * on separated flows), the last-iteration value is a lottery draw inside the
+   * oscillation band, while the tail mean is stable. σ is the honest error bar on
+   * that mean. Absent on samples recorded before averaging existed.
+   */
+  pressureDropStdPa?: number;
+  /** One standard deviation of the head loss over the averaging window, metres. */
+  headLossStdM?: number;
+  /** How many iterations the tail average covered (1 = a single point, no averaging). */
+  averagedIterations?: number;
 }
 
 /**

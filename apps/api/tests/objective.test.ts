@@ -71,31 +71,77 @@ describe('injectObjectiveFunctions', () => {
 });
 
 describe('parseSurfaceFieldValueDat', () => {
-  it('returns the last data row value, skipping # comment lines', () => {
+  it('returns the full (time, value) series, skipping # comment lines', () => {
     const dat = `# Region type : patch inlet
 # Time          weightedAverage(divePTot)
 0               12.5
 1               11.2
 2               10.8
 `;
-    expect(parseSurfaceFieldValueDat(dat)).toBeCloseTo(10.8, 10);
+    expect(parseSurfaceFieldValueDat(dat)).toEqual([
+      { time: 0, value: 12.5 },
+      { time: 1, value: 11.2 },
+      { time: 2, value: 10.8 },
+    ]);
   });
 
-  it('returns null when there are no data rows', () => {
-    expect(parseSurfaceFieldValueDat('# only a header\n')).toBeNull();
-    expect(parseSurfaceFieldValueDat('')).toBeNull();
+  it('returns [] when there are no data rows', () => {
+    expect(parseSurfaceFieldValueDat('# only a header\n')).toEqual([]);
+    expect(parseSurfaceFieldValueDat('')).toEqual([]);
   });
 });
 
+/** Build a (time, value) series from plain numbers, times 1..n. */
+const series = (...values: number[]) => values.map((value, i) => ({ time: i + 1, value }));
+
 describe('computeMetrics', () => {
   it('converts the kinematic total-pressure drop to Pa and head loss', () => {
-    const m = computeMetrics(10, 4, 1000); // dpKin = 6
-    expect(m.pressureDropPa).toBeCloseTo(6000, 6); // 6 * 1000
-    expect(m.headLossM).toBeCloseTo(6 / 9.81, 10);
+    const m = computeMetrics(series(10), series(4), 1000); // dpKin = 6
+    expect(m?.pressureDropPa).toBeCloseTo(6000, 6); // 6 * 1000
+    expect(m?.headLossM).toBeCloseTo(6 / 9.81, 10);
   });
 
   it('uses the magnitude of the drop (sign-convention robust)', () => {
-    const m = computeMetrics(4, 10, 1000); // outlet higher -> still a 6 magnitude
-    expect(m.pressureDropPa).toBeCloseTo(6000, 6);
+    const m = computeMetrics(series(4), series(10), 1000); // outlet higher -> still 6
+    expect(m?.pressureDropPa).toBeCloseTo(6000, 6);
+  });
+
+  it('tail-averages an OSCILLATING drop instead of reading the last row', () => {
+    // Drop oscillates 4 <-> 8 around a true mean of 6. The last row alone would read
+    // 8 (a 33% error); the tail mean recovers 6 with an honest sigma of 2.
+    const inlet = series(14, 8, 14, 8, 14, 8, 14, 8);
+    const outlet = series(6, 4, 6, 4, 6, 4, 6, 4); // drop: 8,4,8,4,...
+    const m = computeMetrics(inlet, outlet, 1000);
+    expect(m?.pressureDropPa).toBeCloseTo(6000, 6);
+    expect(m?.pressureDropStdPa).toBeCloseTo(2000, 6);
+    expect(m?.averagedIterations).toBe(4); // the last half of 8 joined rows
+  });
+
+  it('is unchanged on a converged run (constant tail: mean == last value, sigma 0)', () => {
+    const inlet = series(12, 11, 10, 10, 10, 10);
+    const outlet = series(5, 4.5, 4, 4, 4, 4);
+    const m = computeMetrics(inlet, outlet, 1000);
+    expect(m?.pressureDropPa).toBeCloseTo(6000, 6);
+    expect(m?.pressureDropStdPa).toBeCloseTo(0, 10);
+  });
+
+  it('joins rows on the time key (unmatched rows are dropped)', () => {
+    const inlet = [
+      { time: 1, value: 10 },
+      { time: 2, value: 10 },
+      { time: 3, value: 10 },
+    ];
+    const outlet = [
+      { time: 2, value: 4 },
+      { time: 3, value: 4 },
+    ]; // no outlet row at t=1
+    const m = computeMetrics(inlet, outlet, 1000);
+    expect(m?.pressureDropPa).toBeCloseTo(6000, 6);
+    expect(m?.averagedIterations).toBe(1); // 2 joined rows -> tail = last 1
+  });
+
+  it('returns null when the series never overlap (patch mismatch)', () => {
+    expect(computeMetrics(series(10), [], 1000)).toBeNull();
+    expect(computeMetrics([], series(4), 1000)).toBeNull();
   });
 });

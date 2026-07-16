@@ -128,58 +128,96 @@ export function removeObjectiveFunctions(controlDict: string): string {
   return controlDict.slice(0, start) + controlDict.slice(end);
 }
 
+/** One data row of a surfaceFieldValue .dat: the iteration time + the probed value. */
+export interface DatSample {
+  time: number;
+  value: number;
+}
+
 /**
- * Parse a surfaceFieldValue .dat file: return the LAST data row's last column (the
- * final, converged averaged value), or null when the file has no data rows.
+ * Parse a surfaceFieldValue .dat file into its FULL (time, value) series: first
+ * column = iteration time, last column = the probed value. Comment/blank lines are
+ * skipped; returns [] when the file has no data rows.
  */
-export function parseSurfaceFieldValueDat(content: string): number | null {
-  let value: number | null = null;
+export function parseSurfaceFieldValueDat(content: string): DatSample[] {
+  const series: DatSample[] = [];
   for (const line of content.split(/\r?\n/)) {
     const t = line.trim();
     if (!t || t.startsWith('#')) continue;
     const tokens = t.split(/\s+/);
-    const v = Number(tokens[tokens.length - 1]);
-    if (Number.isFinite(v)) value = v;
+    const time = Number(tokens[0]);
+    const value = Number(tokens[tokens.length - 1]);
+    if (Number.isFinite(time) && Number.isFinite(value)) series.push({ time, value });
   }
-  return value;
+  return series;
 }
 
-/** Read the mass-flow-averaged value from a FO's latest postProcessing time folder. */
-async function readMassFlowAvg(caseDir: string, foName: string): Promise<number | null> {
+/** Read a probe's full series from its latest postProcessing time folder. */
+async function readProbeSeries(caseDir: string, foName: string): Promise<DatSample[]> {
   const dir = path.join(caseDir, 'postProcessing', foName);
   let entries: string[];
   try {
     entries = await fs.readdir(dir);
   } catch {
-    return null;
+    return [];
   }
   const times = entries
     .map((e) => ({ e, t: Number(e) }))
     .filter((x) => Number.isFinite(x.t))
     .sort((a, b) => a.t - b.t);
-  if (times.length === 0) return null;
+  if (times.length === 0) return [];
   const latest = times[times.length - 1].e;
   try {
     const dat = await fs.readFile(path.join(dir, latest, 'surfaceFieldValue.dat'), 'utf8');
     return parseSurfaceFieldValueDat(dat);
   } catch {
-    return null;
+    return [];
   }
 }
 
 /**
- * Turn inlet/outlet total pressures into the loss metrics. The drop is the magnitude
- * of the inlet-minus-outlet total pressure (a passive pipe loses total pressure
- * downstream); pressureDropPa multiplies the kinematic drop by density, head loss
- * divides by g.
+ * Turn the inlet/outlet total-pressure SERIES into the loss metrics.
+ *
+ * Precision: the drop is computed PER ITERATION (rows joined on their time key) and
+ * then TAIL-AVERAGED over the last half of the joined series, with its standard
+ * deviation as the error bar. Reading only the final row - the old behaviour - is a
+ * lottery draw on a run whose objective still oscillates (steady RANS on a separated
+ * flow oscillates by design); the tail mean of the same data is stable. On a truly
+ * converged run the tail is constant, so mean == last value and σ == 0: nothing
+ * changes for clean cases. Differencing per-row (not mean(in) - mean(out)) keeps the
+ * two probes' correlated swings out of σ.
+ *
+ * The drop is |mean| (a passive pipe loses total pressure downstream; the sign only
+ * encodes patch orientation); pressureDropPa multiplies the kinematic drop by
+ * density, head loss divides by g.
  */
 export function computeMetrics(
-  inletTotal: number,
-  outletTotal: number,
+  inlet: DatSample[],
+  outlet: DatSample[],
   densityKgM3: number,
-): StudyMetrics {
-  const dpKin = Math.abs(inletTotal - outletTotal); // kinematic drop (m^2/s^2)
-  return { pressureDropPa: dpKin * densityKgM3, headLossM: dpKin / GRAVITY };
+): StudyMetrics | null {
+  const outletByTime = new Map<number, number>();
+  for (const s of outlet) outletByTime.set(s.time, s.value);
+  const drops: number[] = [];
+  for (const s of inlet) {
+    const out = outletByTime.get(s.time);
+    if (out !== undefined) drops.push(s.value - out);
+  }
+  if (drops.length === 0) return null;
+
+  const tail = drops.slice(Math.floor(drops.length / 2));
+  const mean = tail.reduce((a, v) => a + v, 0) / tail.length;
+  const variance = tail.reduce((a, v) => a + (v - mean) * (v - mean), 0) / tail.length;
+  const std = Math.sqrt(variance);
+
+  const dpKin = Math.abs(mean); // kinematic drop (m^2/s^2)
+  return {
+    pressureDropPa: dpKin * densityKgM3,
+    headLossM: dpKin / GRAVITY,
+    pressureDropStdPa: std * densityKgM3,
+    headLossStdM: std / GRAVITY,
+    averagedIterations: tail.length,
+  };
 }
 
 /**
@@ -190,8 +228,7 @@ export async function readObjective(
   caseDir: string,
   densityKgM3: number,
 ): Promise<StudyMetrics | null> {
-  const inlet = await readMassFlowAvg(caseDir, INLET_FO);
-  const outlet = await readMassFlowAvg(caseDir, OUTLET_FO);
-  if (inlet === null || outlet === null) return null;
+  const inlet = await readProbeSeries(caseDir, INLET_FO);
+  const outlet = await readProbeSeries(caseDir, OUTLET_FO);
   return computeMetrics(inlet, outlet, densityKgM3);
 }
