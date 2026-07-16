@@ -24,6 +24,12 @@ function metricValue(sample: StudySample, primary: StudyMetric): number | null {
   return primary === 'headLoss' ? sample.metrics.headLossM : sample.metrics.pressureDropPa;
 }
 
+/** One standard deviation of the tail-averaged objective (absent on legacy samples). */
+function metricStd(sample: StudySample, primary: StudyMetric): number | undefined {
+  if (sample.status !== 'done' || !sample.metrics) return undefined;
+  return primary === 'headLoss' ? sample.metrics.headLossStdM : sample.metrics.pressureDropStdPa;
+}
+
 /** Compact number for axis ticks and labels (SI-ish, avoids overlong strings). */
 function fmt(n: number): string {
   const abs = Math.abs(n);
@@ -34,11 +40,13 @@ function fmt(n: number): string {
 interface Row {
   diameterUnit: number;
   loss: number;
+  /** One standard deviation of the tail-averaged loss (the error bar), if known. */
+  std?: number;
   isBest: boolean;
 }
 
 interface Model {
-  points: { x: number; y: number; row: Row }[];
+  points: { x: number; y: number; yLo?: number; yHi?: number; row: Row }[];
   xTicks: { x: number; label: string }[];
   yTicks: { y: number; label: string }[];
   baselineY: number;
@@ -60,8 +68,9 @@ function buildModel(
   for (const r of rows) {
     xMin = Math.min(xMin, r.diameterUnit);
     xMax = Math.max(xMax, r.diameterUnit);
-    yMin = Math.min(yMin, r.loss);
-    yMax = Math.max(yMax, r.loss);
+    const half = r.std ?? 0; // the error bars must fit inside the plot too
+    yMin = Math.min(yMin, r.loss - half);
+    yMax = Math.max(yMax, r.loss + half);
   }
   if (xMax === xMin) xMax = xMin + 1;
   // Pad the Y range a little and never let it collapse to a line.
@@ -75,7 +84,13 @@ function buildModel(
   const xScale = (v: number) => PAD.left + ((v - xMin) / (xMax - xMin)) * plotW;
   const yScale = (v: number) => PAD.top + ((yMax - v) / (yMax - yMin)) * plotH;
 
-  const points = rows.map((row) => ({ x: xScale(row.diameterUnit), y: yScale(row.loss), row }));
+  const points = rows.map((row) => ({
+    x: xScale(row.diameterUnit),
+    y: yScale(row.loss),
+    yLo: row.std !== undefined && row.std > 0 ? yScale(row.loss - row.std) : undefined,
+    yHi: row.std !== undefined && row.std > 0 ? yScale(row.loss + row.std) : undefined,
+    row,
+  }));
 
   const tickN = 5;
   const xTicks = Array.from({ length: tickN }, (_, i) => {
@@ -135,6 +150,7 @@ export function LossChart({
       out.push({
         diameterUnit: sample.diameterM / UNIT_M[unit],
         loss,
+        std: metricStd(sample, primary),
         isBest:
           bestDiameterM !== undefined && Math.abs(sample.diameterM - bestDiameterM) < 1e-12,
       });
@@ -211,6 +227,16 @@ export function LossChart({
             {`diameter (${unit})`}
           </text>
 
+          {/* +/- one-sigma error bars of the tail-averaged objective (light blue). */}
+          {model.points.map((p, i) =>
+            p.yLo !== undefined && p.yHi !== undefined ? (
+              <g key={`err-${i}`} stroke="var(--color-primary-light)" strokeWidth={1.25}>
+                <line x1={p.x} x2={p.x} y1={p.yHi} y2={p.yLo} />
+                <line x1={p.x - 3.5} x2={p.x + 3.5} y1={p.yHi} y2={p.yHi} />
+                <line x1={p.x - 3.5} x2={p.x + 3.5} y1={p.yLo} y2={p.yLo} />
+              </g>
+            ) : null,
+          )}
           {/* The loss curve (primary blue). */}
           <polyline
             points={model.points.map((p) => `${p.x},${p.y}`).join(' ')}
@@ -270,7 +296,12 @@ export function LossChart({
                         <span className="ml-1.5 font-semibold text-accent-hover">optimum</span>
                       )}
                     </th>
-                    <td className="px-3 py-1.5 text-text-secondary">{fmt(row.loss)}</td>
+                    <td className="px-3 py-1.5 text-text-secondary">
+                      {fmt(row.loss)}
+                      {row.std !== undefined && row.std > 0 && (
+                        <span className="text-text-secondary/70"> ± {fmt(row.std)}</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -23,7 +23,14 @@ import {
   Trash2,
   XCircle,
 } from 'lucide-react';
-import type { LengthUnit, MeshPatch, Study, StudyMetric, StudySample } from '@/lib/api/types';
+import type {
+  LengthUnit,
+  MeshPatch,
+  Study,
+  StudyMetric,
+  StudyMetrics,
+  StudySample,
+} from '@/lib/api/types';
 import { useMeshGeometryQuery, useMeshManifestQuery } from '@/features/visualize/useMesh';
 import { useRunLogQuery } from '@/features/solver/useRuns';
 import { ResidualChart } from '@/features/solver/ResidualChart';
@@ -500,18 +507,64 @@ function SummaryRow({ label, value }: { label: string; value: ReactNode }) {
 
 function toCsv(study: Study): string {
   const u = study.sweep.unit;
-  const header = ['diameter_m', `diameter_${u}`, 'status', 'pressureDrop_Pa', 'headLoss_m', 'runId'];
+  const header = [
+    'diameter_m',
+    `diameter_${u}`,
+    'status',
+    'pressureDrop_Pa',
+    'pressureDropStd_Pa',
+    'headLoss_m',
+    'headLossStd_m',
+    'averagedIterations',
+    'runId',
+  ];
   const lines = study.samples.map((x) =>
     [
       x.diameterM,
       x.diameterM / UNIT_M[u],
       x.status,
       x.metrics?.pressureDropPa ?? '',
+      x.metrics?.pressureDropStdPa ?? '',
       x.metrics?.headLossM ?? '',
+      x.metrics?.headLossStdM ?? '',
+      x.metrics?.averagedIterations ?? '',
       x.runId ?? '',
     ].join(','),
   );
   return [header.join(','), ...lines].join('\n');
+}
+
+/**
+ * Parabolic (three-point) estimate of the true optimum: fit a parabola through the
+ * best sampled diameter and its two neighbours and return its vertex. The sweep grid
+ * can only locate the minimum to +/- one step; if the underlying loss curve is smooth
+ * (a pipe loss curve is), the vertex lands between grid points with sub-step
+ * precision. Returns null when the minimum sits on the edge of the range (no
+ * bracket), the fit is not convex, or fewer than 3 values solved.
+ */
+function parabolicOptimumM(samples: StudySample[], primary: StudyMetric): number | null {
+  const pts = samples
+    .filter((x) => x.status === 'done' && x.metrics)
+    .map((x) => ({
+      d: x.diameterM,
+      v:
+        primary === 'headLoss'
+          ? (x.metrics as StudyMetrics).headLossM
+          : (x.metrics as StudyMetrics).pressureDropPa,
+    }))
+    .sort((p, q) => p.d - q.d);
+  if (pts.length < 3) return null;
+  let i = 0;
+  for (let k = 1; k < pts.length; k += 1) if (pts[k].v < pts[i].v) i = k;
+  if (i === 0 || i === pts.length - 1) return null; // minimum on the edge: no bracket
+  const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+  const denom = (a.d - b.d) * (a.d - c.d) * (b.d - c.d);
+  if (denom === 0) return null;
+  const A = (c.d * (b.v - a.v) + b.d * (a.v - c.v) + a.d * (c.v - b.v)) / denom;
+  const B = (c.d * c.d * (a.v - b.v) + b.d * b.d * (c.v - a.v) + a.d * a.d * (b.v - c.v)) / denom;
+  if (!(A > 0)) return null; // not convex around the minimum
+  const vertex = -B / (2 * A);
+  return vertex > a.d && vertex < c.d ? vertex : null;
 }
 
 function downloadCsv(study: Study): void {
@@ -532,6 +585,8 @@ interface SetupSweep {
   minU: number;
   maxU: number;
   stepU: number;
+  /** Auto-zoom: a finer second pass (step/4) around the coarse optimum. */
+  refine: boolean;
   inletPatch: string;
   outletPatch: string;
   primary: StudyMetric;
@@ -545,6 +600,7 @@ function defaultSweep(): SetupSweep {
     minU: 0,
     maxU: 0,
     stepU: 0,
+    refine: true,
     inletPatch: '',
     outletPatch: '',
     primary: 'pressureDrop',
@@ -681,6 +737,7 @@ function SetupFlow({
       maxM: s.maxU * UNIT_M[s.unit],
       stepM: s.stepU * UNIT_M[s.unit],
       unit: s.unit,
+      refine: s.refine,
     },
     objective: {
       inletPatch: s.inletPatch,
@@ -954,6 +1011,21 @@ function SetupFlow({
             Pre-filled around the measured diameter after the trace.
           </p>
         )}
+        <label className="mt-3 flex cursor-pointer items-start gap-2 text-sm text-text">
+          <input
+            type="checkbox"
+            checked={s.refine}
+            onChange={(e) => set({ refine: e.target.checked })}
+            className="mt-0.5 size-4 shrink-0 cursor-pointer accent-[var(--color-primary)]"
+          />
+          <span>
+            Refine around the optimum
+            <span className="block text-xs font-normal text-text-secondary">
+              After the sweep, re-sample at step/4 around the best value (up to 6 extra runs) to
+              pin the optimum ~4x more precisely.
+            </span>
+          </span>
+        </label>
       </RailSection>
 
       <RailSection title="Loss objective" icon={Target}>
@@ -1065,6 +1137,7 @@ function StudySummary({ study }: { study: Study }) {
           )} ${u}`}
         />
         <SummaryRow label="Diameters" value={study.samples.length} />
+        <SummaryRow label="Refine pass" value={study.sweep.refine ? 'On (step/4 zoom)' : 'Off'} />
         <SummaryRow
           label="Objective"
           value={study.objective.primary === 'headLoss' ? 'Head loss' : 'Pressure drop'}
@@ -1272,11 +1345,28 @@ function FinishedView({
   const bestSample = study.samples.find(
     (x) => study.bestDiameterM !== undefined && Math.abs(x.diameterM - study.bestDiameterM) < 1e-12,
   );
+  const isHead = study.objective.primary === 'headLoss';
+  const bestStd = isHead
+    ? bestSample?.metrics?.headLossStdM
+    : bestSample?.metrics?.pressureDropStdPa;
   const bestLoss = bestSample?.metrics
-    ? study.objective.primary === 'headLoss'
-      ? `${Number(bestSample.metrics.headLossM.toPrecision(4))} m`
-      : `${Number(bestSample.metrics.pressureDropPa.toPrecision(4))} Pa`
+    ? `${Number(
+        (isHead ? bestSample.metrics.headLossM : bestSample.metrics.pressureDropPa).toPrecision(4),
+      )}${bestStd !== undefined && bestStd > 0 ? ` ± ${Number(bestStd.toPrecision(2))}` : ''} ${
+        isHead ? 'm' : 'Pa'
+      }`
     : '-';
+  // Sub-step estimate of the true optimum (parabola through the best + neighbours).
+  const fitOptimumM = parabolicOptimumM(study.samples, study.objective.primary);
+  // Runs whose tail-averaged objective still swings by more than 10%: flag them so
+  // an oscillation-driven "optimum" is never taken at face value.
+  const noisySamples = doneSamples.filter((x) => {
+    const m = x.metrics;
+    if (!m) return false;
+    const std = isHead ? m.headLossStdM : m.pressureDropStdPa;
+    const value = isHead ? m.headLossM : m.pressureDropPa;
+    return std !== undefined && value > 0 && std / value > 0.1;
+  });
 
   const stage = (
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5">
@@ -1292,6 +1382,11 @@ function FinishedView({
           <span className="text-lg font-semibold tabular-nums text-accent-hover">
             {study.bestDiameterM !== undefined ? fmtDiameter(study.bestDiameterM, study.sweep.unit) : '-'}
           </span>
+          {fitOptimumM !== null && (
+            <span className="text-xs tabular-nums text-text-secondary">
+              curve fit ≈ {fmtDiameter(fitOptimumM, study.sweep.unit)}
+            </span>
+          )}
         </div>
         <div className="flex flex-col gap-0.5">
           <span className="text-xs text-text-secondary">
@@ -1312,6 +1407,16 @@ function FinishedView({
           </span>
         </div>
       </div>
+      {noisySamples.length > 0 && (
+        <div className="mb-4 flex items-start gap-2 rounded-md border border-border bg-accent-tint px-4 py-3 text-sm text-accent-hover">
+          <AlertTriangle size={16} strokeWidth={1.75} className="mt-0.5 shrink-0" aria-hidden="true" />
+          <span>
+            On {noisySamples.length} run{noisySamples.length === 1 ? '' : 's'} the objective was
+            still oscillating by over 10% (see the error bars). The values are averaged over the
+            tail of each run, but for tighter results increase the solver iterations (endTime).
+          </span>
+        </div>
+      )}
       <LossChart
         samples={study.samples}
         primary={study.objective.primary}
