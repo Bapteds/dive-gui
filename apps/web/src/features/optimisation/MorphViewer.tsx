@@ -84,6 +84,7 @@ export function MorphViewer({
   tiltA,
   tiltB,
   falloffEndM,
+  flowEnabled = true,
   pickMode,
   onPlaceRing,
   morphPreview,
@@ -101,6 +102,12 @@ export function MorphViewer({
    * back to FALLOFF_END_FACTOR x the mean ring radius when absent.
    */
   falloffEndM?: number;
+  /**
+   * Animate the liquid through the zone: particles enter at ring A and leave at
+   * ring B, making the flow direction legible at a glance. Ignored (always off)
+   * under prefers-reduced-motion. Default on.
+   */
+  flowEnabled?: boolean;
   /** Which ring the next click drops (null = clicks just orbit). */
   pickMode: 'A' | 'B' | null;
   /** Fired when a ring is dropped or dragged to a new spot on the shape. */
@@ -118,6 +125,7 @@ export function MorphViewer({
   const tiltARef = useRef<Tilt>(tiltA);
   const tiltBRef = useRef<Tilt>(tiltB);
   const falloffEndRef = useRef<number | undefined>(falloffEndM);
+  const flowEnabledRef = useRef(flowEnabled);
   const previewRef = useRef<MorphPreview | null>(morphPreview);
   onPlaceRingRef.current = onPlaceRing;
   pickModeRef.current = pickMode;
@@ -127,11 +135,13 @@ export function MorphViewer({
   tiltARef.current = tiltA;
   tiltBRef.current = tiltB;
   falloffEndRef.current = falloffEndM;
+  flowEnabledRef.current = flowEnabled;
   previewRef.current = morphPreview;
 
   const resetViewRef = useRef<() => void>(() => {});
   const syncOverlayRef = useRef<() => void>(() => {});
   const applyMorphRef = useRef<() => void>(() => {});
+  const kickFlowRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const container = containerRef.current;
@@ -200,6 +210,116 @@ export function MorphViewer({
 
     const tracked: Tracked[] = [];
     let modelRadius = 1;
+
+    // ---- flow animation: liquid entering at ring A, leaving at ring B ------------
+    // A light particle cloud travelling along the axis inside the tube. Utilitarian
+    // motion (it shows the flow direction through the zone), token colours only, and
+    // fully off under prefers-reduced-motion. Runs its own rAF loop ONLY while both
+    // rings are placed and the toggle is on, so an idle viewer stays on-demand.
+    const FLOW_N = 64;
+    const flowPos = new Float32Array(FLOW_N * 3);
+    const flowGeom = new THREE.BufferGeometry();
+    flowGeom.setAttribute('position', new THREE.BufferAttribute(flowPos, 3));
+    const flowMat = new THREE.PointsMaterial({
+      color: primaryLight.clone(),
+      size: 1,
+      sizeAttenuation: true,
+      transparent: true,
+      opacity: 0.85,
+      depthWrite: false,
+    });
+    const flowCloud = new THREE.Points(flowGeom, flowMat);
+    flowCloud.visible = false;
+    flowCloud.renderOrder = 3;
+    flowCloud.frustumCulled = false; // positions churn every frame
+    overlay.add(flowCloud);
+    // Per particle: arc fraction, angle + radius inside the tube, speed jitter.
+    const pS = new Float32Array(FLOW_N);
+    const pAng = new Float32Array(FLOW_N);
+    const pRad = new Float32Array(FLOW_N);
+    const pVel = new Float32Array(FLOW_N);
+    for (let i = 0; i < FLOW_N; i += 1) {
+      pS[i] = Math.random();
+      pAng[i] = Math.random() * Math.PI * 2;
+      pRad[i] = Math.sqrt(Math.random()) * 0.65; // area-uniform across the section
+      pVel[i] = 0.75 + Math.random() * 0.5;
+    }
+    // The sampled axis the particles follow (rebuilt by syncOverlay).
+    let flowField: { pts: Vec3[]; cum: number[]; total: number; radius: number } | null = null;
+
+    /** Write one particle's world position (axis point + radial offset). */
+    const flowWrite = (i: number): void => {
+      const f = flowField!;
+      const s = pS[i] * f.total;
+      let k = 0;
+      while (k < f.cum.length - 2 && f.cum[k + 1] < s) k += 1;
+      const seg = f.cum[k + 1] - f.cum[k] || 1;
+      const t = (s - f.cum[k]) / seg;
+      const a = f.pts[k];
+      const b = f.pts[k + 1];
+      // Tangent + a stable perpendicular basis (same up-vector trick as tiltFrame).
+      let dx = b[0] - a[0];
+      let dy = b[1] - a[1];
+      let dz = b[2] - a[2];
+      const dl = Math.hypot(dx, dy, dz) || 1;
+      dx /= dl;
+      dy /= dl;
+      dz /= dl;
+      const upZ = Math.abs(dz) < 0.9;
+      // u = d x up, v = d x u
+      const ux = upZ ? dy : 0;
+      const uy = upZ ? -dx : dz;
+      const uz = upZ ? 0 : -dy;
+      const ul = Math.hypot(ux, uy, uz) || 1;
+      const vx = dy * (uz / ul) - dz * (uy / ul);
+      const vy = dz * (ux / ul) - dx * (uz / ul);
+      const vz = dx * (uy / ul) - dy * (ux / ul);
+      const r = pRad[i] * f.radius;
+      const ca = Math.cos(pAng[i]) * r;
+      const sa = Math.sin(pAng[i]) * r;
+      flowPos[3 * i] = a[0] + (b[0] - a[0]) * t + (ux / ul) * ca + vx * sa;
+      flowPos[3 * i + 1] = a[1] + (b[1] - a[1]) * t + (uy / ul) * ca + vy * sa;
+      flowPos[3 * i + 2] = a[2] + (b[2] - a[2]) * t + (uz / ul) * ca + vz * sa;
+    };
+
+    let flowRaf = 0;
+    let flowLastT = 0;
+    const flowLoop = (now: number): void => {
+      flowRaf = 0;
+      if (disposed) return;
+      const active = !reduceMotion && flowEnabledRef.current && flowField !== null;
+      if (flowCloud.visible !== active) {
+        flowCloud.visible = active;
+        requestRender(); // one frame to show/hide the cloud
+      }
+      if (!active) {
+        flowLastT = 0;
+        return; // loop parks itself; kickFlow restarts it
+      }
+      const dt = flowLastT ? Math.min((now - flowLastT) / 1000, 0.05) : 0.016;
+      flowLastT = now;
+      for (let i = 0; i < FLOW_N; i += 1) {
+        pS[i] += dt * 0.35 * pVel[i]; // ~3 s to traverse the zone
+        if (pS[i] >= 1) {
+          // The particle LEFT at ring B: a new one ENTERS at ring A.
+          pS[i] -= 1;
+          pAng[i] = Math.random() * Math.PI * 2;
+          pRad[i] = Math.sqrt(Math.random()) * 0.65;
+        }
+        flowWrite(i);
+      }
+      (flowGeom.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+      controls.update();
+      renderer.render(scene, camera);
+      flowRaf = requestAnimationFrame(flowLoop);
+    };
+    const kickFlow = (): void => {
+      if (!disposed && flowRaf === 0) {
+        flowLastT = 0;
+        flowRaf = requestAnimationFrame(flowLoop);
+      }
+    };
+    kickFlowRef.current = kickFlow;
 
     const fitView = () => {
       const box = new THREE.Box3().setFromObject(meshRoot);
@@ -352,12 +472,26 @@ export function MorphViewer({
     };
 
     const syncOverlay = () => {
-      drawRings(
-        ringARef.current,
-        ringBRef.current,
-        (centerlineRef.current?.points as Vec3[] | undefined) ?? null,
-      );
+      const axisPts = (centerlineRef.current?.points as Vec3[] | undefined) ?? null;
+      drawRings(ringARef.current, ringBRef.current, axisPts);
       recolorZone(centerlineRef.current, ringARef.current, ringBRef.current);
+      // Rebuild the flow field the particles travel along (null hides the cloud).
+      const a = ringARef.current;
+      const b = ringBRef.current;
+      if (axisPts && axisPts.length >= 2 && a && b) {
+        const cum = [0];
+        let total = 0;
+        for (let i = 1; i < axisPts.length; i += 1) {
+          total += dist3(axisPts[i - 1], axisPts[i]);
+          cum.push(total);
+        }
+        const radius = meanRadius(a, b);
+        flowField = total > 0 && radius > 0 ? { pts: axisPts, cum, total, radius } : null;
+        if (flowField) flowMat.size = radius * 0.16;
+      } else {
+        flowField = null;
+      }
+      kickFlow();
       requestRender();
     };
     syncOverlayRef.current = syncOverlay;
@@ -563,6 +697,7 @@ export function MorphViewer({
     return () => {
       disposed = true;
       cancelAnimationFrame(rafId);
+      cancelAnimationFrame(flowRaf);
       controls.removeEventListener('change', requestRender);
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener('pointerdown', onDown);
@@ -574,6 +709,8 @@ export function MorphViewer({
       dotGeom.dispose();
       matA.dispose();
       matB.dispose();
+      flowGeom.dispose();
+      flowMat.dispose();
       scene.traverse((object) => {
         const mesh = object as THREE.Mesh;
         if (mesh.isMesh) mesh.geometry?.dispose?.();
@@ -584,6 +721,7 @@ export function MorphViewer({
       resetViewRef.current = () => {};
       syncOverlayRef.current = () => {};
       applyMorphRef.current = () => {};
+      kickFlowRef.current = () => {};
       renderer.dispose();
       // dispose() frees buffers/programs but NOT the GL context; release it so we do
       // not hit the browser's live-context cap after many tab/study remounts.
@@ -607,6 +745,11 @@ export function MorphViewer({
   useEffect(() => {
     applyMorphRef.current();
   }, [morphPreview, centerline]);
+
+  // Restart the parked flow loop when the toggle flips back on.
+  useEffect(() => {
+    kickFlowRef.current();
+  }, [flowEnabled]);
 
   return (
     <div

@@ -21,6 +21,7 @@ import {
   Square,
   Target,
   Trash2,
+  Waves,
   XCircle,
 } from 'lucide-react';
 import type {
@@ -661,6 +662,7 @@ function SetupFlow({
   const [tiltB, setTiltB] = useState<Tilt>(NO_TILT);
   const [pickMode, setPickMode] = useState<'A' | 'B' | null>('A');
   const [previewU, setPreviewU] = useState<number | null>(null);
+  const [flowOn, setFlowOn] = useState(true);
   // Sweep + objective.
   const [s, setS] = useState<SetupSweep>(defaultSweep);
   const set = (patch: Partial<SetupSweep>) => setS((prev) => ({ ...prev, ...patch }));
@@ -827,18 +829,34 @@ function SetupFlow({
           onToggle={() => setPickMode((m) => (m === 'B' ? null : 'B'))}
         />
         {bothPlaced && (
-          <SecondaryButton
-            className="px-2.5 py-1.5 text-xs"
-            onClick={() => {
-              setRingA(null);
-              setRingB(null);
-              setTiltA(NO_TILT);
-              setTiltB(NO_TILT);
-              setPickMode('A');
-            }}
-          >
-            Clear rings
-          </SecondaryButton>
+          <>
+            <SecondaryButton
+              className="px-2.5 py-1.5 text-xs"
+              onClick={() => {
+                setRingA(null);
+                setRingB(null);
+                setTiltA(NO_TILT);
+                setTiltB(NO_TILT);
+                setPickMode('A');
+              }}
+            >
+              Clear rings
+            </SecondaryButton>
+            <button
+              type="button"
+              aria-pressed={flowOn}
+              onClick={() => setFlowOn((v) => !v)}
+              title="Animate the liquid through the zone"
+              className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring ${
+                flowOn
+                  ? 'border-primary bg-primary-tint text-primary'
+                  : 'border-border-strong bg-surface text-text hover:bg-primary-tint'
+              }`}
+            >
+              <Waves size={13} strokeWidth={1.75} aria-hidden="true" />
+              Flow
+            </button>
+          </>
         )}
         <span className="ml-auto text-xs text-text-secondary">
           Click the shape to drop a ring; drag a ring to move it anywhere.
@@ -854,6 +872,7 @@ function SetupFlow({
             tiltA={tiltA}
             tiltB={tiltB}
             falloffEndM={falloffEndM}
+            flowEnabled={flowOn}
             pickMode={pickMode}
             onPlaceRing={onPlaceRing}
             morphPreview={morphPreview}
