@@ -516,6 +516,9 @@ function toCsv(study: Study): string {
     'headLoss_m',
     'headLossStd_m',
     'averagedIterations',
+    'maxNonOrtho_deg',
+    'maxSkewness',
+    'wallYPlusAvg',
     'runId',
   ];
   const lines = study.samples.map((x) =>
@@ -528,6 +531,9 @@ function toCsv(study: Study): string {
       x.metrics?.headLossM ?? '',
       x.metrics?.headLossStdM ?? '',
       x.metrics?.averagedIterations ?? '',
+      x.quality?.maxNonOrtho ?? '',
+      x.quality?.maxSkewness ?? '',
+      x.yPlus?.avg ?? '',
       x.runId ?? '',
     ].join(','),
   );
@@ -1417,6 +1423,13 @@ function FinishedView({
     const value = isHead ? m.headLossM : m.pressureDropPa;
     return std !== undefined && value > 0 && std / value > 0.1;
   });
+  // Physics trust: the worst wall y+ across the sweep. Wall functions want ~30-300;
+  // far outside, the ABSOLUTE loss is biased (the diameter ranking usually survives).
+  const worstYPlus = doneSamples.reduce<StudySample['yPlus']>(
+    (worst, x) => (x.yPlus && (!worst || x.yPlus.avg > worst.avg) ? x.yPlus : worst),
+    undefined,
+  );
+  const yPlusOff = worstYPlus !== undefined && (worstYPlus.avg > 300 || worstYPlus.avg < 30);
 
   const stage = (
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5">
@@ -1464,6 +1477,17 @@ function FinishedView({
             On {noisySamples.length} run{noisySamples.length === 1 ? '' : 's'} the objective was
             still oscillating by over 10% (see the error bars). The values are averaged over the
             tail of each run, but for tighter results increase the solver iterations (endTime).
+          </span>
+        </div>
+      )}
+      {yPlusOff && worstYPlus && (
+        <div className="mb-4 flex items-start gap-2 rounded-md border border-border bg-accent-tint px-4 py-3 text-sm text-accent-hover">
+          <AlertTriangle size={16} strokeWidth={1.75} className="mt-0.5 shrink-0" aria-hidden="true" />
+          <span>
+            Wall y+ on <span translate="no">{worstYPlus.patch}</span> averages{' '}
+            {Number(worstYPlus.avg.toPrecision(3))} (wall functions expect roughly 30 to 300). The
+            absolute loss values are biased by this; the diameter ranking usually survives, but
+            treat the Pa numbers with care. Refining the mesh near the walls fixes it.
           </span>
         </div>
       )}

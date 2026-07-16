@@ -30,4 +30,22 @@ describe('parseCheckMesh', () => {
     expect(v.negativeVolumeCells).toBe(0);
     expect(v.note).toMatch(/2 non-fatal/);
   });
+
+  it('extracts the quality numbers (max non-orthogonality / skewness)', () => {
+    const out =
+      'Checking geometry...\n' +
+      '    Mesh non-orthogonality Max: 64.8969 average: 17.7089\n' +
+      '    Max skewness = 1.85604 OK.\n' +
+      'Mesh OK.\n';
+    const v = parseCheckMesh(out);
+    expect(v.maxNonOrtho).toBeCloseTo(64.8969, 4);
+    expect(v.maxSkewness).toBeCloseTo(1.85604, 5);
+    expect(v.ok).toBe(true);
+  });
+
+  it('leaves the quality numbers undefined when checkMesh does not print them', () => {
+    const v = parseCheckMesh('Mesh OK.\n');
+    expect(v.maxNonOrtho).toBeUndefined();
+    expect(v.maxSkewness).toBeUndefined();
+  });
 });

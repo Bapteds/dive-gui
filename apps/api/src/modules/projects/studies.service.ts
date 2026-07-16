@@ -31,6 +31,8 @@ import { caseDirAbsolute, caseFileExists } from '../../lib/caseStorage';
 import { extractCenterline, type CenterlineResult } from '../../lib/centerlineExtract';
 import { runCheckMeshGate } from '../../lib/checkMeshGate';
 import { morphMeshPoints } from '../../lib/meshTransform';
+import { parseYPlus } from '../../lib/residualParser';
+import { readRunLog } from '../../lib/runStorage';
 import {
   injectObjectiveFunctions,
   readObjective,
@@ -411,10 +413,16 @@ async function runSweep(viewer: Viewer, projectId: string, studyId: string): Pro
     // a) Morph from the pristine original (never compound).
     await fs.writeFile(pointsPath, morphMeshPoints(original, doc.morph, diameterM));
 
-    // b) checkMesh gate — skip a value whose morph inverts cells.
+    // b) checkMesh gate — skip a value whose morph inverts cells. Its quality numbers
+    // (max non-orthogonality / skewness of the MORPHED mesh) ride along on the sample
+    // so extreme diameters' loss values can be trusted accordingly.
     const gate = await runCheckMeshGate(caseDir);
+    const quality =
+      gate.available && (gate.maxNonOrtho !== undefined || gate.maxSkewness !== undefined)
+        ? { maxNonOrtho: gate.maxNonOrtho, maxSkewness: gate.maxSkewness }
+        : undefined;
     if (!gate.ok) {
-      doc.samples[i] = { diameterM, status: 'meshFailed', note: gate.note };
+      doc.samples[i] = { diameterM, status: 'meshFailed', quality, note: gate.note };
       await persistSweep(projectId, studyId, doc);
       return;
     }
@@ -442,7 +450,15 @@ async function runSweep(viewer: Viewer, projectId: string, studyId: string): Pro
     if (finalStatus === 'converged' || finalStatus === 'completed') {
       const metrics = await readObjective(caseDir, doc.objective.densityKgM3);
       if (metrics) {
-        doc.samples[i] = { diameterM, status: 'done', runId, metrics };
+        // Physics trust: if the case runs a yPlus FO, keep the worst wall patch's
+        // stats (nothing is injected; a case without the FO simply yields none).
+        const yLog = await readRunLog(projectId, runId, 0, 262144).catch(() => null);
+        const yEntries = yLog ? parseYPlus(yLog.content) : [];
+        const yPlus =
+          yEntries.length > 0
+            ? yEntries.reduce((worst, e) => (e.avg > worst.avg ? e : worst))
+            : undefined;
+        doc.samples[i] = { diameterM, status: 'done', runId, metrics, quality, yPlus };
         const value = primaryMetricValue(metrics, doc.objective.primary);
         if (value < bestValue) {
           bestValue = value;

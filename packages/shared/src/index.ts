@@ -2245,6 +2245,20 @@ export interface StudySample {
   runId?: string;
   /** Measured metrics (present when status === 'done'). */
   metrics?: StudyMetrics;
+  /**
+   * checkMesh quality of the MORPHED mesh this value solved on: how much the stretch
+   * degraded it. maxNonOrtho in degrees (> ~70 is OpenFOAM's own warning level),
+   * maxSkewness dimensionless (> ~4 alarms). Extreme values mean the loss number for
+   * this diameter deserves less trust than its neighbours'.
+   */
+  quality?: { maxNonOrtho?: number; maxSkewness?: number };
+  /**
+   * Worst wall y+ printed by the run's own yPlus functionObject (last write wins;
+   * the patch with the highest average is kept). Wall functions are valid roughly
+   * for 30 < y+ < 300; far outside that band the ABSOLUTE loss is biased (the
+   * diameter RANKING usually survives). Absent when the case has no yPlus FO.
+   */
+  yPlus?: { patch: string; min: number; max: number; avg: number };
   /** Short explanation when meshFailed / failed / skipped (e.g. the checkMesh reason). */
   note?: string;
 }

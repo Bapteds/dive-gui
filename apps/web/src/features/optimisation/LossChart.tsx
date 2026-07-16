@@ -42,6 +42,10 @@ interface Row {
   loss: number;
   /** One standard deviation of the tail-averaged loss (the error bar), if known. */
   std?: number;
+  /** Max non-orthogonality (deg) of the morphed mesh this value solved on. */
+  nonOrtho?: number;
+  /** Worst wall-patch average y+ of the run (wall functions want ~30-300). */
+  yPlusAvg?: number;
   isBest: boolean;
 }
 
@@ -151,6 +155,8 @@ export function LossChart({
         diameterUnit: sample.diameterM / UNIT_M[unit],
         loss,
         std: metricStd(sample, primary),
+        nonOrtho: sample.quality?.maxNonOrtho,
+        yPlusAvg: sample.yPlus?.avg,
         isBest:
           bestDiameterM !== undefined && Math.abs(sample.diameterM - bestDiameterM) < 1e-12,
       });
@@ -285,6 +291,16 @@ export function LossChart({
                   <th scope="col" className="px-3 py-1.5 font-medium text-text-secondary">
                     {label}
                   </th>
+                  {rows.some((r) => r.nonOrtho !== undefined) && (
+                    <th scope="col" className="px-3 py-1.5 font-medium text-text-secondary">
+                      Max non-ortho (°)
+                    </th>
+                  )}
+                  {rows.some((r) => r.yPlusAvg !== undefined) && (
+                    <th scope="col" className="px-3 py-1.5 font-medium text-text-secondary">
+                      Wall y+ (avg)
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -302,6 +318,16 @@ export function LossChart({
                         <span className="text-text-secondary/70"> ± {fmt(row.std)}</span>
                       )}
                     </td>
+                    {rows.some((r) => r.nonOrtho !== undefined) && (
+                      <td className="px-3 py-1.5 text-text-secondary">
+                        {row.nonOrtho !== undefined ? fmt(row.nonOrtho) : ''}
+                      </td>
+                    )}
+                    {rows.some((r) => r.yPlusAvg !== undefined) && (
+                      <td className="px-3 py-1.5 text-text-secondary">
+                        {row.yPlusAvg !== undefined ? fmt(row.yPlusAvg) : ''}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

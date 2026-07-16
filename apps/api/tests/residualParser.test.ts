@@ -1,6 +1,6 @@
 // Pure unit tests for the OpenFOAM residual parser — no HTTP, no filesystem.
 import { describe, expect, it } from 'vitest';
-import { downsampleResiduals, parseResiduals } from '../src/lib/residualParser';
+import { downsampleResiduals, parseResiduals, parseYPlus } from '../src/lib/residualParser';
 
 const TWO_ITERATIONS = `/*--------- banner ---------*/
 Starting time loop
@@ -133,6 +133,29 @@ describe('parseResiduals', () => {
       expect(parsed.fpe, line).toBe(true);
       expect(parsed.foamError, line).toBe(true);
     }
+  });
+
+  it('parses per-patch y+ from the yPlus functionObject lines (last write wins)', () => {
+    const log = [
+      'yPlus yPlus write:',
+      '    writing field yPlus',
+      '    patch deadEnd y+ : min = 25.4925, max = 1304.39, average = 495.535',
+      '    patch wall y+ : min = 16.5401, max = 6121.33, average = 579.841',
+      'Time = 200',
+      'yPlus yPlus write:',
+      '    patch deadEnd y+ : min = 50.3582, max = 1299.68, average = 441.454',
+      '    patch wall y+ : min = 15.4063, max = 6130.08, average = 579.315',
+    ].join('\n');
+    const entries = parseYPlus(log);
+    expect(entries).toHaveLength(2);
+    const wall = entries.find((e) => e.patch === 'wall');
+    expect(wall?.min).toBeCloseTo(15.4063, 4); // the LAST write, not the first
+    expect(wall?.max).toBeCloseTo(6130.08, 2);
+    expect(wall?.avg).toBeCloseTo(579.315, 3);
+  });
+
+  it('returns [] when the case has no yPlus functionObject', () => {
+    expect(parseYPlus(TWO_ITERATIONS)).toEqual([]);
   });
 
   it('flags a FOAM fatal error / floating point exception', () => {

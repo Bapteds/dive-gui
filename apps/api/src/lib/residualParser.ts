@@ -141,6 +141,37 @@ export function parseResiduals(log: string): ParsedResiduals {
   return { samples, diverged: lastNonFinite, converged, foamError, fpe, nonFiniteSeen, lastTime };
 }
 
+/** Last-written y+ stats of one wall patch, from the yPlus functionObject's log lines. */
+export interface YPlusEntry {
+  patch: string;
+  min: number;
+  max: number;
+  avg: number;
+}
+
+// "    patch wall y+ : min = 16.54, max = 6121.33, average = 579.84"
+const YPLUS_RE =
+  /patch\s+(\S+)\s+y\+\s*:\s*min\s*=\s*([\d.eE+-]+),\s*max\s*=\s*([\d.eE+-]+),\s*average\s*=\s*([\d.eE+-]+)/;
+
+/**
+ * Extract per-patch y+ from a solver log, when the case runs a yPlus functionObject
+ * (nothing is injected - a case without one simply yields []). The LAST occurrence
+ * per patch wins (the converged state). Wall functions are valid roughly for
+ * 30 < y+ < 300; the caller uses these to flag physics trust, never to fail a run.
+ */
+export function parseYPlus(log: string): YPlusEntry[] {
+  const byPatch = new Map<string, YPlusEntry>();
+  for (const line of log.split(/\r?\n/)) {
+    const m = YPLUS_RE.exec(line);
+    if (!m) continue;
+    const [min, max, avg] = [Number(m[2]), Number(m[3]), Number(m[4])];
+    if (Number.isFinite(min) && Number.isFinite(max) && Number.isFinite(avg)) {
+      byPatch.set(m[1], { patch: m[1], min, max, avg });
+    }
+  }
+  return [...byPatch.values()];
+}
+
 /**
  * Downsample a residual series to at most `maxPoints`, keeping the most recent
  * points dense and decimating the older history. Residuals read fine coarse on a
