@@ -235,7 +235,7 @@ function PickToggle({
   placed: boolean;
   onToggle: () => void;
 }) {
-  const dot = which === 'c1' ? 'bg-accent' : which === 'c2' ? 'bg-primary' : 'bg-neutral';
+  const dot = which === 'c1' ? 'bg-primary' : which === 'c2' ? 'bg-primary-light' : 'bg-neutral';
   const n = which === 'c1' ? 'A' : 'B';
   const label =
     which === 'patch'
@@ -795,13 +795,13 @@ function SetupFlow({
             </div>
             <ZoneSlider
               label="Ring A"
-              color="var(--color-accent)"
+              color="var(--color-primary)"
               value={station1 ?? 0.25}
               onChange={setStation1}
             />
             <ZoneSlider
               label="Ring B"
-              color="var(--color-primary)"
+              color="var(--color-primary-light)"
               value={station2 ?? 0.75}
               onChange={setStation2}
             />

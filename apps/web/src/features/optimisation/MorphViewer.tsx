@@ -217,6 +217,7 @@ export function MorphViewer({
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     const primary = new THREE.Color(readToken('--color-primary', '#004a99'));
+    const primaryLight = new THREE.Color(readToken('--color-primary-light', '#1e63b5'));
     const accent = new THREE.Color(readToken('--color-accent', '#ee7f00'));
     const neutral = new THREE.Color(readToken('--color-neutral', '#bcbdbf'));
 
@@ -259,9 +260,10 @@ export function MorphViewer({
 
     // Axis line + the two ring hoops (unit tori, scaled to the local wall radius).
     let axisLine: THREE.Line | null = null;
+    // Rings are BLUE (deep A / light B) so they stand out from the ORANGE grow zone.
     const ringGeom = new THREE.TorusGeometry(1, 0.12, 12, 48);
-    const ring1 = new THREE.Mesh(ringGeom, new THREE.MeshBasicMaterial({ color: accent.clone() }));
-    const ring2 = new THREE.Mesh(ringGeom, new THREE.MeshBasicMaterial({ color: primary.clone() }));
+    const ring1 = new THREE.Mesh(ringGeom, new THREE.MeshBasicMaterial({ color: primary.clone() }));
+    const ring2 = new THREE.Mesh(ringGeom, new THREE.MeshBasicMaterial({ color: primaryLight.clone() }));
     ring1.visible = false;
     ring2.visible = false;
     ring1.renderOrder = 2;
