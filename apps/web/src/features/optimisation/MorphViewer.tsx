@@ -41,22 +41,19 @@ export function MorphViewer({
   geometry,
   endpointA,
   endpointB,
-  vias = [],
   pickMode,
   onPick,
   centerline,
   morphPreview,
 }: {
   geometry: ArrayBuffer;
-  /** Endpoint markers in raw coords; null hides the marker (not placed yet). */
+  /** Optional hint markers in raw coords; null hides the marker (not placed). */
   endpointA: Vec3 | null;
   endpointB: Vec3 | null;
-  /** Ordered via points between A and B (route disambiguation on closed loops). */
-  vias?: Vec3[];
-  /** What the next mesh click places, or null (orbit only). */
-  pickMode: 'A' | 'B' | 'via' | null;
-  /** Fired on a mesh click: the raw-coord point plus the clicked patch name. */
-  onPick: (which: 'A' | 'B' | 'via', point: Vec3, patch: string | null) => void;
+  /** What the next mesh click does: pick the wall patch, or move a hint, or orbit. */
+  pickMode: 'patch' | 'A' | 'B' | null;
+  /** Fired on a mesh click: which, the raw-coord point, and the clicked patch name. */
+  onPick: (which: 'patch' | 'A' | 'B', point: Vec3, patch: string | null) => void;
   centerline: Centerline | null;
   /** When set, deform the surface to this diameter (else show the pristine mesh). */
   morphPreview: MorphPreview | null;
@@ -68,14 +65,12 @@ export function MorphViewer({
   const pickModeRef = useRef(pickMode);
   const aRef = useRef<Vec3 | null>(endpointA);
   const bRef = useRef<Vec3 | null>(endpointB);
-  const viasRef = useRef<Vec3[]>(vias);
   const centerlineRef = useRef<Centerline | null>(centerline);
   const previewRef = useRef<MorphPreview | null>(morphPreview);
   onPickRef.current = onPick;
   pickModeRef.current = pickMode;
   aRef.current = endpointA;
   bRef.current = endpointB;
-  viasRef.current = vias;
   centerlineRef.current = centerline;
   previewRef.current = morphPreview;
 
@@ -140,10 +135,6 @@ export function MorphViewer({
     let markerA: THREE.Mesh | null = null;
     let markerB: THREE.Mesh | null = null;
     let centerlineLine: THREE.Line | null = null;
-    const viaGroup = new THREE.Group();
-    overlay.add(viaGroup);
-    let viaMaterial: THREE.MeshBasicMaterial | null = null;
-    let sphereGeom: THREE.SphereGeometry | null = null;
     const pristine: { mesh: THREE.Mesh; positions: Float32Array }[] = [];
     let markerRadius = 1;
 
@@ -175,16 +166,6 @@ export function MorphViewer({
       if (markerB) {
         markerB.visible = bRef.current !== null;
         if (bRef.current) markerB.position.set(...bRef.current);
-      }
-      // Via markers: rebuild the (small) set each sync; geometry + material shared.
-      viaGroup.clear();
-      if (sphereGeom && viaMaterial) {
-        for (const via of viasRef.current) {
-          const m = new THREE.Mesh(sphereGeom, viaMaterial);
-          m.scale.setScalar(markerRadius * 0.7);
-          m.position.set(...via);
-          viaGroup.add(m);
-        }
       }
       if (centerlineLine) {
         overlay.remove(centerlineLine);
@@ -282,8 +263,7 @@ export function MorphViewer({
         pristine.push({ mesh, positions: Float32Array.from(attr.array as Float32Array) });
       });
 
-      sphereGeom = new THREE.SphereGeometry(1, 20, 16);
-      viaMaterial = new THREE.MeshBasicMaterial({ color: neutral.clone() });
+      const sphereGeom = new THREE.SphereGeometry(1, 20, 16);
       markerA = new THREE.Mesh(sphereGeom, new THREE.MeshBasicMaterial({ color: accent.clone() }));
       markerB = new THREE.Mesh(sphereGeom, new THREE.MeshBasicMaterial({ color: primary.clone() }));
       overlay.add(markerA);
@@ -370,10 +350,10 @@ export function MorphViewer({
     };
   }, [geometry]);
 
-  // Move the markers + redraw the centerline when the waypoints or trace change.
+  // Move the hint markers + redraw the centerline when they or the trace change.
   useEffect(() => {
     syncOverlayRef.current();
-  }, [endpointA, endpointB, vias, centerline]);
+  }, [endpointA, endpointB, centerline]);
 
   // Re-deform the surface when the preview diameter (or the trace) changes.
   useEffect(() => {

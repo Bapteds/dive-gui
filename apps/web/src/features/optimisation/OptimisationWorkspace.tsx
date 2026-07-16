@@ -28,6 +28,7 @@ import type { LengthUnit, MeshPatch, Study, StudyMetric, StudySample } from '@/l
 import { useMeshGeometryQuery, useMeshManifestQuery } from '@/features/visualize/useMesh';
 import { useRunLogQuery } from '@/features/solver/useRuns';
 import { ResidualChart } from '@/features/solver/ResidualChart';
+import type { ChannelShape } from '@/lib/api/studies';
 import { LossChart } from './LossChart';
 import { MorphViewer } from './MorphViewer';
 import {
@@ -58,10 +59,11 @@ const METRICS: { id: StudyMetric; label: string }[] = [
   { id: 'headLoss', label: 'Head loss' },
 ];
 const MAX_SWEEP = 200;
-// Blend geometry defaults (arc-length fractions; see MorphDefinition).
-const STATION_A = 0.15;
-const STATION_B = 0.85;
-const BLEND = 0.15;
+const SHAPES: { id: ChannelShape; label: string }[] = [
+  { id: 'auto', label: 'Auto' },
+  { id: 'straight', label: 'Straight' },
+  { id: 'ring', label: 'Ring' },
+];
 
 type Vec3 = [number, number, number];
 
@@ -221,29 +223,29 @@ function Segmented<T extends string>({
   );
 }
 
-/** Toggle that arms the next mesh click to place endpoint A/B or add a via point. */
+/** Toggle that arms the next mesh click: pick the channel wall, or move a hint end. */
 function PickToggle({
   which,
   active,
   placed,
   onToggle,
 }: {
-  which: 'A' | 'B' | 'via';
+  which: 'patch' | 'A' | 'B';
   active: boolean;
   placed: boolean;
   onToggle: () => void;
 }) {
   const dot = which === 'A' ? 'bg-accent' : which === 'B' ? 'bg-primary' : 'bg-neutral';
   const label =
-    which === 'via'
+    which === 'patch'
       ? active
-        ? 'Click the pipe to add a via'
-        : 'Add via'
+        ? 'Click a face on the channel'
+        : 'Pick channel'
       : active
-        ? `Click the pipe to set ${which}`
+        ? `Click to set end ${which}`
         : placed
-          ? `Move ${which}`
-          : `Set ${which}`;
+          ? `Move end ${which}`
+          : `Set end ${which}`;
   return (
     <button
       type="button"
@@ -499,16 +501,18 @@ function SetupFlow({
   switcher: ReactNode;
   onCreated: (studyId: string) => void;
 }) {
-  // Geometry: the two clicked endpoints + ordered via points + the wall patch
-  // inferred from the click.
+  // Geometry: pick a face (-> the wall patch), choose the channel SHAPE, and the axis
+  // is fitted automatically. Optional A/B hints reposition/clip a straight axis.
+  const [wallPatch, setWallPatch] = useState<string>('');
+  const [shape, setShape] = useState<ChannelShape>('auto');
   const [a, setA] = useState<Vec3 | null>(null);
   const [b, setB] = useState<Vec3 | null>(null);
-  const [vias, setVias] = useState<Vec3[]>([]);
-  const [wallPatch, setWallPatch] = useState<string>('');
-  const [pickMode, setPickMode] = useState<'A' | 'B' | 'via' | null>('A');
-  // Trace result.
+  const [pickMode, setPickMode] = useState<'patch' | 'A' | 'B' | null>('patch');
+  // Fit result.
   const [baselineM, setBaselineM] = useState<number | null>(null);
   const [centerlinePts, setCenterlinePts] = useState<Vec3[] | null>(null);
+  const [closed, setClosed] = useState(false);
+  const [fittedShape, setFittedShape] = useState<'straight' | 'ring' | null>(null);
   const [previewU, setPreviewU] = useState<number | null>(null);
   // Sweep + objective.
   const [s, setS] = useState<SetupSweep>(defaultSweep);
@@ -518,34 +522,36 @@ function SetupFlow({
   const create = useCreateStudy(projectId);
   const run = useRunStudy(projectId);
 
-  const onPick = (which: 'A' | 'B' | 'via', point: Vec3, patch: string | null) => {
-    if (which === 'A') {
+  const onPick = (which: 'patch' | 'A' | 'B', point: Vec3, patch: string | null) => {
+    if (which === 'patch') {
+      if (patch) setWallPatch(patch); // clicking a face selects the channel wall
+      setPickMode(null);
+    } else if (which === 'A') {
       setA(point);
-      if (patch) setWallPatch(patch); // A's patch wins (all clicks land on the pipe wall)
-      setPickMode(b === null ? 'B' : null); // guide straight to the second click
-    } else if (which === 'B') {
-      setB(point);
       if (patch) setWallPatch((prev) => prev || patch);
       setPickMode(null);
     } else {
-      setVias((prev) => [...prev, point]);
+      setB(point);
+      if (patch) setWallPatch((prev) => prev || patch);
       setPickMode(null);
     }
   };
 
-  // Auto-trace: as soon as both endpoints and the wall patch are known, trace the
-  // centerline (debounced; re-traces when an endpoint moves). A failed trace can be
-  // retried manually.
+  // Auto-fit: once a wall patch is chosen, fit the axis for the current shape
+  // (debounced; re-fits when the shape or the A/B hints change). Retry on error.
   const traceKey = useMemo(
-    () => (a && b && wallPatch ? JSON.stringify([wallPatch, a, b, vias]) : null),
-    [a, b, vias, wallPatch],
+    () => (wallPatch ? JSON.stringify([wallPatch, shape, a, b]) : null),
+    [wallPatch, shape, a, b],
   );
   const lastTraced = useRef<string | null>(null);
   const doTraceRef = useRef<() => void>(() => {});
   doTraceRef.current = () => {
-    if (!a || !b || !wallPatch) return;
+    if (!wallPatch) return;
+    // A and B are hints only when BOTH are placed (they clip/reposition the axis).
+    const hintA = a && b ? a : undefined;
+    const hintB = a && b ? b : undefined;
     extract.mutate(
-      { wallPatch, endpointA: a, endpointB: b, vias },
+      { wallPatch, shape, endpointA: hintA, endpointB: hintB },
       {
         onSuccess: (res) => {
           const mean =
@@ -554,9 +560,11 @@ function SetupFlow({
           const dUnit = dM / UNIT_M[s.unit];
           setBaselineM(dM);
           setCenterlinePts(res.centerline.points as Vec3[]);
+          setClosed(res.closed);
+          setFittedShape(res.shape);
           setPreviewU(Number(dUnit.toPrecision(4)));
           // Pre-fill a sensible range around the measured diameter (only when empty,
-          // so a user-tuned range survives a re-trace).
+          // so a user-tuned range survives a re-fit).
           setS((prev) =>
             prev.minU > 0
               ? prev
@@ -569,7 +577,7 @@ function SetupFlow({
           );
         },
         onError: () => {
-          lastTraced.current = null; // allow an automatic retry after the endpoints move
+          lastTraced.current = null;
         },
       },
     );
@@ -582,6 +590,12 @@ function SetupFlow({
     }, 400);
     return () => clearTimeout(timer);
   }, [traceKey]);
+
+  // Morph zone: a ring spans the whole loop (tiny blend at the seam); an open axis
+  // blends its two ends so the morphed segment joins the rest smoothly.
+  const stations = closed
+    ? { stationA: 0, stationB: 1, blend: 0.03 }
+    : { stationA: 0.1, stationB: 0.9, blend: 0.12 };
 
   const sweepValues = useMemo(() => {
     if (!(s.minU > 0) || !(s.maxU >= s.minU) || !(s.stepU > 0)) return [];
@@ -625,9 +639,9 @@ function SetupFlow({
     morph: {
       wallPatch,
       centerline: { points: centerlinePts as Vec3[] },
-      stationA: STATION_A,
-      stationB: STATION_B,
-      blend: BLEND,
+      stationA: stations.stationA,
+      stationB: stations.stationB,
+      blend: stations.blend,
       baselineDiameterM: baselineM as number,
       falloffStartM,
       falloffEndM,
@@ -661,9 +675,9 @@ function SetupFlow({
       ? {
           baselineDiameterM: baselineM as number,
           diameterM: previewU * UNIT_M[s.unit],
-          stationA: STATION_A,
-          stationB: STATION_B,
-          blend: BLEND,
+          stationA: stations.stationA,
+          stationB: stations.stationB,
+          blend: stations.blend,
           falloffStartM,
           falloffEndM,
         }
@@ -672,27 +686,30 @@ function SetupFlow({
   const stage = (
     <>
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
+        <Segmented ariaLabel="Channel shape" options={SHAPES} value={shape} onChange={setShape} />
         <PickToggle
-          which="A"
-          active={pickMode === 'A'}
-          placed={a !== null}
-          onToggle={() => setPickMode((m) => (m === 'A' ? null : 'A'))}
+          which="patch"
+          active={pickMode === 'patch'}
+          placed={!!wallPatch}
+          onToggle={() => setPickMode((m) => (m === 'patch' ? null : 'patch'))}
         />
-        <PickToggle
-          which="B"
-          active={pickMode === 'B'}
-          placed={b !== null}
-          onToggle={() => setPickMode((m) => (m === 'B' ? null : 'B'))}
-        />
-        <PickToggle
-          which="via"
-          active={pickMode === 'via'}
-          placed={vias.length > 0}
-          onToggle={() => setPickMode((m) => (m === 'via' ? null : 'via'))}
-        />
-        <span className="ml-auto text-xs text-text-secondary">
-          Drag to orbit, scroll to zoom.
-        </span>
+        {traced && (
+          <>
+            <PickToggle
+              which="A"
+              active={pickMode === 'A'}
+              placed={a !== null}
+              onToggle={() => setPickMode((m) => (m === 'A' ? null : 'A'))}
+            />
+            <PickToggle
+              which="B"
+              active={pickMode === 'B'}
+              placed={b !== null}
+              onToggle={() => setPickMode((m) => (m === 'B' ? null : 'B'))}
+            />
+          </>
+        )}
+        <span className="ml-auto text-xs text-text-secondary">Drag to orbit, scroll to zoom.</span>
       </div>
       <div className="min-h-0 flex-1 p-3">
         {geometry ? (
@@ -700,7 +717,6 @@ function SetupFlow({
             geometry={geometry}
             endpointA={a}
             endpointB={b}
-            vias={vias}
             pickMode={pickMode}
             onPick={onPick}
             centerline={centerlinePts ? { points: centerlinePts } : null}
@@ -711,8 +727,8 @@ function SetupFlow({
             <AlertTriangle size={20} strokeWidth={1.5} className="text-neutral" aria-hidden="true" />
             <p className="text-sm font-medium text-text">3D preview unavailable</p>
             <p className="max-w-sm text-xs text-text-secondary">
-              The mesh render could not be built on this host. Enter the endpoint coordinates in
-              the Geometry section instead.
+              The mesh render could not be built on this host. Select the wall patch in the Pipe
+              segment section instead; the axis is still fitted automatically.
             </p>
           </div>
         ) : (
@@ -752,108 +768,81 @@ function SetupFlow({
       <RailSection title="Pipe segment" icon={Ruler}>
         <div className="flex flex-col gap-2">
           <SummaryRow
-            label="Endpoint A"
-            value={a ? fmtVec(a) : <span className="font-normal text-text-secondary">click the pipe</span>}
-          />
-          <SummaryRow
-            label="Endpoint B"
-            value={b ? fmtVec(b) : <span className="font-normal text-text-secondary">click the pipe</span>}
-          />
-          <SummaryRow
             label="Wall patch"
             value={
               wallPatch ? (
                 <span translate="no">{wallPatch}</span>
               ) : (
-                <span className="font-normal text-text-secondary">from your click</span>
+                <span className="font-normal text-text-secondary">click a face</span>
               )
             }
           />
-          {vias.length > 0 && (
-            <div className="flex flex-col gap-1">
-              <span className="text-sm text-text-secondary">Via points</span>
-              <ul className="flex flex-wrap gap-1.5">
-                {vias.map((via, i) => (
-                  <li key={i}>
-                    <button
-                      type="button"
-                      onClick={() => setVias((prev) => prev.filter((_, j) => j !== i))}
-                      className="inline-flex items-center gap-1 rounded-md border border-border bg-bg px-2 py-1 text-xs tabular-nums text-text transition-colors hover:bg-danger-tint hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-                      aria-label={`Remove via point ${i + 1} (${fmtVec(via)})`}
-                      title="Remove this via point"
-                    >
-                      {i + 1}. {fmtVec(via)}
-                      <XCircle size={12} strokeWidth={2} aria-hidden="true" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          <p className="text-xs text-text-secondary">
-            Closed channel (a ring)? Place A and B side by side, then add a via on the far side to
-            trace the full tour. A via also picks the direction around a spiral.
-          </p>
+          <SummaryRow
+            label="Fitted shape"
+            value={
+              fittedShape ? (
+                `${fittedShape === 'ring' ? 'Ring (full loop)' : 'Straight'}${shape === 'auto' ? ', auto' : ''}`
+              ) : (
+                <span className="font-normal text-text-secondary">
+                  {SHAPES.find((x) => x.id === shape)?.label}
+                </span>
+              )
+            }
+          />
           <div aria-live="polite">
             {extract.isPending ? (
               <p className="flex items-center gap-1.5 text-sm text-text-secondary">
                 <Loader2 size={14} className="animate-spin" aria-hidden="true" />
-                Tracing the centerline…
+                Fitting the axis…
               </p>
             ) : traced ? (
               <SummaryRow label="Measured Ø" value={fmtDiameter(baselineM as number, s.unit)} />
             ) : null}
           </div>
+          {(a || b) && (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+              <span className="text-text-secondary">Axis ends:</span>
+              {a && <span className="tabular-nums text-text">A {fmtVec(a)}</span>}
+              {b && <span className="tabular-nums text-text">B {fmtVec(b)}</span>}
+              <button
+                type="button"
+                onClick={() => {
+                  setA(null);
+                  setB(null);
+                }}
+                className="rounded-sm text-text-secondary underline-offset-2 transition-colors hover:text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+              >
+                clear
+              </button>
+            </div>
+          )}
           {extract.isError && (
             <div className="flex flex-col gap-2">
               <p className="text-xs text-danger" role="alert">
-                {extract.error instanceof Error ? extract.error.message : 'Centerline tracing failed.'}
+                {extract.error instanceof Error ? extract.error.message : 'Axis fit failed.'}
               </p>
               <SecondaryButton className="px-3 py-1.5" onClick={() => doTraceRef.current()}>
-                Retrace
+                Retry fit
               </SecondaryButton>
             </div>
           )}
+          <p className="text-xs text-text-secondary">
+            Click a face on the channel and the axis is fitted automatically. Auto detects straight
+            vs ring; a ring is traced as the full loop. Nudge the two ends to trim a straight axis.
+          </p>
         </div>
         <details className="mt-3 text-xs">
           <summary className="cursor-pointer rounded-sm text-text-secondary transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2">
-            Edit coordinates manually
+            Choose the wall patch from a list
           </summary>
-          <div className="mt-2 flex flex-col gap-3">
-            {(
-              [
-                ['A', a, setA],
-                ['B', b, setB],
-              ] as const
-            ).map(([which, point, setPoint]) => (
-              <fieldset key={which} className="flex flex-col gap-1.5 rounded-md border border-border p-2.5">
-                <legend className="px-1 text-xs font-medium text-text-secondary">
-                  Endpoint {which} (x, y, z, m)
-                </legend>
-                <div className="grid grid-cols-3 gap-1.5">
-                  {([0, 1, 2] as const).map((i) => (
-                    <NumberField
-                      key={i}
-                      value={point ? point[i] : 0}
-                      aria-label={`Endpoint ${which} ${['x', 'y', 'z'][i]}`}
-                      step={0.001}
-                      onChange={(n) => {
-                        const next = (point ? [...point] : [0, 0, 0]) as Vec3;
-                        next[i] = n;
-                        setPoint(next);
-                      }}
-                    />
-                  ))}
-                </div>
-              </fieldset>
-            ))}
+          <div className="mt-2">
             <Field label="Wall patch" htmlFor="opt-wall">
               <PatchSelect
                 id="opt-wall"
                 value={wallPatch}
                 onChange={setWallPatch}
                 patches={patches}
-                placeholder="Select the pipe wall…"
+                placeholder="Select the channel wall…"
               />
             </Field>
           </div>
@@ -961,7 +950,7 @@ function SetupFlow({
         )}
         {!traced && (
           <p className="text-xs text-text-secondary">
-            Place both endpoints on the pipe to unlock the launch.
+            Click a face on the channel to fit its axis, then launch.
           </p>
         )}
         <PrimaryButton onClick={() => onLaunch(true)} disabled={!ready || busy}>

@@ -9,6 +9,7 @@ import {
   stopStudy,
   updateStudy,
   type CenterlineResult,
+  type ChannelShape,
   type StudyConfigInput,
 } from '@/lib/api/studies';
 import type { Study, StudyStatus } from '@/lib/api/types';
@@ -126,20 +127,20 @@ export function useStopStudy(projectId: string) {
   });
 }
 
-/** Trace the pipe centerline from the wall patch + waypoints (study prep). */
+/** Fit the channel centerline from the wall patch + shape (study prep). */
 export function useExtractCenterline(projectId: string) {
   return useMutation<
     CenterlineResult,
     Error,
     {
       wallPatch: string;
-      endpointA: [number, number, number];
-      endpointB: [number, number, number];
-      /** Ordered via points between A and B (full tour of a ring, spiral direction). */
-      vias?: [number, number, number][];
+      shape: ChannelShape;
+      /** Optional hint points that reposition/clip the fitted axis. */
+      endpointA?: [number, number, number];
+      endpointB?: [number, number, number];
     }
   >({
-    mutationFn: ({ wallPatch, endpointA, endpointB, vias }) =>
-      extractCenterline(projectId, wallPatch, endpointA, endpointB, vias ?? []),
+    mutationFn: ({ wallPatch, shape, endpointA, endpointB }) =>
+      extractCenterline(projectId, wallPatch, shape, endpointA, endpointB),
   });
 }

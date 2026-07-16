@@ -9,6 +9,9 @@ import type {
   SweepConfig,
 } from './types';
 
+/** Channel shape the axis is fitted as. */
+export type ChannelShape = 'auto' | 'straight' | 'ring';
+
 /** Result of the centerline-extraction helper (POST /studies/centerline). */
 export interface CenterlineResult {
   centerline: Centerline;
@@ -16,6 +19,10 @@ export interface CenterlineResult {
   radii: number[];
   /** Total polyline arc-length (metres). */
   length: number;
+  /** The shape actually fitted (auto resolves to one of these). */
+  shape: 'straight' | 'ring';
+  /** True when the axis is a closed loop (a ring). */
+  closed: boolean;
 }
 
 /**
@@ -81,22 +88,21 @@ export async function stopStudy(projectId: string, studyId: string): Promise<Stu
 }
 
 /**
- * Trace the pipe centerline + radius profile from the case's wall patch between the
- * two clicked endpoints (study prep, before a study exists). Ordered `vias` between
- * A and B disambiguate the route: the far side of a closed ring for a full tour, or
- * which way around a spiral.
+ * Fit the channel centerline + radius profile to the case's wall patch as `shape`
+ * (study prep, before a study exists). Optional A/B hint points reposition/clip the
+ * fitted axis (both or neither).
  */
 export async function extractCenterline(
   projectId: string,
   wallPatch: string,
-  endpointA: [number, number, number],
-  endpointB: [number, number, number],
-  vias: [number, number, number][] = [],
+  shape: ChannelShape,
+  endpointA?: [number, number, number],
+  endpointB?: [number, number, number],
 ): Promise<CenterlineResult> {
   return apiClient.post<CenterlineResult>(`/projects/${projectId}/studies/centerline`, {
     wallPatch,
+    shape,
     endpointA,
     endpointB,
-    vias,
   });
 }
