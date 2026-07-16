@@ -236,6 +236,15 @@ export function morphMeshPoints(
   const centerline = prepareCenterline(def.centerline);
   const ratio = def.baselineDiameterM > 0 ? diameterM / def.baselineDiameterM : 1;
   return rewriteMeshPoints(pointsBuffer, (x, y, z) =>
-    morphPoint([x, y, z], centerline, def.stationA, def.stationB, def.blend, ratio),
+    morphPoint(
+      [x, y, z],
+      centerline,
+      def.stationA,
+      def.stationB,
+      def.blend,
+      ratio,
+      def.falloffStartM,
+      def.falloffEndM,
+    ),
   );
 }

@@ -2130,6 +2130,16 @@ export interface MorphDefinition {
    * The sweep's target diameters are realised as the ratio target / baselineDiameterM.
    */
   baselineDiameterM: number;
+  /**
+   * Optional RADIAL confinement of the morph, in metres from the centerline: points
+   * with a radial offset <= `falloffStartM` scale fully, the scale fades (cosine) to
+   * zero at `falloffEndM`, and beyond it the mesh is untouched. Essential on a
+   * complex machine mesh (e.g. a spiral casing): only the picked channel deforms,
+   * never distant parts of the domain that happen to project onto the same
+   * stations. Absent => no radial limit (a standalone pipe mesh).
+   */
+  falloffStartM?: number;
+  falloffEndM?: number;
 }
 
 /**
@@ -2314,9 +2324,13 @@ export function blendWeight(
 /**
  * Morph one point for a target/baseline `ratio`: project it onto the centerline,
  * weight by blendWeight along the axis, and scale its radial offset from the axis.
- * Returns the new raw coordinates (unchanged when the point is outside the zone or
- * ratio is 1). Pure and framework-free — the browser preview and the server bake
- * call this identically, so the preview is bit-for-bit the baked mesh.
+ * When `falloffStartM`/`falloffEndM` are given, the scale is additionally confined
+ * RADIALLY: full up to falloffStartM from the axis, cosine-faded to zero at
+ * falloffEndM, untouched beyond — so on a complex machine mesh only the picked
+ * channel deforms. Returns the new raw coordinates (unchanged when the point is
+ * outside the zone or ratio is 1). Pure and framework-free — the browser preview
+ * and the server bake call this identically, so the preview is bit-for-bit the
+ * baked mesh.
  */
 export function morphPoint(
   p: readonly [number, number, number],
@@ -2325,6 +2339,8 @@ export function morphPoint(
   stationB: number,
   blend: number,
   ratio: number,
+  falloffStartM?: number,
+  falloffEndM?: number,
 ): [number, number, number] {
   const { points, cumLen, total } = centerline;
   const px = p[0];
@@ -2370,8 +2386,27 @@ export function morphPoint(
 
   const w = blendWeight(bestS / total, stationA, stationB, blend);
   if (w === 0) return [px, py, pz];
+
+  // Radial confinement: full weight up to falloffStartM, cosine fade to zero at
+  // falloffEndM, untouched beyond. No falloffEndM => no radial limit (legacy).
+  let wr = 1;
+  if (falloffEndM !== undefined && falloffEndM > 0) {
+    const start =
+      falloffStartM !== undefined && falloffStartM >= 0
+        ? Math.min(falloffStartM, falloffEndM)
+        : falloffEndM;
+    const r = Math.sqrt(bestDist2);
+    if (r >= falloffEndM) return [px, py, pz];
+    if (r > start) {
+      wr =
+        falloffEndM > start
+          ? 0.5 + 0.5 * Math.cos((Math.PI * (r - start)) / (falloffEndM - start))
+          : 0;
+    }
+  }
+
   // Scale only the radial offset (p - F); the axial position F is preserved.
-  const k = w * (ratio - 1);
+  const k = w * wr * (ratio - 1);
   return [px + (px - bestFx) * k, py + (py - bestFy) * k, pz + (pz - bestFz) * k];
 }
 

@@ -86,6 +86,22 @@ describe('morphPoint', () => {
     expect(out[1]).toBeCloseTo(1.5, 12);
   });
 
+  it('confines the morph radially (full inside falloffStart, zero beyond falloffEnd)', () => {
+    // ratio 2, falloff start 1.2, end 2.0 (metres from the axis).
+    const wall = morphPoint([5, 1, 0], prep, 0.2, 0.8, 0, 2, 1.2, 2);
+    expect(wall[1]).toBeCloseTo(2, 12); // r=1 <= start -> full scale
+    const far = morphPoint([5, 3, 0], prep, 0.2, 0.8, 0, 2, 1.2, 2);
+    expect(far).toEqual([5, 3, 0]); // r=3 >= end -> untouched (a distant machine part)
+    const mid = morphPoint([5, 1.6, 0], prep, 0.2, 0.8, 0, 2, 1.2, 2);
+    expect(mid[1]).toBeGreaterThan(1.6); // partially dragged...
+    expect(mid[1]).toBeLessThan(3.2); // ...but less than the full scale
+  });
+
+  it('has no radial limit when the falloff is omitted (legacy behaviour)', () => {
+    const far = morphPoint([5, 3, 0], prep, 0.2, 0.8, 0, 2);
+    expect(far[1]).toBeCloseTo(6, 12);
+  });
+
   it('scales radially about a bent (curved) centerline', () => {
     // L-shape: (0,0,0)->(10,0,0)->(10,10,0), total 20. Point (11,5,0) sits off the
     // vertical leg: foot (10,5,0), radial +x offset 1, arc-length 15 -> sFrac 0.75.
@@ -195,6 +211,21 @@ describe('morphMeshPoints — ASCII', () => {
       [5, 1, 0],
       [4, 0, 1],
     ]);
+  });
+});
+
+describe('morphMeshPoints — radial falloff', () => {
+  it('honours the definition falloff (far vertices untouched)', () => {
+    const def: MorphDefinition = { ...DEF, falloffStartM: 1.2, falloffEndM: 2 };
+    const pts: Array<[number, number, number]> = [
+      [5, 1, 0], // on the wall -> full scale to [5,2,0]
+      [5, 3, 0], // beyond falloffEnd -> untouched
+    ];
+    const got = readAsciiPoints(
+      morphMeshPoints(Buffer.from(asciiPoints(pts)), def, 4).toString('utf8'),
+    );
+    expect(got[0][1]).toBeCloseTo(2, 10);
+    expect(got[1]).toEqual([5, 3, 0]);
   });
 });
 

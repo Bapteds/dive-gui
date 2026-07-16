@@ -25,11 +25,21 @@ const morphSchema = z
     stationB: z.number().min(0).max(1),
     blend: z.number().min(0).max(1),
     baselineDiameterM: z.number().finite().positive(),
+    // Optional radial confinement of the morph (metres from the axis).
+    falloffStartM: z.number().finite().positive().optional(),
+    falloffEndM: z.number().finite().positive().optional(),
   })
   .refine((m) => m.stationA < m.stationB, {
     message: 'stationA must be strictly less than stationB',
     path: ['stationB'],
-  });
+  })
+  .refine(
+    (m) =>
+      m.falloffStartM === undefined ||
+      m.falloffEndM === undefined ||
+      m.falloffEndM > m.falloffStartM,
+    { message: 'falloffEndM must be greater than falloffStartM', path: ['falloffEndM'] },
+  );
 
 const sweepSchema = z
   .object({
