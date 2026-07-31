@@ -73,7 +73,6 @@ FOOT_TAPER = 0.07            # run from the sharp inner tip to full width
 FOOT_CHAMFER = 0.04          # 45 deg chamfer at the blunt outer end
 FOOT_PLANK_THICK = 0.05      # vertical thickness of the horizontal plank (50 mm)
 FOOT_PLANK_OVERLAP = 0.02    # plank radial overlap into the last-cyl wall
-FOOT_PLANK_DROP = 0.01       # leg extends this far above z_top to key into the plank
 FOOT_GUSSET_MIN_BASE = 0.05  # min triangular-plank base; below it (near 0/90/180) the build refuses
 FOOT_CLEARANCE = 0.02        # radial gap the leg keeps from the first cylinder (any angle)
 FOOT_ANGLE_DEG = 45.0        # default leg orientation; the gusset needs an intermediate angle
@@ -183,7 +182,7 @@ def make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
 def make_feet(cq, cx, cy, z0, z_top, r_cyl, d_first, foot_angle_deg=FOOT_ANGLE_DEG,
               width=FOOT_WIDTH, length=FOOT_LENGTH, taper=FOOT_TAPER,
               chamfer=FOOT_CHAMFER, plank_thick=FOOT_PLANK_THICK,
-              plank_overlap=FOOT_PLANK_OVERLAP, plank_drop=FOOT_PLANK_DROP,
+              plank_overlap=FOOT_PLANK_OVERLAP,
               gusset_min_base=FOOT_GUSSET_MIN_BASE, clear=FOOT_CLEARANCE,
               angles=FOOT_ANGLES_DEG):
     """Four torque-foot VOIDS spaced at `angles` (0/90/180/270). Each LEG is a
@@ -198,8 +197,9 @@ def make_feet(cq, cx, cy, z0, z_top, r_cyl, d_first, foot_angle_deg=FOOT_ANGLE_D
     (through the inner tip), and the perpendicular (radial) foot of the FAR tip on
     the cylinder. Its bottom is flush on the cylinder base z_top (no thin ledge
     under the cylinder); the two base vertices are pushed `plank_overlap` inside the
-    wall for a solid weld and the leg is extruded `plank_drop` above z_top to key
-    into it. The gusset CANNOT form near tangential (0/180, the tip line misses the
+    wall for a solid weld. The leg is extruded up to the plank's TOP so both share
+    one flat top face (no step where they meet). The gusset CANNOT form near
+    tangential (0/180, the tip line misses the
     cylinder) or near radial (90, the base collapses); within `gusset_min_base` of
     degenerate the build is REFUSED (raises). Returns (feet_union, r_outer) centred
     at the part axis (cx, cy); r_outer bounds the footprint for the classifier."""
@@ -215,9 +215,10 @@ def make_feet(cq, cx, cy, z0, z_top, r_cyl, d_first, foot_angle_deg=FOOT_ANGLE_D
         (r_outer, hw - chamfer), (r_outer, -(hw - chamfer)),
         (r_outer - chamfer, -hw), (r_in + taper, -hw),
     ]
-    # Extrude the leg slightly ABOVE z_top (by plank_drop) so it keys into the
-    # plank from below; the plank's own bottom stays flush with the cylinder base.
-    leg = cq.Workplane("XY", origin=(0, 0, z0)).polyline(plan).close().extrude((z_top + plank_drop) - z0)
+    # Extrude the leg up to the plank's TOP (z_top + plank_thick) so the leg and
+    # plank share ONE flat top surface -> no step/edge where they meet (the plank
+    # still starts at z_top, flush with the cylinder base). CFD-friendly.
+    leg = cq.Workplane("XY", origin=(0, 0, z0)).polyline(plan).close().extrude((z_top + plank_thick) - z0)
     # The unrotated plan lies RADIAL (long axis along +X). Swing it (angle - 90)
     # about the vertical axis through the inner tip: 0 deg -> tangential one way,
     # 90 deg -> radial, 180 deg -> tangential the other way.
