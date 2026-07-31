@@ -72,7 +72,7 @@ FOOT_TAPER = 0.07            # run from the sharp inner tip to full width
 FOOT_CHAMFER = 0.04          # 45 deg chamfer at the blunt outer end
 FOOT_PLANK_THICK = 0.05      # vertical thickness of the horizontal plank (50 mm)
 FOOT_PLANK_OVERLAP = 0.02    # plank radial overlap into the last-cyl wall
-FOOT_PLANK_DROP = 0.01       # plank sinks this far into the leg top (clean union)
+FOOT_PLANK_DROP = 0.01       # leg extends this far above z_top to key into the plank
 FOOT_CLEARANCE = 0.02        # radial gap the leg keeps from the first cylinder (any angle)
 FOOT_ANGLE_DEG = 0.0         # default leg orientation (0/180 = tangential, 90 = radial)
 FOOT_ANGLES_DEG = (0, 90, 180, 270)     # azimuth positions (aligned with the inlet axes)
@@ -189,9 +189,10 @@ def make_feet(cq, cx, cy, z0, z_top, r_cyl, d_first, foot_angle_deg=FOOT_ANGLE_D
     cylinder (radial gap `clear`). `foot_angle_deg` swings the leg about the
     vertical line through that tip: 0 deg = TANGENTIAL one way, 90 deg = RADIAL
     (tip pointing at the axis), 180 deg = TANGENTIAL the other way. A horizontal PLANK
-    then sits ON TOP of the leg at z_top, bridging radially from the last-cylinder
-    wall (radius r_cyl, overlapping it by `plank_overlap`) out to the leg tip and
-    sinking `plank_drop` into the leg top for a clean union. Returns (feet_union,
+    then sits ON TOP of the leg with its bottom flush on the cylinder base z_top
+    (no thin ledge under the cylinder), bridging radially from the last-cylinder
+    wall (radius r_cyl, overlapping it by `plank_overlap`) out to the leg tip; the
+    leg is extruded `plank_drop` above z_top to key into it. Returns (feet_union,
     r_outer) centred at the part axis (cx, cy); r_outer bounds the foot footprint
     at every angle and feeds the patch classifier."""
     hw = width / 2
@@ -206,20 +207,23 @@ def make_feet(cq, cx, cy, z0, z_top, r_cyl, d_first, foot_angle_deg=FOOT_ANGLE_D
         (r_outer, hw - chamfer), (r_outer, -(hw - chamfer)),
         (r_outer - chamfer, -hw), (r_in + taper, -hw),
     ]
-    leg = cq.Workplane("XY", origin=(0, 0, z0)).polyline(plan).close().extrude(z_top - z0)
+    # Extrude the leg slightly ABOVE z_top (by plank_drop) so it keys into the
+    # plank from below; the plank's own bottom stays flush with the cylinder base.
+    leg = cq.Workplane("XY", origin=(0, 0, z0)).polyline(plan).close().extrude((z_top + plank_drop) - z0)
     # The unrotated plan lies RADIAL (long axis along +X). Swing it (angle - 90)
     # about the vertical axis through the inner tip: 0 deg -> tangential one way,
     # 90 deg -> radial, 180 deg -> tangential the other way.
     leg = leg.rotate((r_in, 0, 0), (r_in, 0, 1), foot_angle_deg - 90.0)
     # horizontal plank ON TOP of the leg: a slab from the last-cylinder wall
-    # (overlapping it) out to the leg tip, its top plank_thick above z_top less the
-    # plank_drop that keys it into the leg.
+    # (overlapping it) out to the leg tip. Its BOTTOM sits exactly on the cylinder
+    # base (z_top) so it never dips under the cylinder (no thin sub-shoulder ledge
+    # -> CFD-friendly); the leg overlaps it from below for a clean union.
     plank_r0 = r_cyl - plank_overlap
     plank_r1 = r_in + taper
     plank = (
         cq.Workplane("XY")
         .box(plank_r1 - plank_r0, width, plank_thick)
-        .translate(((plank_r0 + plank_r1) / 2, 0, z_top - plank_drop + plank_thick / 2))
+        .translate(((plank_r0 + plank_r1) / 2, 0, z_top + plank_thick / 2))
     )
     foot0 = leg.union(plank)
     feet = None
