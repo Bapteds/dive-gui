@@ -74,9 +74,10 @@ FOOT_CHAMFER = 0.04          # 45 deg chamfer at the blunt outer end
 FOOT_PLANK_THICK = 0.05      # vertical thickness of the horizontal plank (50 mm)
 FOOT_PLANK_OVERLAP = 0.02    # plank radial overlap into the last-cyl wall
 FOOT_PLANK_DROP = 0.01       # leg extends this far above z_top to key into the plank
-FOOT_GUSSET_MIN_BASE = 0.05  # min triangular-plank base; below it (near radial) the build refuses
+FOOT_GUSSET_MIN_BASE = 0.05  # min triangular-plank base; below it (near 0/90/180) the build refuses
 FOOT_CLEARANCE = 0.02        # radial gap the leg keeps from the first cylinder (any angle)
-FOOT_ANGLE_DEG = 0.0         # default leg orientation (0/180 = tangential, 90 = radial)
+FOOT_ANGLE_DEG = 45.0        # default leg orientation; the gusset needs an intermediate angle
+                             # (0/180 = tangential and 90 = radial both degenerate the gusset)
 FOOT_ANGLES_DEG = (0, 90, 180, 270)     # azimuth positions (aligned with the inlet axes)
 
 PATCH_ORDER = ("inlet", "outlet", "cylinder_walls", "walls")
@@ -193,15 +194,15 @@ def make_feet(cq, cx, cy, z0, z_top, r_cyl, d_first, foot_angle_deg=FOOT_ANGLE_D
     vertical line through that tip: 0 deg = TANGENTIAL one way, 90 deg = RADIAL
     (tip pointing at the axis), 180 deg = TANGENTIAL the other way. A horizontal
     TRIANGULAR PLANK (gusset) then sits ON TOP of the leg with vertices: the leg's
-    FAR tip, the cylinder point under the INNER tip, and the perpendicular (radial)
-    foot of the FAR tip on the cylinder -- i.e. it connects tip-to-tip and adds one
-    perpendicular line from the far tip to the cylinder. Its bottom is flush on the
-    cylinder base z_top (no thin ledge under the cylinder); the two base vertices
-    are pushed `plank_overlap` inside the wall for a solid weld and the leg is
-    extruded `plank_drop` above z_top to key into it. Near radial (90 deg) the two
-    base vertices collapse, so a build within `gusset_min_base` of degenerate is
-    REFUSED (raises). Returns (feet_union, r_outer) centred at the part axis
-    (cx, cy); r_outer bounds the foot footprint at every angle for the classifier."""
+    FAR tip (apex), the point where the tip-to-tip line extended hits the cylinder
+    (through the inner tip), and the perpendicular (radial) foot of the FAR tip on
+    the cylinder. Its bottom is flush on the cylinder base z_top (no thin ledge
+    under the cylinder); the two base vertices are pushed `plank_overlap` inside the
+    wall for a solid weld and the leg is extruded `plank_drop` above z_top to key
+    into it. The gusset CANNOT form near tangential (0/180, the tip line misses the
+    cylinder) or near radial (90, the base collapses); within `gusset_min_base` of
+    degenerate the build is REFUSED (raises). Returns (feet_union, r_outer) centred
+    at the part axis (cx, cy); r_outer bounds the footprint for the classifier."""
     hw = width / 2
     # Anchor the inner tip so the WHOLE footprint clears the first cylinder at ANY
     # angle: when the leg swings tangential its half-width `hw` reaches inward past
@@ -229,22 +230,38 @@ def make_feet(cq, cx, cy, z0, z_top, r_cyl, d_first, foot_angle_deg=FOOT_ANGLE_D
     # it from below for a clean union. Base vertices are pushed `plank_overlap`
     # inside the wall so the gusset welds solidly to the cylinder along the chord.
     lean = math.radians(foot_angle_deg - 90.0)
-    t_out = (r_in + length * math.cos(lean), length * math.sin(lean))  # apex = far tip (post-rotation)
-    r_base = r_cyl - plank_overlap                    # base vertices sit just inside the wall
+    t_in = (r_in, 0.0)                                 # inner tip (pivot)
+    t_out = (r_in + length * math.cos(lean), length * math.sin(lean))  # far (rotating) tip
+    r_base = r_cyl - plank_overlap                     # base vertices sit just inside the wall
     t_out_len = math.hypot(*t_out)
-    c_in = (r_base, 0.0)                               # cylinder point under the inner tip (+X)
-    c_out = (r_base * t_out[0] / t_out_len, r_base * t_out[1] / t_out_len)  # perpendicular foot of far tip
-    # Near radial the two base vertices collapse onto one -> a zero-area triangle.
-    # Refuse rather than emit degenerate geometry (as intended: no build at ~90 deg).
-    if math.hypot(c_out[0] - c_in[0], c_out[1] - c_in[1]) < gusset_min_base:
+    c_out = (r_base * t_out[0] / t_out_len, r_base * t_out[1] / t_out_len)  # far-tip perpendicular foot
+    # C_axis: extend the tip-to-tip line (through the inner + far tips) INWARD to
+    # the cylinder. This misses the cylinder near tangential (0/180), where the
+    # line runs parallel to the wall -> then the gusset cannot be formed.
+    dx, dy = t_in[0] - t_out[0], t_in[1] - t_out[1]
+    dnorm = math.hypot(dx, dy)
+    dx, dy = dx / dnorm, dy / dnorm
+    bq = 2.0 * (t_in[0] * dx + t_in[1] * dy)
+    cq_ = t_in[0] ** 2 + t_in[1] ** 2 - r_base ** 2
+    disc = bq * bq - 4.0 * cq_
+    c_axis = None
+    if disc >= 0.0:
+        sq = math.sqrt(disc)
+        pos = [s for s in ((-bq - sq) / 2.0, (-bq + sq) / 2.0) if s > 1e-9]
+        if pos:
+            s = min(pos)                               # nearest crossing going inward
+            c_axis = (t_in[0] + s * dx, t_in[1] + s * dy)
+    if c_axis is None or math.hypot(c_axis[0] - c_out[0], c_axis[1] - c_out[1]) < gusset_min_base:
         raise ValueError(
-            "footAngleDeg %.1f is too close to radial (90) for the triangular "
-            "gusset (degenerate base); use a more tangential angle" % foot_angle_deg)
-    # asymmetric gusset: apex at the far tip, one base vertex under the inner tip
-    # and one at the far tip's perpendicular (radial) foot on the cylinder.
+            "footAngleDeg %.1f cannot form the triangular gusset (near tangential "
+            "0/180 the tip line misses the cylinder; near radial 90 the base "
+            "collapses). Use an intermediate angle." % foot_angle_deg)
+    # gusset: apex at the far tip; one edge is the tip-to-tip line extended to the
+    # cylinder (c_axis, through the inner tip), the other the far tip's
+    # perpendicular foot (c_out); base is the chord c_axis..c_out on the cylinder.
     plank = (
         cq.Workplane("XY", origin=(0, 0, z_top))
-        .polyline([t_out, c_in, c_out]).close()
+        .polyline([t_out, c_axis, c_out]).close()
         .extrude(plank_thick)
     )
     foot0 = leg.union(plank)

@@ -100,7 +100,7 @@ export function ChamberInputsForm({
         <Field
           label="Foot angle (°)"
           error={errors.footAngleDeg?.message}
-          helperText="0 & 180 = tangential · ≈90° (radial) unavailable"
+          helperText="Gusset needs ≈37–143° (not ≈90°); nearer 0/90/180 the build is refused"
         >
           <Input
             type="number"

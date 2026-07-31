@@ -153,23 +153,23 @@ describe('Chamber Creation', () => {
     expect(oWidth.model).toBeCloseTo(4444.44, 0);
   });
 
-  it('accepts a foot angle and keys the build on it (tangential vs radial)', async () => {
+  it('accepts a foot angle and keys the build on it', async () => {
     setCommandRunner(successRunner);
     const auth = authHeader(await createTestUser());
 
-    const tangential = await request(app)
+    const a45 = await request(app)
       .post('/api/v1/chamber/build')
       .set('Authorization', auth)
-      .send({ ...BUILD, footAngleDeg: 0 })
+      .send({ ...BUILD, footAngleDeg: 45 })
       .expect(200);
-    const radial = await request(app)
+    const a135 = await request(app)
       .post('/api/v1/chamber/build')
       .set('Authorization', auth)
-      .send({ ...BUILD, footAngleDeg: 90 })
+      .send({ ...BUILD, footAngleDeg: 135 })
       .expect(200);
 
     // Different foot orientation => different geometry => different cache key.
-    expect(tangential.body.hash).not.toBe(radial.body.hash);
+    expect(a45.body.hash).not.toBe(a135.body.hash);
   });
 
   it('rejects a foot angle outside 0–180', async () => {

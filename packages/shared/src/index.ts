@@ -2187,8 +2187,9 @@ export interface ChamberInput {
   variant?: ChamberVariant;
   /**
    * Torque-foot orientation in degrees, 0–180: 0/180 = tangential to the cylinder
-   * (opposite directions), 90 = radial. Default 0. Geometry-only (not part of the
-   * empirical model); passed straight to the builder.
+   * (opposite directions), 90 = radial. Default 45. The triangular gusset only
+   * forms at intermediate angles (~37–143°, excluding ~90°); near 0/90/180 the
+   * build is refused. Geometry-only (not part of the empirical model).
    */
   footAngleDeg?: number;
   /** Box length along Y (mm). Omitted => 2 x the (final) width. */
