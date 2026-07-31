@@ -16,3 +16,9 @@ h5py>=3.0
 pyvista>=0.43
 trimesh>=4.0
 numpy>=1.24
+
+# buildChamber.py (Chamber Creation: CadQuery solid -> named patches -> GLB).
+# Runs under CHAMBER_PYTHON_BIN, which should be a SEPARATE interpreter/venv from
+# the pyvista one above (cadquery pulls in OCP/OpenCascade; keep the wheel sets
+# apart). Needs trimesh + numpy (already floored above) plus:
+cadquery>=2.4

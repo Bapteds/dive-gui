@@ -182,6 +182,21 @@ const envSchema = z
     // Wall-clock timeout (ms) for a single mesh-extraction run. The one-time VTK
     // read of a large ASCII mesh dominates; generous, like the conversion above.
     MESH_BUILD_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
+    // --- Chamber Creation (standalone /chamber page) --------------------------
+    // The chamber generator builds a CadQuery solid from 3 empirical inputs and
+    // splits it into named OpenFOAM patches, emitting the same GLB + manifest +
+    // edges transport the mesh viewer consumes (scripts/buildChamber.py). It runs
+    // CadQuery + trimesh, so it needs its OWN interpreter, kept separate from the
+    // pyvista mesh interpreter (MESH_PYTHON_BIN) — the two wheel sets should not
+    // share a site-packages. Point CHAMBER_PYTHON_BIN at a venv that has cadquery
+    // and trimesh installed. Absent on a bare box => a clean CHAMBER_BUILD_FAILED.
+    CHAMBER_PYTHON_BIN: z.string().min(1).default(process.platform === 'win32' ? 'python' : 'python3'),
+    // Absolute path to the chamber builder. Empty => the script bundled with the
+    // API at apps/api/scripts/buildChamber.py (resolved relative to the module,
+    // cwd-independent). Set only to point at a script kept elsewhere.
+    BUILD_CHAMBER_SCRIPT: z.string().default(''),
+    // Wall-clock timeout (ms) for one chamber build (CadQuery boolean + tessellate).
+    CHAMBER_BUILD_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
     // --- Draft-tube inlet profile (boundary-condition overlay) ----------------
     // The DraftTube object type maps a runner-exit velocity profile onto its inlet
     // via timeVaryingMappedFixedValue, which reads constant/boundaryData (NOT a CSV

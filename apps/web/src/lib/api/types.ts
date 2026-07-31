@@ -11,6 +11,12 @@ import type {
   ConversionStepId,
   ExportArtifacts,
   ExportResult,
+  ChamberConfidence,
+  ChamberConstraint,
+  ChamberInput,
+  ChamberOutput,
+  ChamberOutputKey,
+  ChamberStatus,
   ExportStep,
   ExportStepId,
   ExportValidation,
@@ -569,6 +575,24 @@ export type { MeshPatch, MeshManifest, MeshPatchType, MeshPatchSetting, MeshPatc
 /** `GET /projects/:id/mesh/manifest` and `POST /projects/:id/mesh/rebuild` response. */
 export interface MeshManifestResponse {
   manifest: MeshManifest;
+}
+
+// ---- Chamber Creation ("/chamber" page) ----
+
+/** Re-export of the shared chamber shapes used by the feature. */
+export type {
+  ChamberInput,
+  ChamberOutput,
+  ChamberOutputKey,
+  ChamberConstraint,
+  ChamberStatus,
+  ChamberConfidence,
+};
+
+/** `POST /chamber/build` response: the cache key + the twelve computed outputs. */
+export interface ChamberBuildResponse {
+  hash: string;
+  outputs: ChamberOutput[];
 }
 
 /**

@@ -2007,6 +2007,223 @@ export interface ResidualSample {
   values: Partial<Record<string, number>>;
 }
 
+// ---------------------------------------------------------------------------
+// Chamber Creation (standalone /chamber page).
+//
+// Three empirical inputs (X1, X2, X3) drive twelve geometry parameters through
+// a fitted regression model (11 linear, 1 power), replacing the old Excel
+// calculator. Each output keeps the calculator's optional Min / Max / Exact
+// override -> FINAL value + Status. The twelve FINAL values (mm), plus a direct
+// LENGTH input (mm), are the geometry parameters the buildChamber.py builder
+// consumes (converted to metres). This model is the single source of truth for
+// the whole feature (the Python builder receives already-resolved params, so it
+// carries no model logic).
+// ---------------------------------------------------------------------------
+
+/**
+ * Directory name (under STORAGE_DIR) holding a chamber build's rendered
+ * artifacts, keyed by a hash of its inputs. Global, not project-scoped (mirrors
+ * MESHING_DIRNAME): the chamber generator is a standalone tool.
+ */
+export const CHAMBER_DIRNAME = 'chamber';
+
+/** Model outputs and the LENGTH input are in millimetres; the builder converts to metres. */
+export const CHAMBER_UNIT = 'mm';
+
+/**
+ * Valid input ranges for the three empirical inputs (from the fit's training
+ * span; extrapolate with care). Used by the input form's validation.
+ */
+export const CHAMBER_INPUT_RANGES = {
+  x1: { min: 700, max: 2420 },
+  x2: { min: 1.8, max: 14.9 },
+  x3: { min: 1, max: 23 },
+} as const;
+
+/**
+ * The twelve output parameter keys, in display order. Each key is also the JSON
+ * key the buildChamber.py builder reads (plus `length`, a direct input).
+ */
+export const CHAMBER_OUTPUT_KEYS = [
+  'width',
+  'height',
+  'distFromSideChamfer1',
+  'chamferLength1',
+  'chamferWidth1',
+  'chamferLength2',
+  'chamferWidth2',
+  'distFromEnd',
+  'dLast',
+  'hMiddle',
+  'hMiddlePlusFirst',
+  'hLast',
+] as const;
+export type ChamberOutputKey = (typeof CHAMBER_OUTPUT_KEYS)[number];
+
+/** Honesty labels for a parameter's leave-one-out cross-validation error. */
+export type ChamberConfidence = 'Good' | 'High' | 'Moderate' | 'Low';
+
+/** The functional form the fit chose for a parameter. */
+export type ChamberForm = 'linear' | 'power';
+
+/**
+ * The fitted model for one output. `linear`: a + b*X1 + c*X2 + d*X3.
+ * `power`: k * X1^e1 * X2^e2 * X3^e3. `cvError` is the leave-one-out RMSE as a
+ * percent of the mean (lower is better); `confidence` is its honesty label.
+ */
+export interface ChamberOutputSpec {
+  key: ChamberOutputKey;
+  label: string;
+  form: ChamberForm;
+  cvError: number;
+  confidence: ChamberConfidence;
+  coeffs:
+    | { a: number; b: number; c: number; d: number }
+    | { k: number; e1: number; e2: number; e3: number };
+}
+
+/**
+ * The fitted coefficients for all twelve outputs (full precision). P4/P5
+ * (chamfer 1 length/width) intentionally share one formula. Single source of
+ * truth for the model on both the client (live preview) and the server.
+ */
+export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
+  { key: 'width', label: 'Width', form: 'linear', cvError: 18.8, confidence: 'Moderate',
+    coeffs: { a: 3501.480486, b: -0.01990289598, c: -104.4968392, d: 224.0149301 } },
+  { key: 'height', label: 'Height', form: 'linear', cvError: 28.6, confidence: 'Moderate',
+    coeffs: { a: -2655.561158, b: 3.469850592, c: 500.9913764, d: -178.9974433 } },
+  { key: 'distFromSideChamfer1', label: 'Chamfer-1 side distance', form: 'linear', cvError: 32.0, confidence: 'Low',
+    coeffs: { a: 1913.645229, b: -0.1144287145, c: -38.895132, d: 115.1237973 } },
+  { key: 'chamferLength1', label: 'Chamfer 1 length', form: 'linear', cvError: 20.6, confidence: 'Moderate',
+    coeffs: { a: -2.009758353, b: 0.9116908157, c: 16.38088606, d: -19.61930855 } },
+  { key: 'chamferWidth1', label: 'Chamfer 1 width', form: 'linear', cvError: 20.6, confidence: 'Moderate',
+    coeffs: { a: -2.009758353, b: 0.9116908157, c: 16.38088606, d: -19.61930855 } },
+  { key: 'chamferLength2', label: 'Chamfer 2 length', form: 'linear', cvError: 18.6, confidence: 'Moderate',
+    coeffs: { a: 810.7255952, b: 0.1366396239, c: -70.24908474, d: 55.86948952 } },
+  { key: 'chamferWidth2', label: 'Chamfer 2 width', form: 'linear', cvError: 22.0, confidence: 'Moderate',
+    coeffs: { a: 1207.055875, b: -0.137521288, c: -128.8078895, d: 79.76891504 } },
+  { key: 'distFromEnd', label: 'Chamfered-end distance', form: 'linear', cvError: 27.2, confidence: 'Moderate',
+    coeffs: { a: -359.9271681, b: 2.188772589, c: 48.83409566, d: -45.9108988 } },
+  { key: 'dLast', label: 'Last cylinder diameter', form: 'linear', cvError: 8.1, confidence: 'Good',
+    coeffs: { a: 221.4522145, b: 1.498949106, c: -9.02505593, d: 14.40321366 } },
+  { key: 'hMiddle', label: 'Middle cylinder height', form: 'linear', cvError: 5.8, confidence: 'High',
+    coeffs: { a: 17.17464869, b: 0.435873881, c: -6.126007422, d: 2.320487817 } },
+  { key: 'hMiddlePlusFirst', label: 'Middle + first height', form: 'power', cvError: 24.9, confidence: 'Moderate',
+    coeffs: { k: 2.38913334e-8, e1: 3.631996617, e2: 0.647878341, e3: -1.281050007 } },
+  { key: 'hLast', label: 'Last cylinder height', form: 'linear', cvError: 38.9, confidence: 'Low',
+    coeffs: { a: 506.0051287, b: -0.4315856534, c: 312.7206124, d: 47.41062013 } },
+];
+
+/** An optional per-output override: pin an Exact value, or clamp to Min / Max. */
+export interface ChamberConstraint {
+  min?: number;
+  max?: number;
+  exact?: number;
+}
+
+/**
+ * The cylinder-stack design options:
+ *  - 'stepped': three solid coaxial cylinders (first/middle/last) - the default.
+ *  - 'hollow' : first/middle solid, the LAST cylinder an open-top hollow shell
+ *    (walls carved out) of a hand-set length, plus a central cylinder (Ø 0.75*X1,
+ *    height 0.75*P12) rising from the middle with an oval dome (20% of its height).
+ */
+export const CHAMBER_VARIANTS = ['stepped', 'hollow'] as const;
+export type ChamberVariant = (typeof CHAMBER_VARIANTS)[number];
+
+/** Default wall thickness (mm) of the hollow last cylinder in the 'hollow' variant. */
+export const CHAMBER_WALL_THICKNESS_MM = 50;
+
+/**
+ * The chamber build request: the three empirical inputs, optional per-output
+ * Min / Max / Exact overrides, the cylinder design variant, and geometry inputs
+ * that are NOT part of the empirical model (all lengths in mm).
+ */
+export interface ChamberInput {
+  x1: number;
+  x2: number;
+  x3: number;
+  constraints?: Partial<Record<ChamberOutputKey, ChamberConstraint>>;
+  /** Cylinder design (default 'stepped'). */
+  variant?: ChamberVariant;
+  /** Box length along Y (mm). Omitted => 2 x the (final) width. */
+  lengthOverride?: number;
+  /** Height (mm) of the hollow last cylinder. Required for the 'hollow' variant. */
+  hollowLength?: number;
+  /** Wall thickness (mm) of the hollow last cylinder. Default CHAMBER_WALL_THICKNESS_MM. */
+  wallThickness?: number;
+}
+
+/** What the FINAL clamp did to a model value, mirroring the calculator. */
+export type ChamberStatus =
+  | 'within range'
+  | 'capped at max'
+  | 'raised to min'
+  | 'set exact'
+  | '! min>max';
+
+/** One computed output: the raw model value, the clamped FINAL, and metadata. */
+export interface ChamberOutput {
+  key: ChamberOutputKey;
+  label: string;
+  form: ChamberForm;
+  /** Raw regression value (mm). */
+  model: number;
+  /** Value after the Min / Max / Exact override (mm) — what the builder uses. */
+  final: number;
+  status: ChamberStatus;
+  cvError: number;
+  confidence: ChamberConfidence;
+}
+
+/** Evaluate one output's fitted formula at (x1, x2, x3). */
+export function evalChamberSpec(spec: ChamberOutputSpec, x1: number, x2: number, x3: number): number {
+  if (spec.form === 'power') {
+    const c = spec.coeffs as { k: number; e1: number; e2: number; e3: number };
+    return c.k * Math.pow(x1, c.e1) * Math.pow(x2, c.e2) * Math.pow(x3, c.e3);
+  }
+  const c = spec.coeffs as { a: number; b: number; c: number; d: number };
+  return c.a + c.b * x1 + c.c * x2 + c.d * x3;
+}
+
+/**
+ * Compute the twelve outputs for a set of inputs: the raw model value and the
+ * FINAL after the optional Min / Max / Exact override, with a Status. This is
+ * the one place the model lives; the Python builder receives the resolved FINAL
+ * values and does no model math.
+ */
+export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
+  const { x1, x2, x3, constraints } = input;
+  return CHAMBER_OUTPUT_SPECS.map((spec) => {
+    const model = evalChamberSpec(spec, x1, x2, x3);
+    const con = constraints?.[spec.key] ?? {};
+    let final = model;
+    let status: ChamberStatus = 'within range';
+    if (con.exact != null) {
+      final = con.exact;
+      status = 'set exact';
+    } else if (con.min != null && con.max != null && con.min > con.max) {
+      status = '! min>max';
+    } else if (con.max != null && model > con.max) {
+      final = con.max;
+      status = 'capped at max';
+    } else if (con.min != null && model < con.min) {
+      final = con.min;
+      status = 'raised to min';
+    }
+    return {
+      key: spec.key,
+      label: spec.label,
+      form: spec.form,
+      model,
+      final,
+      status,
+      cvError: spec.cvError,
+      confidence: spec.confidence,
+    };
+  });
+}
+
 /**
  * Machine-readable error codes the API may emit in its `{ error: { code } }`
  * envelope. The web client maps these to user-facing messages; it adds its own
@@ -2030,6 +2247,8 @@ export const SERVER_ERROR_CODES = [
   'NO_MESH',
   'MESH_NOT_BUILT',
   'MESH_BUILD_FAILED',
+  'CHAMBER_BUILD_FAILED',
+  'CHAMBER_NOT_BUILT',
   'NO_MESHES',
   'INVALID_MERGE_PLAN',
   'STITCH_PATCH_NOT_FOUND',
