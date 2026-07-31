@@ -38,6 +38,13 @@ import {
 /** Sheet/model values are millimetres; the builder works in metres. */
 const MM_TO_M = 1 / 1000;
 
+/**
+ * Hollow variant: the central cylinder's height is a fixed ratio of its own
+ * diameter (independent of the empirical P12/hLast, which drives only the stepped
+ * last cylinder). Height = 1.33 x central diameter.
+ */
+const CENTRAL_HEIGHT_OVER_DIAMETER = 1.33;
+
 /** The result of a build request: the cache key + the twelve computed outputs. */
 export interface ChamberBuildResult {
   hash: string;
@@ -102,12 +109,13 @@ function resolveGeometryParams(
   }
 
   if (variant === 'hollow') {
-    const hLastMm = outputFinal(outputs, 'hLast');
     const wallMm = input.wallThickness ?? CHAMBER_WALL_THICKNESS_MM;
-    const centralHeightMm = 0.75 * hLastMm; // 0.75 * P12
+    const centralDiameterMm = 0.75 * input.x1; // 0.75 * X1
+    // Central cylinder height scales with its diameter (no longer tied to P12).
+    const centralHeightMm = CENTRAL_HEIGHT_OVER_DIAMETER * centralDiameterMm;
     params.wallThickness = wallMm * MM_TO_M;
     params.hollowLength = (input.hollowLength ?? 0) * MM_TO_M;
-    params.centralDiameter = 0.75 * input.x1 * MM_TO_M; // 0.75 * X1
+    params.centralDiameter = centralDiameterMm * MM_TO_M;
     params.centralHeight = centralHeightMm * MM_TO_M;
     params.domeHeight = 0.2 * centralHeightMm * MM_TO_M; // 20% of the central height
   }
