@@ -24,11 +24,17 @@ describe('computeChamberOutputs', () => {
     // Power: hMiddlePlusFirst = 2.38913334e-8 * X1^3.632 * X2^0.648 * X3^-1.281.
     expect(m.get('hMiddlePlusFirst')!.model).toBeCloseTo(1919.5, 0);
 
-    // With no constraints, FINAL equals the model value and status is within range.
+    // With no constraints, FINAL equals the model value. Fitted outputs read
+    // "within range"; the derived Height (P2) is the P11 + P12 identity.
     for (const o of outputs) {
       expect(o.final).toBe(o.model);
-      expect(o.status).toBe('within range');
+      expect(o.status).toBe(o.key === 'height' ? '= P11 + P12' : 'within range');
     }
+    expect(m.get('height')!.form).toBe('identity');
+    expect(m.get('height')!.model).toBeCloseTo(
+      m.get('hMiddlePlusFirst')!.final + m.get('hLast')!.final,
+      6,
+    );
   });
 
   it('gives chamfer-1 length and width the same value (shared formula)', () => {
@@ -50,10 +56,10 @@ describe('computeChamberOutputs', () => {
 
   it('pins a value to Exact regardless of Min/Max', () => {
     const m = byKey(
-      computeChamberOutputs({ ...BASE, constraints: { height: { exact: 1234, max: 10 } } }),
+      computeChamberOutputs({ ...BASE, constraints: { chamferLength2: { exact: 1234, max: 10 } } }),
     );
-    expect(m.get('height')!.final).toBe(1234);
-    expect(m.get('height')!.status).toBe('set exact');
+    expect(m.get('chamferLength2')!.final).toBe(1234);
+    expect(m.get('chamferLength2')!.status).toBe('set exact');
   });
 
   it('flags an inverted Min/Max range and leaves the model value', () => {
@@ -82,10 +88,29 @@ describe('computeChamberOutputs', () => {
     expect(m.get('distFromSideChamfer1')!.refined).toBe(false);
   });
 
-  it('refines the reverse pair (Height <-> Last cylinder height)', () => {
-    const m = byKey(computeChamberOutputs({ ...BASE, constraints: { height: { exact: 3000 } } }));
-    expect(m.get('hLast')!.refined).toBe(true);
-    expect(m.get('hLast')!.model).toBeCloseTo(1697.88, 1);
+  it('derives Height as the exact sum of middle+first and last cylinder height (P2 = P11 + P12)', () => {
+    const m = byKey(computeChamberOutputs(BASE));
+    const h = m.get('height')!;
+    expect(h.form).toBe('identity');
+    expect(h.status).toBe('= P11 + P12');
+    expect(h.final).toBeCloseTo(m.get('hMiddlePlusFirst')!.final + m.get('hLast')!.final, 6);
+  });
+
+  it('recomputes Height when a component (hLast) is constrained', () => {
+    const m = byKey(computeChamberOutputs({ ...BASE, constraints: { hLast: { exact: 1000 } } }));
+    expect(m.get('hLast')!.final).toBe(1000);
+    expect(m.get('height')!.final).toBeCloseTo(m.get('hMiddlePlusFirst')!.final + 1000, 6);
+  });
+
+  it('ignores Height’s own Min/Max/Exact (hard identity) and no longer refines hLast', () => {
+    const m = byKey(computeChamberOutputs({ ...BASE, constraints: { height: { exact: 1234 } } }));
+    // Height stays the P11 + P12 sum, not the exact override; hLast does not refine.
+    expect(m.get('height')!.final).not.toBe(1234);
+    expect(m.get('height')!.final).toBeCloseTo(
+      m.get('hMiddlePlusFirst')!.final + m.get('hLast')!.final,
+      6,
+    );
+    expect(m.get('hLast')!.refined).toBe(false);
   });
 
   it('opts out of refinement when interdependency is false', () => {

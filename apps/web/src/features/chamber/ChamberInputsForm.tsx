@@ -100,7 +100,7 @@ export function ChamberInputsForm({
         <Field
           label="Foot angle (°)"
           error={errors.footAngleDeg?.message}
-          helperText="0 / 180 = tangential · 90 = radial"
+          helperText="0 & 180 = tangential · ≈90° (radial) unavailable"
         >
           <Input
             type="number"

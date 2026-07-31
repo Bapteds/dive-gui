@@ -22,8 +22,9 @@ describe('ChamberOutputsTable', () => {
     render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />);
     expect(screen.getByText('Width')).toBeInTheDocument();
     expect(screen.getByText('Last cylinder diameter')).toBeInTheDocument();
-    // 12 outputs, all unconstrained -> every status reads "within range".
-    expect(screen.getAllByText('within range')).toHaveLength(OUTPUTS.length);
+    // 11 fitted outputs read "within range"; Height is the derived P11 + P12 identity.
+    expect(screen.getAllByText('within range')).toHaveLength(OUTPUTS.length - 1);
+    expect(screen.getByText('= P11 + P12')).toBeInTheDocument();
   });
 
   it('reports a Min edit up as a numeric constraint change', () => {

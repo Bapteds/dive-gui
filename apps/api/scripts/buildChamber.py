@@ -44,6 +44,7 @@ Success/failure contract (mirrors extractPatches.py / CgnsToVtk.py):
 
 import io
 import json
+import math
 import os
 import sys
 import zipfile
@@ -73,6 +74,7 @@ FOOT_CHAMFER = 0.04          # 45 deg chamfer at the blunt outer end
 FOOT_PLANK_THICK = 0.05      # vertical thickness of the horizontal plank (50 mm)
 FOOT_PLANK_OVERLAP = 0.02    # plank radial overlap into the last-cyl wall
 FOOT_PLANK_DROP = 0.01       # leg extends this far above z_top to key into the plank
+FOOT_GUSSET_MIN_BASE = 0.05  # min triangular-plank base; below it (near radial) the build refuses
 FOOT_CLEARANCE = 0.02        # radial gap the leg keeps from the first cylinder (any angle)
 FOOT_ANGLE_DEG = 0.0         # default leg orientation (0/180 = tangential, 90 = radial)
 FOOT_ANGLES_DEG = (0, 90, 180, 270)     # azimuth positions (aligned with the inlet axes)
@@ -181,20 +183,25 @@ def make_feet(cq, cx, cy, z0, z_top, r_cyl, d_first, foot_angle_deg=FOOT_ANGLE_D
               width=FOOT_WIDTH, length=FOOT_LENGTH, taper=FOOT_TAPER,
               chamfer=FOOT_CHAMFER, plank_thick=FOOT_PLANK_THICK,
               plank_overlap=FOOT_PLANK_OVERLAP, plank_drop=FOOT_PLANK_DROP,
-              clear=FOOT_CLEARANCE, angles=FOOT_ANGLES_DEG):
+              gusset_min_base=FOOT_GUSSET_MIN_BASE, clear=FOOT_CLEARANCE,
+              angles=FOOT_ANGLES_DEG):
     """Four torque-foot VOIDS spaced at `angles` (0/90/180/270). Each LEG is a
     pointed-hexagon TOP-DOWN footprint (max width `width`, a sharp tip and a blunt
     45 deg-chamfered end) extruded VERTICALLY from the floor (z0) up to the BASE of
     the last/hollow cylinder (z_top). Its inner tip anchors just outside the first
     cylinder (radial gap `clear`). `foot_angle_deg` swings the leg about the
     vertical line through that tip: 0 deg = TANGENTIAL one way, 90 deg = RADIAL
-    (tip pointing at the axis), 180 deg = TANGENTIAL the other way. A horizontal PLANK
-    then sits ON TOP of the leg with its bottom flush on the cylinder base z_top
-    (no thin ledge under the cylinder), bridging radially from the last-cylinder
-    wall (radius r_cyl, overlapping it by `plank_overlap`) out to the leg tip; the
-    leg is extruded `plank_drop` above z_top to key into it. Returns (feet_union,
-    r_outer) centred at the part axis (cx, cy); r_outer bounds the foot footprint
-    at every angle and feeds the patch classifier."""
+    (tip pointing at the axis), 180 deg = TANGENTIAL the other way. A horizontal
+    TRIANGULAR PLANK (gusset) then sits ON TOP of the leg with vertices: the leg's
+    FAR tip, the cylinder point under the INNER tip, and the perpendicular (radial)
+    foot of the FAR tip on the cylinder -- i.e. it connects tip-to-tip and adds one
+    perpendicular line from the far tip to the cylinder. Its bottom is flush on the
+    cylinder base z_top (no thin ledge under the cylinder); the two base vertices
+    are pushed `plank_overlap` inside the wall for a solid weld and the leg is
+    extruded `plank_drop` above z_top to key into it. Near radial (90 deg) the two
+    base vertices collapse, so a build within `gusset_min_base` of degenerate is
+    REFUSED (raises). Returns (feet_union, r_outer) centred at the part axis
+    (cx, cy); r_outer bounds the foot footprint at every angle for the classifier."""
     hw = width / 2
     # Anchor the inner tip so the WHOLE footprint clears the first cylinder at ANY
     # angle: when the leg swings tangential its half-width `hw` reaches inward past
@@ -214,16 +221,31 @@ def make_feet(cq, cx, cy, z0, z_top, r_cyl, d_first, foot_angle_deg=FOOT_ANGLE_D
     # about the vertical axis through the inner tip: 0 deg -> tangential one way,
     # 90 deg -> radial, 180 deg -> tangential the other way.
     leg = leg.rotate((r_in, 0, 0), (r_in, 0, 1), foot_angle_deg - 90.0)
-    # horizontal plank ON TOP of the leg: a slab from the last-cylinder wall
-    # (overlapping it) out to the leg tip. Its BOTTOM sits exactly on the cylinder
-    # base (z_top) so it never dips under the cylinder (no thin sub-shoulder ledge
-    # -> CFD-friendly); the leg overlaps it from below for a clean union.
-    plank_r0 = r_cyl - plank_overlap
-    plank_r1 = r_in + taper
+    # horizontal TRIANGULAR plank (gusset) ON TOP of the leg. Apex at the leg's far
+    # tip; base is a chord on the last cylinder. One edge is the perpendicular
+    # (radial) line from the far tip to the cylinder, the other runs from the far
+    # tip back to the cylinder near the inner tip. Its bottom sits exactly on the
+    # cylinder base z_top (no sub-shoulder ledge -> CFD-friendly); the leg overlaps
+    # it from below for a clean union. Base vertices are pushed `plank_overlap`
+    # inside the wall so the gusset welds solidly to the cylinder along the chord.
+    lean = math.radians(foot_angle_deg - 90.0)
+    t_out = (r_in + length * math.cos(lean), length * math.sin(lean))  # apex = far tip (post-rotation)
+    r_base = r_cyl - plank_overlap                    # base vertices sit just inside the wall
+    t_out_len = math.hypot(*t_out)
+    c_in = (r_base, 0.0)                               # cylinder point under the inner tip (+X)
+    c_out = (r_base * t_out[0] / t_out_len, r_base * t_out[1] / t_out_len)  # perpendicular foot of far tip
+    # Near radial the two base vertices collapse onto one -> a zero-area triangle.
+    # Refuse rather than emit degenerate geometry (as intended: no build at ~90 deg).
+    if math.hypot(c_out[0] - c_in[0], c_out[1] - c_in[1]) < gusset_min_base:
+        raise ValueError(
+            "footAngleDeg %.1f is too close to radial (90) for the triangular "
+            "gusset (degenerate base); use a more tangential angle" % foot_angle_deg)
+    # asymmetric gusset: apex at the far tip, one base vertex under the inner tip
+    # and one at the far tip's perpendicular (radial) foot on the cylinder.
     plank = (
-        cq.Workplane("XY")
-        .box(plank_r1 - plank_r0, width, plank_thick)
-        .translate(((plank_r0 + plank_r1) / 2, 0, z_top + plank_thick / 2))
+        cq.Workplane("XY", origin=(0, 0, z_top))
+        .polyline([t_out, c_in, c_out]).close()
+        .extrude(plank_thick)
     )
     foot0 = leg.union(plank)
     feet = None
@@ -451,7 +473,10 @@ def main():
             part_height = h_first + h_middle + h_last
             rmax = max(d_first, d_middle, d_last) / 2
 
-        if part_height > height:
+        # height now equals part_height exactly for the stepped variant (the model
+        # sets P2 = P11 + P12); allow a micron of float slack so that identity does
+        # not trip a false "part exceeds box" failure.
+        if part_height > height + 1e-6:
             raise ValueError(
                 "part height %.4f exceeds box height %.4f" % (part_height, height))
 

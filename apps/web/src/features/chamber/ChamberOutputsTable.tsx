@@ -39,6 +39,7 @@ const STATUS_STYLES: Record<ChamberStatus, string> = {
   'capped at max': 'text-accent-hover',
   'raised to min': 'text-accent-hover',
   '! min>max': 'text-danger',
+  '= P11 + P12': 'text-primary',
 };
 
 /** Format a millimetre value for display (1 decimal, tabular). */
@@ -119,6 +120,9 @@ export function ChamberOutputsTable({
           <TableBody>
             {outputs.map((o) => {
               const con = constraints[o.key] ?? {};
+              // A derived (identity) output — e.g. Height = P11 + P12 — cannot be
+              // constrained directly; its Min/Max/Exact cells are read-only.
+              const derived = o.form === 'identity';
               return (
                 <TableRow key={o.key}>
                   <TableCell className="font-medium text-text">
@@ -135,27 +139,35 @@ export function ChamberOutputsTable({
                     </span>
                   </TableCell>
                   <TableCell className="text-right text-text-secondary">{mm(o.model)}</TableCell>
-                  <TableCell>
-                    <NumCell
-                      value={con.min}
-                      ariaLabel={`${o.label} minimum`}
-                      onChange={(v) => onConstraintChange(o.key, 'min', v)}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <NumCell
-                      value={con.max}
-                      ariaLabel={`${o.label} maximum`}
-                      onChange={(v) => onConstraintChange(o.key, 'max', v)}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <NumCell
-                      value={con.exact}
-                      ariaLabel={`${o.label} exact`}
-                      onChange={(v) => onConstraintChange(o.key, 'exact', v)}
-                    />
-                  </TableCell>
+                  {derived ? (
+                    <TableCell colSpan={3} className="text-center text-xs text-text-secondary">
+                      derived from Middle + first &amp; Last cylinder height
+                    </TableCell>
+                  ) : (
+                    <>
+                      <TableCell>
+                        <NumCell
+                          value={con.min}
+                          ariaLabel={`${o.label} minimum`}
+                          onChange={(v) => onConstraintChange(o.key, 'min', v)}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <NumCell
+                          value={con.max}
+                          ariaLabel={`${o.label} maximum`}
+                          onChange={(v) => onConstraintChange(o.key, 'max', v)}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <NumCell
+                          value={con.exact}
+                          ariaLabel={`${o.label} exact`}
+                          onChange={(v) => onConstraintChange(o.key, 'exact', v)}
+                        />
+                      </TableCell>
+                    </>
+                  )}
                   <TableCell className="text-right font-semibold text-text">{mm(o.final)}</TableCell>
                   <TableCell>
                     <span className={cn('text-xs', STATUS_STYLES[o.status])}>{o.status}</span>

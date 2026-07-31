@@ -2063,8 +2063,8 @@ export type ChamberOutputKey = (typeof CHAMBER_OUTPUT_KEYS)[number];
 /** Honesty labels for a parameter's leave-one-out cross-validation error. */
 export type ChamberConfidence = 'Good' | 'High' | 'Moderate' | 'Low';
 
-/** The functional form the fit chose for a parameter. */
-export type ChamberForm = 'linear' | 'power';
+/** The functional form the fit chose for a parameter ('identity' = exact sum of others). */
+export type ChamberForm = 'linear' | 'power' | 'identity';
 
 /**
  * Interdependency refinement for one output: when the PARTNER output's value is
@@ -2096,10 +2096,17 @@ export interface ChamberOutputSpec {
   form: ChamberForm;
   cvError: number;
   confidence: ChamberConfidence;
-  coeffs:
+  /** Fit coefficients (absent for form 'identity', which is a sum of other outputs). */
+  coeffs?:
     | { a: number; b: number; c: number; d: number }
     | { k: number; e1: number; e2: number; e3: number };
   refinement?: ChamberRefinement;
+  /**
+   * For form 'identity': this output is the EXACT sum of these outputs' FINAL
+   * values (a hard constraint that ignores its own Min/Max/Exact). E.g. height =
+   * hMiddlePlusFirst + hLast.
+   */
+  identityOf?: ChamberOutputKey[];
 }
 
 /**
@@ -2112,10 +2119,10 @@ export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
     coeffs: { a: 3501.480486, b: -0.01990289598, c: -104.4968392, d: 224.0149301 },
     refinement: { partner: 'distFromSideChamfer1', note: 'auto-refines when Chamfer-1 side distance is known (R² 0.51 → 0.81)',
       coeffs: { a: 1101.528235, b: 0.5004560281, c: -19.97360475, d: 78.2136825, p: 0.976665205 } } },
-  { key: 'height', label: 'Height', form: 'linear', cvError: 28.6, confidence: 'Moderate',
-    coeffs: { a: -2655.561158, b: 3.469850592, c: 500.9913764, d: -178.9974433 },
-    refinement: { partner: 'hLast', note: 'auto-refines when Last cylinder height is known (R² 0.39 → 0.84)',
-      coeffs: { a: -4508.197588, b: 5.040489784, c: 261.2175127, d: -287.2625107, p: 0.8922755912 } } },
+  // P2 = P11 + P12 (hard identity): height is the exact sum of the middle+first
+  // and last cylinder heights (its own Min/Max/Exact are ignored — set P11/P12).
+  { key: 'height', label: 'Height', form: 'identity', cvError: 28.6, confidence: 'Moderate',
+    identityOf: ['hMiddlePlusFirst', 'hLast'] },
   { key: 'distFromSideChamfer1', label: 'Chamfer-1 side distance', form: 'linear', cvError: 32.0, confidence: 'Low',
     coeffs: { a: 1913.645229, b: -0.1144287145, c: -38.895132, d: 115.1237973 },
     refinement: { partner: 'width', note: 'auto-refines when Width is known (R² 0.09 → 0.62)',
@@ -2137,9 +2144,7 @@ export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
   { key: 'hMiddlePlusFirst', label: 'Middle + first height', form: 'power', cvError: 24.9, confidence: 'Moderate',
     coeffs: { k: 2.38913334e-8, e1: 3.631996617, e2: 0.647878341, e3: -1.281050007 } },
   { key: 'hLast', label: 'Last cylinder height', form: 'linear', cvError: 38.9, confidence: 'Low',
-    coeffs: { a: 506.0051287, b: -0.4315856534, c: 312.7206124, d: 47.41062013 },
-    refinement: { partner: 'height', note: 'auto-refines when Height is known (R² 0.41 → 0.73)',
-      coeffs: { a: 2679.328771, b: -3.760659542, c: 48.32827513, d: 230.4941673, p: 0.7493909462 } } },
+    coeffs: { a: 506.0051287, b: -0.4315856534, c: 312.7206124, d: 47.41062013 } },
 ];
 
 /** An optional per-output override: pin an Exact value, or clamp to Min / Max. */
@@ -2200,7 +2205,8 @@ export type ChamberStatus =
   | 'capped at max'
   | 'raised to min'
   | 'set exact'
-  | '! min>max';
+  | '! min>max'
+  | '= P11 + P12';
 
 /** One computed output: the raw model value, the clamped FINAL, and metadata. */
 export interface ChamberOutput {
@@ -2255,7 +2261,12 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
   const { x1, x2, x3, constraints } = input;
   // Interdependency is on unless explicitly disabled (opt-out).
   const interdependency = input.interdependency !== false;
-  return CHAMBER_OUTPUT_SPECS.map((spec) => {
+  const byKey = new Map<ChamberOutputKey, ChamberOutput>();
+
+  // Pass 1: every fitted output (linear/power). Identity outputs are deferred to
+  // pass 2 because they read other outputs' resolved FINAL values.
+  for (const spec of CHAMBER_OUTPUT_SPECS) {
+    if (spec.form === 'identity') continue;
     // A paired output refines only when its partner has a known Exact value AND
     // refinement is enabled; otherwise it stays a pure X1/X2/X3 fit.
     const partnerKnown =
@@ -2277,7 +2288,7 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
       final = con.min;
       status = 'raised to min';
     }
-    return {
+    byKey.set(spec.key, {
       key: spec.key,
       label: spec.label,
       form: spec.form,
@@ -2287,8 +2298,29 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
       cvError: spec.cvError,
       confidence: spec.confidence,
       refined,
-    };
-  });
+    });
+  }
+
+  // Pass 2: identity outputs (height = hMiddlePlusFirst + hLast). A hard identity:
+  // the value is the exact sum of its partners' FINAL values and its own
+  // Min/Max/Exact are ignored (mirrors the calculator's P2 = P11 + P12).
+  for (const spec of CHAMBER_OUTPUT_SPECS) {
+    if (spec.form !== 'identity' || !spec.identityOf) continue;
+    const value = spec.identityOf.reduce((sum, k) => sum + (byKey.get(k)?.final ?? 0), 0);
+    byKey.set(spec.key, {
+      key: spec.key,
+      label: spec.label,
+      form: spec.form,
+      model: value,
+      final: value,
+      status: '= P11 + P12',
+      cvError: spec.cvError,
+      confidence: spec.confidence,
+      refined: false,
+    });
+  }
+
+  return CHAMBER_OUTPUT_KEYS.map((k) => byKey.get(k)!);
 }
 
 /**
