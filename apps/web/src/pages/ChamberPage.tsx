@@ -50,13 +50,13 @@ export function ChamberPage() {
 
   const values = watch();
   const outputs = useMemo<ChamberOutput[] | null>(() => {
-    const { x1, x2, x3 } = values;
+    const { x1, x2, x3, interdependency } = values;
     if (![x1, x2, x3].every((v) => typeof v === 'number' && Number.isFinite(v))) {
       return null;
     }
-    return computeChamberOutputs({ x1, x2, x3, constraints });
+    return computeChamberOutputs({ x1, x2, x3, constraints, interdependency });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [values.x1, values.x2, values.x3, constraints]);
+  }, [values.x1, values.x2, values.x3, values.interdependency, constraints]);
 
   // Auto length shown on the (blank) length field = 2 x the final width (mm).
   const widthFinal = outputs?.find((o) => o.key === 'width')?.final ?? null;

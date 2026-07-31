@@ -2067,9 +2067,28 @@ export type ChamberConfidence = 'Good' | 'High' | 'Moderate' | 'Low';
 export type ChamberForm = 'linear' | 'power';
 
 /**
+ * Interdependency refinement for one output: when the PARTNER output's value is
+ * known (entered as its Exact override), this output switches to a sharper linear
+ * fit that also reads that known partner value — `a + b*X1 + c*X2 + d*X3 + p*P`.
+ * Only two pairs gain real accuracy (width <-> chamfer-1 side distance, and
+ * height <-> last-cylinder height); every other output is input-only. The
+ * refinement is opt-out via `ChamberInput.interdependency`.
+ */
+export interface ChamberRefinement {
+  /** The output whose known (Exact) value sharpens this one. */
+  partner: ChamberOutputKey;
+  /** Refined-fit coefficients: a + b*X1 + c*X2 + d*X3 + p*(known partner value). */
+  coeffs: { a: number; b: number; c: number; d: number; p: number };
+  /** Short human note (R^2 gain) for the UI. */
+  note: string;
+}
+
+/**
  * The fitted model for one output. `linear`: a + b*X1 + c*X2 + d*X3.
  * `power`: k * X1^e1 * X2^e2 * X3^e3. `cvError` is the leave-one-out RMSE as a
  * percent of the mean (lower is better); `confidence` is its honesty label.
+ * `refinement`, when present, is the sharper fit used once the partner output's
+ * value is known (see ChamberRefinement).
  */
 export interface ChamberOutputSpec {
   key: ChamberOutputKey;
@@ -2080,6 +2099,7 @@ export interface ChamberOutputSpec {
   coeffs:
     | { a: number; b: number; c: number; d: number }
     | { k: number; e1: number; e2: number; e3: number };
+  refinement?: ChamberRefinement;
 }
 
 /**
@@ -2089,11 +2109,17 @@ export interface ChamberOutputSpec {
  */
 export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
   { key: 'width', label: 'Width', form: 'linear', cvError: 18.8, confidence: 'Moderate',
-    coeffs: { a: 3501.480486, b: -0.01990289598, c: -104.4968392, d: 224.0149301 } },
+    coeffs: { a: 3501.480486, b: -0.01990289598, c: -104.4968392, d: 224.0149301 },
+    refinement: { partner: 'distFromSideChamfer1', note: 'auto-refines when Chamfer-1 side distance is known (R² 0.51 → 0.81)',
+      coeffs: { a: 1101.528235, b: 0.5004560281, c: -19.97360475, d: 78.2136825, p: 0.976665205 } } },
   { key: 'height', label: 'Height', form: 'linear', cvError: 28.6, confidence: 'Moderate',
-    coeffs: { a: -2655.561158, b: 3.469850592, c: 500.9913764, d: -178.9974433 } },
+    coeffs: { a: -2655.561158, b: 3.469850592, c: 500.9913764, d: -178.9974433 },
+    refinement: { partner: 'hLast', note: 'auto-refines when Last cylinder height is known (R² 0.39 → 0.84)',
+      coeffs: { a: -4508.197588, b: 5.040489784, c: 261.2175127, d: -287.2625107, p: 0.8922755912 } } },
   { key: 'distFromSideChamfer1', label: 'Chamfer-1 side distance', form: 'linear', cvError: 32.0, confidence: 'Low',
-    coeffs: { a: 1913.645229, b: -0.1144287145, c: -38.895132, d: 115.1237973 } },
+    coeffs: { a: 1913.645229, b: -0.1144287145, c: -38.895132, d: 115.1237973 },
+    refinement: { partner: 'width', note: 'auto-refines when Width is known (R² 0.09 → 0.62)',
+      coeffs: { a: -417.365864, b: -0.2106437417, c: 14.17960421, d: -32.6306581, p: 0.7098088714 } } },
   { key: 'chamferLength1', label: 'Chamfer 1 length', form: 'linear', cvError: 20.6, confidence: 'Moderate',
     coeffs: { a: -2.009758353, b: 0.9116908157, c: 16.38088606, d: -19.61930855 } },
   { key: 'chamferWidth1', label: 'Chamfer 1 width', form: 'linear', cvError: 20.6, confidence: 'Moderate',
@@ -2111,7 +2137,9 @@ export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
   { key: 'hMiddlePlusFirst', label: 'Middle + first height', form: 'power', cvError: 24.9, confidence: 'Moderate',
     coeffs: { k: 2.38913334e-8, e1: 3.631996617, e2: 0.647878341, e3: -1.281050007 } },
   { key: 'hLast', label: 'Last cylinder height', form: 'linear', cvError: 38.9, confidence: 'Low',
-    coeffs: { a: 506.0051287, b: -0.4315856534, c: 312.7206124, d: 47.41062013 } },
+    coeffs: { a: 506.0051287, b: -0.4315856534, c: 312.7206124, d: 47.41062013 },
+    refinement: { partner: 'height', note: 'auto-refines when Height is known (R² 0.41 → 0.73)',
+      coeffs: { a: 2679.328771, b: -3.760659542, c: 48.32827513, d: 230.4941673, p: 0.7493909462 } } },
 ];
 
 /** An optional per-output override: pin an Exact value, or clamp to Min / Max. */
@@ -2144,8 +2172,20 @@ export interface ChamberInput {
   x2: number;
   x3: number;
   constraints?: Partial<Record<ChamberOutputKey, ChamberConstraint>>;
+  /**
+   * Interdependency refinement. When true (the default), a paired output is
+   * sharpened by its partner's known (Exact) value. Set false to opt out and
+   * make every parameter depend on X1/X2/X3 only.
+   */
+  interdependency?: boolean;
   /** Cylinder design (default 'stepped'). */
   variant?: ChamberVariant;
+  /**
+   * Torque-foot orientation in degrees, 0–180: 0/180 = tangential to the cylinder
+   * (opposite directions), 90 = radial. Default 0. Geometry-only (not part of the
+   * empirical model); passed straight to the builder.
+   */
+  footAngleDeg?: number;
   /** Box length along Y (mm). Omitted => 2 x the (final) width. */
   lengthOverride?: number;
   /** Height (mm) of the hollow last cylinder. Required for the 'hollow' variant. */
@@ -2174,10 +2214,29 @@ export interface ChamberOutput {
   status: ChamberStatus;
   cvError: number;
   confidence: ChamberConfidence;
+  /**
+   * True when the raw model value came from the interdependency-refined fit
+   * (i.e. this output's partner had a known Exact value and refinement was on).
+   */
+  refined: boolean;
 }
 
-/** Evaluate one output's fitted formula at (x1, x2, x3). */
-export function evalChamberSpec(spec: ChamberOutputSpec, x1: number, x2: number, x3: number): number {
+/**
+ * Evaluate one output's fitted formula at (x1, x2, x3). When `partnerKnown` is
+ * provided and the spec has a refinement, the sharper interdependency fit
+ * (a + b*X1 + c*X2 + d*X3 + p*partnerKnown) is used instead of the base fit.
+ */
+export function evalChamberSpec(
+  spec: ChamberOutputSpec,
+  x1: number,
+  x2: number,
+  x3: number,
+  partnerKnown?: number,
+): number {
+  if (spec.refinement && partnerKnown != null) {
+    const r = spec.refinement.coeffs;
+    return r.a + r.b * x1 + r.c * x2 + r.d * x3 + r.p * partnerKnown;
+  }
   if (spec.form === 'power') {
     const c = spec.coeffs as { k: number; e1: number; e2: number; e3: number };
     return c.k * Math.pow(x1, c.e1) * Math.pow(x2, c.e2) * Math.pow(x3, c.e3);
@@ -2194,8 +2253,15 @@ export function evalChamberSpec(spec: ChamberOutputSpec, x1: number, x2: number,
  */
 export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
   const { x1, x2, x3, constraints } = input;
+  // Interdependency is on unless explicitly disabled (opt-out).
+  const interdependency = input.interdependency !== false;
   return CHAMBER_OUTPUT_SPECS.map((spec) => {
-    const model = evalChamberSpec(spec, x1, x2, x3);
+    // A paired output refines only when its partner has a known Exact value AND
+    // refinement is enabled; otherwise it stays a pure X1/X2/X3 fit.
+    const partnerKnown =
+      interdependency && spec.refinement ? constraints?.[spec.refinement.partner]?.exact : undefined;
+    const refined = partnerKnown != null;
+    const model = evalChamberSpec(spec, x1, x2, x3, partnerKnown);
     const con = constraints?.[spec.key] ?? {};
     let final = model;
     let status: ChamberStatus = 'within range';
@@ -2220,6 +2286,7 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
       status,
       cvError: spec.cvError,
       confidence: spec.confidence,
+      refined,
     };
   });
 }

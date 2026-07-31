@@ -124,6 +124,63 @@ describe('Chamber Creation', () => {
     expect(width.status).toBe('set exact');
   });
 
+  it('refines a paired output from a partner Exact, and opts out on request', async () => {
+    setCommandRunner(successRunner);
+    const auth = authHeader(await createTestUser());
+
+    // A known Chamfer-1 side distance (Exact) sharpens Width via interdependency.
+    const refined = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, constraints: { distFromSideChamfer1: { exact: 2000 } } })
+      .expect(200);
+    const rWidth = (refined.body.outputs as { key: string; model: number; refined: boolean }[]).find(
+      (o) => o.key === 'width',
+    )!;
+    expect(rWidth.refined).toBe(true);
+    expect(rWidth.model).toBeCloseTo(4249.44, 0);
+
+    // Opting out ignores the partner and falls back to the pure X1/X2/X3 fit.
+    const optedOut = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, interdependency: false, constraints: { distFromSideChamfer1: { exact: 2000 } } })
+      .expect(200);
+    const oWidth = (optedOut.body.outputs as { key: string; model: number; refined: boolean }[]).find(
+      (o) => o.key === 'width',
+    )!;
+    expect(oWidth.refined).toBe(false);
+    expect(oWidth.model).toBeCloseTo(4444.44, 0);
+  });
+
+  it('accepts a foot angle and keys the build on it (tangential vs radial)', async () => {
+    setCommandRunner(successRunner);
+    const auth = authHeader(await createTestUser());
+
+    const tangential = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, footAngleDeg: 0 })
+      .expect(200);
+    const radial = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, footAngleDeg: 90 })
+      .expect(200);
+
+    // Different foot orientation => different geometry => different cache key.
+    expect(tangential.body.hash).not.toBe(radial.body.hash);
+  });
+
+  it('rejects a foot angle outside 0–180', async () => {
+    const auth = authHeader(await createTestUser());
+    await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, footAngleDeg: 200 })
+      .expect(422);
+  });
+
   it('builds the hollow variant when a hollow length is given', async () => {
     setCommandRunner(successRunner);
     const auth = authHeader(await createTestUser());

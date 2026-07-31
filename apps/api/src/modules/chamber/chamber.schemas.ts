@@ -25,6 +25,11 @@ export const chamberBuildSchema = z
     x2: z.number().finite().min(r.x2.min).max(r.x2.max),
     x3: z.number().finite().min(r.x3.min).max(r.x3.max),
     constraints: z.record(z.enum(CHAMBER_OUTPUT_KEYS), constraintSchema).optional(),
+    // Interdependency refinement (paired outputs sharpen from a known partner
+    // Exact). On by default; false opts out to a pure X1/X2/X3 fit.
+    interdependency: z.boolean().default(true),
+    // Torque-foot orientation (0–180): 0/180 = tangential either way, 90 = radial.
+    footAngleDeg: z.number().finite().min(0).max(180).default(0),
     variant: z.enum(CHAMBER_VARIANTS).default('stepped'),
     lengthOverride: z.number().finite().positive().optional(),
     hollowLength: z.number().finite().positive().optional(),

@@ -121,7 +121,19 @@ export function ChamberOutputsTable({
               const con = constraints[o.key] ?? {};
               return (
                 <TableRow key={o.key}>
-                  <TableCell className="font-medium text-text">{o.label}</TableCell>
+                  <TableCell className="font-medium text-text">
+                    <span className="inline-flex items-center gap-2">
+                      {o.label}
+                      {o.refined && (
+                        <span
+                          title="Refined from its partner's known Exact value (interdependency)"
+                          className="inline-block rounded-sm bg-primary-tint px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary"
+                        >
+                          refined
+                        </span>
+                      )}
+                    </span>
+                  </TableCell>
                   <TableCell className="text-right text-text-secondary">{mm(o.model)}</TableCell>
                   <TableCell>
                     <NumCell

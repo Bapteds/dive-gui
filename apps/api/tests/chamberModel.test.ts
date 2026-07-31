@@ -63,4 +63,48 @@ describe('computeChamberOutputs', () => {
     expect(m.get('width')!.status).toBe('! min>max');
     expect(m.get('width')!.final).toBe(m.get('width')!.model);
   });
+
+  it('leaves every output unrefined when no partner Exact is set', () => {
+    for (const o of computeChamberOutputs(BASE)) {
+      expect(o.refined).toBe(false);
+    }
+  });
+
+  it('refines width from a known Chamfer-1 side distance (its partner)', () => {
+    // Known partner value = distFromSideChamfer1 Exact; width uses the sharper fit.
+    const m = byKey(
+      computeChamberOutputs({ ...BASE, constraints: { distFromSideChamfer1: { exact: 2000 } } }),
+    );
+    expect(m.get('width')!.refined).toBe(true);
+    expect(m.get('width')!.model).toBeCloseTo(4249.44, 1);
+    // The partner itself is pinned to its Exact and is not "refined".
+    expect(m.get('distFromSideChamfer1')!.final).toBe(2000);
+    expect(m.get('distFromSideChamfer1')!.refined).toBe(false);
+  });
+
+  it('refines the reverse pair (Height <-> Last cylinder height)', () => {
+    const m = byKey(computeChamberOutputs({ ...BASE, constraints: { height: { exact: 3000 } } }));
+    expect(m.get('hLast')!.refined).toBe(true);
+    expect(m.get('hLast')!.model).toBeCloseTo(1697.88, 1);
+  });
+
+  it('opts out of refinement when interdependency is false', () => {
+    const m = byKey(
+      computeChamberOutputs({
+        ...BASE,
+        interdependency: false,
+        constraints: { distFromSideChamfer1: { exact: 2000 } },
+      }),
+    );
+    expect(m.get('width')!.refined).toBe(false);
+    // Falls back to the pure X1/X2/X3 fit.
+    expect(m.get('width')!.model).toBeCloseTo(4444.44, 1);
+  });
+
+  it('does not refine an unpaired output when an unrelated Exact is set', () => {
+    // dLast has no partner; setting width Exact must not refine it.
+    const m = byKey(computeChamberOutputs({ ...BASE, constraints: { width: { exact: 4000 } } }));
+    expect(m.get('dLast')!.refined).toBe(false);
+    expect(m.get('dLast')!.model).toBeCloseTo(2439.31, 1);
+  });
 });

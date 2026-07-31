@@ -62,14 +62,20 @@ STL_TOLERANCE = 0.01                  # STL export tolerance (m)
 PLANE_TOL = 1e-4                      # "face lies in a plane" tolerance
 
 # --- torque feet (4 pointed-hexagon voids, both variants) -------------------
+# Each foot is a vertical pointed-hexagon LEG (floor -> base of the last/hollow
+# cylinder) plus a horizontal PLANK sitting on top of the leg and reaching the
+# cylinder wall. FOOT_ANGLE_DEG orients the leg: 0/180 = tangential (either way),
+# 90 = radial.
 FOOT_WIDTH = 0.14            # max width of the pointed-hexagon leg (140 mm)
-FOOT_LENGTH = 0.45           # radial length of the leg (sharp tip -> blunt end)
-FOOT_TAPER = 0.07            # radial run from the sharp inner tip to full width
+FOOT_LENGTH = 0.45           # length of the leg along its axis (sharp tip -> blunt end)
+FOOT_TAPER = 0.07            # run from the sharp inner tip to full width
 FOOT_CHAMFER = 0.04          # 45 deg chamfer at the blunt outer end
-FOOT_PLANK_THICK = 0.05      # thin connecting plank (tangential thickness, 50 mm)
+FOOT_PLANK_THICK = 0.05      # vertical thickness of the horizontal plank (50 mm)
 FOOT_PLANK_OVERLAP = 0.02    # plank radial overlap into the last-cyl wall
-FOOT_CLEARANCE = 0.02        # radial gap of the inner tip from the first cylinder
-FOOT_ANGLES_DEG = (0, 90, 180, 270)     # aligned with the inlet axes
+FOOT_PLANK_DROP = 0.01       # plank sinks this far into the leg top (clean union)
+FOOT_CLEARANCE = 0.02        # radial gap the leg keeps from the first cylinder (any angle)
+FOOT_ANGLE_DEG = 0.0         # default leg orientation (0/180 = tangential, 90 = radial)
+FOOT_ANGLES_DEG = (0, 90, 180, 270)     # azimuth positions (aligned with the inlet axes)
 
 PATCH_ORDER = ("inlet", "outlet", "cylinder_walls", "walls")
 PATCH_TYPES = {
@@ -171,39 +177,51 @@ def make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
     return part.union(tube).union(central).union(dome)
 
 
-def make_feet(cq, cx, cy, z0, z_top, z_leg_top, r_cyl, d_first,
+def make_feet(cq, cx, cy, z0, z_top, r_cyl, d_first, foot_angle_deg=FOOT_ANGLE_DEG,
               width=FOOT_WIDTH, length=FOOT_LENGTH, taper=FOOT_TAPER,
               chamfer=FOOT_CHAMFER, plank_thick=FOOT_PLANK_THICK,
-              plank_overlap=FOOT_PLANK_OVERLAP, clear=FOOT_CLEARANCE,
-              angles=FOOT_ANGLES_DEG):
-    """Four torque-foot VOIDS aligned with the inlet axes (0/90/180/270). Each LEG
-    is a pointed-hexagon TOP-DOWN footprint (max width `width`, a sharp tip pointing
-    IN toward the cylinders and a blunt 45 deg-chamfered outer end), extruded
-    VERTICALLY from the floor (z0) up to the TOP of the last/hollow cylinder
-    (z_leg_top); its inner tip sits just outside the first cylinder (radial gap
-    `clear`). A thin vertical PLANK then joins the leg to the last-cylinder wall
-    (radius r_cyl) along the cylinder's height [z_top, z_leg_top], overlapping the
-    wall by `plank_overlap` so it connects solidly. Returns (feet_union, r_outer)
-    centred at the part axis (cx, cy); r_outer feeds the patch classifier."""
-    r_in = d_first / 2 + clear          # sharp inner tip (just clears first cylinder)
-    r_outer = r_in + length             # blunt outer end
+              plank_overlap=FOOT_PLANK_OVERLAP, plank_drop=FOOT_PLANK_DROP,
+              clear=FOOT_CLEARANCE, angles=FOOT_ANGLES_DEG):
+    """Four torque-foot VOIDS spaced at `angles` (0/90/180/270). Each LEG is a
+    pointed-hexagon TOP-DOWN footprint (max width `width`, a sharp tip and a blunt
+    45 deg-chamfered end) extruded VERTICALLY from the floor (z0) up to the BASE of
+    the last/hollow cylinder (z_top). Its inner tip anchors just outside the first
+    cylinder (radial gap `clear`). `foot_angle_deg` swings the leg about the
+    vertical line through that tip: 0 deg = TANGENTIAL one way, 90 deg = RADIAL
+    (tip pointing at the axis), 180 deg = TANGENTIAL the other way. A horizontal PLANK
+    then sits ON TOP of the leg at z_top, bridging radially from the last-cylinder
+    wall (radius r_cyl, overlapping it by `plank_overlap`) out to the leg tip and
+    sinking `plank_drop` into the leg top for a clean union. Returns (feet_union,
+    r_outer) centred at the part axis (cx, cy); r_outer bounds the foot footprint
+    at every angle and feeds the patch classifier."""
     hw = width / 2
-    # pointed-hexagon plan profile (x = radial from the tip, y = tangential)
+    # Anchor the inner tip so the WHOLE footprint clears the first cylinder at ANY
+    # angle: when the leg swings tangential its half-width `hw` reaches inward past
+    # the tip, so fold hw into the radial gap (radial: hw points sideways, no dip).
+    r_in = d_first / 2 + clear + hw      # inner tip (clears first cyl by `clear` at all angles)
+    r_outer = r_in + length             # blunt end (radial baseline; bounds all angles)
+    # pointed-hexagon plan profile (x = along the leg from the tip, y = across it)
     plan = [
         (r_in, 0.0), (r_in + taper, hw), (r_outer - chamfer, hw),
         (r_outer, hw - chamfer), (r_outer, -(hw - chamfer)),
         (r_outer - chamfer, -hw), (r_in + taper, -hw),
     ]
-    leg0 = cq.Workplane("XY", origin=(0, 0, z0)).polyline(plan).close().extrude(z_leg_top - z0)
-    # thin connecting plank: a slim vertical plate from the last-cylinder wall
-    # (overlapping it) out to the leg, spanning the cylinder height [z_top, z_leg_top]
+    leg = cq.Workplane("XY", origin=(0, 0, z0)).polyline(plan).close().extrude(z_top - z0)
+    # The unrotated plan lies RADIAL (long axis along +X). Swing it (angle - 90)
+    # about the vertical axis through the inner tip: 0 deg -> tangential one way,
+    # 90 deg -> radial, 180 deg -> tangential the other way.
+    leg = leg.rotate((r_in, 0, 0), (r_in, 0, 1), foot_angle_deg - 90.0)
+    # horizontal plank ON TOP of the leg: a slab from the last-cylinder wall
+    # (overlapping it) out to the leg tip, its top plank_thick above z_top less the
+    # plank_drop that keys it into the leg.
     plank_r0 = r_cyl - plank_overlap
-    plank0 = (
+    plank_r1 = r_in + taper
+    plank = (
         cq.Workplane("XY")
-        .box((r_in + taper) - plank_r0, plank_thick, z_leg_top - z_top)
-        .translate(((plank_r0 + r_in + taper) / 2, 0, (z_top + z_leg_top) / 2))
+        .box(plank_r1 - plank_r0, width, plank_thick)
+        .translate(((plank_r0 + plank_r1) / 2, 0, z_top - plank_drop + plank_thick / 2))
     )
-    foot0 = leg0.union(plank0)
+    foot0 = leg.union(plank)
     feet = None
     for a in angles:
         f = foot0.rotate((0, 0, 0), (0, 0, 1), a)
@@ -380,6 +398,7 @@ def main():
         h_middle = num("hMiddle")
         h_first = num("hMiddlePlusFirst") - h_middle
         variant = str(P.get("variant", "stepped"))
+        foot_angle = float(P.get("footAngleDeg", FOOT_ANGLE_DEG))
 
         # --- common validation ---------------------------------------------
         if min(width, height, length, d_last, h_middle) <= 0:
@@ -391,6 +410,10 @@ def main():
             raise ValueError(
                 "distFromSideChamfer1 %.4f must be between 0 and width %.4f"
                 % (dist_c1, width))
+        if not 0.0 <= foot_angle <= 180.0:
+            raise ValueError(
+                "footAngleDeg %.3f must be between 0 and 180 "
+                "(0/180 = tangential either way, 90 = radial)" % foot_angle)
 
         d_first = d_last * RATIO_D_FIRST_OVER_LAST
         d_middle = d_last * RATIO_D_MIDDLE_OVER_LAST
@@ -416,7 +439,6 @@ def main():
                                     wall, hollow_len, c_dia, c_h, dome_h)
             part_height = h_first + h_middle + max(hollow_len, c_h + dome_h)
             rmax = max(d_first, d_middle, d_last) / 2
-            last_cyl_h = hollow_len          # feet rise to the top of the hollow cyl
         else:
             h_last = num("hLast")
             if h_last <= 0:
@@ -424,7 +446,6 @@ def main():
             part = make_part(cq, d_first, h_first, d_middle, h_middle, d_last, h_last)
             part_height = h_first + h_middle + h_last
             rmax = max(d_first, d_middle, d_last) / 2
-            last_cyl_h = h_last              # feet rise to the top of the last cyl
 
         if part_height > height:
             raise ValueError(
@@ -444,13 +465,15 @@ def main():
                 "WARN: part radius %.3f at x=%.3f exceeds box half-width %.3f "
                 "-> pocket breaks a side wall\n" % (rmax, target_x, width / 2))
 
-        # four torque-foot voids (both variants), centred on the part axis. The
-        # legs run from the floor up to the TOP of the last/hollow cylinder.
+        # four torque-foot voids (both variants), centred on the part axis. Each
+        # leg runs from the floor up to the BASE of the last/hollow cylinder, with
+        # a horizontal plank on top reaching the cylinder wall; foot_angle orients
+        # the legs (0 = tangential, 90 = radial).
         z_floor = -height / 2 - FLOOR_OVERCUT
         z_last_base = z_floor + h_first + h_middle
         feet, foot_r_outer = make_feet(
-            cq, target_x, target_y, z_floor, z_last_base, z_last_base + last_cyl_h,
-            d_last / 2, d_first,
+            cq, target_x, target_y, z_floor, z_last_base,
+            d_last / 2, d_first, foot_angle_deg=foot_angle,
         )
         result = box.cut(part).cut(feet)
 

@@ -95,6 +95,8 @@ function resolveGeometryParams(
   const variant = input.variant ?? 'stepped';
 
   const params: Record<string, number | string> = { length: lengthMm * MM_TO_M, variant };
+  // Torque-foot orientation is an angle (degrees), not a length — passed as-is.
+  params.footAngleDeg = input.footAngleDeg ?? 0;
   for (const key of CHAMBER_OUTPUT_KEYS) {
     params[key] = outputFinal(outputs, key) * MM_TO_M;
   }

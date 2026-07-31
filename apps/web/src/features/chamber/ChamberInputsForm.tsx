@@ -56,6 +56,21 @@ export function ChamberInputsForm({
         </NativeSelect>
       </Field>
 
+      <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-bg p-3">
+        <input
+          type="checkbox"
+          {...register('interdependency')}
+          className="mt-0.5 size-4 shrink-0 cursor-pointer rounded-sm border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40"
+        />
+        <span className="text-sm">
+          <span className="font-medium text-text">Interdependency refinement</span>
+          <span className="mt-0.5 block text-text-secondary">
+            Sharpen linked parameters (Width ↔ Chamfer-1 side distance, Height ↔ Last cylinder
+            height) from a known Exact value. Uncheck to depend on X1–X3 only.
+          </span>
+        </span>
+      </label>
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="X1" error={errors.x1?.message} helperText={`Valid ${r.x1.min}–${r.x1.max}`}>
           <Input type="number" step="any" {...register('x1', { valueAsNumber: true })} />
@@ -80,6 +95,17 @@ export function ChamberInputsForm({
             step="any"
             placeholder="auto"
             {...register('lengthOverride', { setValueAs: numOrUndef })}
+          />
+        </Field>
+        <Field
+          label="Foot angle (°)"
+          error={errors.footAngleDeg?.message}
+          helperText="0 / 180 = tangential · 90 = radial"
+        >
+          <Input
+            type="number"
+            step="any"
+            {...register('footAngleDeg', { valueAsNumber: true })}
           />
         </Field>
       </div>
