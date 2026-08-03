@@ -290,20 +290,6 @@ def _vane_assets_dir():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 
 
-def _flat_annulus(trimesh, np, r_in, r_out, z, seg=128):
-    """A flat annular ring at height z (the outlet cap face; built at origin)."""
-    ang = np.linspace(0, 2 * np.pi, seg, endpoint=False)
-    verts, faces = [], []
-    for a in ang:
-        verts.append((r_out * np.cos(a), r_out * np.sin(a), z))
-        verts.append((r_in * np.cos(a), r_in * np.sin(a), z))
-    for i in range(seg):
-        j = (i + 1) % seg
-        faces.append([2 * i, 2 * j, 2 * j + 1])
-        faces.append([2 * i, 2 * j + 1, 2 * i + 1])
-    return trimesh.Trimesh(vertices=np.array(verts), faces=np.array(faces), process=False)
-
-
 def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
     """Return {patch_name: Trimesh} for the guide-vane throat: the SOLID vane
     surfaces (blades + contoured hub/shroud walls + the outlet annulus) that sit
@@ -325,6 +311,7 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
         meta = json.load(fh)
     blade = trimesh.load(os.path.join(adir, "guideVanes_blade.stl"))
     walls = trimesh.load(os.path.join(adir, "guideVanes_walls.stl"))
+    outlet_asset = trimesh.load(os.path.join(adir, "guideVanes_outlet.stl"))
 
     s = (RATIO_D_MIDDLE_OVER_LAST * d_last) / (2.0 * meta["pivotRadius"])  # pivot Ø -> 0.80 d_last
     nat_h = meta["height"] * s                      # scaled contoured height
@@ -350,13 +337,11 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
         blades.append(b)
     blades_m = trimesh.util.concatenate(blades)
 
-    # Outlet = the small annulus the contour terminates in (source bottom rim,
-    # scaled), placed at the natural passage bottom z_sb. This keeps the hub /
-    # shroud curve intact and to scale instead of cutting it flat at the band.
-    r_in = meta["outletInnerR"] * s
-    r_out = meta["outletOuterR"] * s
-    outlet = _flat_annulus(trimesh, np, r_in, r_out, z_sb)
-    outlet.apply_translation((cx, cy, 0))
+    # Outlet = the passage's whole bottom annular face (hub -> shroud), the real
+    # CAD outlet cap. It is scaled and placed by the SAME transform as the walls,
+    # so it lands exactly at the passage bottom and keeps its slight conical
+    # form — the full cross-section after the curve, not a synthesised flat ring.
+    outlet = place(outlet_asset)
 
     return {
         "guide_vane_walls": walls_m,
