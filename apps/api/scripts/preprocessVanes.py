@@ -60,19 +60,13 @@ def main():
     angs.sort()
     step = float(np.mean(np.diff(angs + [angs[0] + 360.0])))
 
-    # shell = the full contoured passage wall (hub + shroud), open at both ends
-    # (top = inlet, bottom = outlet). Keep ALL of it as the wall patch: the draft
-    # cone flares so lower faces point slightly down — a normal-based "flat ring"
-    # cut would wrongly delete real wall. The outlet cap is a separate CAD export
-    # (below), NOT synthesised from these rim radii.
+    # shell = the full contoured passage wall (hub + shroud). Re-centre it on the
+    # ring axis / passage bottom. The source shell is CLOSED at the bottom by a
+    # horizontal annular cap over the outlet opening — that cap must be removed so
+    # the walls are open at the bottom and the fluid exits through the outlet
+    # patch (see below), otherwise the wall face seals the outlet.
     shell = m.submesh([shell_faces], append=True)
     shell.vertices = shell.vertices - shift
-    # Keep the walls at FULL resolution (no decimation — decimation enlarged the
-    # source's tessellation cracks into visible holes). Weld coincident vertices
-    # to close what seams the source left as exact duplicates.
-    walls = shell
-    walls.merge_vertices()
-    walls.export(os.path.join(out_dir, "guideVanes_walls.stl"))
 
     # outlet cap = the passage's whole bottom annular face (hub -> shroud), a
     # slightly conical ring exported separately. Re-centre it on ITS OWN xy axis
@@ -88,6 +82,29 @@ def main():
     o.export(os.path.join(out_dir, "guideVanes_outlet.stl"))
     orr = np.hypot(o.vertices[:, 0], o.vertices[:, 1])
     outlet_inner_r, outlet_outer_r = float(orr.min()), float(orr.max())
+    outlet_z_top = float(o.vertices[:, 2].max())
+
+    # Remove the shell's outlet cap: horizontal faces (|nz| > 0.5) whose centroid
+    # falls inside the outlet's (r, z) footprint. This deletes only the flat cap
+    # spanning the opening; the hub and shroud side walls (near-vertical) and the
+    # outboard floor (r beyond the outlet) are kept. Box derived from the outlet
+    # envelope, so it scales with the assets.
+    sv = shell.vertices
+    sr = np.hypot(sv[:, 0], sv[:, 1])
+    sz = sv[:, 2]
+    fr = sr[shell.faces].mean(axis=1)
+    fz = sz[shell.faces].mean(axis=1)
+    fnz = np.abs(shell.face_normals[:, 2])
+    cap = ((fnz > 0.5)
+           & (fr >= outlet_inner_r - 0.01) & (fr <= outlet_outer_r + 0.01)
+           & (fz <= outlet_z_top + 0.02))
+    walls = shell.submesh([np.where(~cap)[0]], append=True)
+    # Keep the walls at FULL resolution (no decimation — decimation enlarged the
+    # source's tessellation cracks into visible holes). Weld coincident vertices
+    # to close what seams the source left as exact duplicates.
+    walls.merge_vertices()
+    walls.export(os.path.join(out_dir, "guideVanes_walls.stl"))
+    sys.stderr.write("outlet cap removed from walls: %d faces\n" % int(cap.sum()))
 
     allv = m.vertices - np.array([cx, cy, 0.0])
     r_all = np.hypot(allv[:, 0], allv[:, 1])
