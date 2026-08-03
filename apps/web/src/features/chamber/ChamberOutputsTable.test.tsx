@@ -20,19 +20,19 @@ describe('ChamberOutputsTable', () => {
 
   it('renders a row per output with its label and within-range status', () => {
     render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />);
-    expect(screen.getByText('Width')).toBeInTheDocument();
-    expect(screen.getByText('Last cylinder diameter')).toBeInTheDocument();
-    // 10 fitted outputs read "within range"; Height (= P11 + P12) and Middle+first
-    // (= 2 × P10) are derived structural relations.
+    expect(screen.getByText('B Kammer')).toBeInTheDocument();
+    expect(screen.getByText('LE (Durchmesser)')).toBeInTheDocument();
+    // 10 fitted outputs read "within range"; H Kammer (= LEB + LEOW) and LEB
+    // (= 2 × HLE) are derived structural relations.
     expect(screen.getAllByText('within range')).toHaveLength(OUTPUTS.length - 2);
-    expect(screen.getByText('= P11 + P12')).toBeInTheDocument();
-    expect(screen.getByText('= 2 × P10')).toBeInTheDocument();
+    expect(screen.getByText('= LEB + LEOW')).toBeInTheDocument();
+    expect(screen.getByText('= 2 × HLE')).toBeInTheDocument();
   });
 
   it('reports a Min edit up as a numeric constraint change', () => {
     const onChange = vi.fn();
     render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={onChange} />);
-    fireEvent.change(screen.getByLabelText('Width minimum'), { target: { value: '4000' } });
+    fireEvent.change(screen.getByLabelText('B Kammer minimum'), { target: { value: '4000' } });
     expect(onChange).toHaveBeenCalledWith('width', 'min', 4000);
   });
 
@@ -45,7 +45,7 @@ describe('ChamberOutputsTable', () => {
         onConstraintChange={onChange}
       />,
     );
-    fireEvent.change(screen.getByLabelText('Width minimum'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('B Kammer minimum'), { target: { value: '' } });
     expect(onChange).toHaveBeenCalledWith('width', 'min', undefined);
   });
 });

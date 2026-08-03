@@ -27,8 +27,8 @@ describe('computeChamberOutputs', () => {
     // With no constraints, FINAL equals the model value. Fitted outputs read
     // "within range"; the two derived outputs carry their structural-relation status.
     const identityStatus: Record<string, string> = {
-      height: '= P11 + P12',
-      hMiddlePlusFirst: '= 2 × P10',
+      height: '= LEB + LEOW',
+      hMiddlePlusFirst: '= 2 × HLE',
     };
     for (const o of outputs) {
       expect(o.final).toBe(o.model);
@@ -97,7 +97,7 @@ describe('computeChamberOutputs', () => {
     const m = byKey(computeChamberOutputs(BASE));
     const h = m.get('height')!;
     expect(h.form).toBe('identity');
-    expect(h.status).toBe('= P11 + P12');
+    expect(h.status).toBe('= LEB + LEOW');
     expect(h.final).toBeCloseTo(m.get('hMiddlePlusFirst')!.final + m.get('hLast')!.final, 6);
   });
 
@@ -105,7 +105,7 @@ describe('computeChamberOutputs', () => {
     const m = byKey(computeChamberOutputs({ ...BASE, constraints: { hMiddle: { exact: 500 } } }));
     expect(m.get('hMiddle')!.final).toBe(500);
     expect(m.get('hMiddlePlusFirst')!.final).toBeCloseTo(1000, 6); // 2 x 500
-    expect(m.get('hMiddlePlusFirst')!.status).toBe('= 2 × P10');
+    expect(m.get('hMiddlePlusFirst')!.status).toBe('= 2 × HLE');
     // Height = P11 + P12 picks up the change through the chain.
     expect(m.get('height')!.final).toBeCloseTo(1000 + m.get('hLast')!.final, 6);
   });

@@ -2108,7 +2108,7 @@ export interface ChamberOutputSpec {
    * or hMiddlePlusFirst = 2·hMiddle.
    */
   identityOf?: readonly { key: ChamberOutputKey; coeff: number }[];
-  /** Status label shown for an identity output (e.g. '= P11 + P12'). */
+  /** Status label shown for an identity output (e.g. '= LEB + LEOW'). */
   identityStatus?: ChamberStatus;
 }
 
@@ -2118,39 +2118,39 @@ export interface ChamberOutputSpec {
  * truth for the model on both the client (live preview) and the server.
  */
 export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
-  { key: 'width', label: 'Width', form: 'linear', cvError: 18.8, confidence: 'Moderate',
+  { key: 'width', label: 'B Kammer', form: 'linear', cvError: 18.8, confidence: 'Moderate',
     coeffs: { a: 3501.480486, b: -0.01990289598, c: -104.4968392, d: 224.0149301 },
-    refinement: { partner: 'distFromSideChamfer1', note: 'auto-refines when Chamfer-1 side distance is known (R² 0.51 → 0.81)',
+    refinement: { partner: 'distFromSideChamfer1', note: 'auto-refines when B1 is known (R² 0.51 → 0.81)',
       coeffs: { a: 1101.528235, b: 0.5004560281, c: -19.97360475, d: 78.2136825, p: 0.976665205 } } },
   // P2 = P11 + P12 (hard identity): height is the exact sum of the middle+first
   // and last cylinder heights (its own Min/Max/Exact are ignored — set P11/P12).
-  { key: 'height', label: 'Height', form: 'identity', cvError: 28.6, confidence: 'Moderate',
+  { key: 'height', label: 'H Kammer', form: 'identity', cvError: 28.6, confidence: 'Moderate',
     identityOf: [{ key: 'hMiddlePlusFirst', coeff: 1 }, { key: 'hLast', coeff: 1 }],
-    identityStatus: '= P11 + P12' },
-  { key: 'distFromSideChamfer1', label: 'Chamfer-1 side distance', form: 'linear', cvError: 32.0, confidence: 'Low',
+    identityStatus: '= LEB + LEOW' },
+  { key: 'distFromSideChamfer1', label: 'B1', form: 'linear', cvError: 32.0, confidence: 'Low',
     coeffs: { a: 1913.645229, b: -0.1144287145, c: -38.895132, d: 115.1237973 },
-    refinement: { partner: 'width', note: 'auto-refines when Width is known (R² 0.09 → 0.62)',
+    refinement: { partner: 'width', note: 'auto-refines when B Kammer is known (R² 0.09 → 0.62)',
       coeffs: { a: -417.365864, b: -0.2106437417, c: 14.17960421, d: -32.6306581, p: 0.7098088714 } } },
-  { key: 'chamferLength1', label: 'Chamfer 1 length', form: 'linear', cvError: 20.6, confidence: 'Moderate',
+  { key: 'chamferLength1', label: 'LF1', form: 'linear', cvError: 20.6, confidence: 'Moderate',
     coeffs: { a: -2.009758353, b: 0.9116908157, c: 16.38088606, d: -19.61930855 } },
-  { key: 'chamferWidth1', label: 'Chamfer 1 width', form: 'linear', cvError: 20.6, confidence: 'Moderate',
+  { key: 'chamferWidth1', label: 'BF1', form: 'linear', cvError: 20.6, confidence: 'Moderate',
     coeffs: { a: -2.009758353, b: 0.9116908157, c: 16.38088606, d: -19.61930855 } },
-  { key: 'chamferLength2', label: 'Chamfer 2 length', form: 'linear', cvError: 18.6, confidence: 'Moderate',
+  { key: 'chamferLength2', label: 'LF2', form: 'linear', cvError: 18.6, confidence: 'Moderate',
     coeffs: { a: 810.7255952, b: 0.1366396239, c: -70.24908474, d: 55.86948952 } },
-  { key: 'chamferWidth2', label: 'Chamfer 2 width', form: 'linear', cvError: 22.0, confidence: 'Moderate',
+  { key: 'chamferWidth2', label: 'BF2', form: 'linear', cvError: 22.0, confidence: 'Moderate',
     coeffs: { a: 1207.055875, b: -0.137521288, c: -128.8078895, d: 79.76891504 } },
-  { key: 'distFromEnd', label: 'Chamfered-end distance', form: 'linear', cvError: 27.2, confidence: 'Moderate',
+  { key: 'distFromEnd', label: 'LT', form: 'linear', cvError: 27.2, confidence: 'Moderate',
     coeffs: { a: -359.9271681, b: 2.188772589, c: 48.83409566, d: -45.9108988 } },
-  { key: 'dLast', label: 'Last cylinder diameter', form: 'linear', cvError: 8.1, confidence: 'Good',
+  { key: 'dLast', label: 'LE (Durchmesser)', form: 'linear', cvError: 8.1, confidence: 'Good',
     coeffs: { a: 221.4522145, b: 1.498949106, c: -9.02505593, d: 14.40321366 } },
-  { key: 'hMiddle', label: 'Middle cylinder height', form: 'linear', cvError: 5.8, confidence: 'High',
+  { key: 'hMiddle', label: 'HLE', form: 'linear', cvError: 5.8, confidence: 'High',
     coeffs: { a: 17.17464869, b: 0.435873881, c: -6.126007422, d: 2.320487817 } },
-  // P11 = 2 x P10 (structural relation): middle+first height is exactly twice the
+  // LEB = 2 x HLE (structural relation): middle+first height is exactly twice the
   // middle-cylinder height (out-of-sample MAPE 8.4% vs 11.3% for the old power
-  // fit). Its own Min/Max/Exact are ignored — change it via hMiddle.
-  { key: 'hMiddlePlusFirst', label: 'Middle + first height', form: 'identity', cvError: 8.4, confidence: 'Good',
-    identityOf: [{ key: 'hMiddle', coeff: 2 }], identityStatus: '= 2 × P10' },
-  { key: 'hLast', label: 'Last cylinder height', form: 'linear', cvError: 38.9, confidence: 'Low',
+  // fit). Its own Min/Max/Exact are ignored — change it via hMiddle (HLE).
+  { key: 'hMiddlePlusFirst', label: 'LEB', form: 'identity', cvError: 8.4, confidence: 'Good',
+    identityOf: [{ key: 'hMiddle', coeff: 2 }], identityStatus: '= 2 × HLE' },
+  { key: 'hLast', label: 'LEOW', form: 'linear', cvError: 38.9, confidence: 'Low',
     coeffs: { a: 506.0051287, b: -0.4315856534, c: 312.7206124, d: 47.41062013 } },
 ];
 
@@ -2214,8 +2214,8 @@ export type ChamberStatus =
   | 'raised to min'
   | 'set exact'
   | '! min>max'
-  | '= P11 + P12'
-  | '= 2 × P10';
+  | '= LEB + LEOW'
+  | '= 2 × HLE';
 
 /** One computed output: the raw model value, the clamped FINAL, and metadata. */
 export interface ChamberOutput {

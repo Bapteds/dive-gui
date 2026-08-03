@@ -39,8 +39,8 @@ const STATUS_STYLES: Record<ChamberStatus, string> = {
   'capped at max': 'text-accent-hover',
   'raised to min': 'text-accent-hover',
   '! min>max': 'text-danger',
-  '= P11 + P12': 'text-primary',
-  '= 2 × P10': 'text-primary',
+  '= LEB + LEOW': 'text-primary',
+  '= 2 × HLE': 'text-primary',
 };
 
 /** Format a millimetre value for display (1 decimal, tabular). */

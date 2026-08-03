@@ -65,8 +65,8 @@ export function ChamberInputsForm({
         <span className="text-sm">
           <span className="font-medium text-text">Interdependency refinement</span>
           <span className="mt-0.5 block text-text-secondary">
-            Sharpen linked parameters (Width ↔ Chamfer-1 side distance, Height ↔ Last cylinder
-            height) from a known Exact value. Uncheck to depend on X1–X3 only.
+            Sharpen the linked pair (B Kammer ↔ B1) from a known Exact value. Uncheck to
+            depend on X1–X3 only.
           </span>
         </span>
       </label>
