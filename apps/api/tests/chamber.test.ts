@@ -172,6 +172,26 @@ describe('Chamber Creation', () => {
     expect(a45.body.hash).not.toBe(a135.body.hash);
   });
 
+  it('keys the build on the guide-vanes flag', async () => {
+    setCommandRunner(successRunner);
+    const auth = authHeader(await createTestUser());
+
+    const off = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(BUILD)
+      .expect(200);
+    const on = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, guideVanes: true })
+      .expect(200);
+
+    // Guide vanes change the geometry => a different cache key, same 12 outputs.
+    expect(on.body.hash).not.toBe(off.body.hash);
+    expect(on.body.outputs).toHaveLength(12);
+  });
+
   it('rejects a foot angle outside 0–180', async () => {
     const auth = authHeader(await createTestUser());
     await request(app)

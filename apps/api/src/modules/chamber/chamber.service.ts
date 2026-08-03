@@ -96,15 +96,17 @@ function outputFinal(outputs: ChamberOutput[], key: string): number {
 function resolveGeometryParams(
   input: ChamberInput,
   outputs: ChamberOutput[],
-): Record<string, number | string> {
+): Record<string, number | string | boolean> {
   const widthMm = outputFinal(outputs, 'width');
   const lengthMm = input.lengthOverride ?? 2 * widthMm; // default: length = 2 x width
   const variant = input.variant ?? 'stepped';
 
-  const params: Record<string, number | string> = { length: lengthMm * MM_TO_M, variant };
+  const params: Record<string, number | string | boolean> = { length: lengthMm * MM_TO_M, variant };
   // Torque-foot orientation is an angle (degrees), not a length — passed as-is.
   // Default 40° (an intermediate angle where the triangular gusset can form).
   params.footAngleDeg = input.footAngleDeg ?? 40;
+  // Guide-vane throat (geometry-only): a different flag => a different build.
+  params.guideVanes = input.guideVanes ?? false;
   for (const key of CHAMBER_OUTPUT_KEYS) {
     params[key] = outputFinal(outputs, key) * MM_TO_M;
   }

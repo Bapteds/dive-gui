@@ -19,6 +19,8 @@ export interface ChamberFormValues {
   interdependency: boolean;
   /** Torque-foot orientation (deg): 0 = tangential, 90 = radial. */
   footAngleDeg: number;
+  /** Replace the middle cylinder with a guide-vane ring (both variants). */
+  guideVanes: boolean;
   /** Box length along Y (mm); blank => auto 2 x width. */
   lengthOverride?: number;
   /** Hollow last-cylinder height (mm); required when variant === 'hollow'. */
@@ -37,6 +39,7 @@ export const chamberFormSchema = z
     x3: z.number({ invalid_type_error: 'Enter a number' }).min(r.x3.min).max(r.x3.max),
     variant: z.enum(CHAMBER_VARIANTS),
     interdependency: z.boolean(),
+    guideVanes: z.boolean(),
     footAngleDeg: z
       .number({ invalid_type_error: 'Enter a number' })
       .min(0, 'Min 0° (tangential)')
@@ -63,6 +66,7 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   variant: 'stepped',
   interdependency: true,
   footAngleDeg: 40,
+  guideVanes: false,
   lengthOverride: undefined,
   hollowLength: 200,
   wallThickness: CHAMBER_WALL_THICKNESS_MM,

@@ -2199,6 +2199,12 @@ export interface ChamberInput {
    * build is refused. Geometry-only (not part of the empirical model).
    */
   footAngleDeg?: number;
+  /**
+   * Replace the middle-cylinder throat with a scaled ring of guide vanes.
+   * Geometry-only (not part of the empirical model); works with both variants.
+   * Default false.
+   */
+  guideVanes?: boolean;
   /** Box length along Y (mm). Omitted => 2 x the (final) width. */
   lengthOverride?: number;
   /** Height (mm) of the hollow last cylinder. Required for the 'hollow' variant. */

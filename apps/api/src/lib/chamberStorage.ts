@@ -50,7 +50,7 @@ function chamberRoot(): string {
  * Stable 16-hex content hash of the resolved geometry params (order-independent),
  * used as the build's directory name / cache key.
  */
-export function chamberHash(params: Record<string, number | string>): string {
+export function chamberHash(params: Record<string, number | string | boolean>): string {
   const canonical = JSON.stringify(
     Object.keys(params)
       .sort()
@@ -90,7 +90,7 @@ export async function chamberGlbExists(hash: string): Promise<boolean> {
 /** Write the resolved params JSON (the buildChamber.py input) into the build dir. */
 export async function writeChamberParams(
   hash: string,
-  params: Record<string, number | string>,
+  params: Record<string, number | string | boolean>,
 ): Promise<void> {
   const paths = chamberPaths(hash);
   await fs.mkdir(paths.dir, { recursive: true });

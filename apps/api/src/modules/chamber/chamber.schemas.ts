@@ -32,6 +32,9 @@ export const chamberBuildSchema = z
     // only forms at intermediate angles (~37–143°, not ~90°); default 40.
     footAngleDeg: z.number().finite().min(0).max(180).default(40),
     variant: z.enum(CHAMBER_VARIANTS).default('stepped'),
+    // Replace the middle cylinder with a guide-vane ring (geometry-only; both
+    // variants). A different flag => a different cached build.
+    guideVanes: z.boolean().default(false),
     lengthOverride: z.number().finite().positive().optional(),
     hollowLength: z.number().finite().positive().optional(),
     wallThickness: z.number().finite().positive().optional(),
