@@ -117,10 +117,16 @@ def make_box(cq, width, length, height, end, big_side, ch_big, ch_small):
     return b
 
 
-def make_part(cq, d_first, h_first, d_middle, h_middle, d_last, h_last):
+def make_part(cq, d_first, h_first, d_middle, h_middle, d_last, h_last, omit_middle=False):
     """Three coaxial cylinders stacked along +Z, base of the FIRST at z = 0
-    (the 'stepped' variant)."""
+    (the 'stepped' variant). With omit_middle the MIDDLE cylinder is left out
+    (the guide-vane band is open): first (0..h_first) + last, the last floating
+    at its usual height (h_first+h_middle .. +h_last) so the band is fluid."""
     part = cq.Workplane("XY").circle(d_first / 2).extrude(h_first)
+    if omit_middle:
+        last = (cq.Workplane("XY", origin=(0, 0, h_first + h_middle))
+                .circle(d_last / 2).extrude(h_last))
+        return part.union(last)
     part = part.faces(">Z").workplane().circle(d_middle / 2).extrude(h_middle)
     part = part.faces(">Z").workplane().circle(d_last / 2).extrude(h_last)
     return part
@@ -143,7 +149,7 @@ def make_dome(cq, radius, height, z_apex_base):
 
 
 def make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
-                     wall, hollow_len, c_dia, c_h, dome_h):
+                     wall, hollow_len, c_dia, c_h, dome_h, omit_middle=False):
     """The 'hollow' variant (base of the FIRST at z = 0), a union of:
       * first + middle SOLID cylinders (as in 'stepped'),
       * the LAST cylinder as an open-top hollow shell (outer d_last, wall
@@ -151,10 +157,13 @@ def make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
       * a central cylinder (dia c_dia, height c_h) rising coaxially from the top
         of the middle cylinder, capped by an oval dome of height dome_h.
     The whole union is later SUBTRACTED from the block, so every surface here is
-    carved out (walls included)."""
+    carved out (walls included). With omit_middle the MIDDLE cylinder is left out
+    (the guide-vane band is open fluid); the cup/central/dome still start at
+    z_mid_top so the stack above the band is unchanged."""
     z_mid_top = h_first + h_middle
     part = cq.Workplane("XY").circle(d_first / 2).extrude(h_first)
-    part = part.faces(">Z").workplane().circle(d_middle / 2).extrude(h_middle)
+    if not omit_middle:
+        part = part.faces(">Z").workplane().circle(d_middle / 2).extrude(h_middle)
 
     # the hollow last cylinder as an open-top CUP (diameter d_last = P9): 5 cm
     # walls + a thin bottom of the same thickness, open at the top. Built as the
@@ -335,17 +344,17 @@ def _ring_radii(np, mesh, cx, cy, z0, z1):
 
 
 def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
-    """Return ({patch_name: Trimesh}, shroud_outer_r) for the guide-vane throat,
-    scaled to fit the middle band [z_mid_base, z_mid_top] (height HLE) and centred
-    at (cx, cy).
+    """Return {patch_name: Trimesh} for the guide-vane throat: the SOLID vane
+    surfaces (blades + hub/walls + a flat outlet cap) that sit as obstacles in the
+    fluid box. Scaled to the middle band [z_mid_base, z_mid_top] and centred at
+    (cx, cy).
 
     Uniform scale pins the blade PIVOT circle diameter (2 x pivotRadius) to the
     middle diameter (0.80 x d_last), preserving the blade angle and the passage
-    contour. The shroud outer then lands wider than 0.40 x d_last, so this returns
-    that scaled shroud radius: main() cuts a bounding cylinder of it so the void
-    contains the whole ring. The passage TOP is pinned to z_mid_top; the bottom is
-    clipped (ring taller than HLE) or extended with a straight collar (shorter) so
-    the total height equals HLE."""
+    contour. The passage TOP is pinned to z_mid_top; the bottom is clipped (ring
+    taller than HLE) or extended with a straight collar (shorter) so the total
+    height equals HLE. No bounding cylinder is used — the vanes are obstacles in
+    the open box cavity, so the fluid flows directly around them."""
     import json
     adir = _vane_assets_dir()
     with open(os.path.join(adir, "guideVanes.json")) as fh:
@@ -404,8 +413,7 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
     outlet.apply_translation((cx, cy, 0))
     patches["outlet"] = outlet
     patches["guide_vanes"] = blades_m
-    shroud_outer_r = 0.5 * meta["outerDiameter"] * s
-    return patches, shroud_outer_r
+    return patches
 
 
 # --- patch classification (ported from prepare_openfoam.py) -----------------
@@ -431,10 +439,13 @@ def _horiz_extent(f, ax, ay):
                for cx in (bb.xmin, bb.xmax) for cy in (bb.ymin, bb.ymax))
 
 
-def classify(faces, adaptor, geomabs, variant, pocket_radius):
+def classify(faces, adaptor, geomabs, variant, pocket_radius, guide_vanes=False):
     """Return {patch: [face,...]} for inlet / outlet / cylinder_walls / walls.
     A face is a pocket (cavity/feet) surface when its vertices lie within
-    `pocket_radius` of the part axis; box faces reach far beyond it."""
+    `pocket_radius` of the part axis; box faces reach far beyond it. With
+    guide_vanes the middle cylinder is omitted (only first/last remain) and the
+    outlet comes from the vane mesh, so fewer cylinders are expected and no BREP
+    outlet is chosen."""
     ymin = min(f.BoundingBox().ymin for f in faces)
 
     inlet, cyls = None, []
@@ -451,8 +462,9 @@ def classify(faces, adaptor, geomabs, variant, pocket_radius):
 
     if inlet is None:
         raise RuntimeError("could not find the inlet (min-Y) face")
-    if len(cyls) < 3:
-        raise RuntimeError("expected >=3 cylindrical faces, found %d" % len(cyls))
+    min_cyls = 1 if guide_vanes else 3
+    if len(cyls) < min_cyls:
+        raise RuntimeError("expected >=%d cylindrical faces, found %d" % (min_cyls, len(cyls)))
 
     ax = sum(c[3] for c in cyls) / len(cyls)
     ay = sum(c[4] for c in cyls) / len(cyls)
@@ -461,10 +473,10 @@ def classify(faces, adaptor, geomabs, variant, pocket_radius):
               if id(f) != id(inlet) and _horiz_extent(f, ax, ay) <= pocket_radius]
     pocket_ids = {id(p) for p in pocket}
 
-    if variant == "hollow":
-        # The hollow variant has many carved surfaces (tube inner/outer walls,
-        # central cylinder, dome, shoulders) and no single flow 'outlet'; group
-        # every pocket surface as cylinder_walls.
+    if variant == "hollow" or guide_vanes:
+        # Hollow (many carved surfaces) and guide-vane (outlet comes from the vane
+        # mesh) builds have no single BREP flow 'outlet'; group every pocket
+        # surface as cylinder_walls.
         outlet = []
     else:
         # Stepped: the MIDDLE cylinder (median z-centre) is the outlet.
@@ -616,14 +628,16 @@ def main():
                     "WARN: central diameter %.3f exceeds the hollow bore %.3f\n"
                     % (c_dia, d_last - 2 * wall))
             part = make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
-                                    wall, hollow_len, c_dia, c_h, dome_h)
+                                    wall, hollow_len, c_dia, c_h, dome_h,
+                                    omit_middle=guide_vanes)
             part_height = h_first + h_middle + max(hollow_len, c_h + dome_h)
             rmax = max(d_first, d_middle, d_last) / 2
         else:
             h_last = num("hLast")
             if h_last <= 0:
                 raise ValueError("hLast must be > 0")
-            part = make_part(cq, d_first, h_first, d_middle, h_middle, d_last, h_last)
+            part = make_part(cq, d_first, h_first, d_middle, h_middle, d_last, h_last,
+                             omit_middle=guide_vanes)
             part_height = h_first + h_middle + h_last
             rmax = max(d_first, d_middle, d_last) / 2
 
@@ -663,7 +677,8 @@ def main():
         # --- split into patches --------------------------------------------
         faces = result.faces().vals()
         pocket_radius = max(rmax, foot_r_outer) + 0.1
-        patches = classify(faces, BRepAdaptor_Surface, geomabs, variant, pocket_radius)
+        patches = classify(faces, BRepAdaptor_Surface, geomabs, variant, pocket_radius,
+                           guide_vanes=guide_vanes)
 
         # --- guide-vane throat: extra MESH patches in the middle band -------
         # The vanes ride as triSurfaces + GLB nodes (no OCC boolean). z is the
@@ -672,20 +687,15 @@ def main():
         vane_patches = {}
         emit_order = list(PATCH_ORDER)
         if guide_vanes:
+            # The middle-cylinder intrusion was OMITTED from the part, so the band
+            # is open fluid (no cut, no cylinder wall around the vanes). The vane
+            # SOLIDS ride as obstacle triSurfaces; the fluid flows around them.
             z_mid_base = z_floor + h_first
             z_mid_top = z_floor + h_first + h_middle
-            vane_patches, shroud_r = make_vane_patches(
+            vane_patches = make_vane_patches(
                 trimesh, np, target_x, target_y, z_mid_base, z_mid_top, d_last)
-            bounding = (
-                cq.Workplane("XY", origin=(target_x, target_y, z_mid_base))
-                .circle(shroud_r).extrude(z_mid_top - z_mid_base)
-            )
-            result = result.cut(bounding)
-            faces = result.faces().vals()
-            patches = classify(faces, BRepAdaptor_Surface, geomabs, variant, pocket_radius)
-            # the BREP middle cylinder is no longer the flow outlet; fold it into
-            # cylinder_walls and let the vane meshes supply outlet + vane walls.
-            patches["cylinder_walls"] = patches["cylinder_walls"] + patches["outlet"]
+            # No BREP middle cylinder now, so there is no BREP outlet; the vane mesh
+            # supplies it. Keep the remaining BREP walls; append the vane patches.
             patches["outlet"] = []
             emit_order = ["inlet", "cylinder_walls", "walls",
                           "guide_vane_walls", "outlet", "guide_vanes"]
