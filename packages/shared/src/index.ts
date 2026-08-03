@@ -2102,13 +2102,14 @@ export interface ChamberOutputSpec {
     | { k: number; e1: number; e2: number; e3: number };
   refinement?: ChamberRefinement;
   /**
-   * For form 'identity': this output is an exact linear combination of other
-   * outputs' FINAL values (Σ coeff × final) — a hard structural relation that
-   * ignores its own Min/Max/Exact. E.g. height = 1·hMiddlePlusFirst + 1·hLast,
-   * or hMiddlePlusFirst = 2·hMiddle.
+   * For form 'identity': this output's MODEL value is an exact linear combination
+   * of other outputs' FINAL values (Σ coeff × final) — a structural relation. E.g.
+   * height = 1·hMiddlePlusFirst + 1·hLast, or hMiddlePlusFirst = 2·hMiddle. The
+   * relation is the default, but the user may still override the FINAL with their
+   * own Min/Max/Exact (which then wins over the derived value).
    */
   identityOf?: readonly { key: ChamberOutputKey; coeff: number }[];
-  /** Status label shown for an identity output (e.g. '= LEB + LEOW'). */
+  /** Status shown for an identity output when it is NOT overridden (e.g. '= LEB + LEOW'). */
   identityStatus?: ChamberStatus;
 }
 
@@ -2122,8 +2123,8 @@ export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
     coeffs: { a: 3501.480486, b: -0.01990289598, c: -104.4968392, d: 224.0149301 },
     refinement: { partner: 'distFromSideChamfer1', note: 'auto-refines when B1 is known (R² 0.51 → 0.81)',
       coeffs: { a: 1101.528235, b: 0.5004560281, c: -19.97360475, d: 78.2136825, p: 0.976665205 } } },
-  // P2 = P11 + P12 (hard identity): height is the exact sum of the middle+first
-  // and last cylinder heights (its own Min/Max/Exact are ignored — set P11/P12).
+  // P2 = P11 + P12: height defaults to the sum of the middle+first and last
+  // cylinder heights, but its Min/Max/Exact override (if set) wins.
   { key: 'height', label: 'H Kammer', form: 'identity', cvError: 28.6, confidence: 'Moderate',
     identityOf: [{ key: 'hMiddlePlusFirst', coeff: 1 }, { key: 'hLast', coeff: 1 }],
     identityStatus: '= LEB + LEOW' },
@@ -2145,9 +2146,9 @@ export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
     coeffs: { a: 221.4522145, b: 1.498949106, c: -9.02505593, d: 14.40321366 } },
   { key: 'hMiddle', label: 'HLE', form: 'linear', cvError: 5.8, confidence: 'High',
     coeffs: { a: 17.17464869, b: 0.435873881, c: -6.126007422, d: 2.320487817 } },
-  // LEB = 2 x HLE (structural relation): middle+first height is exactly twice the
+  // LEB = 2 x HLE (structural relation): middle+first height defaults to twice the
   // middle-cylinder height (out-of-sample MAPE 8.4% vs 11.3% for the old power
-  // fit). Its own Min/Max/Exact are ignored — change it via hMiddle (HLE).
+  // fit), but its Min/Max/Exact override (if set) wins.
   { key: 'hMiddlePlusFirst', label: 'LEB', form: 'identity', cvError: 8.4, confidence: 'Good',
     identityOf: [{ key: 'hMiddle', coeff: 2 }], identityStatus: '= 2 × HLE' },
   { key: 'hLast', label: 'LEOW', form: 'linear', cvError: 38.9, confidence: 'Low',
@@ -2267,6 +2268,25 @@ export function evalChamberSpec(
 }
 
 /**
+ * Apply a Min / Max / Exact override to a model value. `baseStatus` is what to
+ * report when no override is active — 'within range' for a fitted output, or an
+ * identity's own structural-relation label (e.g. '= LEB + LEOW'). Exact wins;
+ * an inverted range is flagged and leaves the model value; otherwise clamp.
+ */
+function resolveChamberFinal(
+  model: number,
+  con: ChamberConstraint,
+  baseStatus: ChamberStatus,
+): { final: number; status: ChamberStatus } {
+  if (con.exact != null) return { final: con.exact, status: 'set exact' };
+  if (con.min != null && con.max != null && con.min > con.max)
+    return { final: model, status: '! min>max' };
+  if (con.max != null && model > con.max) return { final: con.max, status: 'capped at max' };
+  if (con.min != null && model < con.min) return { final: con.min, status: 'raised to min' };
+  return { final: model, status: baseStatus };
+}
+
+/**
  * Compute the twelve outputs for a set of inputs: the raw model value and the
  * FINAL after the optional Min / Max / Exact override, with a Status. This is
  * the one place the model lives; the Python builder receives the resolved FINAL
@@ -2289,20 +2309,7 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
     const refined = partnerKnown != null;
     const model = evalChamberSpec(spec, x1, x2, x3, partnerKnown);
     const con = constraints?.[spec.key] ?? {};
-    let final = model;
-    let status: ChamberStatus = 'within range';
-    if (con.exact != null) {
-      final = con.exact;
-      status = 'set exact';
-    } else if (con.min != null && con.max != null && con.min > con.max) {
-      status = '! min>max';
-    } else if (con.max != null && model > con.max) {
-      final = con.max;
-      status = 'capped at max';
-    } else if (con.min != null && model < con.min) {
-      final = con.min;
-      status = 'raised to min';
-    }
+    const { final, status } = resolveChamberFinal(model, con, 'within range');
     byKey.set(spec.key, {
       key: spec.key,
       label: spec.label,
@@ -2316,10 +2323,12 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
     });
   }
 
-  // Pass 2: identity outputs — each is an exact linear combination of other
-  // outputs' FINAL values (Σ coeff × final), ignoring its own Min/Max/Exact. They
-  // can chain (P11 = 2·P10, then P2 = P11 + P12), so resolve to a fixpoint: keep
-  // emitting any identity whose inputs are all resolved until none remain.
+  // Pass 2: identity outputs — the MODEL is an exact linear combination of other
+  // outputs' FINAL values (Σ coeff × final); the user may still override the FINAL
+  // with their own Min/Max/Exact (defaulting to the identity status label when no
+  // override is set). They can chain (P11 = 2·P10, then P2 = P11 + P12), so resolve
+  // to a fixpoint: keep emitting any identity whose inputs are all resolved until
+  // none remain. The chain reads each identity's FINAL, so an override propagates.
   const identities = CHAMBER_OUTPUT_SPECS.filter((s) => s.form === 'identity' && s.identityOf);
   let progressed = true;
   while (progressed) {
@@ -2327,14 +2336,16 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
     for (const spec of identities) {
       if (byKey.has(spec.key)) continue;
       if (!spec.identityOf!.every((t) => byKey.has(t.key))) continue;
-      const value = spec.identityOf!.reduce((sum, t) => sum + t.coeff * byKey.get(t.key)!.final, 0);
+      const model = spec.identityOf!.reduce((sum, t) => sum + t.coeff * byKey.get(t.key)!.final, 0);
+      const con = constraints?.[spec.key] ?? {};
+      const { final, status } = resolveChamberFinal(model, con, spec.identityStatus ?? 'within range');
       byKey.set(spec.key, {
         key: spec.key,
         label: spec.label,
         form: spec.form,
-        model: value,
-        final: value,
-        status: spec.identityStatus ?? 'within range',
+        model,
+        final,
+        status,
         cvError: spec.cvError,
         confidence: spec.confidence,
         refined: false,

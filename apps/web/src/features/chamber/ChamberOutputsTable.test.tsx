@@ -36,6 +36,14 @@ describe('ChamberOutputsTable', () => {
     expect(onChange).toHaveBeenCalledWith('width', 'min', 4000);
   });
 
+  it('lets an identity output (H Kammer) take an Exact override', () => {
+    const onChange = vi.fn();
+    render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={onChange} />);
+    // The cell exists now (identity rows are editable) and reports up like any other.
+    fireEvent.change(screen.getByLabelText('H Kammer exact'), { target: { value: '5000' } });
+    expect(onChange).toHaveBeenCalledWith('height', 'exact', 5000);
+  });
+
   it('clears a constraint when its cell is emptied', () => {
     const onChange = vi.fn();
     render(

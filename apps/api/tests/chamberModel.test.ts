@@ -116,15 +116,29 @@ describe('computeChamberOutputs', () => {
     expect(m.get('height')!.final).toBeCloseTo(m.get('hMiddlePlusFirst')!.final + 1000, 6);
   });
 
-  it('ignores Height’s own Min/Max/Exact (hard identity) and no longer refines hLast', () => {
+  it('honors Height’s own Exact override (identity value is only the default)', () => {
     const m = byKey(computeChamberOutputs({ ...BASE, constraints: { height: { exact: 1234 } } }));
-    // Height stays the P11 + P12 sum, not the exact override; hLast does not refine.
-    expect(m.get('height')!.final).not.toBe(1234);
-    expect(m.get('height')!.final).toBeCloseTo(
+    // The MODEL stays the P11 + P12 sum, but the FINAL takes the exact override.
+    expect(m.get('height')!.model).toBeCloseTo(
       m.get('hMiddlePlusFirst')!.final + m.get('hLast')!.final,
       6,
     );
-    expect(m.get('hLast')!.refined).toBe(false);
+    expect(m.get('height')!.final).toBe(1234);
+    expect(m.get('height')!.status).toBe('set exact');
+  });
+
+  it('honors an Exact on the LEB identity and propagates it into Height', () => {
+    const m = byKey(computeChamberOutputs({ ...BASE, constraints: { hMiddlePlusFirst: { exact: 1500 } } }));
+    expect(m.get('hMiddlePlusFirst')!.final).toBe(1500);
+    expect(m.get('hMiddlePlusFirst')!.status).toBe('set exact');
+    // Height = LEB + LEOW reads LEB's overridden FINAL.
+    expect(m.get('height')!.final).toBeCloseTo(1500 + m.get('hLast')!.final, 6);
+  });
+
+  it('clamps an identity output to its Max', () => {
+    const m = byKey(computeChamberOutputs({ ...BASE, constraints: { height: { max: 100 } } }));
+    expect(m.get('height')!.final).toBe(100);
+    expect(m.get('height')!.status).toBe('capped at max');
   });
 
   it('opts out of refinement when interdependency is false', () => {
