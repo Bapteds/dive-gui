@@ -36,6 +36,7 @@ Produce three small committed files the builder loads. Runs once by a developer;
   ```json
   {
     "outerDiameter": 2.1696,
+    "pivotRadius": 0.86732,
     "hubRadius": 0.296,
     "height": 0.6457,
     "bladeCount": 16,
@@ -44,7 +45,7 @@ Produce three small committed files the builder loads. Runs once by a developer;
     "outletOuterR": 0.688
   }
   ```
-  (Values above are the measured source numbers; the script recomputes and writes the exact ones.)
+  (Most values are measured from the source; `pivotRadius` is the authoritative CAD value **0.86732 m** — the blade centre-of-rotation circle — supplied by the user and written verbatim. Scaling uses the **pivot diameter** `2·pivotRadius`, not `outerDiameter`.)
 - Produces `guideVanes_blade.stl` = ONE blade, re-centred so the ring axis is at XY origin and the passage bottom is at z=0. The builder replicates it `bladeCount` times, rotating `bladeAngleStepDeg` each.
 - Produces `guideVanes_walls.stl` = the contoured passage side-wall shell (hub + shroud), flat outlet ring removed, decimated, same re-centring transform.
 
@@ -137,8 +138,10 @@ def main():
 
     allv = m.vertices - np.array([cx, cy, 0.0])
     r_all = np.hypot(allv[:, 0], allv[:, 1])
+    PIVOT_RADIUS = 0.86732  # authoritative CAD value (blade centre of rotation), user-supplied
     meta = {
         "outerDiameter": 2.0 * float(r_all.max()),
+        "pivotRadius": PIVOT_RADIUS,
         "hubRadius": float(r_all.min()),
         "height": float(m.vertices[:, 2].max() - zmin),
         "bladeCount": len(blades),
@@ -411,12 +414,17 @@ def _flat_annulus(trimesh, np, r_in, r_out, z, seg=128):
 
 
 def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
-    """Return {patch_name: Trimesh} for the guide-vane throat, scaled to fit the
-    middle band [z_mid_base, z_mid_top] (height HLE) and centred at (cx, cy).
+    """Return ({patch_name: Trimesh}, shroud_outer_r) for the guide-vane throat,
+    scaled to fit the middle band [z_mid_base, z_mid_top] (height HLE) and centred
+    at (cx, cy).
 
-    Uniform scale from the diameter (0.80 x d_last) preserves the blade angle and
-    the passage contour; a straight collar under the contoured passage makes the
-    total height equal HLE (z_mid_top - z_mid_base)."""
+    Uniform scale pins the blade PIVOT circle diameter (2 x pivotRadius) to the
+    middle diameter (0.80 x d_last), preserving the blade angle and the passage
+    contour. The shroud outer then lands a little wider than 0.40 x d_last, so
+    make_vane_patches also returns that scaled shroud radius: main() cuts a
+    bounding cylinder of that radius so the void contains the whole ring. A
+    straight collar under the contoured passage makes the total height equal HLE
+    (z_mid_top - z_mid_base)."""
     import json
     adir = _vane_assets_dir()
     with open(os.path.join(adir, "guideVanes.json")) as fh:
@@ -424,7 +432,7 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
     blade = trimesh.load(os.path.join(adir, "guideVanes_blade.stl"))
     walls = trimesh.load(os.path.join(adir, "guideVanes_walls.stl"))
 
-    s = (RATIO_D_MIDDLE_OVER_LAST * d_last) / meta["outerDiameter"]  # uniform factor
+    s = (RATIO_D_MIDDLE_OVER_LAST * d_last) / (2.0 * meta["pivotRadius"])  # pivot Ø -> 0.80 d_last
     hle = z_mid_top - z_mid_base
     nat_h = meta["height"] * s                     # scaled contoured height
     delta = hle - nat_h                            # straight collar height (>=0 normally)
@@ -467,7 +475,8 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
     outlet.apply_translation((cx, cy, 0))
     patches["outlet"] = outlet
     patches["guide_vanes"] = blades_m
-    return patches
+    shroud_outer_r = 0.5 * meta["outerDiameter"] * s
+    return patches, shroud_outer_r
 ```
 Note: `RATIO_D_MIDDLE_OVER_LAST` (0.80) already exists at the top of the file.
 
@@ -490,8 +499,17 @@ Then, right after `patches = classify(...)`:
         if guide_vanes:
             z_mid_base = z_floor + h_first
             z_mid_top = z_floor + h_first + h_middle
-            vane_patches = make_vane_patches(
+            vane_patches, shroud_r = make_vane_patches(
                 trimesh, np, target_x, target_y, z_mid_base, z_mid_top, d_last)
+            # the scaled shroud is wider than the d_middle void, so open the box to
+            # the shroud radius over the middle band (the ring must fit inside).
+            bounding = (
+                cq.Workplane("XY", origin=(target_x, target_y, z_mid_base))
+                .circle(shroud_r).extrude(z_mid_top - z_mid_base)
+            )
+            result = result.cut(bounding)
+            faces = result.faces().vals()
+            patches = classify(faces, BRepAdaptor_Surface, geomabs, variant, pocket_radius)
             # the BREP middle cylinder is no longer the flow outlet; fold it into
             # cylinder_walls and let the vane meshes supply outlet + vane walls.
             patches["cylinder_walls"] = patches["cylinder_walls"] + patches["outlet"]
