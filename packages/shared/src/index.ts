@@ -2102,11 +2102,14 @@ export interface ChamberOutputSpec {
     | { k: number; e1: number; e2: number; e3: number };
   refinement?: ChamberRefinement;
   /**
-   * For form 'identity': this output is the EXACT sum of these outputs' FINAL
-   * values (a hard constraint that ignores its own Min/Max/Exact). E.g. height =
-   * hMiddlePlusFirst + hLast.
+   * For form 'identity': this output is an exact linear combination of other
+   * outputs' FINAL values (Σ coeff × final) — a hard structural relation that
+   * ignores its own Min/Max/Exact. E.g. height = 1·hMiddlePlusFirst + 1·hLast,
+   * or hMiddlePlusFirst = 2·hMiddle.
    */
-  identityOf?: ChamberOutputKey[];
+  identityOf?: readonly { key: ChamberOutputKey; coeff: number }[];
+  /** Status label shown for an identity output (e.g. '= P11 + P12'). */
+  identityStatus?: ChamberStatus;
 }
 
 /**
@@ -2122,7 +2125,8 @@ export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
   // P2 = P11 + P12 (hard identity): height is the exact sum of the middle+first
   // and last cylinder heights (its own Min/Max/Exact are ignored — set P11/P12).
   { key: 'height', label: 'Height', form: 'identity', cvError: 28.6, confidence: 'Moderate',
-    identityOf: ['hMiddlePlusFirst', 'hLast'] },
+    identityOf: [{ key: 'hMiddlePlusFirst', coeff: 1 }, { key: 'hLast', coeff: 1 }],
+    identityStatus: '= P11 + P12' },
   { key: 'distFromSideChamfer1', label: 'Chamfer-1 side distance', form: 'linear', cvError: 32.0, confidence: 'Low',
     coeffs: { a: 1913.645229, b: -0.1144287145, c: -38.895132, d: 115.1237973 },
     refinement: { partner: 'width', note: 'auto-refines when Width is known (R² 0.09 → 0.62)',
@@ -2141,8 +2145,11 @@ export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
     coeffs: { a: 221.4522145, b: 1.498949106, c: -9.02505593, d: 14.40321366 } },
   { key: 'hMiddle', label: 'Middle cylinder height', form: 'linear', cvError: 5.8, confidence: 'High',
     coeffs: { a: 17.17464869, b: 0.435873881, c: -6.126007422, d: 2.320487817 } },
-  { key: 'hMiddlePlusFirst', label: 'Middle + first height', form: 'power', cvError: 24.9, confidence: 'Moderate',
-    coeffs: { k: 2.38913334e-8, e1: 3.631996617, e2: 0.647878341, e3: -1.281050007 } },
+  // P11 = 2 x P10 (structural relation): middle+first height is exactly twice the
+  // middle-cylinder height (out-of-sample MAPE 8.4% vs 11.3% for the old power
+  // fit). Its own Min/Max/Exact are ignored — change it via hMiddle.
+  { key: 'hMiddlePlusFirst', label: 'Middle + first height', form: 'identity', cvError: 8.4, confidence: 'Good',
+    identityOf: [{ key: 'hMiddle', coeff: 2 }], identityStatus: '= 2 × P10' },
   { key: 'hLast', label: 'Last cylinder height', form: 'linear', cvError: 38.9, confidence: 'Low',
     coeffs: { a: 506.0051287, b: -0.4315856534, c: 312.7206124, d: 47.41062013 } },
 ];
@@ -2207,7 +2214,8 @@ export type ChamberStatus =
   | 'raised to min'
   | 'set exact'
   | '! min>max'
-  | '= P11 + P12';
+  | '= P11 + P12'
+  | '= 2 × P10';
 
 /** One computed output: the raw model value, the clamped FINAL, and metadata. */
 export interface ChamberOutput {
@@ -2302,23 +2310,31 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
     });
   }
 
-  // Pass 2: identity outputs (height = hMiddlePlusFirst + hLast). A hard identity:
-  // the value is the exact sum of its partners' FINAL values and its own
-  // Min/Max/Exact are ignored (mirrors the calculator's P2 = P11 + P12).
-  for (const spec of CHAMBER_OUTPUT_SPECS) {
-    if (spec.form !== 'identity' || !spec.identityOf) continue;
-    const value = spec.identityOf.reduce((sum, k) => sum + (byKey.get(k)?.final ?? 0), 0);
-    byKey.set(spec.key, {
-      key: spec.key,
-      label: spec.label,
-      form: spec.form,
-      model: value,
-      final: value,
-      status: '= P11 + P12',
-      cvError: spec.cvError,
-      confidence: spec.confidence,
-      refined: false,
-    });
+  // Pass 2: identity outputs — each is an exact linear combination of other
+  // outputs' FINAL values (Σ coeff × final), ignoring its own Min/Max/Exact. They
+  // can chain (P11 = 2·P10, then P2 = P11 + P12), so resolve to a fixpoint: keep
+  // emitting any identity whose inputs are all resolved until none remain.
+  const identities = CHAMBER_OUTPUT_SPECS.filter((s) => s.form === 'identity' && s.identityOf);
+  let progressed = true;
+  while (progressed) {
+    progressed = false;
+    for (const spec of identities) {
+      if (byKey.has(spec.key)) continue;
+      if (!spec.identityOf!.every((t) => byKey.has(t.key))) continue;
+      const value = spec.identityOf!.reduce((sum, t) => sum + t.coeff * byKey.get(t.key)!.final, 0);
+      byKey.set(spec.key, {
+        key: spec.key,
+        label: spec.label,
+        form: spec.form,
+        model: value,
+        final: value,
+        status: spec.identityStatus ?? 'within range',
+        cvError: spec.cvError,
+        confidence: spec.confidence,
+        refined: false,
+      });
+      progressed = true;
+    }
   }
 
   return CHAMBER_OUTPUT_KEYS.map((k) => byKey.get(k)!);

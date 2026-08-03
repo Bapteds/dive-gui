@@ -29,8 +29,8 @@ export const chamberBuildSchema = z
     // Exact). On by default; false opts out to a pure X1/X2/X3 fit.
     interdependency: z.boolean().default(true),
     // Torque-foot orientation (0–180): 0/180 = tangential, 90 = radial. The gusset
-    // only forms at intermediate angles (~37–143°, not ~90°); default 45.
-    footAngleDeg: z.number().finite().min(0).max(180).default(45),
+    // only forms at intermediate angles (~37–143°, not ~90°); default 40.
+    footAngleDeg: z.number().finite().min(0).max(180).default(40),
     variant: z.enum(CHAMBER_VARIANTS).default('stepped'),
     lengthOverride: z.number().finite().positive().optional(),
     hollowLength: z.number().finite().positive().optional(),

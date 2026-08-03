@@ -62,8 +62,8 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   x3: 8,
   variant: 'stepped',
   interdependency: true,
-  footAngleDeg: 45,
+  footAngleDeg: 40,
   lengthOverride: undefined,
-  hollowLength: 2000,
+  hollowLength: 200,
   wallThickness: CHAMBER_WALL_THICKNESS_MM,
 };

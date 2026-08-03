@@ -40,6 +40,7 @@ const STATUS_STYLES: Record<ChamberStatus, string> = {
   'raised to min': 'text-accent-hover',
   '! min>max': 'text-danger',
   '= P11 + P12': 'text-primary',
+  '= 2 × P10': 'text-primary',
 };
 
 /** Format a millimetre value for display (1 decimal, tabular). */
@@ -141,7 +142,7 @@ export function ChamberOutputsTable({
                   <TableCell className="text-right text-text-secondary">{mm(o.model)}</TableCell>
                   {derived ? (
                     <TableCell colSpan={3} className="text-center text-xs text-text-secondary">
-                      derived from Middle + first &amp; Last cylinder height
+                      derived (see Status)
                     </TableCell>
                   ) : (
                     <>

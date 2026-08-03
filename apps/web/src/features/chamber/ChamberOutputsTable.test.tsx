@@ -22,9 +22,11 @@ describe('ChamberOutputsTable', () => {
     render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />);
     expect(screen.getByText('Width')).toBeInTheDocument();
     expect(screen.getByText('Last cylinder diameter')).toBeInTheDocument();
-    // 11 fitted outputs read "within range"; Height is the derived P11 + P12 identity.
-    expect(screen.getAllByText('within range')).toHaveLength(OUTPUTS.length - 1);
+    // 10 fitted outputs read "within range"; Height (= P11 + P12) and Middle+first
+    // (= 2 × P10) are derived structural relations.
+    expect(screen.getAllByText('within range')).toHaveLength(OUTPUTS.length - 2);
     expect(screen.getByText('= P11 + P12')).toBeInTheDocument();
+    expect(screen.getByText('= 2 × P10')).toBeInTheDocument();
   });
 
   it('reports a Min edit up as a numeric constraint change', () => {

@@ -103,7 +103,8 @@ function resolveGeometryParams(
 
   const params: Record<string, number | string> = { length: lengthMm * MM_TO_M, variant };
   // Torque-foot orientation is an angle (degrees), not a length — passed as-is.
-  params.footAngleDeg = input.footAngleDeg ?? 0;
+  // Default 40° (an intermediate angle where the triangular gusset can form).
+  params.footAngleDeg = input.footAngleDeg ?? 40;
   for (const key of CHAMBER_OUTPUT_KEYS) {
     params[key] = outputFinal(outputs, key) * MM_TO_M;
   }

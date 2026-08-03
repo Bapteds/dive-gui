@@ -12,7 +12,7 @@ function byKey(outputs: ChamberOutput[]) {
 }
 
 describe('computeChamberOutputs', () => {
-  it('evaluates the twelve outputs (linear + power) at a known input', () => {
+  it('evaluates the twelve outputs at a known input (fits + structural relations)', () => {
     const outputs = computeChamberOutputs(BASE);
     expect(outputs).toHaveLength(12);
     const m = byKey(outputs);
@@ -21,16 +21,21 @@ describe('computeChamberOutputs', () => {
     expect(m.get('width')!.model).toBeCloseTo(4444.44, 1);
     // Linear: dLast (highest-confidence output).
     expect(m.get('dLast')!.model).toBeCloseTo(2439.31, 1);
-    // Power: hMiddlePlusFirst = 2.38913334e-8 * X1^3.632 * X2^0.648 * X3^-1.281.
-    expect(m.get('hMiddlePlusFirst')!.model).toBeCloseTo(1919.5, 0);
+    // Structural: hMiddlePlusFirst (P11) = 2 x hMiddle (P10).
+    expect(m.get('hMiddlePlusFirst')!.model).toBeCloseTo(2 * m.get('hMiddle')!.final, 6);
 
     // With no constraints, FINAL equals the model value. Fitted outputs read
-    // "within range"; the derived Height (P2) is the P11 + P12 identity.
+    // "within range"; the two derived outputs carry their structural-relation status.
+    const identityStatus: Record<string, string> = {
+      height: '= P11 + P12',
+      hMiddlePlusFirst: '= 2 × P10',
+    };
     for (const o of outputs) {
       expect(o.final).toBe(o.model);
-      expect(o.status).toBe(o.key === 'height' ? '= P11 + P12' : 'within range');
+      expect(o.status).toBe(identityStatus[o.key] ?? 'within range');
     }
     expect(m.get('height')!.form).toBe('identity');
+    expect(m.get('hMiddlePlusFirst')!.form).toBe('identity');
     expect(m.get('height')!.model).toBeCloseTo(
       m.get('hMiddlePlusFirst')!.final + m.get('hLast')!.final,
       6,
@@ -94,6 +99,15 @@ describe('computeChamberOutputs', () => {
     expect(h.form).toBe('identity');
     expect(h.status).toBe('= P11 + P12');
     expect(h.final).toBeCloseTo(m.get('hMiddlePlusFirst')!.final + m.get('hLast')!.final, 6);
+  });
+
+  it('derives middle+first height as 2 x hMiddle (P11 = 2 x P10) and chains into Height', () => {
+    const m = byKey(computeChamberOutputs({ ...BASE, constraints: { hMiddle: { exact: 500 } } }));
+    expect(m.get('hMiddle')!.final).toBe(500);
+    expect(m.get('hMiddlePlusFirst')!.final).toBeCloseTo(1000, 6); // 2 x 500
+    expect(m.get('hMiddlePlusFirst')!.status).toBe('= 2 × P10');
+    // Height = P11 + P12 picks up the change through the chain.
+    expect(m.get('height')!.final).toBeCloseTo(1000 + m.get('hLast')!.final, 6);
   });
 
   it('recomputes Height when a component (hLast) is constrained', () => {

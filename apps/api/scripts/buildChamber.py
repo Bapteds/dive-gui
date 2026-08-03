@@ -75,7 +75,7 @@ FOOT_PLANK_THICK = 0.05      # vertical thickness of the horizontal plank (50 mm
 FOOT_PLANK_OVERLAP = 0.02    # plank radial overlap into the last-cyl wall
 FOOT_GUSSET_MIN_BASE = 0.05  # min triangular-plank base; below it (near 0/90/180) the build refuses
 FOOT_CLEARANCE = 0.02        # radial gap the leg keeps from the first cylinder (any angle)
-FOOT_ANGLE_DEG = 45.0        # default leg orientation; the gusset needs an intermediate angle
+FOOT_ANGLE_DEG = 40.0        # default leg orientation; the gusset needs an intermediate angle
                              # (0/180 = tangential and 90 = radial both degenerate the gusset)
 FOOT_ANGLES_DEG = (0, 90, 180, 270)     # azimuth positions (aligned with the inlet axes)
 
