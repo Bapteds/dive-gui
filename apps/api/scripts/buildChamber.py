@@ -85,6 +85,8 @@ PATCH_TYPES = {
     "outlet": "patch",
     "cylinder_walls": "wall",
     "walls": "wall",
+    "guide_vane_walls": "wall",
+    "guide_vanes": "wall",
 }
 
 
@@ -273,6 +275,139 @@ def make_feet(cq, cx, cy, z0, z_top, r_cyl, d_first, foot_angle_deg=FOOT_ANGLE_D
     return feet.translate((cx, cy, 0)), r_outer
 
 
+# --- guide-vane throat (mesh patches, no OCC boolean) -----------------------
+def _vane_assets_dir():
+    """assets/ next to this script (holds the committed vane STLs + JSON)."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+
+
+def _annulus_walls(trimesh, np, r_in, r_out, z0, z1, seg=128):
+    """Two coaxial straight cylinder side-walls (no caps) as one Trimesh: the
+    outer + inner walls of a collar ring between z0 and z1 (built at origin)."""
+    ang = np.linspace(0, 2 * np.pi, seg, endpoint=False)
+    verts, faces = [], []
+    for r in (r_out, r_in):
+        base = len(verts)
+        ring = [(r * np.cos(a), r * np.sin(a), z0) for a in ang] + \
+               [(r * np.cos(a), r * np.sin(a), z1) for a in ang]
+        verts.extend(ring)
+        for i in range(seg):
+            j = (i + 1) % seg
+            faces.append([base + i, base + j, base + seg + j])
+            faces.append([base + i, base + seg + j, base + seg + i])
+    return trimesh.Trimesh(vertices=np.array(verts), faces=np.array(faces), process=False)
+
+
+def _flat_annulus(trimesh, np, r_in, r_out, z, seg=128):
+    """A flat annular ring at height z (the outlet cap face; built at origin)."""
+    ang = np.linspace(0, 2 * np.pi, seg, endpoint=False)
+    verts, faces = [], []
+    for a in ang:
+        verts.append((r_out * np.cos(a), r_out * np.sin(a), z))
+        verts.append((r_in * np.cos(a), r_in * np.sin(a), z))
+    for i in range(seg):
+        j = (i + 1) % seg
+        faces.append([2 * i, 2 * j, 2 * j + 1])
+        faces.append([2 * i, 2 * j + 1, 2 * i + 1])
+    return trimesh.Trimesh(vertices=np.array(verts), faces=np.array(faces), process=False)
+
+
+def _clip_below(trimesh, mesh, z):
+    """Return `mesh` with the part below z removed (planar cut, keep z >= plane).
+    Dependency-free: trimesh.intersections.slice_faces_plane splits straddling
+    triangles at the plane WITHOUT the shapely-backed capping of slice_plane()."""
+    from trimesh.intersections import slice_faces_plane
+    res = slice_faces_plane(mesh.vertices, mesh.faces,
+                            plane_normal=[0, 0, 1], plane_origin=[0, 0, z])
+    v, f = res[0], res[1]
+    return trimesh.Trimesh(vertices=v, faces=f, process=False)
+
+
+def _ring_radii(np, mesh, cx, cy, z0, z1):
+    """Inner/outer radius of the passage cross-section in the z-band [z0, z1],
+    about (cx, cy). Percentiles reject the decimated bottom's ragged stray verts."""
+    v = mesh.vertices
+    sel = (v[:, 2] >= z0) & (v[:, 2] <= z1)
+    if sel.sum() < 16:
+        sel = (v[:, 2] >= z0) & (v[:, 2] <= z0 + 3.0 * (z1 - z0))
+    r = np.hypot(v[sel, 0] - cx, v[sel, 1] - cy)
+    return float(np.percentile(r, 2)), float(np.percentile(r, 98))
+
+
+def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
+    """Return ({patch_name: Trimesh}, shroud_outer_r) for the guide-vane throat,
+    scaled to fit the middle band [z_mid_base, z_mid_top] (height HLE) and centred
+    at (cx, cy).
+
+    Uniform scale pins the blade PIVOT circle diameter (2 x pivotRadius) to the
+    middle diameter (0.80 x d_last), preserving the blade angle and the passage
+    contour. The shroud outer then lands wider than 0.40 x d_last, so this returns
+    that scaled shroud radius: main() cuts a bounding cylinder of it so the void
+    contains the whole ring. The passage TOP is pinned to z_mid_top; the bottom is
+    clipped (ring taller than HLE) or extended with a straight collar (shorter) so
+    the total height equals HLE."""
+    import json
+    adir = _vane_assets_dir()
+    with open(os.path.join(adir, "guideVanes.json")) as fh:
+        meta = json.load(fh)
+    blade = trimesh.load(os.path.join(adir, "guideVanes_blade.stl"))
+    walls = trimesh.load(os.path.join(adir, "guideVanes_walls.stl"))
+
+    s = (RATIO_D_MIDDLE_OVER_LAST * d_last) / (2.0 * meta["pivotRadius"])  # pivot Ø -> 0.80 d_last
+    nat_h = meta["height"] * s                      # scaled contoured height
+    z_sb = z_mid_top - nat_h                         # scaled passage bottom (top pinned to z_mid_top)
+
+    def place(mesh):
+        m = mesh.copy()
+        m.apply_scale(s)                            # uniform (all axes)
+        m.apply_translation((cx, cy, z_sb))         # asset bottom (z=0) -> z_sb
+        return m
+
+    walls_m = place(walls)
+    blades = []
+    for k in range(int(meta["bladeCount"])):
+        b = place(blade)
+        ang = np.radians(k * meta["bladeAngleStepDeg"])
+        R = np.array([[np.cos(ang), -np.sin(ang), 0, 0],
+                      [np.sin(ang), np.cos(ang), 0, 0],
+                      [0, 0, 1, 0], [0, 0, 0, 1]])
+        b.apply_translation((-cx, -cy, 0))          # rotate about the ring axis (cx, cy)
+        b.apply_transform(R)
+        b.apply_translation((cx, cy, 0))
+        blades.append(b)
+    blades_m = trimesh.util.concatenate(blades)
+
+    band = 0.03 * nat_h
+    patches = {}
+    if z_sb < z_mid_base - 1e-4:
+        # taller than HLE -> clip everything below the middle-band base
+        blades_min_z = float(blades_m.vertices[:, 2].min())
+        walls_m = _clip_below(trimesh, walls_m, z_mid_base)
+        blades_m = _clip_below(trimesh, blades_m, z_mid_base)
+        if blades_min_z < z_mid_base - 1e-6:
+            sys.stderr.write("WARN: guide-vane clip to HLE truncates the blades\n")
+        z_out = z_mid_base
+        r_in, r_out = _ring_radii(np, walls_m, cx, cy, z_out, z_out + band)
+        patches["guide_vane_walls"] = walls_m
+    elif z_sb > z_mid_base + 1e-4:
+        # shorter than HLE -> straight collar from the band base up to z_sb
+        r_in, r_out = _ring_radii(np, walls_m, cx, cy, z_sb, z_sb + band)
+        collar = _annulus_walls(trimesh, np, r_in, r_out, z_mid_base, z_sb)
+        collar.apply_translation((cx, cy, 0))
+        patches["guide_vane_walls"] = trimesh.util.concatenate([walls_m, collar])
+        z_out = z_mid_base
+    else:
+        z_out = z_sb
+        r_in, r_out = _ring_radii(np, walls_m, cx, cy, z_sb, z_sb + band)
+        patches["guide_vane_walls"] = walls_m
+    outlet = _flat_annulus(trimesh, np, r_in, r_out, z_out)
+    outlet.apply_translation((cx, cy, 0))
+    patches["outlet"] = outlet
+    patches["guide_vanes"] = blades_m
+    shroud_outer_r = 0.5 * meta["outerDiameter"] * s
+    return patches, shroud_outer_r
+
+
 # --- patch classification (ported from prepare_openfoam.py) -----------------
 def _face_kind(f, adaptor, geomabs):
     s = adaptor(f.wrapped)
@@ -443,6 +578,7 @@ def main():
         h_first = num("hMiddlePlusFirst") - h_middle
         variant = str(P.get("variant", "stepped"))
         foot_angle = float(P.get("footAngleDeg", FOOT_ANGLE_DEG))
+        guide_vanes = bool(P.get("guideVanes", False))
 
         # --- common validation ---------------------------------------------
         if min(width, height, length, d_last, h_middle) <= 0:
@@ -529,6 +665,31 @@ def main():
         pocket_radius = max(rmax, foot_r_outer) + 0.1
         patches = classify(faces, BRepAdaptor_Surface, geomabs, variant, pocket_radius)
 
+        # --- guide-vane throat: extra MESH patches in the middle band -------
+        # The vanes ride as triSurfaces + GLB nodes (no OCC boolean). z is the
+        # middle-cylinder band [z_mid_base, z_mid_top]; the ring's scaled shroud
+        # is wider than the d_middle void, so open the box to the shroud radius.
+        vane_patches = {}
+        emit_order = list(PATCH_ORDER)
+        if guide_vanes:
+            z_mid_base = z_floor + h_first
+            z_mid_top = z_floor + h_first + h_middle
+            vane_patches, shroud_r = make_vane_patches(
+                trimesh, np, target_x, target_y, z_mid_base, z_mid_top, d_last)
+            bounding = (
+                cq.Workplane("XY", origin=(target_x, target_y, z_mid_base))
+                .circle(shroud_r).extrude(z_mid_top - z_mid_base)
+            )
+            result = result.cut(bounding)
+            faces = result.faces().vals()
+            patches = classify(faces, BRepAdaptor_Surface, geomabs, variant, pocket_radius)
+            # the BREP middle cylinder is no longer the flow outlet; fold it into
+            # cylinder_walls and let the vane meshes supply outlet + vane walls.
+            patches["cylinder_walls"] = patches["cylinder_walls"] + patches["outlet"]
+            patches["outlet"] = []
+            emit_order = ["inlet", "cylinder_walls", "walls",
+                          "guide_vane_walls", "outlet", "guide_vanes"]
+
         # --- GLB scene + manifest + edges ----------------------------------
         scene = trimesh.Scene()
         manifest = []
@@ -536,20 +697,27 @@ def main():
         total_edge_verts = 0
         patch_meshes = {}
 
-        for name in PATCH_ORDER:
-            fs = patches[name]
-            tri = patch_trimesh(trimesh, np, fs)
-            if tri is None:
-                continue
+        for name in emit_order:
+            if name in vane_patches:
+                # mesh patch (guide vanes): already a Trimesh, no CAD edges.
+                tri = vane_patches[name]
+                edge_verts = np.zeros((0, 3), dtype=np.float32)
+                n_faces = len(tri.faces)
+            else:
+                fs = patches.get(name, [])
+                tri = patch_trimesh(trimesh, np, fs)
+                if tri is None:
+                    continue
+                edge_verts = patch_edges(np, BRepAdaptor_Curve, GeomAbs_Line, fs)
+                n_faces = len(fs)             # CAD face count for this patch
             patch_meshes[name] = tri
             scene.add_geometry(tri, node_name=name, geom_name=name)
 
-            edge_verts = patch_edges(np, BRepAdaptor_Curve, GeomAbs_Line, fs)
             edge_count = int(edge_verts.shape[0])
             manifest.append({
                 "name": name,
                 "type": PATCH_TYPES[name],
-                "nFaces": len(fs),                 # CAD face count for this patch
+                "nFaces": n_faces,
                 "edgeOffset": total_edge_verts,
                 "edgeCount": edge_count,
             })
@@ -589,7 +757,7 @@ def main():
         with zipfile.ZipFile(os.path.join(exports_dir, "trisurface.zip"), "w",
                              zipfile.ZIP_DEFLATED) as zf:
             combined = io.StringIO()
-            for name in PATCH_ORDER:
+            for name in emit_order:
                 tri = patch_meshes.get(name)
                 if tri is None:
                     continue

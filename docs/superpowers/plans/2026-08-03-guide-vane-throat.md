@@ -413,6 +413,16 @@ def _flat_annulus(trimesh, np, r_in, r_out, z, seg=128):
     return trimesh.Trimesh(vertices=np.array(verts), faces=np.array(faces), process=False)
 
 
+def _clip_below(trimesh, mesh, z):
+    """Return `mesh` with the part below z removed (planar cut, keep z >= plane).
+    Dependency-free: trimesh.intersections.slice_faces_plane splits straddling
+    triangles at the plane WITHOUT the shapely-backed capping of slice_plane()."""
+    from trimesh.intersections import slice_faces_plane
+    res = slice_faces_plane(mesh.vertices, mesh.faces,
+                            plane_normal=[0, 0, 1], plane_origin=[0, 0, z])
+    return trimesh.Trimesh(vertices=res[0], faces=res[1], process=False)
+
+
 def _ring_radii(np, mesh, cx, cy, z0, z1):
     """Inner/outer radius of the passage cross-section in the z-band [z0, z1],
     about (cx, cy). Percentiles reject the decimated bottom's ragged stray verts."""
@@ -471,10 +481,10 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
     patches = {}
     if z_sb < z_mid_base - 1e-4:
         # taller than HLE -> clip everything below the middle-band base
-        walls_m = walls_m.slice_plane([0, 0, z_mid_base], [0, 0, 1], cap=False)
-        blades_before = len(blades_m.faces)
-        blades_m = blades_m.slice_plane([0, 0, z_mid_base], [0, 0, 1], cap=False)
-        if len(blades_m.faces) < blades_before:
+        blades_min_z = float(blades_m.vertices[:, 2].min())
+        walls_m = _clip_below(trimesh, walls_m, z_mid_base)
+        blades_m = _clip_below(trimesh, blades_m, z_mid_base)
+        if blades_min_z < z_mid_base - 1e-6:
             sys.stderr.write("WARN: guide-vane clip to HLE truncates the blades\n")
         z_out = z_mid_base
         r_in, r_out = _ring_radii(np, walls_m, cx, cy, z_out, z_out + band)
