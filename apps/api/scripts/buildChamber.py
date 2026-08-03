@@ -290,23 +290,6 @@ def _vane_assets_dir():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 
 
-def _annulus_walls(trimesh, np, r_in, r_out, z0, z1, seg=128):
-    """Two coaxial straight cylinder side-walls (no caps) as one Trimesh: the
-    outer + inner walls of a collar ring between z0 and z1 (built at origin)."""
-    ang = np.linspace(0, 2 * np.pi, seg, endpoint=False)
-    verts, faces = [], []
-    for r in (r_out, r_in):
-        base = len(verts)
-        ring = [(r * np.cos(a), r * np.sin(a), z0) for a in ang] + \
-               [(r * np.cos(a), r * np.sin(a), z1) for a in ang]
-        verts.extend(ring)
-        for i in range(seg):
-            j = (i + 1) % seg
-            faces.append([base + i, base + j, base + seg + j])
-            faces.append([base + i, base + seg + j, base + seg + i])
-    return trimesh.Trimesh(vertices=np.array(verts), faces=np.array(faces), process=False)
-
-
 def _flat_annulus(trimesh, np, r_in, r_out, z, seg=128):
     """A flat annular ring at height z (the outlet cap face; built at origin)."""
     ang = np.linspace(0, 2 * np.pi, seg, endpoint=False)
@@ -321,40 +304,21 @@ def _flat_annulus(trimesh, np, r_in, r_out, z, seg=128):
     return trimesh.Trimesh(vertices=np.array(verts), faces=np.array(faces), process=False)
 
 
-def _clip_below(trimesh, mesh, z):
-    """Return `mesh` with the part below z removed (planar cut, keep z >= plane).
-    Dependency-free: trimesh.intersections.slice_faces_plane splits straddling
-    triangles at the plane WITHOUT the shapely-backed capping of slice_plane()."""
-    from trimesh.intersections import slice_faces_plane
-    res = slice_faces_plane(mesh.vertices, mesh.faces,
-                            plane_normal=[0, 0, 1], plane_origin=[0, 0, z])
-    v, f = res[0], res[1]
-    return trimesh.Trimesh(vertices=v, faces=f, process=False)
-
-
-def _ring_radii(np, mesh, cx, cy, z0, z1):
-    """Inner/outer radius of the passage cross-section in the z-band [z0, z1],
-    about (cx, cy). Percentiles reject the decimated bottom's ragged stray verts."""
-    v = mesh.vertices
-    sel = (v[:, 2] >= z0) & (v[:, 2] <= z1)
-    if sel.sum() < 16:
-        sel = (v[:, 2] >= z0) & (v[:, 2] <= z0 + 3.0 * (z1 - z0))
-    r = np.hypot(v[sel, 0] - cx, v[sel, 1] - cy)
-    return float(np.percentile(r, 2)), float(np.percentile(r, 98))
-
-
 def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
     """Return {patch_name: Trimesh} for the guide-vane throat: the SOLID vane
-    surfaces (blades + hub/walls + a flat outlet cap) that sit as obstacles in the
-    fluid box. Scaled to the middle band [z_mid_base, z_mid_top] and centred at
-    (cx, cy).
+    surfaces (blades + contoured hub/shroud walls + the outlet annulus) that sit
+    as obstacles in the fluid box, centred at (cx, cy).
 
     Uniform scale pins the blade PIVOT circle diameter (2 x pivotRadius) to the
-    middle diameter (0.80 x d_last), preserving the blade angle and the passage
-    contour. The passage TOP is pinned to z_mid_top; the bottom is clipped (ring
-    taller than HLE) or extended with a straight collar (shorter) so the total
-    height equals HLE. No bounding cylinder is used — the vanes are obstacles in
-    the open box cavity, so the fluid flows directly around them."""
+    middle diameter (0.80 x d_last), preserving the blade angle AND the full
+    hub/shroud contour. The passage TOP (vane inlet) is pinned to z_mid_top and
+    the whole contour is kept to scale — the passage curves down to its natural
+    bottom rim, exactly as in the source design. NO clipping and NO flat cut: the
+    outlet is the small annulus that the curve terminates in (radii = the source
+    bottom rim, scaled), placed at the natural passage bottom. It is neither
+    flattened up at the band base nor stretched to the box floor. No bounding
+    cylinder is used — the vanes are obstacles in the open box cavity, so the
+    fluid flows directly around them."""
     import json
     adir = _vane_assets_dir()
     with open(os.path.join(adir, "guideVanes.json")) as fh:
@@ -386,34 +350,19 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
         blades.append(b)
     blades_m = trimesh.util.concatenate(blades)
 
-    band = 0.03 * nat_h
-    patches = {}
-    if z_sb < z_mid_base - 1e-4:
-        # taller than HLE -> clip everything below the middle-band base
-        blades_min_z = float(blades_m.vertices[:, 2].min())
-        walls_m = _clip_below(trimesh, walls_m, z_mid_base)
-        blades_m = _clip_below(trimesh, blades_m, z_mid_base)
-        if blades_min_z < z_mid_base - 1e-6:
-            sys.stderr.write("WARN: guide-vane clip to HLE truncates the blades\n")
-        z_out = z_mid_base
-        r_in, r_out = _ring_radii(np, walls_m, cx, cy, z_out, z_out + band)
-        patches["guide_vane_walls"] = walls_m
-    elif z_sb > z_mid_base + 1e-4:
-        # shorter than HLE -> straight collar from the band base up to z_sb
-        r_in, r_out = _ring_radii(np, walls_m, cx, cy, z_sb, z_sb + band)
-        collar = _annulus_walls(trimesh, np, r_in, r_out, z_mid_base, z_sb)
-        collar.apply_translation((cx, cy, 0))
-        patches["guide_vane_walls"] = trimesh.util.concatenate([walls_m, collar])
-        z_out = z_mid_base
-    else:
-        z_out = z_sb
-        r_in, r_out = _ring_radii(np, walls_m, cx, cy, z_sb, z_sb + band)
-        patches["guide_vane_walls"] = walls_m
-    outlet = _flat_annulus(trimesh, np, r_in, r_out, z_out)
+    # Outlet = the small annulus the contour terminates in (source bottom rim,
+    # scaled), placed at the natural passage bottom z_sb. This keeps the hub /
+    # shroud curve intact and to scale instead of cutting it flat at the band.
+    r_in = meta["outletInnerR"] * s
+    r_out = meta["outletOuterR"] * s
+    outlet = _flat_annulus(trimesh, np, r_in, r_out, z_sb)
     outlet.apply_translation((cx, cy, 0))
-    patches["outlet"] = outlet
-    patches["guide_vanes"] = blades_m
-    return patches
+
+    return {
+        "guide_vane_walls": walls_m,
+        "outlet": outlet,
+        "guide_vanes": blades_m,
+    }
 
 
 # --- patch classification (ported from prepare_openfoam.py) -----------------
