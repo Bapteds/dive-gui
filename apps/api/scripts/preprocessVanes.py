@@ -72,11 +72,11 @@ def main():
     rim = bnd[sz[bnd] < sz.min() + eps]
     rim = rim if len(rim) else np.where(sz < sz.min() + eps)[0]
     outlet_inner_r, outlet_outer_r = float(sr[rim].min()), float(sr[rim].max())
+    # Keep the walls at FULL resolution (no decimation — decimation enlarged the
+    # source's tessellation cracks into visible holes). Weld coincident vertices
+    # to close what seams the source left as exact duplicates.
     walls = shell
-    try:
-        walls = walls.simplify_quadric_decimation(face_count=20000)
-    except Exception as err:  # noqa: BLE001
-        sys.stderr.write("WARN: decimation skipped (%s)\n" % err)
+    walls.merge_vertices()
     walls.export(os.path.join(out_dir, "guideVanes_walls.stl"))
 
     allv = m.vertices - np.array([cx, cy, 0.0])
