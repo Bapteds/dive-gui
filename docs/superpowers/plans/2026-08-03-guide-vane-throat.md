@@ -45,7 +45,7 @@ Produce three small committed files the builder loads. Runs once by a developer;
     "outletOuterR": 0.688
   }
   ```
-  (Most values are measured from the source; `pivotRadius` is the authoritative CAD value **0.86732 m** — the blade centre-of-rotation circle — supplied by the user and written verbatim. Scaling uses the **pivot diameter** `2·pivotRadius`, not `outerDiameter`.)
+  (Most values are measured from the source; `pivotRadius` is the authoritative CAD value **0.86732 m** — the blade centre-of-rotation circle — supplied by the user and written verbatim. Scaling uses the **pivot diameter** `2·pivotRadius`, not `outerDiameter`. `outletInnerR/OuterR` are informational only: the builder recomputes the outlet radii from the *scaled, placed, clipped* wall cross-section, which is robust to the decimated bottom's ragged rim.)
 - Produces `guideVanes_blade.stl` = ONE blade, re-centred so the ring axis is at XY origin and the passage bottom is at z=0. The builder replicates it `bladeCount` times, rotating `bladeAngleStepDeg` each.
 - Produces `guideVanes_walls.stl` = the contoured passage side-wall shell (hub + shroud), flat outlet ring removed, decimated, same re-centring transform.
 
@@ -413,6 +413,17 @@ def _flat_annulus(trimesh, np, r_in, r_out, z, seg=128):
     return trimesh.Trimesh(vertices=np.array(verts), faces=np.array(faces), process=False)
 
 
+def _ring_radii(np, mesh, cx, cy, z0, z1):
+    """Inner/outer radius of the passage cross-section in the z-band [z0, z1],
+    about (cx, cy). Percentiles reject the decimated bottom's ragged stray verts."""
+    v = mesh.vertices
+    sel = (v[:, 2] >= z0) & (v[:, 2] <= z1)
+    if sel.sum() < 16:
+        sel = (v[:, 2] >= z0) & (v[:, 2] <= z0 + 3.0 * (z1 - z0))
+    r = np.hypot(v[sel, 0] - cx, v[sel, 1] - cy)
+    return float(np.percentile(r, 2)), float(np.percentile(r, 98))
+
+
 def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
     """Return ({patch_name: Trimesh}, shroud_outer_r) for the guide-vane throat,
     scaled to fit the middle band [z_mid_base, z_mid_top] (height HLE) and centred
@@ -433,15 +444,13 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
     walls = trimesh.load(os.path.join(adir, "guideVanes_walls.stl"))
 
     s = (RATIO_D_MIDDLE_OVER_LAST * d_last) / (2.0 * meta["pivotRadius"])  # pivot Ø -> 0.80 d_last
-    hle = z_mid_top - z_mid_base
     nat_h = meta["height"] * s                     # scaled contoured height
-    delta = hle - nat_h                            # straight collar height (>=0 normally)
+    z_sb = z_mid_top - nat_h                        # scaled passage bottom (top pinned to z_mid_top)
 
     def place(mesh):
         m = mesh.copy()
         m.apply_scale(s)                           # uniform (all axes)
-        # asset bottom is at z=0; align the passage TOP (z=nat_h) to z_mid_top
-        m.apply_translation((cx, cy, z_mid_top - nat_h))
+        m.apply_translation((cx, cy, z_sb))        # asset bottom (z=0) -> z_sb
         return m
 
     walls_m = place(walls)
@@ -452,26 +461,36 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
         R = np.array([[np.cos(ang), -np.sin(ang), 0, 0],
                       [np.sin(ang), np.cos(ang), 0, 0],
                       [0, 0, 1, 0], [0, 0, 0, 1]])
-        # rotate about the ring axis (cx, cy)
-        b.apply_translation((-cx, -cy, 0))
+        b.apply_translation((-cx, -cy, 0))         # rotate about the ring axis (cx, cy)
         b.apply_transform(R)
         b.apply_translation((cx, cy, 0))
         blades.append(b)
     blades_m = trimesh.util.concatenate(blades)
 
-    r_in = meta["outletInnerR"] * s
-    r_out = meta["outletOuterR"] * s
-    z_contour_bottom = z_mid_top - nat_h
+    band = 0.03 * nat_h
     patches = {}
-    if delta > 1e-4:
-        collar = _annulus_walls(trimesh, np, r_in, r_out, z_mid_base, z_contour_bottom)
+    if z_sb < z_mid_base - 1e-4:
+        # taller than HLE -> clip everything below the middle-band base
+        walls_m = walls_m.slice_plane([0, 0, z_mid_base], [0, 0, 1], cap=False)
+        blades_before = len(blades_m.faces)
+        blades_m = blades_m.slice_plane([0, 0, z_mid_base], [0, 0, 1], cap=False)
+        if len(blades_m.faces) < blades_before:
+            sys.stderr.write("WARN: guide-vane clip to HLE truncates the blades\n")
+        z_out = z_mid_base
+        r_in, r_out = _ring_radii(np, walls_m, cx, cy, z_out, z_out + band)
+        patches["guide_vane_walls"] = walls_m
+    elif z_sb > z_mid_base + 1e-4:
+        # shorter than HLE -> straight collar from the band base up to z_sb
+        r_in, r_out = _ring_radii(np, walls_m, cx, cy, z_sb, z_sb + band)
+        collar = _annulus_walls(trimesh, np, r_in, r_out, z_mid_base, z_sb)
         collar.apply_translation((cx, cy, 0))
         patches["guide_vane_walls"] = trimesh.util.concatenate([walls_m, collar])
-        z_outlet = z_mid_base
+        z_out = z_mid_base
     else:
+        z_out = z_sb
+        r_in, r_out = _ring_radii(np, walls_m, cx, cy, z_sb, z_sb + band)
         patches["guide_vane_walls"] = walls_m
-        z_outlet = z_contour_bottom
-    outlet = _flat_annulus(trimesh, np, r_in, r_out, z_outlet)
+    outlet = _flat_annulus(trimesh, np, r_in, r_out, z_out)
     outlet.apply_translation((cx, cy, 0))
     patches["outlet"] = outlet
     patches["guide_vanes"] = blades_m
