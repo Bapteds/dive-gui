@@ -53,7 +53,7 @@ export const chamberFormSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['hollowLength'],
-        message: 'A hollow length is required for this variant.',
+        message: 'A cone length is required for this variant.',
       });
     }
   });

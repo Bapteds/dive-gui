@@ -51,8 +51,8 @@ export function ChamberInputsForm({
 
       <Field label="Cylinder design">
         <NativeSelect {...register('variant')}>
-          <option value="stepped">Stepped — three solid cylinders</option>
-          <option value="hollow">Hollow — open-top cup + central dome</option>
+          <option value="stepped">Closed generator — three solid cylinders</option>
+          <option value="hollow">With cone — open-top cone</option>
         </NativeSelect>
       </Field>
 
@@ -127,9 +127,9 @@ export function ChamberInputsForm({
       {variant === 'hollow' && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field
-            label="Hollow length (mm)"
+            label="Cone length (mm)"
             error={errors.hollowLength?.message}
-            helperText="Height of the open-top cup"
+            helperText="Height of the open-top cone"
           >
             <Input
               type="number"
@@ -140,7 +140,7 @@ export function ChamberInputsForm({
           <Field
             label="Wall thickness (mm)"
             error={errors.wallThickness?.message}
-            helperText="Cup walls + bottom (default 50)"
+            helperText="Cone walls + bottom (default 50)"
           >
             <Input
               type="number"

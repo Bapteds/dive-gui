@@ -85,7 +85,7 @@ PATCH_TYPES = {
     "outlet": "patch",
     "cylinder_walls": "wall",
     "walls": "wall",
-    "guide_vane_walls": "wall",
+    "hub_and_shroud": "wall",
     "guide_vanes": "wall",
 }
 
@@ -344,7 +344,7 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
     outlet = place(outlet_asset)
 
     return {
-        "guide_vane_walls": walls_m,
+        "hub_and_shroud": walls_m,
         "outlet": outlet,
         "guide_vanes": blades_m,
     }
@@ -632,7 +632,7 @@ def main():
             # supplies it. Keep the remaining BREP walls; append the vane patches.
             patches["outlet"] = []
             emit_order = ["inlet", "cylinder_walls", "walls",
-                          "guide_vane_walls", "outlet", "guide_vanes"]
+                          "hub_and_shroud", "outlet", "guide_vanes"]
 
         # --- GLB scene + manifest + edges ----------------------------------
         scene = trimesh.Scene()
