@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { CHAMBER_INPUT_RANGES, CHAMBER_VARIANTS, CHAMBER_WALL_THICKNESS_MM } from '@dive/shared';
+import {
+  CHAMBER_INPUT_RANGES,
+  CHAMBER_RELATIONS,
+  CHAMBER_VARIANTS,
+  CHAMBER_WALL_THICKNESS_MM,
+} from '@dive/shared';
 import type { ChamberVariant } from '@dive/shared';
 
 /**
@@ -15,8 +20,10 @@ export interface ChamberFormValues {
   x2: number;
   x3: number;
   variant: ChamberVariant;
-  /** Interdependency refinement on (default) or opted out (inputs-only). */
-  interdependency: boolean;
+  /** Master switch for all structural relations (hard override; off = X1–X3 only). */
+  relationsMaster: boolean;
+  /** Per-relation on/off, keyed by the driven output. Only read when the master is on. */
+  relations: Record<string, boolean>;
   /** Torque-foot orientation (deg): 0 = tangential, 90 = radial. */
   footAngleDeg: number;
   /** Replace the middle cylinder with a guide-vane ring (both variants). */
@@ -38,7 +45,8 @@ export const chamberFormSchema = z
     x2: z.number({ invalid_type_error: 'Enter a number' }).min(r.x2.min).max(r.x2.max),
     x3: z.number({ invalid_type_error: 'Enter a number' }).min(r.x3.min).max(r.x3.max),
     variant: z.enum(CHAMBER_VARIANTS),
-    interdependency: z.boolean(),
+    relationsMaster: z.boolean(),
+    relations: z.record(z.boolean()),
     guideVanes: z.boolean(),
     footAngleDeg: z
       .number({ invalid_type_error: 'Enter a number' })
@@ -64,7 +72,8 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   x2: 7.85,
   x3: 8,
   variant: 'stepped',
-  interdependency: true,
+  relationsMaster: true,
+  relations: Object.fromEntries(CHAMBER_RELATIONS.map((rel) => [rel.key, rel.defaultOn])),
   footAngleDeg: 40,
   guideVanes: false,
   lengthOverride: undefined,

@@ -12,34 +12,49 @@ function byKey(outputs: ChamberOutput[]) {
 }
 
 describe('computeChamberOutputs', () => {
-  it('evaluates the twelve outputs at a known input (fits + structural relations)', () => {
-    const outputs = computeChamberOutputs(BASE);
+  it('evaluates the twelve base X1–X3 fits when the master switch is off', () => {
+    const outputs = computeChamberOutputs({ ...BASE, relationsMaster: false });
     expect(outputs).toHaveLength(12);
     const m = byKey(outputs);
 
     // Linear: width = 3501.480486 - 0.01990289598*X1 - 104.4968392*X2 + 224.0149301*X3.
     expect(m.get('width')!.model).toBeCloseTo(4444.44, 1);
-    // Linear: dLast (highest-confidence output).
+    // Linear: dLast own fit (relation off).
     expect(m.get('dLast')!.model).toBeCloseTo(2439.31, 1);
-    // Structural: hMiddlePlusFirst (P11) = 2 x hMiddle (P10).
-    expect(m.get('hMiddlePlusFirst')!.model).toBeCloseTo(2 * m.get('hMiddle')!.final, 6);
+    // LEB falls back to its own POWER fit; height to its own LINEAR fit.
+    expect(m.get('hMiddlePlusFirst')!.form).toBe('power');
+    expect(m.get('height')!.form).toBe('linear');
 
-    // With no constraints, FINAL equals the model value. Fitted outputs read
-    // "within range"; the two derived outputs carry their structural-relation status.
-    const identityStatus: Record<string, string> = {
-      height: '= LEB + LEOW',
-      hMiddlePlusFirst: '= 2 × HLE',
-    };
+    // With relations and constraints off, FINAL equals the model and every output
+    // reads "within range".
     for (const o of outputs) {
       expect(o.final).toBe(o.model);
-      expect(o.status).toBe(identityStatus[o.key] ?? 'within range');
+      expect(o.status).toBe('within range');
     }
-    expect(m.get('height')!.form).toBe('identity');
-    expect(m.get('hMiddlePlusFirst')!.form).toBe('identity');
-    expect(m.get('height')!.model).toBeCloseTo(
+  });
+
+  it('applies every structural relation by default (all on)', () => {
+    const m = byKey(computeChamberOutputs(BASE));
+    // Height = LEB + LEOW, LEB = 2 x HLE.
+    expect(m.get('hMiddlePlusFirst')!.final).toBeCloseTo(2 * m.get('hMiddle')!.final, 6);
+    expect(m.get('height')!.final).toBeCloseTo(
       m.get('hMiddlePlusFirst')!.final + m.get('hLast')!.final,
       6,
     );
+    // Chamfer chain: BF1 = LF1, LF2 = LF1, BF2 = LF2, LT = LF1 + LF2.
+    expect(m.get('chamferWidth1')!.final).toBeCloseTo(m.get('chamferLength1')!.final, 6);
+    expect(m.get('chamferLength2')!.final).toBeCloseTo(m.get('chamferLength1')!.final, 6);
+    expect(m.get('chamferWidth2')!.final).toBeCloseTo(m.get('chamferLength2')!.final, 6);
+    expect(m.get('distFromEnd')!.final).toBeCloseTo(
+      m.get('chamferLength1')!.final + m.get('chamferLength2')!.final,
+      6,
+    );
+    // LE = 255.16 + 3.4954 x HLE.
+    expect(m.get('dLast')!.final).toBeCloseTo(255.16 + 3.4954 * m.get('hMiddle')!.final, 6);
+    // A relation-sourced value carries 'from relation' + its label.
+    expect(m.get('height')!.status).toBe('from relation');
+    expect(m.get('height')!.relationLabel).toBe('= LEB + LEOW');
+    expect(m.get('distFromEnd')!.relationLabel).toBe('= LF1 + LF2');
   });
 
   it('gives chamfer-1 length and width the same value (shared formula)', () => {
@@ -93,11 +108,11 @@ describe('computeChamberOutputs', () => {
     expect(m.get('distFromSideChamfer1')!.refined).toBe(false);
   });
 
-  it('derives Height as the exact sum of middle+first and last cylinder height (P2 = P11 + P12)', () => {
+  it('derives Height as the sum of middle+first and last cylinder height (P2 = P11 + P12)', () => {
     const m = byKey(computeChamberOutputs(BASE));
     const h = m.get('height')!;
-    expect(h.form).toBe('identity');
-    expect(h.status).toBe('= LEB + LEOW');
+    expect(h.status).toBe('from relation');
+    expect(h.relationLabel).toBe('= LEB + LEOW');
     expect(h.final).toBeCloseTo(m.get('hMiddlePlusFirst')!.final + m.get('hLast')!.final, 6);
   });
 
@@ -105,7 +120,8 @@ describe('computeChamberOutputs', () => {
     const m = byKey(computeChamberOutputs({ ...BASE, constraints: { hMiddle: { exact: 500 } } }));
     expect(m.get('hMiddle')!.final).toBe(500);
     expect(m.get('hMiddlePlusFirst')!.final).toBeCloseTo(1000, 6); // 2 x 500
-    expect(m.get('hMiddlePlusFirst')!.status).toBe('= 2 × HLE');
+    expect(m.get('hMiddlePlusFirst')!.status).toBe('from relation');
+    expect(m.get('hMiddlePlusFirst')!.relationLabel).toBe('= 2 × HLE');
     // Height = P11 + P12 picks up the change through the chain.
     expect(m.get('height')!.final).toBeCloseTo(1000 + m.get('hLast')!.final, 6);
   });
@@ -141,11 +157,11 @@ describe('computeChamberOutputs', () => {
     expect(m.get('height')!.status).toBe('capped at max');
   });
 
-  it('opts out of refinement when interdependency is false', () => {
+  it('opts out of refinement when the master relations switch is off', () => {
     const m = byKey(
       computeChamberOutputs({
         ...BASE,
-        interdependency: false,
+        relationsMaster: false,
         constraints: { distFromSideChamfer1: { exact: 2000 } },
       }),
     );
@@ -154,10 +170,22 @@ describe('computeChamberOutputs', () => {
     expect(m.get('width')!.model).toBeCloseTo(4444.44, 1);
   });
 
-  it('does not refine an unpaired output when an unrelated Exact is set', () => {
-    // dLast has no partner; setting width Exact must not refine it.
+  it('turns a single relation off via the per-relation map', () => {
+    // Master on, but LT's own relation disabled -> LT uses its own X1–X3 fit while
+    // the other relations (e.g. BF2 = LF2) stay on.
+    const m = byKey(computeChamberOutputs({ ...BASE, relations: { distFromEnd: false } }));
+    expect(m.get('distFromEnd')!.status).toBe('within range');
+    expect(m.get('distFromEnd')!.model).toBeCloseTo(2829.85, 1);
+    expect(m.get('chamferWidth2')!.status).toBe('from relation');
+  });
+
+  it('does not mark a combination output as refined for an unrelated Exact', () => {
+    // dLast's relation is a combination (= f(HLE)), not a refine; an unrelated
+    // width Exact must not mark it refined.
     const m = byKey(computeChamberOutputs({ ...BASE, constraints: { width: { exact: 4000 } } }));
     expect(m.get('dLast')!.refined).toBe(false);
-    expect(m.get('dLast')!.model).toBeCloseTo(2439.31, 1);
+    // With its own relation off it is the pure X1–X3 fit.
+    const off = byKey(computeChamberOutputs({ ...BASE, relations: { dLast: false } }));
+    expect(off.get('dLast')!.model).toBeCloseTo(2439.31, 1);
   });
 });

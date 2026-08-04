@@ -140,11 +140,12 @@ describe('Chamber Creation', () => {
     expect(rWidth.refined).toBe(true);
     expect(rWidth.model).toBeCloseTo(4249.44, 0);
 
-    // Opting out ignores the partner and falls back to the pure X1/X2/X3 fit.
+    // Turning the master relations switch off ignores the partner and falls back
+    // to the pure X1/X2/X3 fit.
     const optedOut = await request(app)
       .post('/api/v1/chamber/build')
       .set('Authorization', auth)
-      .send({ ...BUILD, interdependency: false, constraints: { distFromSideChamfer1: { exact: 2000 } } })
+      .send({ ...BUILD, relationsMaster: false, constraints: { distFromSideChamfer1: { exact: 2000 } } })
       .expect(200);
     const oWidth = (optedOut.body.outputs as { key: string; model: number; refined: boolean }[]).find(
       (o) => o.key === 'width',

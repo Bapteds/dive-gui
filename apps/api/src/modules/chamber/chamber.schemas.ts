@@ -25,9 +25,12 @@ export const chamberBuildSchema = z
     x2: z.number().finite().min(r.x2.min).max(r.x2.max),
     x3: z.number().finite().min(r.x3.min).max(r.x3.max),
     constraints: z.record(z.enum(CHAMBER_OUTPUT_KEYS), constraintSchema).optional(),
-    // Interdependency refinement (paired outputs sharpen from a known partner
-    // Exact). On by default; false opts out to a pure X1/X2/X3 fit.
-    interdependency: z.boolean().default(true),
+    // Master switch for ALL structural relations (hard override). false forces
+    // every relation off (pure X1/X2/X3 fits). On by default.
+    relationsMaster: z.boolean().default(true),
+    // Per-relation on/off, keyed by the driven output. Consulted only when
+    // relationsMaster is not false; a missing entry uses the relation's default.
+    relations: z.record(z.enum(CHAMBER_OUTPUT_KEYS), z.boolean()).optional(),
     // Torque-foot orientation (0–180): 0/180 = tangential, 90 = radial. The gusset
     // only forms at intermediate angles (~37–143°, not ~90°); default 40.
     footAngleDeg: z.number().finite().min(0).max(180).default(40),

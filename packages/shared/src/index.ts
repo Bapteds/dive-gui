@@ -2063,32 +2063,49 @@ export type ChamberOutputKey = (typeof CHAMBER_OUTPUT_KEYS)[number];
 /** Honesty labels for a parameter's leave-one-out cross-validation error. */
 export type ChamberConfidence = 'Good' | 'High' | 'Moderate' | 'Low';
 
-/** The functional form the fit chose for a parameter ('identity' = exact sum of others). */
-export type ChamberForm = 'linear' | 'power' | 'identity';
+/** The functional form of a parameter's own X1–X3 fit. */
+export type ChamberForm = 'linear' | 'power';
+
+/** A structural relation's kind: refine a fit from a measured partner, or a
+ * linear combination of other outputs' FINAL values. */
+export type ChamberRelationKind = 'refine' | 'combination';
 
 /**
- * Interdependency refinement for one output: when the PARTNER output's value is
- * known (entered as its Exact override), this output switches to a sharper linear
- * fit that also reads that known partner value — `a + b*X1 + c*X2 + d*X3 + p*P`.
- * Only two pairs gain real accuracy (width <-> chamfer-1 side distance, and
- * height <-> last-cylinder height); every other output is input-only. The
- * refinement is opt-out via `ChamberInput.interdependency`.
+ * A toggleable structural relation for one output. When ON it overrides the
+ * output's own X1–X3 fit (precedence: a Set-exact override still wins over it,
+ * and Min/Max still clamp after). Two shapes:
+ *  - 'refine': when the PARTNER output has a measured (Exact) value, use a sharper
+ *    fit a + b*X1 + c*X2 + d*X3 + p*(partner Exact). With no measured partner it
+ *    falls back to this output's own base fit, so toggling it on is harmless.
+ *  - 'combination': FINAL = constant + Σ coeff × partner.final (e.g. LEB = 2·HLE,
+ *    LT = LF1 + LF2, LE = 255.16 + 3.4954·HLE). Reads partners' FINAL values, so
+ *    an override on a partner propagates.
  */
-export interface ChamberRefinement {
-  /** The output whose known (Exact) value sharpens this one. */
-  partner: ChamberOutputKey;
-  /** Refined-fit coefficients: a + b*X1 + c*X2 + d*X3 + p*(known partner value). */
-  coeffs: { a: number; b: number; c: number; d: number; p: number };
-  /** Short human note (R^2 gain) for the UI. */
-  note: string;
+export interface ChamberRelation {
+  kind: ChamberRelationKind;
+  /** Whether the toggle defaults to on. */
+  defaultOn: boolean;
+  /** Toggle name and (for combinations) the Status label, e.g. '= LEB + LEOW'. */
+  label: string;
+  /** One-line explanation for the per-relation dropdown. */
+  description: string;
+  /** 'refine': the partner whose measured (Exact) value sharpens this output. */
+  partner?: ChamberOutputKey;
+  /** 'refine': sharper-fit coefficients a + b*X1 + c*X2 + d*X3 + p*(partner Exact). */
+  refineCoeffs?: { a: number; b: number; c: number; d: number; p: number };
+  /** 'combination': terms of constant + Σ coeff × partner.final. */
+  terms?: readonly { key: ChamberOutputKey; coeff: number }[];
+  /** 'combination': additive constant (default 0). */
+  constant?: number;
 }
 
 /**
- * The fitted model for one output. `linear`: a + b*X1 + c*X2 + d*X3.
- * `power`: k * X1^e1 * X2^e2 * X3^e3. `cvError` is the leave-one-out RMSE as a
- * percent of the mean (lower is better); `confidence` is its honesty label.
- * `refinement`, when present, is the sharper fit used once the partner output's
- * value is known (see ChamberRefinement).
+ * The fitted model for one output. `form` is its own X1–X3 fit — `linear`:
+ * a + b*X1 + c*X2 + d*X3, `power`: k * X1^e1 * X2^e2 * X3^e3 — always present and
+ * used when the output has no active relation. `cvError` is the leave-one-out
+ * RMSE as a percent of the mean (lower is better); `confidence` is its honesty
+ * label. `relation`, when present, is a toggleable structural relation that
+ * overrides the base fit while it is on.
  */
 export interface ChamberOutputSpec {
   key: ChamberOutputKey;
@@ -2096,21 +2113,11 @@ export interface ChamberOutputSpec {
   form: ChamberForm;
   cvError: number;
   confidence: ChamberConfidence;
-  /** Fit coefficients (absent for form 'identity', which is a sum of other outputs). */
-  coeffs?:
+  /** Base X1–X3 fit coefficients (every output has one). */
+  coeffs:
     | { a: number; b: number; c: number; d: number }
     | { k: number; e1: number; e2: number; e3: number };
-  refinement?: ChamberRefinement;
-  /**
-   * For form 'identity': this output's MODEL value is an exact linear combination
-   * of other outputs' FINAL values (Σ coeff × final) — a structural relation. E.g.
-   * height = 1·hMiddlePlusFirst + 1·hLast, or hMiddlePlusFirst = 2·hMiddle. The
-   * relation is the default, but the user may still override the FINAL with their
-   * own Min/Max/Exact (which then wins over the derived value).
-   */
-  identityOf?: readonly { key: ChamberOutputKey; coeff: number }[];
-  /** Status shown for an identity output when it is NOT overridden (e.g. '= LEB + LEOW'). */
-  identityStatus?: ChamberStatus;
+  relation?: ChamberRelation;
 }
 
 /**
@@ -2119,41 +2126,95 @@ export interface ChamberOutputSpec {
  * truth for the model on both the client (live preview) and the server.
  */
 export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
+  // P1: width. Refines from a measured B1 (P3).
   { key: 'width', label: 'B Kammer', form: 'linear', cvError: 18.8, confidence: 'Moderate',
     coeffs: { a: 3501.480486, b: -0.01990289598, c: -104.4968392, d: 224.0149301 },
-    refinement: { partner: 'distFromSideChamfer1', note: 'auto-refines when B1 is known (R² 0.51 → 0.81)',
-      coeffs: { a: 1101.528235, b: 0.5004560281, c: -19.97360475, d: 78.2136825, p: 0.976665205 } } },
-  // P2 = P11 + P12: height defaults to the sum of the middle+first and last
-  // cylinder heights, but its Min/Max/Exact override (if set) wins.
-  { key: 'height', label: 'H Kammer', form: 'identity', cvError: 28.6, confidence: 'Moderate',
-    identityOf: [{ key: 'hMiddlePlusFirst', coeff: 1 }, { key: 'hLast', coeff: 1 }],
-    identityStatus: '= LEB + LEOW' },
+    relation: { kind: 'refine', defaultOn: true, partner: 'distFromSideChamfer1',
+      label: 'refine from B1', description: 'Sharpen B Kammer from a measured B1 (its Exact); R² 0.51 → 0.81.',
+      refineCoeffs: { a: 1101.528235, b: 0.5004560281, c: -19.97360475, d: 78.2136825, p: 0.976665205 } } },
+  // P2: height. Own linear fit; relation = LEB + LEOW.
+  { key: 'height', label: 'H Kammer', form: 'linear', cvError: 28.6, confidence: 'Moderate',
+    coeffs: { a: -2655.561158, b: 3.469850592, c: 500.9913764, d: -178.9974433 },
+    relation: { kind: 'combination', defaultOn: true, label: '= LEB + LEOW',
+      description: 'H Kammer = LEB + LEOW (middle+first plus last cylinder height).',
+      terms: [{ key: 'hMiddlePlusFirst', coeff: 1 }, { key: 'hLast', coeff: 1 }] } },
+  // P3: distFromSideChamfer1. Refines from a measured B Kammer (P1).
   { key: 'distFromSideChamfer1', label: 'B1', form: 'linear', cvError: 32.0, confidence: 'Low',
     coeffs: { a: 1913.645229, b: -0.1144287145, c: -38.895132, d: 115.1237973 },
-    refinement: { partner: 'width', note: 'auto-refines when B Kammer is known (R² 0.09 → 0.62)',
-      coeffs: { a: -417.365864, b: -0.2106437417, c: 14.17960421, d: -32.6306581, p: 0.7098088714 } } },
+    relation: { kind: 'refine', defaultOn: true, partner: 'width',
+      label: 'refine from B Kammer', description: 'Sharpen B1 from a measured B Kammer (its Exact); R² 0.09 → 0.62.',
+      refineCoeffs: { a: -417.365864, b: -0.2106437417, c: 14.17960421, d: -32.6306581, p: 0.7098088714 } } },
+  // P4: chamferLength1. No relation.
   { key: 'chamferLength1', label: 'LF1', form: 'linear', cvError: 20.6, confidence: 'Moderate',
     coeffs: { a: -2.009758353, b: 0.9116908157, c: 16.38088606, d: -19.61930855 } },
+  // P5: chamferWidth1. relation = LF1.
   { key: 'chamferWidth1', label: 'BF1', form: 'linear', cvError: 20.6, confidence: 'Moderate',
-    coeffs: { a: -2.009758353, b: 0.9116908157, c: 16.38088606, d: -19.61930855 } },
+    coeffs: { a: -2.009758353, b: 0.9116908157, c: 16.38088606, d: -19.61930855 },
+    relation: { kind: 'combination', defaultOn: true, label: '= LF1',
+      description: 'BF1 = LF1 (chamfer 1 width equals its length).',
+      terms: [{ key: 'chamferLength1', coeff: 1 }] } },
+  // P6: chamferLength2. relation = LF1 (both chamfers equal).
   { key: 'chamferLength2', label: 'LF2', form: 'linear', cvError: 18.6, confidence: 'Moderate',
-    coeffs: { a: 810.7255952, b: 0.1366396239, c: -70.24908474, d: 55.86948952 } },
+    coeffs: { a: 810.7255952, b: 0.1366396239, c: -70.24908474, d: 55.86948952 },
+    relation: { kind: 'combination', defaultOn: true, label: '= LF1',
+      description: 'LF2 = LF1 (both chamfers equal).',
+      terms: [{ key: 'chamferLength1', coeff: 1 }] } },
+  // P7: chamferWidth2. relation = LF2.
   { key: 'chamferWidth2', label: 'BF2', form: 'linear', cvError: 22.0, confidence: 'Moderate',
-    coeffs: { a: 1207.055875, b: -0.137521288, c: -128.8078895, d: 79.76891504 } },
+    coeffs: { a: 1207.055875, b: -0.137521288, c: -128.8078895, d: 79.76891504 },
+    relation: { kind: 'combination', defaultOn: true, label: '= LF2',
+      description: 'BF2 = LF2 (chamfer 2 width equals its length).',
+      terms: [{ key: 'chamferLength2', coeff: 1 }] } },
+  // P8: distFromEnd. relation = LF1 + LF2 (chamfered part).
   { key: 'distFromEnd', label: 'LT', form: 'linear', cvError: 27.2, confidence: 'Moderate',
-    coeffs: { a: -359.9271681, b: 2.188772589, c: 48.83409566, d: -45.9108988 } },
+    coeffs: { a: -359.9271681, b: 2.188772589, c: 48.83409566, d: -45.9108988 },
+    relation: { kind: 'combination', defaultOn: true, label: '= LF1 + LF2',
+      description: 'LT = LF1 + LF2 (the chamfered part).',
+      terms: [{ key: 'chamferLength1', coeff: 1 }, { key: 'chamferLength2', coeff: 1 }] } },
+  // P9: dLast. relation = 255.16 + 3.4954 × HLE.
   { key: 'dLast', label: 'LE (Durchmesser)', form: 'linear', cvError: 8.1, confidence: 'Good',
-    coeffs: { a: 221.4522145, b: 1.498949106, c: -9.02505593, d: 14.40321366 } },
+    coeffs: { a: 221.4522145, b: 1.498949106, c: -9.02505593, d: 14.40321366 },
+    relation: { kind: 'combination', defaultOn: true, label: '= f(HLE)',
+      description: 'LE = 255.16 + 3.4954 × HLE.',
+      constant: 255.16, terms: [{ key: 'hMiddle', coeff: 3.4954 }] } },
+  // P10: hMiddle. No relation.
   { key: 'hMiddle', label: 'HLE', form: 'linear', cvError: 5.8, confidence: 'High',
     coeffs: { a: 17.17464869, b: 0.435873881, c: -6.126007422, d: 2.320487817 } },
-  // LEB = 2 x HLE (structural relation): middle+first height defaults to twice the
-  // middle-cylinder height (out-of-sample MAPE 8.4% vs 11.3% for the old power
-  // fit), but its Min/Max/Exact override (if set) wins.
-  { key: 'hMiddlePlusFirst', label: 'LEB', form: 'identity', cvError: 8.4, confidence: 'Good',
-    identityOf: [{ key: 'hMiddle', coeff: 2 }], identityStatus: '= 2 × HLE' },
+  // P11: hMiddlePlusFirst. Own power fit; relation = 2 × HLE.
+  { key: 'hMiddlePlusFirst', label: 'LEB', form: 'power', cvError: 24.9, confidence: 'Moderate',
+    coeffs: { k: 0.0000000238913334, e1: 3.631996617, e2: 0.647878341, e3: -1.281050007 },
+    relation: { kind: 'combination', defaultOn: true, label: '= 2 × HLE',
+      description: 'LEB = 2 × HLE (middle+first height is twice the middle height).',
+      terms: [{ key: 'hMiddle', coeff: 2 }] } },
+  // P12: hLast. No relation.
   { key: 'hLast', label: 'LEOW', form: 'linear', cvError: 38.9, confidence: 'Low',
     coeffs: { a: 506.0051287, b: -0.4315856534, c: 312.7206124, d: 47.41062013 } },
 ];
+
+/** UI descriptor for one toggleable relation (derived from the specs). */
+export interface ChamberRelationInfo {
+  /** The output the relation drives (also the toggle's id in ChamberInput.relations). */
+  key: ChamberOutputKey;
+  /** The output's parameter label, e.g. 'H Kammer'. */
+  label: string;
+  /** The relation's short label, e.g. '= LEB + LEOW' or 'refine from B1'. */
+  relationLabel: string;
+  /** One-line explanation for the dropdown. */
+  description: string;
+  /** Default toggle state. */
+  defaultOn: boolean;
+}
+
+/** The toggleable relations, in output order — the per-relation dropdown iterates this. */
+export const CHAMBER_RELATIONS: readonly ChamberRelationInfo[] = CHAMBER_OUTPUT_SPECS.filter(
+  (s) => s.relation,
+).map((s) => ({
+  key: s.key,
+  label: s.label,
+  relationLabel: s.relation!.label,
+  description: s.relation!.description,
+  defaultOn: s.relation!.defaultOn,
+}));
 
 /** An optional per-output override: pin an Exact value, or clamp to Min / Max. */
 export interface ChamberConstraint {
@@ -2186,11 +2247,17 @@ export interface ChamberInput {
   x3: number;
   constraints?: Partial<Record<ChamberOutputKey, ChamberConstraint>>;
   /**
-   * Interdependency refinement. When true (the default), a paired output is
-   * sharpened by its partner's known (Exact) value. Set false to opt out and
-   * make every parameter depend on X1/X2/X3 only.
+   * Master switch for ALL structural relations (a hard override). When false,
+   * every relation is forced off and each output uses its own X1/X2/X3 fit,
+   * regardless of `relations`. Default true.
    */
-  interdependency?: boolean;
+  relationsMaster?: boolean;
+  /**
+   * Per-relation on/off, keyed by the driven output. Only consulted when
+   * `relationsMaster` is not false. A missing entry uses the relation's own
+   * default (all ship on). Keys without a relation are ignored.
+   */
+  relations?: Partial<Record<ChamberOutputKey, boolean>>;
   /** Cylinder design (default 'stepped'). */
   variant?: ChamberVariant;
   /**
@@ -2214,15 +2281,16 @@ export interface ChamberInput {
   wallThickness?: number;
 }
 
-/** What the FINAL clamp did to a model value, mirroring the calculator. */
+/** What the FINAL clamp did to a model value, mirroring the calculator. A value
+ * sourced from an active structural relation reads 'from relation' and carries
+ * the human relation label in `ChamberOutput.relationLabel`. */
 export type ChamberStatus =
   | 'within range'
   | 'capped at max'
   | 'raised to min'
   | 'set exact'
   | '! min>max'
-  | '= LEB + LEOW'
-  | '= 2 × HLE';
+  | 'from relation';
 
 /** One computed output: the raw model value, the clamped FINAL, and metadata. */
 export interface ChamberOutput {
@@ -2234,18 +2302,20 @@ export interface ChamberOutput {
   /** Value after the Min / Max / Exact override (mm) — what the builder uses. */
   final: number;
   status: ChamberStatus;
+  /** Present when status is 'from relation': the relation label, e.g. '= LEB + LEOW'. */
+  relationLabel?: string;
   cvError: number;
   confidence: ChamberConfidence;
   /**
-   * True when the raw model value came from the interdependency-refined fit
-   * (i.e. this output's partner had a known Exact value and refinement was on).
+   * True when the model value came from an active 'refine' relation (this output's
+   * partner had a measured Exact value and the relation was on).
    */
   refined: boolean;
 }
 
 /**
- * Evaluate one output's fitted formula at (x1, x2, x3). When `partnerKnown` is
- * provided and the spec has a refinement, the sharper interdependency fit
+ * Evaluate one output's own X1–X3 fit at (x1, x2, x3). When `partnerKnown` is
+ * provided and the spec has a 'refine' relation, the sharper fit
  * (a + b*X1 + c*X2 + d*X3 + p*partnerKnown) is used instead of the base fit.
  */
 export function evalChamberSpec(
@@ -2255,8 +2325,8 @@ export function evalChamberSpec(
   x3: number,
   partnerKnown?: number,
 ): number {
-  if (spec.refinement && partnerKnown != null) {
-    const r = spec.refinement.coeffs;
+  if (spec.relation?.kind === 'refine' && spec.relation.refineCoeffs && partnerKnown != null) {
+    const r = spec.relation.refineCoeffs;
     return r.a + r.b * x1 + r.c * x2 + r.d * x3 + r.p * partnerKnown;
   }
   if (spec.form === 'power') {
@@ -2294,22 +2364,22 @@ function resolveChamberFinal(
  */
 export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
   const { x1, x2, x3, constraints } = input;
-  // Interdependency is on unless explicitly disabled (opt-out).
-  const interdependency = input.interdependency !== false;
-  const byKey = new Map<ChamberOutputKey, ChamberOutput>();
+  // Hard master override: when false, EVERY relation is off. Otherwise each
+  // relation follows its per-key toggle, defaulting to its own defaultOn.
+  const masterOn = input.relationsMaster !== false;
+  const relationOn = (spec: ChamberOutputSpec): boolean =>
+    masterOn && !!spec.relation && (input.relations?.[spec.key] ?? spec.relation.defaultOn);
 
-  // Pass 1: every fitted output (linear/power). Identity outputs are deferred to
-  // pass 2 because they read other outputs' resolved FINAL values.
-  for (const spec of CHAMBER_OUTPUT_SPECS) {
-    if (spec.form === 'identity') continue;
-    // A paired output refines only when its partner has a known Exact value AND
-    // refinement is enabled; otherwise it stays a pure X1/X2/X3 fit.
-    const partnerKnown =
-      interdependency && spec.refinement ? constraints?.[spec.refinement.partner]?.exact : undefined;
-    const refined = partnerKnown != null;
-    const model = evalChamberSpec(spec, x1, x2, x3, partnerKnown);
+  const byKey = new Map<ChamberOutputKey, ChamberOutput>();
+  const setOutput = (
+    spec: ChamberOutputSpec,
+    model: number,
+    baseStatus: ChamberStatus,
+    refined: boolean,
+    relationLabel?: string,
+  ) => {
     const con = constraints?.[spec.key] ?? {};
-    const { final, status } = resolveChamberFinal(model, con, 'within range');
+    const { final, status } = resolveChamberFinal(model, con, baseStatus);
     byKey.set(spec.key, {
       key: spec.key,
       label: spec.label,
@@ -2317,39 +2387,45 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
       model,
       final,
       status,
+      relationLabel: status === 'from relation' ? relationLabel : undefined,
       cvError: spec.cvError,
       confidence: spec.confidence,
       refined,
     });
+  };
+
+  // Pass 1: outputs whose value does NOT need another output's FINAL — i.e. no
+  // relation, an off relation, or a 'refine' relation (which reads a partner's
+  // input Exact, not its computed FINAL). 'combination' relations that are ON are
+  // deferred to pass 2. A refine relation is harmless when on but unmeasured: it
+  // falls back to the base fit.
+  for (const spec of CHAMBER_OUTPUT_SPECS) {
+    const on = relationOn(spec);
+    if (on && spec.relation!.kind === 'combination') continue; // pass 2
+    const partnerKnown =
+      on && spec.relation!.kind === 'refine' && spec.relation!.partner
+        ? constraints?.[spec.relation!.partner]?.exact
+        : undefined;
+    const refined = partnerKnown != null;
+    const model = evalChamberSpec(spec, x1, x2, x3, partnerKnown);
+    setOutput(spec, model, 'within range', refined);
   }
 
-  // Pass 2: identity outputs — the MODEL is an exact linear combination of other
-  // outputs' FINAL values (Σ coeff × final); the user may still override the FINAL
-  // with their own Min/Max/Exact (defaulting to the identity status label when no
-  // override is set). They can chain (P11 = 2·P10, then P2 = P11 + P12), so resolve
-  // to a fixpoint: keep emitting any identity whose inputs are all resolved until
-  // none remain. The chain reads each identity's FINAL, so an override propagates.
-  const identities = CHAMBER_OUTPUT_SPECS.filter((s) => s.form === 'identity' && s.identityOf);
+  // Pass 2: ON 'combination' relations — MODEL = constant + Σ coeff × partner.final.
+  // They can chain (LEB = 2·HLE, then H Kammer = LEB + LEOW), so resolve to a
+  // fixpoint: emit any whose terms are all resolved until none remain. Reading each
+  // term's FINAL means an override on a partner (or a chained relation) propagates.
+  const combos = CHAMBER_OUTPUT_SPECS.filter((s) => relationOn(s) && s.relation!.kind === 'combination');
   let progressed = true;
   while (progressed) {
     progressed = false;
-    for (const spec of identities) {
+    for (const spec of combos) {
       if (byKey.has(spec.key)) continue;
-      if (!spec.identityOf!.every((t) => byKey.has(t.key))) continue;
-      const model = spec.identityOf!.reduce((sum, t) => sum + t.coeff * byKey.get(t.key)!.final, 0);
-      const con = constraints?.[spec.key] ?? {};
-      const { final, status } = resolveChamberFinal(model, con, spec.identityStatus ?? 'within range');
-      byKey.set(spec.key, {
-        key: spec.key,
-        label: spec.label,
-        form: spec.form,
-        model,
-        final,
-        status,
-        cvError: spec.cvError,
-        confidence: spec.confidence,
-        refined: false,
-      });
+      const rel = spec.relation!;
+      if (!rel.terms!.every((t) => byKey.has(t.key))) continue;
+      const model =
+        (rel.constant ?? 0) + rel.terms!.reduce((sum, t) => sum + t.coeff * byKey.get(t.key)!.final, 0);
+      setOutput(spec, model, 'from relation', false, rel.label);
       progressed = true;
     }
   }

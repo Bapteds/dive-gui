@@ -18,15 +18,16 @@ describe('ChamberOutputsTable', () => {
     expect(screen.getByText(/enter valid inputs/i)).toBeInTheDocument();
   });
 
-  it('renders a row per output with its label and within-range status', () => {
+  it('renders a row per output with its label and status', () => {
     render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />);
     expect(screen.getByText('B Kammer')).toBeInTheDocument();
     expect(screen.getByText('LE (Durchmesser)')).toBeInTheDocument();
-    // 10 fitted outputs read "within range"; H Kammer (= LEB + LEOW) and LEB
-    // (= 2 × HLE) are derived structural relations.
-    expect(screen.getAllByText('within range')).toHaveLength(OUTPUTS.length - 2);
+    // Outputs with no active relation read "within range"; relation-driven outputs
+    // show their relation label. Both counts come from the shared model.
+    const withinRange = OUTPUTS.filter((o) => o.status === 'within range').length;
+    expect(screen.getAllByText('within range')).toHaveLength(withinRange);
     expect(screen.getByText('= LEB + LEOW')).toBeInTheDocument();
-    expect(screen.getByText('= 2 × HLE')).toBeInTheDocument();
+    expect(screen.getByText('= LF1 + LF2')).toBeInTheDocument();
   });
 
   it('reports a Min edit up as a numeric constraint change', () => {

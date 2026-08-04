@@ -1,10 +1,19 @@
 import type { FormEventHandler } from 'react';
 import type { FieldErrors, UseFormRegister } from 'react-hook-form';
-import { CHAMBER_INPUT_RANGES, type ChamberVariant } from '@dive/shared';
+import { ChevronDown } from 'lucide-react';
+import { CHAMBER_INPUT_RANGES, CHAMBER_RELATIONS, type ChamberVariant } from '@dive/shared';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { NativeSelect } from '@/components/ui/native-select';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import type { ChamberFormValues } from './chamberForm';
 
 /**
@@ -27,6 +36,9 @@ export function ChamberInputsForm({
   isBuilding,
   variant,
   autoLengthMm,
+  relationsMaster,
+  relations,
+  onRelationChange,
 }: {
   register: UseFormRegister<ChamberFormValues>;
   errors: FieldErrors<ChamberFormValues>;
@@ -34,7 +46,15 @@ export function ChamberInputsForm({
   isBuilding: boolean;
   variant: ChamberVariant;
   autoLengthMm: number | null;
+  /** Current master switch state (governs whether individual relations apply). */
+  relationsMaster: boolean;
+  /** Current per-relation on/off, keyed by the driven output. */
+  relations: Record<string, boolean>;
+  /** Toggle one relation on/off. */
+  onRelationChange: (key: string, on: boolean) => void;
 }) {
+  const relOn = (key: string, fallback: boolean) => relations[key] ?? fallback;
+  const activeCount = CHAMBER_RELATIONS.filter((rel) => relOn(rel.key, rel.defaultOn)).length;
   return (
     <form
       onSubmit={onSubmit}
@@ -56,20 +76,62 @@ export function ChamberInputsForm({
         </NativeSelect>
       </Field>
 
-      <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-bg p-3">
-        <input
-          type="checkbox"
-          {...register('interdependency')}
-          className="mt-0.5 size-4 shrink-0 cursor-pointer rounded-sm border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40"
-        />
-        <span className="text-sm">
-          <span className="font-medium text-text">Interdependency refinement</span>
-          <span className="mt-0.5 block text-text-secondary">
-            Sharpen the linked pair (B Kammer ↔ B1) from a known Exact value. Uncheck to
-            depend on X1–X3 only.
+      <div className="rounded-md border border-border bg-bg p-3">
+        <label className="flex cursor-pointer items-start gap-3">
+          <input
+            type="checkbox"
+            {...register('relationsMaster')}
+            className="mt-0.5 size-4 shrink-0 cursor-pointer rounded-sm border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40"
+          />
+          <span className="text-sm">
+            <span className="font-medium text-text">Structural relations</span>
+            <span className="mt-0.5 block text-text-secondary">
+              Link parameters to each other (e.g. LT = LF1 + LF2, LEB = 2 × HLE). Uncheck to
+              make every parameter depend on X1–X3 only.
+            </span>
           </span>
-        </span>
-      </label>
+        </label>
+
+        <div className="mt-3 pl-7">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild disabled={!relationsMaster}>
+              <button
+                type="button"
+                className="inline-flex w-full items-center justify-between gap-2 rounded-sm border border-border bg-surface px-3 py-1.5 text-sm text-text transition-colors duration-fast ease-out hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <span>
+                  Configure relations{' '}
+                  <span className="text-text-secondary">
+                    ({relationsMaster ? activeCount : 0}/{CHAMBER_RELATIONS.length} on)
+                  </span>
+                </span>
+                <ChevronDown className="size-4 text-text-secondary" aria-hidden="true" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-[20rem]">
+              <DropdownMenuLabel>Toggle individual relations</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {CHAMBER_RELATIONS.map((rel) => (
+                <DropdownMenuCheckboxItem
+                  key={rel.key}
+                  checked={relOn(rel.key, rel.defaultOn)}
+                  onCheckedChange={(c) => onRelationChange(rel.key, c === true)}
+                  onSelect={(e) => e.preventDefault()}
+                  className="items-start"
+                >
+                  <span className="flex flex-col gap-0.5">
+                    <span className="text-sm text-text">
+                      <span className="font-medium">{rel.label}</span>{' '}
+                      <span className="text-text-secondary">{rel.relationLabel}</span>
+                    </span>
+                    <span className="text-xs text-text-secondary">{rel.description}</span>
+                  </span>
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
 
       <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-bg p-3">
         <input

@@ -39,8 +39,7 @@ const STATUS_STYLES: Record<ChamberStatus, string> = {
   'capped at max': 'text-accent-hover',
   'raised to min': 'text-accent-hover',
   '! min>max': 'text-danger',
-  '= LEB + LEOW': 'text-primary',
-  '= 2 × HLE': 'text-primary',
+  'from relation': 'text-primary',
 };
 
 /** Format a millimetre value for display (1 decimal, tabular). */
@@ -121,7 +120,7 @@ export function ChamberOutputsTable({
           <TableBody>
             {outputs.map((o) => {
               const con = constraints[o.key] ?? {};
-              // Identity outputs (Height = P11 + P12, LEB = 2 × HLE) default to their
+              // Relation-driven outputs (e.g. Height = LEB + LEOW) default to their
               // derived value but can be overridden with Min/Max/Exact like any other.
               return (
                 <TableRow key={o.key}>
@@ -162,7 +161,9 @@ export function ChamberOutputsTable({
                   </TableCell>
                   <TableCell className="text-right font-semibold text-text">{mm(o.final)}</TableCell>
                   <TableCell>
-                    <span className={cn('text-xs', STATUS_STYLES[o.status])}>{o.status}</span>
+                    <span className={cn('text-xs', STATUS_STYLES[o.status])}>
+                      {o.status === 'from relation' ? o.relationLabel : o.status}
+                    </span>
                   </TableCell>
                   <TableCell>
                     <span

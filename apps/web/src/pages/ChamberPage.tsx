@@ -35,6 +35,7 @@ export function ChamberPage() {
     register,
     handleSubmit,
     watch,
+    setValue,
     formState: { errors },
   } = useForm<ChamberFormValues>({
     resolver: zodResolver(chamberFormSchema),
@@ -49,14 +50,15 @@ export function ChamberPage() {
   const build = useBuildChamber();
 
   const values = watch();
+  const relationsKey = JSON.stringify(values.relations);
   const outputs = useMemo<ChamberOutput[] | null>(() => {
-    const { x1, x2, x3, interdependency } = values;
+    const { x1, x2, x3, relationsMaster, relations } = values;
     if (![x1, x2, x3].every((v) => typeof v === 'number' && Number.isFinite(v))) {
       return null;
     }
-    return computeChamberOutputs({ x1, x2, x3, constraints, interdependency });
+    return computeChamberOutputs({ x1, x2, x3, constraints, relationsMaster, relations });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [values.x1, values.x2, values.x3, values.interdependency, constraints]);
+  }, [values.x1, values.x2, values.x3, values.relationsMaster, relationsKey, constraints]);
 
   // Auto length shown on the (blank) length field = 2 x the final width (mm).
   const widthFinal = outputs?.find((o) => o.key === 'width')?.final ?? null;
@@ -115,6 +117,11 @@ export function ChamberPage() {
             isBuilding={build.isPending}
             variant={values.variant}
             autoLengthMm={autoLengthMm}
+            relationsMaster={values.relationsMaster}
+            relations={values.relations}
+            onRelationChange={(key, on) =>
+              setValue(`relations.${key}` as `relations.${string}`, on, { shouldDirty: true })
+            }
           />
           <div className="rounded-md border border-border bg-surface p-5 shadow-sm">
             <h2 className="text-lg font-semibold text-text">Export</h2>
