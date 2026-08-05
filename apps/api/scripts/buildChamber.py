@@ -310,21 +310,6 @@ def vane_scale_and_height(meta, d_last):
     return s, meta["height"] * s
 
 
-def _open_cylinder(np, trimesh, cx, cy, r, z0, z1, n=128):
-    """A vertical open cylinder WALL (side faces only) of radius r about (cx, cy),
-    from z0 to z1 — used to extend the hub / shroud straight down to the floor."""
-    th = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)
-    xs, ys = cx + r * np.cos(th), cy + r * np.sin(th)
-    verts = np.vstack([np.column_stack([xs, ys, np.full(n, z0)]),
-                       np.column_stack([xs, ys, np.full(n, z1)])])
-    faces = []
-    for i in range(n):
-        j = (i + 1) % n
-        faces.append([i, n + i, n + j])
-        faces.append([i, n + j, j])
-    return trimesh.Trimesh(vertices=verts, faces=np.array(faces, dtype=np.int64), process=False)
-
-
 def _flat_annulus(np, trimesh, cx, cy, z, r_in, r_out, n=128):
     """A flat annular ring (a disk with a central hole) at height z about (cx, cy)
     — the outlet face between the hub (inner) and shroud (outer) at the floor."""
@@ -922,24 +907,19 @@ def main():
             vane_patches = make_vane_patches(
                 trimesh, np, target_x, target_y, z_mid_base, z_mid_top, d_last,
                 vane_angle_deg=vane_pitch)
-            # The hub and shroud keep their natural CURVED shape and are EXTENDED
-            # straight down from the passage bottom to the box floor (open cylinder
-            # walls at the hub-inner and shroud-outer rims). The passage between them
-            # runs to the floor and the OUTLET is the annulus between the two rims
-            # at the floor — flow exits at the ground.
-            # #5: the outlet plane and the two duct bottoms land on the TRUE box floor
-            # (-height/2), not on z_floor (= box floor - FLOOR_OVERCUT). The overcut is a
-            # builder trick to open the pocket through the box wall; the outlet must
-            # coincide with the box-floor boundary so the mesher sees one flush plane.
+            # The hub and shroud keep their natural CURVED shape; the curved throat /
+            # funnel meets the box floor through the OCC annular-slot walls, not extra
+            # mesh. The passage between the two rims runs to the floor and the OUTLET is
+            # the annulus between them at the floor — flow exits at the ground.
+            # Ducts (de-doubling): the vertical duct below the natural passage bottom is
+            # NOT added as mesh. The OCC annular-slot walls (cylinder_walls at r = ri and
+            # r = ro) already span the box floor up to the first-cyl top, so they ARE the
+            # duct walls; the mesh throat/funnel simply meet them at the natural passage
+            # bottom. Adding _open_cylinder ducts here would duplicate those OCC walls.
+            # #5: the outlet plane lands on the TRUE box floor (-height/2), not on z_floor
+            # (= box floor - FLOOR_OVERCUT, a builder trick to open the pocket through the
+            # box wall), so it coincides with the box-floor boundary for meshing.
             z_box_floor = -height / 2
-            _hub_zmin = float(vane_patches["hub"].vertices[:, 2].min())
-            _shr_zmin = float(vane_patches["shroud"].vertices[:, 2].min())
-            _hub_ext = _open_cylinder(np, trimesh, target_x, target_y,
-                                      vane_outlet_ri, z_box_floor, _hub_zmin)
-            _shr_ext = _open_cylinder(np, trimesh, target_x, target_y,
-                                      vane_outlet_ro, z_box_floor, _shr_zmin)
-            vane_patches["hub"] = trimesh.util.concatenate([vane_patches["hub"], _hub_ext])
-            vane_patches["shroud"] = trimesh.util.concatenate([vane_patches["shroud"], _shr_ext])
             vane_patches["outlet"] = _flat_annulus(np, trimesh, target_x, target_y,
                                                    z_box_floor, vane_outlet_ri, vane_outlet_ro)
             # No BREP middle cylinder now, so there is no BREP outlet; the vane mesh
