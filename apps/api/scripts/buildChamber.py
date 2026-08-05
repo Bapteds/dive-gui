@@ -360,6 +360,19 @@ def _split_hub_shroud(np, walls):
     return hub, shroud
 
 
+def _drop_flat_cap(np, mesh, z_asset, tol=0.01, nz_min=0.7):
+    """Return `mesh` with its flat horizontal CAP removed: faces whose centroid asset-z
+    is within `tol` of z_asset AND whose normal is near-vertical (|n_z| >= nz_min). Used
+    to drop the hub ROOF (at asset z = height) and the shroud FLOOR (at asset z = its
+    top) so the coincident CAD faces (upper-cyl bottom / first-cyl top) are the SINGLE
+    roof/floor surface — no doubled mesh cap. The curved throat/funnel (near-vertical
+    normals) is kept. Done on the RAW asset (normals are invariant under place())."""
+    fc = mesh.vertices[mesh.faces].mean(axis=1)
+    nz = mesh.face_normals[:, 2]
+    keep = np.where(~((np.abs(fc[:, 2] - z_asset) <= tol) & (np.abs(nz) >= nz_min)))[0]
+    return mesh.submesh([keep], append=True)
+
+
 def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_angle_deg=0.0):
     """Return {patch_name: Trimesh} for the guide-vane throat: the SOLID vane
     surfaces (blades + contoured hub/shroud walls + the outlet annulus) that sit
@@ -442,11 +455,22 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
     # uniform place() scale + translate).
     hub_walls, shroud_walls = _split_hub_shroud(np, walls)
 
-    # The SHROUD stays fixed; place it once (reused in the return) and derive its
-    # FLOOR profile f(r) = top-surface z per radius. The shroud is a surface of
-    # revolution, so the floor the blades rest on depends only on radius from the
-    # ring axis. Reading it off the ACTUALLY-PLACED shroud makes the blade drape below
-    # track HLE (via the vertical scale sz) and diameter (via s) automatically.
+    # De-doubling (#3/#4): the hub ROOF (flat, asset z = height) coincides with the
+    # upper-cylinder CAD bottom, and the shroud FLOOR (flat, asset z = its top) with
+    # the first-cylinder CAD top. Drop those flat mesh caps and let the CAD faces be the
+    # SINGLE roof / floor. The curved hub throat and shroud funnel are kept. Dropping the
+    # roof also removes the old ballooned roof (place_throat pushed it out past the
+    # upper-cyl radius). The FULL shroud (with floor) is still used below to derive the
+    # blade-drape profile; only the EMITTED shroud loses its flat floor.
+    hub_walls_emit = _drop_flat_cap(np, hub_walls, float(hub_walls.vertices[:, 2].max()))
+    shroud_floor_z_asset = float(shroud_walls.vertices[:, 2].max())
+    shroud_walls_emit = _drop_flat_cap(np, shroud_walls, shroud_floor_z_asset)
+
+    # The SHROUD stays fixed; place the FULL shroud once to derive its FLOOR profile
+    # f(r) = top-surface z per radius. The shroud is a surface of revolution, so the
+    # floor the blades rest on depends only on radius from the ring axis. Reading it off
+    # the ACTUALLY-PLACED shroud makes the blade drape below track HLE (via the vertical
+    # scale sz) and diameter (via s) automatically.
     shroud_placed = place(shroud_walls)
     _sv = np.asarray(shroud_placed.vertices, dtype=float)
     _sr = np.hypot(_sv[:, 0] - cx, _sv[:, 1] - cy)
@@ -521,8 +545,10 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
     outlet = place_throat(outlet_asset)
 
     return {
-        "hub": place_throat(hub_walls),          # uniform scale about the fixed shroud rim
-        "shroud": shroud_placed,                 # FIXED: natural (s, s, sz), does not move
+        # hub/shroud EMITTED without their flat caps (#3/#4); the CAD upper-cyl bottom
+        # and first-cyl top are the single roof/floor. Curved throat + funnel kept.
+        "hub": place_throat(hub_walls_emit),     # uniform scale about the fixed shroud rim
+        "shroud": place(shroud_walls_emit),      # FIXED: natural (s, s, sz), does not move
         "outlet": outlet,
         "guide_vanes": blades_m,
     }
@@ -901,16 +927,21 @@ def main():
             # walls at the hub-inner and shroud-outer rims). The passage between them
             # runs to the floor and the OUTLET is the annulus between the two rims
             # at the floor — flow exits at the ground.
+            # #5: the outlet plane and the two duct bottoms land on the TRUE box floor
+            # (-height/2), not on z_floor (= box floor - FLOOR_OVERCUT). The overcut is a
+            # builder trick to open the pocket through the box wall; the outlet must
+            # coincide with the box-floor boundary so the mesher sees one flush plane.
+            z_box_floor = -height / 2
             _hub_zmin = float(vane_patches["hub"].vertices[:, 2].min())
             _shr_zmin = float(vane_patches["shroud"].vertices[:, 2].min())
             _hub_ext = _open_cylinder(np, trimesh, target_x, target_y,
-                                      vane_outlet_ri, z_floor, _hub_zmin)
+                                      vane_outlet_ri, z_box_floor, _hub_zmin)
             _shr_ext = _open_cylinder(np, trimesh, target_x, target_y,
-                                      vane_outlet_ro, z_floor, _shr_zmin)
+                                      vane_outlet_ro, z_box_floor, _shr_zmin)
             vane_patches["hub"] = trimesh.util.concatenate([vane_patches["hub"], _hub_ext])
             vane_patches["shroud"] = trimesh.util.concatenate([vane_patches["shroud"], _shr_ext])
             vane_patches["outlet"] = _flat_annulus(np, trimesh, target_x, target_y,
-                                                   z_floor, vane_outlet_ri, vane_outlet_ro)
+                                                   z_box_floor, vane_outlet_ri, vane_outlet_ro)
             # No BREP middle cylinder now, so there is no BREP outlet; the vane mesh
             # supplies it. Keep the remaining BREP walls; append the vane patches.
             patches["outlet"] = []
