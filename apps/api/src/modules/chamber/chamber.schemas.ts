@@ -38,6 +38,10 @@ export const chamberBuildSchema = z
     // Replace the middle cylinder with a guide-vane ring (geometry-only; both
     // variants). A different flag => a different cached build.
     guideVanes: z.boolean().default(false),
+    // Absolute guide-vane open angle (deg); the asset is baked at 50° and each blade
+    // swings about its own spindle by (vaneAngleDeg - 50). Range 45..55. Guide-vane
+    // builds only. A different angle => a different cached build.
+    vaneAngleDeg: z.number().finite().min(45).max(55).default(50),
     // Uniform scale for the whole internal assembly (cylinders + feet + vanes +
     // hollow/dome) about its floor-anchored axis; the box + axis stay fixed.
     // Geometry-only; up-scaling is clamped to the box height by the builder.

@@ -107,6 +107,9 @@ function resolveGeometryParams(
   params.footAngleDeg = input.footAngleDeg ?? 40;
   // Guide-vane throat (geometry-only): a different flag => a different build.
   params.guideVanes = input.guideVanes ?? false;
+  // Absolute guide-vane open angle (deg, 45..55; asset baked at 50°); only affects
+  // guide-vane builds. Part of the cache key, so a new angle => a new build.
+  params.vaneAngleDeg = input.vaneAngleDeg ?? 50;
   // Uniform scale of the whole internal assembly (cylinders + feet + vanes +
   // hollow/dome) — the box + axis stay fixed. The builder clamps up-scaling to
   // the box height. Part of the cache key, so a new scale => a new build.

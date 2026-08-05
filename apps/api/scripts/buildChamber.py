@@ -78,6 +78,9 @@ FOOT_CLEARANCE = 0.02        # radial gap the leg keeps from the first cylinder 
 FOOT_ANGLE_DEG = 40.0        # default leg orientation; the gusset needs an intermediate angle
                              # (0/180 = tangential and 90 = radial both degenerate the gusset)
 FOOT_ANGLES_DEG = (0, 90, 180, 270)     # azimuth positions (aligned with the inlet axes)
+VANE_BASE_ANGLE_DEG = 50.0   # the guide-vane open angle baked into the asset. The
+                             # vaneAngleDeg param is this ABSOLUTE angle; the pitch
+                             # actually applied is (vaneAngleDeg - VANE_BASE_ANGLE_DEG).
 
 PATCH_ORDER = ("inlet", "outlet", "cylinder_walls", "walls")
 PATCH_TYPES = {
@@ -357,7 +360,7 @@ def _split_hub_shroud(np, walls):
     return hub, shroud
 
 
-def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
+def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_angle_deg=0.0):
     """Return {patch_name: Trimesh} for the guide-vane throat: the SOLID vane
     surfaces (blades + contoured hub/shroud walls + the outlet annulus) that sit
     as obstacles in the fluid box, centred at (cx, cy).
@@ -439,9 +442,68 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
     # uniform place() scale + translate).
     hub_walls, shroud_walls = _split_hub_shroud(np, walls)
 
+    # The SHROUD stays fixed; place it once (reused in the return) and derive its
+    # FLOOR profile f(r) = top-surface z per radius. The shroud is a surface of
+    # revolution, so the floor the blades rest on depends only on radius from the
+    # ring axis. Reading it off the ACTUALLY-PLACED shroud makes the blade drape below
+    # track HLE (via the vertical scale sz) and diameter (via s) automatically.
+    shroud_placed = place(shroud_walls)
+    _sv = np.asarray(shroud_placed.vertices, dtype=float)
+    _sr = np.hypot(_sv[:, 0] - cx, _sv[:, 1] - cy)
+    _nb = 240
+    _edges = np.linspace(_sr.min(), _sr.max(), _nb + 1)
+    _rc = 0.5 * (_edges[:-1] + _edges[1:])
+    _idx = np.clip(np.searchsorted(_edges, _sr) - 1, 0, _nb - 1)
+    _zf = np.full(_nb, -np.inf)
+    np.maximum.at(_zf, _idx, _sv[:, 2])             # per-radius top surface = the floor
+    _ok = np.isfinite(_zf)
+    _rc_v, _zf_v = _rc[_ok], _zf[_ok]
+
+    def shroud_floor_z(r):
+        return np.interp(r, _rc_v, _zf_v)           # clamps to end values outside the range
+
+    # Guide-vane PITCH + shroud DRAPE. Each blade swings about its OWN vertical
+    # spindle (pivot axis at radius pivotRadius, at the blade's angular position) by
+    # vane_angle_deg — a +-5 deg offset on the asset's baked-in open angle. A rigid
+    # pitch shifts the (contoured) bottom edge radially onto a different part of the
+    # SLOPED shroud floor, so it would otherwise hang above (or dig into) the shroud;
+    # after pitching, the bottom BAND is re-draped onto shroud_floor_z(r) minus a small
+    # overlap, blended to zero shift a band-fraction higher up so the airfoil above
+    # stays rigid (no kink). Only Z moves, so the blade cross-section is untouched.
+    # Pitch + drape act on the reference blade; the radius-preserving ring rotation
+    # then carries identical copies to their slots (drape is a function of radius, so
+    # it survives the ring rotation).
+    bc = np.asarray(blade.vertices, dtype=float).mean(axis=0)
+    theta0 = np.arctan2(bc[1], bc[0])               # reference blade angular position
+    piv_x = meta["pivotRadius"] * s * np.cos(theta0) + cx
+    piv_y = meta["pivotRadius"] * s * np.sin(theta0) + cy
+    pang = np.radians(vane_angle_deg)
+    Rp = np.array([[np.cos(pang), -np.sin(pang), 0, 0],
+                   [np.sin(pang), np.cos(pang), 0, 0],
+                   [0, 0, 1, 0], [0, 0, 0, 1]])
+
+    base = place(blade)
+    if vane_angle_deg:
+        base.apply_translation((-piv_x, -piv_y, 0))     # pitch about the spindle
+        base.apply_transform(Rp)
+        base.apply_translation((piv_x, piv_y, 0))
+    _bv = np.asarray(base.vertices, dtype=float)
+    _br = np.hypot(_bv[:, 0] - cx, _bv[:, 1] - cy)
+    _overlap = 0.01 * band                          # small penetration into the shroud: seals the
+                                                    # blade->shroud junction (a gap would leak; a
+                                                    # coincident plane confuses the mesher) and stays
+                                                    # comfortably above typical snappy/cfMesh cell
+                                                    # sizes so it is reliably captured. It is hidden
+                                                    # behind the shroud wall, so it is invisible in the
+                                                    # meshed fluid domain.
+    _blend_h = 0.15 * band                          # ramp the drape over the bottom ~15% of the band
+    _w = np.clip((z_mid_base + _blend_h - _bv[:, 2]) / _blend_h, 0.0, 1.0)  # 1 at the floor -> 0 above
+    _bv[:, 2] = _bv[:, 2] + _w * (shroud_floor_z(_br) - _overlap - _bv[:, 2])
+    base.vertices = _bv
+
     blades = []
     for k in range(int(meta["bladeCount"])):
-        b = place(blade)
+        b = base.copy()
         ang = np.radians(k * meta["bladeAngleStepDeg"])
         R = np.array([[np.cos(ang), -np.sin(ang), 0, 0],
                       [np.sin(ang), np.cos(ang), 0, 0],
@@ -460,7 +522,7 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
 
     return {
         "hub": place_throat(hub_walls),          # uniform scale about the fixed shroud rim
-        "shroud": place(shroud_walls),           # FIXED: natural (s, s, sz), does not move
+        "shroud": shroud_placed,                 # FIXED: natural (s, s, sz), does not move
         "outlet": outlet,
         "guide_vanes": blades_m,
     }
@@ -641,6 +703,12 @@ def main():
         variant = str(P.get("variant", "stepped"))
         foot_angle = float(P.get("footAngleDeg", FOOT_ANGLE_DEG))
         guide_vanes = bool(P.get("guideVanes", False))
+        # Absolute guide-vane open angle (deg). The asset is baked at
+        # VANE_BASE_ANGLE_DEG (50); each blade swings about its own spindle by
+        # (vane_angle - VANE_BASE_ANGLE_DEG) to reach the requested angle. Range is
+        # +-5 deg about the base (45..55). Only used by guide-vane builds.
+        vane_angle = float(P.get("vaneAngleDeg", VANE_BASE_ANGLE_DEG))
+        vane_pitch = vane_angle - VANE_BASE_ANGLE_DEG   # signed offset actually applied
         # Uniform scale for the WHOLE internal assembly (the three cylinders, the
         # hollow cup / central cylinder / dome, the four feet, and the guide vanes
         # which key off d_last). The box (width/length/height), the chamfers, and
@@ -666,6 +734,12 @@ def main():
                 "(0/180 = tangential either way, 90 = radial)" % foot_angle)
         if part_scale <= 0:
             raise ValueError("partScale %.4f must be > 0" % part_scale)
+        if not VANE_BASE_ANGLE_DEG - 5.0 <= vane_angle <= VANE_BASE_ANGLE_DEG + 5.0:
+            raise ValueError(
+                "vaneAngleDeg %.3f must be within +-5 deg of the base open angle "
+                "%.1f (i.e. %.1f..%.1f)" % (
+                    vane_angle, VANE_BASE_ANGLE_DEG,
+                    VANE_BASE_ANGLE_DEG - 5.0, VANE_BASE_ANGLE_DEG + 5.0))
 
         # --- read the per-variant stack dims (UNSCALED) up front, so we can
         #     size the uniform scale against the box BEFORE building ----------
@@ -820,7 +894,8 @@ def main():
             z_mid_base = z_floor + h_first
             z_mid_top = z_floor + h_first + h_middle   # upper-cyl base (HLE band top)
             vane_patches = make_vane_patches(
-                trimesh, np, target_x, target_y, z_mid_base, z_mid_top, d_last)
+                trimesh, np, target_x, target_y, z_mid_base, z_mid_top, d_last,
+                vane_angle_deg=vane_pitch)
             # The hub and shroud keep their natural CURVED shape and are EXTENDED
             # straight down from the passage bottom to the box floor (open cylinder
             # walls at the hub-inner and shroud-outer rims). The passage between them

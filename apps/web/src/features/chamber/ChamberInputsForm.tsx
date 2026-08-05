@@ -196,6 +196,19 @@ export function ChamberInputsForm({
             {...register('partScale', { valueAsNumber: true })}
           />
         </Field>
+        <Field
+          label="Vane angle (°)"
+          error={errors.vaneAngleDeg?.message}
+          helperText="Guide-vane builds only: open angle 45–55° (50 = as-designed); each blade pitches about its spindle"
+        >
+          <Input
+            type="number"
+            step="0.5"
+            min="45"
+            max="55"
+            {...register('vaneAngleDeg', { valueAsNumber: true })}
+          />
+        </Field>
       </div>
 
       {variant === 'hollow' && (
