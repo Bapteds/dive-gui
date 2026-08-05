@@ -109,11 +109,18 @@ def main():
     allv = m.vertices - np.array([cx, cy, 0.0])
     r_all = np.hypot(allv[:, 0], allv[:, 1])
     PIVOT_RADIUS = 0.86732  # authoritative CAD value (blade centre of rotation), user-supplied
+    # blade bottom edge AT THE PIVOT RADIUS, not the global minimum. The blade has a
+    # small stub/pin at its inner edge that dips ~0.01 below the airfoil body; the
+    # builder anchors the blade on this value, so taking the global min would float
+    # the whole blade above its seat. Sample the body bottom around the pivot axis.
+    bvr = np.hypot(blade.vertices[:, 0], blade.vertices[:, 1])
+    blade_bottom_z = float(blade.vertices[np.abs(bvr - PIVOT_RADIUS) < 0.02, 2].min())
     meta = {
         "outerDiameter": 2.0 * float(r_all.max()),
         "pivotRadius": PIVOT_RADIUS,
         "hubRadius": float(r_all.min()),
         "height": float(m.vertices[:, 2].max() - zmin),
+        "bladeBottomZ": blade_bottom_z,
         "bladeCount": len(blades),
         "bladeAngleStepDeg": round(step, 4),
         "outletInnerR": outlet_inner_r,

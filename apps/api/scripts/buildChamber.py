@@ -85,7 +85,8 @@ PATCH_TYPES = {
     "outlet": "patch",
     "cylinder_walls": "wall",
     "walls": "wall",
-    "hub_and_shroud": "wall",
+    "hub": "wall",
+    "shroud": "wall",
     "guide_vanes": "wall",
 }
 
@@ -290,40 +291,154 @@ def _vane_assets_dir():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 
 
+def _load_vane_meta():
+    """The committed guide-vane metadata (pivotRadius, contour height, radii …)."""
+    with open(os.path.join(_vane_assets_dir(), "guideVanes.json")) as fh:
+        return json.load(fh)
+
+
+def vane_scale_and_height(meta, d_last):
+    """The uniform vane scale and scaled contour height for a given (scaled)
+    d_last. `s` pins the blade pivot-circle Ø to 0.80 x d_last; `nat_h` is the
+    scaled top-to-outlet contour height (the vane passage's full height). Shared
+    by main() (to size the first cylinder under the vanes) and make_vane_patches
+    (to place them), so the two never drift."""
+    s = (RATIO_D_MIDDLE_OVER_LAST * d_last) / (2.0 * meta["pivotRadius"])
+    return s, meta["height"] * s
+
+
+def _open_cylinder(np, trimesh, cx, cy, r, z0, z1, n=128):
+    """A vertical open cylinder WALL (side faces only) of radius r about (cx, cy),
+    from z0 to z1 — used to extend the hub / shroud straight down to the floor."""
+    th = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)
+    xs, ys = cx + r * np.cos(th), cy + r * np.sin(th)
+    verts = np.vstack([np.column_stack([xs, ys, np.full(n, z0)]),
+                       np.column_stack([xs, ys, np.full(n, z1)])])
+    faces = []
+    for i in range(n):
+        j = (i + 1) % n
+        faces.append([i, n + i, n + j])
+        faces.append([i, n + j, j])
+    return trimesh.Trimesh(vertices=verts, faces=np.array(faces, dtype=np.int64), process=False)
+
+
+def _flat_annulus(np, trimesh, cx, cy, z, r_in, r_out, n=128):
+    """A flat annular ring (a disk with a central hole) at height z about (cx, cy)
+    — the outlet face between the hub (inner) and shroud (outer) at the floor."""
+    th = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)
+    inner = np.column_stack([cx + r_in * np.cos(th), cy + r_in * np.sin(th), np.full(n, z)])
+    outer = np.column_stack([cx + r_out * np.cos(th), cy + r_out * np.sin(th), np.full(n, z)])
+    verts = np.vstack([inner, outer])
+    faces = []
+    for i in range(n):
+        j = (i + 1) % n
+        faces.append([i, n + i, n + j])
+        faces.append([i, n + j, j])
+    return trimesh.Trimesh(vertices=verts, faces=np.array(faces, dtype=np.int64), process=False)
+
+
+def _split_hub_shroud(np, walls):
+    """Split the passage-wall shell into (hub_mesh, shroud_mesh) by which surface
+    each face lies on. The two walls meet only at the outer rim and both bend down
+    to the outlet, so they cannot be told apart by height; instead use the face
+    normal about the ring axis (asset origin): the HUB (top + inner wall) points UP
+    or INWARD, the SHROUD (bottom + outer wall) points DOWN or OUTWARD. The scalar
+    score = n.z - n.r_hat (r_hat = outward radial unit vector) is > 0 on the hub and
+    <= 0 on the shroud, and stays correct through the 90 deg bend to the outlet."""
+    fc = walls.vertices[walls.faces].mean(axis=1)      # face centroids (about axis 0,0)
+    frad = np.hypot(fc[:, 0], fc[:, 1])
+    nrm = walls.face_normals
+    n_r = np.where(frad > 1e-9,
+                   (nrm[:, 0] * fc[:, 0] + nrm[:, 1] * fc[:, 1]) / np.maximum(frad, 1e-9),
+                   0.0)
+    hub_mask = (nrm[:, 2] - n_r) > 0.0
+    hub = walls.submesh([np.where(hub_mask)[0]], append=True)
+    shroud = walls.submesh([np.where(~hub_mask)[0]], append=True)
+    return hub, shroud
+
+
 def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
     """Return {patch_name: Trimesh} for the guide-vane throat: the SOLID vane
     surfaces (blades + contoured hub/shroud walls + the outlet annulus) that sit
     as obstacles in the fluid box, centred at (cx, cy).
 
     Uniform scale pins the blade PIVOT circle diameter (2 x pivotRadius) to the
-    middle diameter (0.80 x d_last), preserving the blade angle AND the full
-    hub/shroud contour. The passage TOP (vane inlet) is pinned to z_mid_top and
-    the whole contour is kept to scale — the passage curves down to its natural
-    bottom rim, exactly as in the source design. NO clipping and NO flat cut: the
-    outlet is the small annulus that the curve terminates in (radii = the source
-    bottom rim, scaled), placed at the natural passage bottom. It is neither
-    flattened up at the band base nor stretched to the box floor. No bounding
-    cylinder is used — the vanes are obstacles in the open box cavity, so the
-    fluid flows directly around them."""
-    import json
+    middle diameter (0.80 x d_last), preserving the blade angle and all radii. The
+    band is then stretched/clipped VERTICALLY (a separate z scale) so the vane
+    channel fills the HLE band exactly: the vane bottom lays on the first-cylinder
+    top and the hub roof meets the upper-cylinder base. The curved throat keeps its
+    shape (scaled in z, never flattened) and continues down to the outlet. No
+    bounding cylinder is used — the vanes are obstacles in the open box cavity, so
+    the fluid flows directly around them."""
     adir = _vane_assets_dir()
-    with open(os.path.join(adir, "guideVanes.json")) as fh:
-        meta = json.load(fh)
+    meta = _load_vane_meta()
     blade = trimesh.load(os.path.join(adir, "guideVanes_blade.stl"))
     walls = trimesh.load(os.path.join(adir, "guideVanes_walls.stl"))
     outlet_asset = trimesh.load(os.path.join(adir, "guideVanes_outlet.stl"))
 
-    s = (RATIO_D_MIDDLE_OVER_LAST * d_last) / (2.0 * meta["pivotRadius"])  # pivot Ø -> 0.80 d_last
-    nat_h = meta["height"] * s                      # scaled contoured height
-    z_sb = z_mid_top - nat_h                         # scaled passage bottom (top pinned to z_mid_top)
+    s, _ = vane_scale_and_height(meta, d_last)      # RADIAL scale: pivot Ø -> 0.80 d_last
+    # Scale RADIALLY by s (fixes the blade pivot circle to 0.80 d_last, so the blade
+    # ANGLE and all radii are preserved), then adapt VERTICALLY to the HLE band
+    # [z_mid_base, z_mid_top] via the z scale sz = band / channel-height, anchored so
+    # the BOTTOM stays fixed on the first-cylinder top and any change happens from the
+    # top: the vane bottom (blade body bottom, asset z=blade_z0) lays on z_mid_base and
+    # the hub roof (asset z=height) meets the upper-cylinder base z_mid_top. The vanes
+    # ELONGATE or CLIP to fill the band; because the blade is prismatic, a pure z scale
+    # never distorts its cross-section (same airfoil, taller/shorter). The hub adjusts
+    # to the height (roof at z_mid_top, throat scaled in z, never flattened).
+    # Anchor on the blade BODY bottom AT THE PIVOT RADIUS (the vane rotation axis),
+    # NOT the global minimum: the blade has a small stub/pin at its inner edge that
+    # dips ~0.0099 below the airfoil body. Seating that stub floats the whole blade
+    # above the first-cylinder top; anchoring at the pivot bottom seats the body and
+    # lets the stub embed into the seat. The fallback stays the global min for old
+    # assets that predate the baked-in value.
+    blade_z0 = float(meta.get("bladeBottomZ", blade.vertices[:, 2].min()))  # vane bottom at pivot (asset z)
+    band = z_mid_top - z_mid_base                    # HLE band (first-cyl top -> upper-cyl base)
+    sz = band / (meta["height"] - blade_z0)          # vertical scale: channel height -> HLE band
+    z_sb = z_mid_base - blade_z0 * sz                 # asset z=0 offset; blade bottom -> z_mid_base
 
     def place(mesh):
         m = mesh.copy()
-        m.apply_scale(s)                            # uniform (all axes)
+        m.apply_scale((s, s, sz))                   # radial s (angle preserved) + vertical sz
         m.apply_translation((cx, cy, z_sb))         # asset bottom (z=0) -> z_sb
         return m
 
-    walls_m = place(walls)
+    # The SHROUD is the fixed reference (plain place() below, never moves). The HUB and
+    # OUTLET scale by sz via a UNIFORM radial map ABOUT the shroud outer rim r_shroud:
+    #   r_new = r_shroud + (r_asset*s - r_shroud) * sz
+    # The shroud edge (r_asset*s == r_shroud) is invariant; every other radius scales
+    # linearly toward/away from it. Being a single linear map (no z ramp, no shear) it
+    # is MONOTONIC in radius, so the converging throat stays monotonic — it cannot dip
+    # below its own rim and produce a bump. The hub inner rim lands at
+    #   ri_target = r_shroud + (outletInnerR*s - r_shroud) * sz
+    # elongate (sz>1) -> ri_target smaller (outlet widens inward); clip (sz<1) -> larger
+    # (narrower). The straight vertical duct below the rim then sits at ri_target, so
+    # the throat->outlet connection is a straight vertical wall.
+    r_shroud = meta["outletOuterR"] * s
+
+    def place_throat(mesh):
+        m = mesh.copy()
+        v = np.asarray(m.vertices, dtype=float)
+        r = np.hypot(v[:, 0], v[:, 1])                       # asset radius about the ring axis
+        r_new = np.maximum(r_shroud + (r * s - r_shroud) * sz, 1e-3)
+        ux = np.where(r > 1e-12, v[:, 0] / r, 0.0)           # unit radial (angle preserved)
+        uy = np.where(r > 1e-12, v[:, 1] / r, 0.0)
+        m.vertices = np.column_stack([cx + r_new * ux, cy + r_new * uy, z_sb + v[:, 2] * sz])
+        return m
+
+    # Split the passage walls into the HUB (top + inner surface) and the SHROUD
+    # (bottom + outer surface) as SEPARATE CFD wall patches. Both surfaces curve
+    # DOWN to the outlet, so a flat z cut is wrong; classify each face by WHICH
+    # surface it lies on, following the curve, via its normal about the ring axis:
+    #   hub  faces point UP or INWARD  (toward the axis)   -> n.z - n.r_hat > 0
+    #   shroud faces point DOWN or OUTWARD                 -> n.z - n.r_hat <= 0
+    # where n.r_hat is the outward radial component of the face normal. This holds
+    # through the 90 deg bend (flat channel: nz dominates; vertical throat: nr
+    # dominates), so the hub follows down to the outlet's inner rim and the shroud
+    # down to its outer rim. Done on the RAW asset (normals are unchanged by the
+    # uniform place() scale + translate).
+    hub_walls, shroud_walls = _split_hub_shroud(np, walls)
+
     blades = []
     for k in range(int(meta["bladeCount"])):
         b = place(blade)
@@ -338,13 +453,14 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last):
     blades_m = trimesh.util.concatenate(blades)
 
     # Outlet = the passage's whole bottom annular face (hub -> shroud), the real
-    # CAD outlet cap. It is scaled and placed by the SAME transform as the walls,
-    # so it lands exactly at the passage bottom and keeps its slight conical
+    # CAD outlet cap. Placed by the SAME ramped throat transform as the walls, so it
+    # lands exactly at the (sz-scaled) passage bottom and keeps its slight conical
     # form — the full cross-section after the curve, not a synthesised flat ring.
-    outlet = place(outlet_asset)
+    outlet = place_throat(outlet_asset)
 
     return {
-        "hub_and_shroud": walls_m,
+        "hub": place_throat(hub_walls),          # uniform scale about the fixed shroud rim
+        "shroud": place(shroud_walls),           # FIXED: natural (s, s, sz), does not move
         "outlet": outlet,
         "guide_vanes": blades_m,
     }
@@ -525,8 +641,16 @@ def main():
         variant = str(P.get("variant", "stepped"))
         foot_angle = float(P.get("footAngleDeg", FOOT_ANGLE_DEG))
         guide_vanes = bool(P.get("guideVanes", False))
+        # Uniform scale for the WHOLE internal assembly (the three cylinders, the
+        # hollow cup / central cylinder / dome, the four feet, and the guide vanes
+        # which key off d_last). The box (width/length/height), the chamfers, and
+        # the part AXIS (positioned by distFromSideChamfer1 / distFromEnd) are NOT
+        # scaled, so the cavity grows/shrinks about its own floor-anchored axis
+        # inside an unchanged box. Up-scaling is clamped below so the stack never
+        # outgrows the box height; scaling down is unbounded.
+        part_scale = float(P.get("partScale", 1.0))
 
-        # --- common validation ---------------------------------------------
+        # --- common validation (on the UNSCALED model values) ---------------
         if min(width, height, length, d_last, h_middle) <= 0:
             raise ValueError("width/height/length/dLast/hMiddle must be > 0")
         if h_first <= 0:
@@ -540,11 +664,11 @@ def main():
             raise ValueError(
                 "footAngleDeg %.3f must be between 0 and 180 "
                 "(0/180 = tangential either way, 90 = radial)" % foot_angle)
+        if part_scale <= 0:
+            raise ValueError("partScale %.4f must be > 0" % part_scale)
 
-        d_first = d_last * RATIO_D_FIRST_OVER_LAST
-        d_middle = d_last * RATIO_D_MIDDLE_OVER_LAST
-
-        # --- build the part (per variant) -----------------------------------
+        # --- read the per-variant stack dims (UNSCALED) up front, so we can
+        #     size the uniform scale against the box BEFORE building ----------
         if variant == "hollow":
             wall = num("wallThickness")
             hollow_len = num("hollowLength")
@@ -557,6 +681,41 @@ def main():
                 raise ValueError("hollow params (length/central dia+height/dome) must be > 0")
             if hollow_len <= wall:
                 raise ValueError("hollowLength must exceed the wall thickness (open-top cup)")
+            unscaled_part_height = h_first + h_middle + max(hollow_len, c_h + dome_h)
+        else:
+            h_last = num("hLast")
+            if h_last <= 0:
+                raise ValueError("hLast must be > 0")
+            unscaled_part_height = h_first + h_middle + h_last
+
+        # Clamp the scale UP so the scaled stack still fits under the box top (the
+        # box height is fixed). Scaling DOWN is always allowed. Same float slack as
+        # the exceed-box guard below, so partScale == 1 stays an exact no-op when
+        # the stack already equals the box height (the stepped identity P2=P11+P12).
+        if unscaled_part_height > 0 and part_scale * unscaled_part_height > height + 1e-6:
+            clamped = height / unscaled_part_height
+            sys.stderr.write(
+                "WARN: partScale %.4f would push the stack (%.4f) past the box "
+                "height %.4f; clamped to %.4f\n"
+                % (part_scale, part_scale * unscaled_part_height, height, clamped))
+            part_scale = clamped
+
+        # Apply the uniform scale to every internal dimension. d_first / d_middle
+        # are ratios of the (scaled) d_last, so they scale with it; the guide-vane
+        # ring also keys off d_last downstream, so it scales too.
+        d_last *= part_scale
+        h_middle *= part_scale
+        h_first *= part_scale
+        d_first = d_last * RATIO_D_FIRST_OVER_LAST
+        d_middle = d_last * RATIO_D_MIDDLE_OVER_LAST
+
+        # --- build the part (per variant) -----------------------------------
+        if variant == "hollow":
+            wall *= part_scale
+            hollow_len *= part_scale
+            c_dia *= part_scale
+            c_h *= part_scale
+            dome_h *= part_scale
             if c_dia > d_last - 2 * wall:
                 sys.stderr.write(
                     "WARN: central diameter %.3f exceeds the hollow bore %.3f\n"
@@ -567,9 +726,7 @@ def main():
             part_height = h_first + h_middle + max(hollow_len, c_h + dome_h)
             rmax = max(d_first, d_middle, d_last) / 2
         else:
-            h_last = num("hLast")
-            if h_last <= 0:
-                raise ValueError("hLast must be > 0")
+            h_last *= part_scale
             part = make_part(cq, d_first, h_first, d_middle, h_middle, d_last, h_last,
                              omit_middle=guide_vanes)
             part_height = h_first + h_middle + h_last
@@ -600,12 +757,48 @@ def main():
         # leg runs from the floor up to the BASE of the last/hollow cylinder, with
         # a horizontal plank on top reaching the cylinder wall; foot_angle orients
         # the legs (0 = tangential, 90 = radial).
+        # z_last_base uses the SCALED h_first + h_middle, so a scaled stack lifts
+        # the leg top with it (the leg still starts on the fixed floor z_floor).
         z_floor = -height / 2 - FLOOR_OVERCUT
         z_last_base = z_floor + h_first + h_middle
+        # Feet scale uniformly with the rest of the assembly: every foot LENGTH is
+        # multiplied by part_scale (the leg height scales via z_last_base above).
         feet, foot_r_outer = make_feet(
             cq, target_x, target_y, z_floor, z_last_base,
             d_last / 2, d_first, foot_angle_deg=foot_angle,
+            width=FOOT_WIDTH * part_scale, length=FOOT_LENGTH * part_scale,
+            taper=FOOT_TAPER * part_scale, chamfer=FOOT_CHAMFER * part_scale,
+            plank_thick=FOOT_PLANK_THICK * part_scale,
+            plank_overlap=FOOT_PLANK_OVERLAP * part_scale,
+            gusset_min_base=FOOT_GUSSET_MIN_BASE * part_scale,
+            clear=FOOT_CLEARANCE * part_scale,
         )
+        # Guide-vane builds: cut an ANNULAR slot through the first cylinder down to
+        # the box floor, between the hub inner rim and the shroud outer rim. The
+        # vane passage then runs straight to the floor and the outlet is the annulus
+        # there. The CENTRAL body (r < hub inner) and the OUTER ring (r > shroud
+        # outer) stay solid; the first cylinder keeps its model height and radius.
+        vane_z_first_top = z_floor + h_first
+        vane_s = vane_nat_h = vane_outlet_ri = vane_outlet_ro = vane_z_sb = 0.0
+        if guide_vanes:
+            _vmeta = _load_vane_meta()
+            vane_s, vane_nat_h = vane_scale_and_height(_vmeta, d_last)
+            # Outlet scales by the vertical band factor sz ABOUT THE FIXED SHROUD rim
+            # (elongate -> wider, clip -> narrower): the shroud outer rim never moves,
+            # the hub inner rim slides toward/away from the axis. Straight vertical
+            # ducts drop from each rim to the floor (see make_vane_patches.place_throat,
+            # which scales the mesh rims to match).
+            _vane_sz = h_middle / (_vmeta["height"] - _vmeta["bladeBottomZ"])
+            vane_outlet_ro = _vmeta["outletOuterR"] * vane_s              # shroud rim: FIXED
+            vane_outlet_ri = vane_outlet_ro + (_vmeta["outletInnerR"] * vane_s - vane_outlet_ro) * _vane_sz
+            vane_outlet_ri = max(vane_outlet_ri, 1e-3)                    # hub rim, never past the axis
+            vane_z_sb = (z_floor + h_first + h_middle) - vane_nat_h  # natural passage bottom
+            _outer = (cq.Workplane("XY", origin=(target_x, target_y, z_floor))
+                      .circle(vane_outlet_ro).extrude(h_first))
+            _inner = (cq.Workplane("XY", origin=(target_x, target_y, z_floor))
+                      .circle(vane_outlet_ri).extrude(h_first))
+            part = part.cut(_outer.cut(_inner))   # remove the annular slot only
+
         result = box.cut(part).cut(feet)
 
         # --- split into patches --------------------------------------------
@@ -625,14 +818,29 @@ def main():
             # is open fluid (no cut, no cylinder wall around the vanes). The vane
             # SOLIDS ride as obstacle triSurfaces; the fluid flows around them.
             z_mid_base = z_floor + h_first
-            z_mid_top = z_floor + h_first + h_middle
+            z_mid_top = z_floor + h_first + h_middle   # upper-cyl base (HLE band top)
             vane_patches = make_vane_patches(
                 trimesh, np, target_x, target_y, z_mid_base, z_mid_top, d_last)
+            # The hub and shroud keep their natural CURVED shape and are EXTENDED
+            # straight down from the passage bottom to the box floor (open cylinder
+            # walls at the hub-inner and shroud-outer rims). The passage between them
+            # runs to the floor and the OUTLET is the annulus between the two rims
+            # at the floor — flow exits at the ground.
+            _hub_zmin = float(vane_patches["hub"].vertices[:, 2].min())
+            _shr_zmin = float(vane_patches["shroud"].vertices[:, 2].min())
+            _hub_ext = _open_cylinder(np, trimesh, target_x, target_y,
+                                      vane_outlet_ri, z_floor, _hub_zmin)
+            _shr_ext = _open_cylinder(np, trimesh, target_x, target_y,
+                                      vane_outlet_ro, z_floor, _shr_zmin)
+            vane_patches["hub"] = trimesh.util.concatenate([vane_patches["hub"], _hub_ext])
+            vane_patches["shroud"] = trimesh.util.concatenate([vane_patches["shroud"], _shr_ext])
+            vane_patches["outlet"] = _flat_annulus(np, trimesh, target_x, target_y,
+                                                   z_floor, vane_outlet_ri, vane_outlet_ro)
             # No BREP middle cylinder now, so there is no BREP outlet; the vane mesh
             # supplies it. Keep the remaining BREP walls; append the vane patches.
             patches["outlet"] = []
             emit_order = ["inlet", "cylinder_walls", "walls",
-                          "hub_and_shroud", "outlet", "guide_vanes"]
+                          "hub", "shroud", "outlet", "guide_vanes"]
 
         # --- GLB scene + manifest + edges ----------------------------------
         scene = trimesh.Scene()

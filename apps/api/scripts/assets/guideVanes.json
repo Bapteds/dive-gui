@@ -3,6 +3,7 @@
   "pivotRadius": 0.86732,
   "hubRadius": 0.29548015138483935,
   "height": 0.6456500000000001,
+  "bladeBottomZ": 0.09891030192375183,
   "bladeCount": 16,
   "bladeAngleStepDeg": 22.5,
   "outletInnerR": 0.2957333029119147,
