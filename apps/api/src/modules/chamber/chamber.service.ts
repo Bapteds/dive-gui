@@ -107,6 +107,10 @@ function resolveGeometryParams(
   params.footAngleDeg = input.footAngleDeg ?? 40;
   // Guide-vane throat (geometry-only): a different flag => a different build.
   params.guideVanes = input.guideVanes ?? false;
+  // Uniform scale of the whole internal assembly (cylinders + feet + vanes +
+  // hollow/dome) — the box + axis stay fixed. The builder clamps up-scaling to
+  // the box height. Part of the cache key, so a new scale => a new build.
+  params.partScale = input.partScale ?? 1;
   for (const key of CHAMBER_OUTPUT_KEYS) {
     params[key] = outputFinal(outputs, key) * MM_TO_M;
   }

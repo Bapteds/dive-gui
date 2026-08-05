@@ -26,6 +26,8 @@ export interface ChamberFormValues {
   relations: Record<string, boolean>;
   /** Torque-foot orientation (deg): 0 = tangential, 90 = radial. */
   footAngleDeg: number;
+  /** Uniform scale of the whole internal assembly (cylinders + feet + vanes); box + axis stay fixed. */
+  partScale: number;
   /** Replace the middle cylinder with a guide-vane ring (both variants). */
   guideVanes: boolean;
   /** Box length along Y (mm); blank => auto 2 x width. */
@@ -52,6 +54,10 @@ export const chamberFormSchema = z
       .number({ invalid_type_error: 'Enter a number' })
       .min(0, 'Min 0° (tangential)')
       .max(180, 'Max 180° (tangential, opposite)'),
+    partScale: z
+      .number({ invalid_type_error: 'Enter a number' })
+      .positive('Must be greater than 0')
+      .max(5, 'Max 5×'),
     lengthOverride: optionalPositive,
     hollowLength: optionalPositive,
     wallThickness: optionalPositive,
@@ -75,6 +81,7 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   relationsMaster: true,
   relations: Object.fromEntries(CHAMBER_RELATIONS.map((rel) => [rel.key, rel.defaultOn])),
   footAngleDeg: 40,
+  partScale: 1,
   guideVanes: false,
   lengthOverride: undefined,
   hollowLength: 200,

@@ -184,6 +184,18 @@ export function ChamberInputsForm({
             {...register('footAngleDeg', { valueAsNumber: true })}
           />
         </Field>
+        <Field
+          label="Part scale (×)"
+          error={errors.partScale?.message}
+          helperText="Scales all cylinders, feet & vanes together; box & axis stay fixed. >1 is clamped to the box height"
+        >
+          <Input
+            type="number"
+            step="0.05"
+            min="0"
+            {...register('partScale', { valueAsNumber: true })}
+          />
+        </Field>
       </div>
 
       {variant === 'hollow' && (

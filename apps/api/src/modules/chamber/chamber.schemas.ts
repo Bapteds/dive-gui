@@ -38,6 +38,10 @@ export const chamberBuildSchema = z
     // Replace the middle cylinder with a guide-vane ring (geometry-only; both
     // variants). A different flag => a different cached build.
     guideVanes: z.boolean().default(false),
+    // Uniform scale for the whole internal assembly (cylinders + feet + vanes +
+    // hollow/dome) about its floor-anchored axis; the box + axis stay fixed.
+    // Geometry-only; up-scaling is clamped to the box height by the builder.
+    partScale: z.number().finite().positive().max(5).default(1),
     lengthOverride: z.number().finite().positive().optional(),
     hollowLength: z.number().finite().positive().optional(),
     wallThickness: z.number().finite().positive().optional(),

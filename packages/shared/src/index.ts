@@ -2273,6 +2273,19 @@ export interface ChamberInput {
    * Default false.
    */
   guideVanes?: boolean;
+  /**
+   * Uniform scale for the WHOLE internal assembly at once — the three cylinders
+   * (and the hollow-variant cup / central cylinder / dome), the four torque feet,
+   * and the guide vanes (which key off the last diameter). The BOX (width /
+   * length / height), the chamfers, and the part AXIS (positioned by
+   * distFromSideChamfer1 / distFromEnd) are NOT scaled, so the cavity grows or
+   * shrinks about its own floor-anchored axis inside an unchanged box. Geometry-
+   * only (not part of the empirical model). Default 1. Scaling down is unbounded;
+   * scaling up is clamped by the builder so the cylinder stack never outgrows the
+   * box height (in the stepped variant the stack height already equals the box
+   * height, so up-scaling clamps to 1).
+   */
+  partScale?: number;
   /** Box length along Y (mm). Omitted => 2 x the (final) width. */
   lengthOverride?: number;
   /** Height (mm) of the hollow last cylinder. Required for the 'hollow' variant. */
