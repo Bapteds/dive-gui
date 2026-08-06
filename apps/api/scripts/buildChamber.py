@@ -47,6 +47,7 @@ import json
 import math
 import os
 import sys
+import tempfile
 import zipfile
 
 # --- fixed builder configuration (NOT user inputs) --------------------------
@@ -310,6 +311,22 @@ def vane_scale_and_height(meta, d_last):
     return s, meta["height"] * s
 
 
+def _open_cylinder(np, trimesh, cx, cy, r, z0, z1, n=128):
+    """A vertical open cylinder WALL (side faces only) of radius r about (cx, cy),
+    from z0 to z1 — the hub / shroud straight DUCT from the passage bottom to the
+    box floor, extending the mesh down to the outlet."""
+    th = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)
+    xs, ys = cx + r * np.cos(th), cy + r * np.sin(th)
+    verts = np.vstack([np.column_stack([xs, ys, np.full(n, z0)]),
+                       np.column_stack([xs, ys, np.full(n, z1)])])
+    faces = []
+    for i in range(n):
+        j = (i + 1) % n
+        faces.append([i, n + i, n + j])
+        faces.append([i, n + j, j])
+    return trimesh.Trimesh(vertices=verts, faces=np.array(faces, dtype=np.int64), process=False)
+
+
 def _flat_annulus(np, trimesh, cx, cy, z, r_in, r_out, n=128):
     """A flat annular ring (a disk with a central hole) at height z about (cx, cy)
     — the outlet face between the hub (inner) and shroud (outer) at the floor."""
@@ -343,19 +360,6 @@ def _split_hub_shroud(np, walls):
     hub = walls.submesh([np.where(hub_mask)[0]], append=True)
     shroud = walls.submesh([np.where(~hub_mask)[0]], append=True)
     return hub, shroud
-
-
-def _drop_flat_cap(np, mesh, z_asset, tol=0.01, nz_min=0.7):
-    """Return `mesh` with its flat horizontal CAP removed: faces whose centroid asset-z
-    is within `tol` of z_asset AND whose normal is near-vertical (|n_z| >= nz_min). Used
-    to drop the hub ROOF (at asset z = height) and the shroud FLOOR (at asset z = its
-    top) so the coincident CAD faces (upper-cyl bottom / first-cyl top) are the SINGLE
-    roof/floor surface — no doubled mesh cap. The curved throat/funnel (near-vertical
-    normals) is kept. Done on the RAW asset (normals are invariant under place())."""
-    fc = mesh.vertices[mesh.faces].mean(axis=1)
-    nz = mesh.face_normals[:, 2]
-    keep = np.where(~((np.abs(fc[:, 2] - z_asset) <= tol) & (np.abs(nz) >= nz_min)))[0]
-    return mesh.submesh([keep], append=True)
 
 
 def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_angle_deg=0.0):
@@ -440,16 +444,30 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
     # uniform place() scale + translate).
     hub_walls, shroud_walls = _split_hub_shroud(np, walls)
 
-    # De-doubling (#3/#4): the hub ROOF (flat, asset z = height) coincides with the
-    # upper-cylinder CAD bottom, and the shroud FLOOR (flat, asset z = its top) with
-    # the first-cylinder CAD top. Drop those flat mesh caps and let the CAD faces be the
-    # SINGLE roof / floor. The curved hub throat and shroud funnel are kept. Dropping the
-    # roof also removes the old ballooned roof (place_throat pushed it out past the
-    # upper-cyl radius). The FULL shroud (with floor) is still used below to derive the
-    # blade-drape profile; only the EMITTED shroud loses its flat floor.
-    hub_walls_emit = _drop_flat_cap(np, hub_walls, float(hub_walls.vertices[:, 2].max()))
-    shroud_floor_z_asset = float(shroud_walls.vertices[:, 2].max())
-    shroud_walls_emit = _drop_flat_cap(np, shroud_walls, shroud_floor_z_asset)
+    # The hub and shroud are built as their FULL surfaces of revolution (roof + throat
+    # + duct, floor + funnel + duct). main() turns each into a watertight solid of
+    # revolution (the hub CORE, the shroud CASING) and subtracts them from the fluid, so
+    # the non-wetted regions are removed by the boolean at build time; the true wetted
+    # boundary is then re-split into named patches. These full surfaces are therefore
+    # both the classification sources and the silhouettes the core/casing are revolved
+    # from — hence the synthesised roof below (out to the upper-cyl wall) is what caps
+    # the core silhouette, not a surface that is emitted verbatim.
+    #
+    # HUB mesh = the place_throat THROAT + a synthesised flat ROOF. place_throat scales
+    # the asset roof by the vertical band factor (it balloons past the wall when sz>1 and
+    # shrinks short of it when sz<1), so instead of using that roof we rebuild it as a
+    # clean annulus from the throat top out to the upper-cyl wall (d_last/2). The roof
+    # then reaches the wall for ANY HLE band, so the hub-core silhouette is full-width.
+    _hub_placed = place_throat(hub_walls)
+    _hf = _hub_placed.vertices[_hub_placed.faces].mean(axis=1)
+    _hfnz = _hub_placed.face_normals[:, 2]
+    _roof_face = (np.abs(_hf[:, 2] - z_mid_top) < 0.02 * band) & (np.abs(_hfnz) > 0.7)
+    _throat = _hub_placed.submesh([np.where(~_roof_face)[0]], append=True)
+    _tv = np.asarray(_throat.vertices, dtype=float)
+    _tr = np.hypot(_tv[:, 0] - cx, _tv[:, 1] - cy)
+    _throat_top_r = float(_tr[_tv[:, 2] > z_mid_top - 0.02 * band].max())
+    _roof = _flat_annulus(np, trimesh, cx, cy, z_mid_top, _throat_top_r, d_last / 2.0)
+    hub_mesh = trimesh.util.concatenate([_throat, _roof])
 
     # The SHROUD stays fixed; place the FULL shroud once to derive its FLOOR profile
     # f(r) = top-surface z per radius. The shroud is a surface of revolution, so the
@@ -530,10 +548,15 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
     outlet = place_throat(outlet_asset)
 
     return {
-        # hub/shroud EMITTED without their flat caps (#3/#4); the CAD upper-cyl bottom
-        # and first-cyl top are the single roof/floor. Curved throat + funnel kept.
-        "hub": place_throat(hub_walls_emit),     # uniform scale about the fixed shroud rim
-        "shroud": place(shroud_walls_emit),      # FIXED: natural (s, s, sz), does not move
+        # FULL hub/shroud surfaces (roof/floor + throat/funnel), the true refinement
+        # surfaces. Hub roof synthesised to meet the wall for any band; shroud is the
+        # fixed reference placement (radial s, so its floor reaches the wall regardless
+        # of the band).
+        "hub": hub_mesh,
+        # THROAT only (funnel + duct, NO flat roof) — the hub-core solid is revolved
+        # from this so the throat->roof corner is not cut. Not a CFD patch (not emitted).
+        "hub_throat": _throat,
+        "shroud": shroud_placed,                 # FIXED: natural (s, s, sz), full surface
         "outlet": outlet,
         "guide_vanes": blades_m,
     }
@@ -548,6 +571,94 @@ def _face_kind(f, adaptor, geomabs):
     if t == geomabs["cyl"]:
         return "cyl", s.Cylinder().Radius()
     return "other", None
+
+
+# --- boolean distributor helpers (guide-vane builds) ------------------------
+# The non-wetted regions of the distributor (the hub CORE inside the funnel/duct
+# and the shroud CASING below the shroud floor) are removed from the fluid at
+# BUILD time with a mesh boolean, rather than being emitted as closed obstacle
+# surfaces and left for the mesher to seal + discard. Both regions are surfaces of
+# revolution, so each is reconstructed as a watertight solid of revolution and
+# subtracted from the fluid; the resulting true wetted boundary is then re-split
+# into named patches. This deletes the manual carve / drop-roof / roof-synthesis
+# heuristics: whatever surface is actually wetted survives, everything else goes.
+def _revolve_profile(np, trimesh, profile_rz, cx, cy, sections=128):
+    """Revolve a closed (r, z) polygon about the vertical axis at (cx, cy) into a
+    watertight solid. Inverts if the winding yielded a negative (inward) volume."""
+    m = trimesh.creation.revolve(np.asarray(profile_rz, dtype=float), sections=sections)
+    if m.volume < 0.0:
+        m.invert()
+    m.apply_translation((cx, cy, 0.0))
+    return m
+
+
+def _hub_core_solid(np, trimesh, throat_mesh, cx, cy, z_top, nb=200):
+    """The hub CORE as a solid of revolution. Built from the THROAT (funnel + central
+    duct) ONLY — NOT the flat roof — and capped flat at z_top. This is deliberate: the
+    hub's true profile is the throat rising to the throat-top, then a FLAT roof out to
+    the wall. Feeding the flat roof into an r_max(z) silhouette would collapse the whole
+    roof to one outer point and the revolve would draw a diagonal from the throat to the
+    wall (cutting the throat->roof corner), fattening the core into the vane passage. So
+    the core follows the throat up to the throat-top and caps flat at z_top; the flat
+    roof itself is supplied by the OCC upper-cylinder bottom (classified to hub) for
+    r > throat-top, where the vanes then rest on it cleanly."""
+    v = np.asarray(throat_mesh.vertices, dtype=float)
+    r = np.hypot(v[:, 0] - cx, v[:, 1] - cy)
+    z = v[:, 2]
+    z0 = float(z.min())
+    edges = np.linspace(z0, float(z.max()), nb + 1)
+    zc = 0.5 * (edges[:-1] + edges[1:])
+    idx = np.clip(np.searchsorted(edges, z) - 1, 0, nb - 1)
+    rmax = np.zeros(nb)
+    np.maximum.at(rmax, idx, r)
+    ok = rmax > 0
+    zc_v, rmax_v = zc[ok], rmax[ok]
+    # follow the throat silhouette, then a vertical rise to z_top and a FLAT cap to the
+    # axis — no diagonal shortcut across the throat->roof corner.
+    prof = [(0.0, z0)] + list(zip(rmax_v.tolist(), zc_v.tolist()))
+    prof += [(float(rmax_v[-1]), z_top), (0.0, z_top)]
+    return _revolve_profile(np, trimesh, prof, cx, cy)
+
+
+def _shroud_casing_solid(np, trimesh, shroud_mesh, cx, cy, nb=200):
+    """The shroud CASING as an annular solid of revolution — the material below the
+    shroud floor, from the inner duct rim (r_in) to the outer rim (r_out), down to
+    the box floor. The top follows the shroud floor contour f(r); the annulus never
+    touches the axis, so the revolve is a clean watertight ring."""
+    v = np.asarray(shroud_mesh.vertices, dtype=float)
+    r = np.hypot(v[:, 0] - cx, v[:, 1] - cy)
+    z = v[:, 2]
+    r_in, r_out, z0 = float(r.min()), float(r.max()), float(z.min())
+    edges = np.linspace(r_in, r_out, nb + 1)
+    rc = 0.5 * (edges[:-1] + edges[1:])
+    idx = np.clip(np.searchsorted(edges, r) - 1, 0, nb - 1)
+    ztop = np.full(nb, -np.inf)
+    np.maximum.at(ztop, idx, z)
+    ok = np.isfinite(ztop)
+    rc_v, ztop_v = rc[ok], ztop[ok]
+    # closed loop: box floor -> outer wall up -> floor contour back to inner -> down
+    prof = [(r_in, z0), (r_out, z0), (r_out, float(ztop_v[-1]))]
+    prof += list(zip(rc_v[::-1].tolist(), ztop_v[::-1].tolist()))
+    prof += [(r_in, float(ztop_v[0])), (r_in, z0)]
+    return _revolve_profile(np, trimesh, prof, cx, cy)
+
+
+def _label_by_nearest_source(np, mesh, sources):
+    """Label every face of `mesh` by the nearest labelled source patch (face-centroid
+    KD-tree). `sources` is a list of (label, Trimesh); returns (names, who) where
+    names[i] is the label and who[f] is the source index of face f. The true wetted
+    boundary coincides with the source surfaces, so nearest-centroid re-splits it."""
+    from scipy.spatial import cKDTree
+    cents, labels = [], []
+    for li, (_, m) in enumerate(sources):
+        c = m.vertices[m.faces].mean(axis=1)
+        cents.append(c)
+        labels.append(np.full(len(c), li, dtype=np.int64))
+    tree = cKDTree(np.vstack(cents))
+    lab = np.concatenate(labels)
+    fc = mesh.vertices[mesh.faces].mean(axis=1)
+    _, nn = tree.query(fc)
+    return [name for name, _ in sources], lab[nn]
 
 
 def _horiz_extent(f, ax, ay):
@@ -858,11 +969,14 @@ def main():
             gusset_min_base=FOOT_GUSSET_MIN_BASE * part_scale,
             clear=FOOT_CLEARANCE * part_scale,
         )
-        # Guide-vane builds: cut an ANNULAR slot through the first cylinder down to
-        # the box floor, between the hub inner rim and the shroud outer rim. The
-        # vane passage then runs straight to the floor and the outlet is the annulus
-        # there. The CENTRAL body (r < hub inner) and the OUTER ring (r > shroud
-        # outer) stay solid; the first cylinder keeps its model height and radius.
+        # Guide-vane builds: carve the first cylinder into a RING outside the vane
+        # distributor. The whole distributor footprint (r < d_last/2, the upper-cyl
+        # radius, which is also the shroud's outer radius) is cut away down to the box
+        # floor, so the first cylinder keeps ONLY its outer ring (d_last/2 .. d_first/2)
+        # and contributes NO surface inside the distributor (no first-cyl top under the
+        # shroud, no central column, no slot walls). The mesh hub/shroud/outlet are the
+        # sole surfaces there; being closed, they seal the hub core and the base, which
+        # the mesher then removes.
         vane_z_first_top = z_floor + h_first
         vane_s = vane_nat_h = vane_outlet_ri = vane_outlet_ro = vane_z_sb = 0.0
         if guide_vanes:
@@ -878,11 +992,12 @@ def main():
             vane_outlet_ri = vane_outlet_ro + (_vmeta["outletInnerR"] * vane_s - vane_outlet_ro) * _vane_sz
             vane_outlet_ri = max(vane_outlet_ri, 1e-3)                    # hub rim, never past the axis
             vane_z_sb = (z_floor + h_first + h_middle) - vane_nat_h  # natural passage bottom
-            _outer = (cq.Workplane("XY", origin=(target_x, target_y, z_floor))
-                      .circle(vane_outlet_ro).extrude(h_first))
-            _inner = (cq.Workplane("XY", origin=(target_x, target_y, z_floor))
-                      .circle(vane_outlet_ri).extrude(h_first))
-            part = part.cut(_outer.cut(_inner))   # remove the annular slot only
+            # Carve the whole distributor footprint (a full disk of the upper-cyl radius)
+            # out of the first cylinder, leaving only the outer ring.
+            vane_ring_ri = d_last / 2.0
+            _cavity = (cq.Workplane("XY", origin=(target_x, target_y, z_floor))
+                       .circle(vane_ring_ri).extrude(h_first))
+            part = part.cut(_cavity)
 
         result = box.cut(part).cut(feet)
 
@@ -907,26 +1022,145 @@ def main():
             vane_patches = make_vane_patches(
                 trimesh, np, target_x, target_y, z_mid_base, z_mid_top, d_last,
                 vane_angle_deg=vane_pitch)
-            # The hub and shroud keep their natural CURVED shape; the curved throat /
-            # funnel meets the box floor through the OCC annular-slot walls, not extra
-            # mesh. The passage between the two rims runs to the floor and the OUTLET is
-            # the annulus between them at the floor — flow exits at the ground.
-            # Ducts (de-doubling): the vertical duct below the natural passage bottom is
-            # NOT added as mesh. The OCC annular-slot walls (cylinder_walls at r = ri and
-            # r = ro) already span the box floor up to the first-cyl top, so they ARE the
-            # duct walls; the mesh throat/funnel simply meet them at the natural passage
-            # bottom. Adding _open_cylinder ducts here would duplicate those OCC walls.
-            # #5: the outlet plane lands on the TRUE box floor (-height/2), not on z_floor
-            # (= box floor - FLOOR_OVERCUT, a builder trick to open the pocket through the
-            # box wall), so it coincides with the box-floor boundary for meshing.
+            # The hub and shroud are the FULL true surfaces and continue straight down
+            # from their natural passage bottom as mesh DUCTS (open cylinders at the
+            # hub-inner rim vane_outlet_ri and the shroud-outer rim vane_outlet_ro). The
+            # ducts run a hair BELOW the box floor (z_duct_bottom) so that the hub-core
+            # and shroud-casing solids built from them PROTRUDE through the floor and the
+            # boolean cut is clean (no coincident-plane sliver at the outlet). The OUTLET
+            # source annulus stays on the TRUE box floor (-height/2), where F's floor is.
             z_box_floor = -height / 2
+            z_duct_bottom = z_box_floor - 2.0 * FLOOR_OVERCUT
+            _hub_zmin = float(vane_patches["hub"].vertices[:, 2].min())
+            _shr_zmin = float(vane_patches["shroud"].vertices[:, 2].min())
+            _hub_ext = _open_cylinder(np, trimesh, target_x, target_y,
+                                      vane_outlet_ri, z_duct_bottom, _hub_zmin)
+            _shr_ext = _open_cylinder(np, trimesh, target_x, target_y,
+                                      vane_outlet_ro, z_duct_bottom, _shr_zmin)
+            vane_patches["hub"] = trimesh.util.concatenate([vane_patches["hub"], _hub_ext])
+            vane_patches["shroud"] = trimesh.util.concatenate([vane_patches["shroud"], _shr_ext])
             vane_patches["outlet"] = _flat_annulus(np, trimesh, target_x, target_y,
                                                    z_box_floor, vane_outlet_ri, vane_outlet_ro)
             # No BREP middle cylinder now, so there is no BREP outlet; the vane mesh
-            # supplies it. Keep the remaining BREP walls; append the vane patches.
+            # supplies it.
             patches["outlet"] = []
             emit_order = ["inlet", "cylinder_walls", "walls",
                           "hub", "shroud", "outlet", "guide_vanes"]
+
+            # --- boolean distributor: remove the non-wetted regions --------
+            # Subtract the hub CORE and shroud CASING (solids of revolution) from the
+            # OCC fluid, then re-split the TRUE wetted boundary F into named patches by
+            # nearest source surface. This removes the hub core, the shroud casing, and
+            # every stray cylinder/roof fragment in a non-wetted area at build time,
+            # deterministically — no reliance on the mesher sealing closed surfaces and
+            # no manual carve/drop heuristics. The blades are thin obstacles fully
+            # immersed in the passage (wetted on both faces), so they are NOT subtracted;
+            # they ride as their own patch exactly as before.
+            # Core from the THROAT + its floor duct (NOT the flat roof), capped flat at
+            # z_mid_top so the throat->roof corner is preserved (see _hub_core_solid).
+            _hub_throat = trimesh.util.concatenate(
+                [vane_patches["hub_throat"], _hub_ext])
+            _core = _hub_core_solid(np, trimesh, _hub_throat, target_x, target_y,
+                                    z_top=z_mid_top)
+            _casing = _shroud_casing_solid(np, trimesh, vane_patches["shroud"],
+                                           target_x, target_y)
+            _fd, _tmp_stl = tempfile.mkstemp(suffix=".stl")
+            os.close(_fd)
+            cq.exporters.export(result, _tmp_stl, tolerance=STL_TOLERANCE)
+            _result_mesh = trimesh.load(_tmp_stl, file_type="stl")
+            os.unlink(_tmp_stl)
+            fluid_F = trimesh.boolean.difference([_result_mesh, _core, _casing],
+                                                 engine="manifold")
+            # Classification sources: the OCC box/part patches (inlet, walls,
+            # cylinder_walls) plus the distributor meshes (hub, shroud, outlet). F's
+            # boundary coincides with these, so nearest-centroid gives a clean re-split.
+            _sources = []
+            for _nm in ("inlet", "walls", "cylinder_walls"):
+                _sm = patch_trimesh(trimesh, np, patches.get(_nm, []))
+                if _sm is None:
+                    continue
+                if _nm == "cylinder_walls":
+                    # Drop the upper-cylinder BOTTOM disk (horizontal, at z_mid_top,
+                    # r < d_last/2) from the source. It is NON-WETTED (upper-cyl solid
+                    # above, hub core solid below) and coincides with the wetted hub roof
+                    # (the passage ceiling), so leaving it in the source ties the nearest-
+                    # source vote and steals the hub roof onto cylinder_walls. Removing it
+                    # lets the ceiling classify to hub, where it belongs. Faces beyond
+                    # d_last/2 (foot planks, shoulders) are kept.
+                    _sfc = _sm.vertices[_sm.faces].mean(axis=1)
+                    _sfr = np.hypot(_sfc[:, 0] - target_x, _sfc[:, 1] - target_y)
+                    _snz = _sm.face_normals[:, 2]
+                    _disk = ((np.abs(_sfc[:, 2] - z_mid_top) < 3.0 * FLOOR_OVERCUT)
+                             & (np.abs(_snz) > 0.9) & (_sfr < d_last / 2.0))
+                    if _disk.any():
+                        _sm = _sm.submesh([np.where(~_disk)[0]], append=True)
+                _sources.append((_nm, _sm))
+            _sources.append(("hub", vane_patches["hub"]))
+            _sources.append(("shroud", vane_patches["shroud"]))
+            _sources.append(("outlet", vane_patches["outlet"]))
+            _names, _who = _label_by_nearest_source(np, fluid_F, _sources)
+            # The box pocket floor and the outlet annulus are coincident at z_box_floor,
+            # so nearest-source ties a few floor faces the wrong way. The outlet is
+            # exactly the HORIZONTAL floor annulus [vane_outlet_ri, vane_outlet_ro] —
+            # assign it by that rule so the outlet BC surface is clean and complete.
+            _oi = _names.index("outlet")
+            _fc = fluid_F.vertices[fluid_F.faces].mean(axis=1)
+            _fr = np.hypot(_fc[:, 0] - target_x, _fc[:, 1] - target_y)
+            _fnz = fluid_F.face_normals[:, 2]
+            _floor = ((np.abs(_fc[:, 2] - z_box_floor) < 3.0 * FLOOR_OVERCUT)
+                      & (np.abs(_fnz) > 0.9)
+                      & (_fr >= vane_outlet_ri - 1e-3) & (_fr <= vane_outlet_ro + 1e-3))
+            _who[_floor] = _oi
+            # Same coincidence at the ROOF: the upper-cyl bottom (non-wetted) sits on the
+            # wetted hub ceiling at z_mid_top, so nearest-source ties send ceiling faces to
+            # cylinder_walls. The ceiling is exactly the horizontal F annulus at z_mid_top,
+            # r < d_last/2 — assign it to hub (the distributor's own surface).
+            _hi = _names.index("hub")
+            _roof = ((np.abs(_fc[:, 2] - z_mid_top) < 3.0 * FLOOR_OVERCUT)
+                     & (np.abs(_fnz) > 0.9) & (_fr <= d_last / 2.0 + 2e-3))
+            _who[_roof] = _hi
+            final_patches = {}
+            for _li, _nm in enumerate(_names):
+                _idx = np.where(_who == _li)[0]
+                if len(_idx):
+                    final_patches[_nm] = fluid_F.submesh([_idx], append=True)
+
+            # Trim the vane DRAPE: the blade bottom is laid a hair below the shroud floor
+            # (an old seal overlap) and the inner stub dips further, so the blade protrudes
+            # into the shroud casing (non-wetted). CLIP the blades with a horizontal plane
+            # at the shroud floor so they end ON the floor (fused, no protrusion). The floor
+            # is flat to ~3 mm across the blade span; clipping at its HIGH point guarantees
+            # no protrusion below the floor anywhere (any residual sub-3 mm gap at the inner
+            # edge is far below mesh cell size, so it cannot leak).
+            _blades = vane_patches["guide_vanes"]
+            _bv = np.asarray(_blades.vertices, dtype=float)
+            _bvr = np.hypot(_bv[:, 0] - target_x, _bv[:, 1] - target_y)
+            _shv = np.asarray(vane_patches["shroud"].vertices, dtype=float)
+            _shr = np.hypot(_shv[:, 0] - target_x, _shv[:, 1] - target_y)
+            _span = (_shr >= _bvr.min() - 0.02) & (_shr <= _bvr.max() + 0.02)
+            _z_clip = float(_shv[_span, 2].max()) if _span.any() else z_mid_base
+            _clipped = trimesh.intersections.slice_mesh_plane(
+                _blades, plane_normal=[0.0, 0.0, 1.0],
+                plane_origin=[0.0, 0.0, _z_clip], cap=False)
+            if _clipped is not None and len(_clipped.faces):
+                _blades = _clipped
+            final_patches["guide_vanes"] = _blades
+
+            if os.environ.get("CHAMBER_DEBUG_DUMP"):
+                _dd = os.path.join(out_dir, "_debug")
+                os.makedirs(_dd, exist_ok=True)
+                _core.export(os.path.join(_dd, "core.stl"))
+                _casing.export(os.path.join(_dd, "casing.stl"))
+                vane_patches["hub"].export(os.path.join(_dd, "hub_source.stl"))
+                vane_patches["shroud"].export(os.path.join(_dd, "shroud_source.stl"))
+                vane_patches["guide_vanes"].export(os.path.join(_dd, "vanes_source.stl"))
+                fluid_F.export(os.path.join(_dd, "F.stl"))
+                with open(os.path.join(_dd, "meta.json"), "w") as _mf:
+                    json.dump({"target_x": target_x, "target_y": target_y,
+                               "z_mid_base": z_mid_base, "z_mid_top": z_mid_top,
+                               "z_box_floor": z_box_floor, "d_last": d_last,
+                               "vane_outlet_ri": vane_outlet_ri,
+                               "vane_outlet_ro": vane_outlet_ro}, _mf)
 
         # --- GLB scene + manifest + edges ----------------------------------
         scene = trimesh.Scene()
@@ -936,9 +1170,13 @@ def main():
         patch_meshes = {}
 
         for name in emit_order:
-            if name in vane_patches:
-                # mesh patch (guide vanes): already a Trimesh, no CAD edges.
-                tri = vane_patches[name]
+            if guide_vanes:
+                # Every patch is a triangle group of the boolean fluid boundary F
+                # (blades excepted); no CAD edges — the viewer falls back to client
+                # feature edges.
+                tri = final_patches.get(name)
+                if tri is None:
+                    continue
                 edge_verts = np.zeros((0, 3), dtype=np.float32)
                 n_faces = len(tri.faces)
             else:
@@ -986,9 +1224,14 @@ def main():
         with open(os.path.join(out_dir, "manifest.json"), "w") as fh:
             json.dump(manifest, fh)
 
-        # exports: whole solid STL + STEP
-        cq.exporters.export(result, os.path.join(exports_dir, "chamber.stl"),
-                            tolerance=STL_TOLERANCE)
+        # exports: whole solid STL + STEP. For guide-vane builds the STL is the true
+        # boolean fluid F (core + casing removed); STEP stays the OCC solid (a mesh
+        # cannot be written as STEP, and the distributor booleans are mesh-only).
+        if guide_vanes:
+            fluid_F.export(os.path.join(exports_dir, "chamber.stl"))
+        else:
+            cq.exporters.export(result, os.path.join(exports_dir, "chamber.stl"),
+                                tolerance=STL_TOLERANCE)
         cq.exporters.export(result, os.path.join(exports_dir, "chamber.step"))
 
         # exports: OpenFOAM triSurface zip (per-patch STL + combined domain.stl)

@@ -22,3 +22,11 @@ numpy>=1.24
 # the pyvista one above (cadquery pulls in OCP/OpenCascade; keep the wheel sets
 # apart). Needs trimesh + numpy (already floored above) plus:
 cadquery>=2.4
+# Guide-vane builds carve the non-wetted hub-core / shroud-casing out of the fluid
+# with a mesh boolean: manifold3d is trimesh's in-process boolean engine (a self-
+# contained wheel, no system libs), networkx backs trimesh's mesh repair/split, and
+# shapely backs trimesh's plane-slice (used to clip the vane drape to the shroud
+# floor). All three are self-contained wheels (shapely bundles GEOS) — no system libs.
+manifold3d>=2.3
+networkx>=3.0
+shapely>=2.0
