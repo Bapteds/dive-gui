@@ -126,10 +126,15 @@ def _corner_prism(cq, width, length, height, sx, sy, len_set, wid_set):
     )
 
 
-def make_box(cq, width, length, height, end, big_side, ch_big, ch_small):
-    """Box with two asymmetric chamfers on the two vertical corners of ONE end.
-    ch = (length_setback, width_setback): cut along Y (length) and X (width)."""
+def make_box(cq, width, length, height, end, big_side, ch_big, ch_small, enabled=True):
+    """Box with two asymmetric chamfers on the two vertical corners of ONE end
+    (when enabled). ch = (length_setback, width_setback): cut along Y (length)
+    and X (width). When enabled=False the box is returned untouched -- ch_big/
+    ch_small are ignored entirely, never coerced to a zero-size cut (which
+    would be a degenerate zero-area wire)."""
     b = cq.Workplane("XY").box(width, length, height)
+    if not enabled:
+        return b
     end_sy = 1.0 if end.startswith(">") else -1.0
     big_sx = 1.0 if big_side.startswith(">") else -1.0
     b = b.cut(_corner_prism(cq, width, length, height, big_sx, end_sy,
@@ -1065,6 +1070,7 @@ def main():
         variant = str(P.get("variant", "stepped"))
         foot_angle = float(P.get("footAngleDeg", FOOT_ANGLE_DEG))
         guide_vanes = bool(P.get("guideVanes", False))
+        chamfer_enabled = bool(P.get("chamferEnabled", True))
         # Absolute guide-vane open angle (deg). The asset is baked at
         # VANE_BASE_ANGLE_DEG (50); each blade swings about its own spindle by
         # (vane_angle - VANE_BASE_ANGLE_DEG) to reach the requested angle. Range is
@@ -1176,7 +1182,8 @@ def main():
                 "part height %.4f exceeds box height %.4f" % (part_height, height))
 
         box = make_box(cq, width, length, height,
-                       CHAMFER_END, BIG_CORNER_SIDE, ch_big, ch_small)
+                       CHAMFER_END, BIG_CORNER_SIDE, ch_big, ch_small,
+                       enabled=chamfer_enabled)
 
         big_sx = 1.0 if BIG_CORNER_SIDE.startswith(">") else -1.0
         end_sy = 1.0 if CHAMFER_END.startswith(">") else -1.0
