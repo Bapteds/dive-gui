@@ -290,7 +290,13 @@ export function renderSnappyHexMeshDict(
   const layerRegions =
     chosen && chosen.length > 0 ? regions.filter((r) => chosen.includes(r.file)) : regions;
   const layers = layerRegions
-    .map((r) => `        ${r.region} { nSurfaceLayers ${config.addLayers.nLayers}; }`)
+    .map((r) => {
+      // A per-surface override carries its own count + growth + thickness; without
+      // one, keep the plain global-count form so an un-overridden dict is unchanged.
+      const spec = config.addLayers.perSurface?.[r.file];
+      if (!spec) return `        ${r.region} { nSurfaceLayers ${config.addLayers.nLayers}; }`;
+      return `        ${r.region} { nSurfaceLayers ${spec.nLayers}; expansionRatio ${fmt(spec.expansionRatio)}; finalLayerThickness ${fmt(spec.finalLayerThickness)}; }`;
+    })
     .join('\n');
   const [lx, ly, lz] = domain.locationInMesh;
 

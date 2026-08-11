@@ -170,6 +170,23 @@ describe('dict renderers', () => {
     expect(dict).toContain('stator { nSurfaceLayers 2; }');
   });
 
+  it('applies a per-surface layer override, others at the global count', () => {
+    const dict = renderSnappyHexMeshDict(
+      ['rotor.stl', 'stator.stl'],
+      domain,
+      config({
+        addLayers: {
+          enabled: true, nLayers: 3, relativeSizes: true, finalLayerThickness: 0.5, expansionRatio: 1.2,
+          perSurface: { 'rotor.stl': { nLayers: 6, expansionRatio: 1.3, finalLayerThickness: 0.4 } },
+        },
+      }),
+    );
+    // rotor carries its own count + growth + thickness…
+    expect(dict).toContain('rotor { nSurfaceLayers 6; expansionRatio 1.3; finalLayerThickness 0.4; }');
+    // …stator keeps the plain global-count form (byte-identical to today).
+    expect(dict).toContain('stator { nSurfaceLayers 3; }');
+  });
+
   it('applies per-surface refinement overrides keyed by STL name', () => {
     const dict = renderSnappyHexMeshDict(
       ['rotor.stl', 'stator.stl'],
