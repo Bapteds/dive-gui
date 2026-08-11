@@ -12,7 +12,7 @@ import AdmZip from 'adm-zip';
 import { app, authHeader, createTestUser, resetDatabase } from './helpers';
 import { setCommandRunner, type CommandResult, type CommandRunner } from '../src/lib/commandRunner';
 import { chamberPaths } from '../src/lib/chamberStorage';
-import { runSnappySchema } from '../src/modules/meshing/meshing.schemas';
+import { runCfMeshSchema, runSnappySchema } from '../src/modules/meshing/meshing.schemas';
 
 /** Build a minimal binary STL from a list of triangles (each = 3 xyz vertices). */
 function binaryStl(triangles: number[][][]): Buffer {
@@ -486,6 +486,59 @@ describe('runSnappySchema — per-patch feature edges', () => {
     ).toThrow();
     expect(() =>
       runSnappySchema.parse({ ...base, featureRefinements: { 'r.stl': { includedAngle: 90, level: 1.5 } } }),
+    ).toThrow();
+  });
+});
+
+describe('per-patch boundary layers — schema', () => {
+  const snappyBase = { engine: 'snappy', domainType: 'internal', surfaceRefinement: { min: 1, max: 2 } };
+  const cfBase = { engine: 'cfmesh' };
+
+  it('snappy accepts a per-surface layer override', () => {
+    const parsed = runSnappySchema.parse({
+      ...snappyBase,
+      addLayers: {
+        enabled: true, nLayers: 3, relativeSizes: true, finalLayerThickness: 0.5, expansionRatio: 1.2,
+        perSurface: { 'rotor.stl': { nLayers: 6, expansionRatio: 1.3, finalLayerThickness: 0.4 } },
+      },
+    });
+    expect(parsed.addLayers.perSurface?.['rotor.stl']).toEqual({
+      nLayers: 6, expansionRatio: 1.3, finalLayerThickness: 0.4,
+    });
+  });
+
+  it('cfMesh accepts a per-patch layer override', () => {
+    const parsed = runCfMeshSchema.parse({
+      ...cfBase,
+      addLayers: {
+        enabled: true, nLayers: 3, thicknessRatio: 1.2, maxFirstLayerThickness: null,
+        perPatch: { walls: { nLayers: 5, thicknessRatio: 1.4, maxFirstLayerThickness: 0.01 } },
+      },
+    });
+    expect(parsed.addLayers.perPatch?.walls).toEqual({
+      nLayers: 5, thicknessRatio: 1.4, maxFirstLayerThickness: 0.01,
+    });
+  });
+
+  it('leaves the maps undefined when omitted', () => {
+    const s = runSnappySchema.parse({
+      ...snappyBase,
+      addLayers: { enabled: false, nLayers: 3, relativeSizes: true, finalLayerThickness: 0.5, expansionRatio: 1.2 },
+    });
+    expect(s.addLayers.perSurface).toBeUndefined();
+    const c = runCfMeshSchema.parse({ ...cfBase });
+    expect(c.addLayers.perPatch).toBeUndefined();
+  });
+
+  it('rejects an out-of-range per-surface layer count', () => {
+    expect(() =>
+      runSnappySchema.parse({
+        ...snappyBase,
+        addLayers: {
+          enabled: true, nLayers: 3, relativeSizes: true, finalLayerThickness: 0.5, expansionRatio: 1.2,
+          perSurface: { 'r.stl': { nLayers: 99, expansionRatio: 1.2, finalLayerThickness: 0.5 } },
+        },
+      }),
     ).toThrow();
   });
 });

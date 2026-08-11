@@ -103,6 +103,17 @@ export const runSnappySchema = z.object({
       relativeSizes: z.boolean().default(true),
       finalLayerThickness: z.number().positive().default(0.5),
       expansionRatio: z.number().min(1).max(5).default(1.2),
+      // Per-surface layer overrides keyed by STL file name; absent key => the globals.
+      perSurface: z
+        .record(
+          z.string(),
+          z.object({
+            nLayers: z.number().int().min(1).max(20),
+            expansionRatio: z.number().min(1).max(5),
+            finalLayerThickness: z.number().positive(),
+          }),
+        )
+        .optional(),
     })
     .default({
       enabled: false,
@@ -139,6 +150,17 @@ export const runCfMeshSchema = z.object({
       nLayers: z.number().int().min(1).max(20),
       thicknessRatio: z.number().min(1).max(5).default(1.2),
       maxFirstLayerThickness: z.number().positive().nullable().default(null),
+      // Per-patch layer overrides keyed by patch name; absent key => the globals.
+      perPatch: z
+        .record(
+          z.string(),
+          z.object({
+            nLayers: z.number().int().min(1).max(20),
+            thicknessRatio: z.number().min(1).max(5),
+            maxFirstLayerThickness: z.number().positive().nullable().default(null),
+          }),
+        )
+        .optional(),
     })
     .default({ enabled: false, nLayers: 3, thicknessRatio: 1.2, maxFirstLayerThickness: null }),
   cores: z.number().int().min(1).max(1024).default(1),
