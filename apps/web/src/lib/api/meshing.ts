@@ -1,5 +1,7 @@
 import { ApiError, apiClient } from './client';
 import type {
+  CopySessionBody,
+  FromChamberBody,
   MeshManifest,
   MeshManifestResponse,
   MeshImportConversion,
@@ -30,6 +32,18 @@ export async function createMeshingSession(
   engine: MeshingEngine,
 ): Promise<MeshingSession> {
   const data = await apiClient.post<MeshingSessionResponse>('/meshing', { name, engine });
+  return data.session;
+}
+
+/** Duplicate a session's engine + config + surfaces into a new session. */
+export async function copyMeshingSession(body: CopySessionBody): Promise<MeshingSession> {
+  const data = await apiClient.post<MeshingSessionResponse>('/meshing/copy', body);
+  return data.session;
+}
+
+/** Import a built chamber's patch surfaces into a meshing session (new/existing/copyFrom). */
+export async function transferChamberToMeshing(body: FromChamberBody): Promise<MeshingSession> {
+  const data = await apiClient.post<MeshingSessionResponse>('/meshing/from-chamber', body);
   return data.session;
 }
 

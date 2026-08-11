@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  copyMeshingSession,
   createMeshingSession,
   deleteMeshingSession,
   deleteStl,
@@ -10,9 +11,12 @@ import {
   listMeshingSessions,
   runSnappy,
   saveMeshingConfig,
+  transferChamberToMeshing,
   uploadStl,
 } from '@/lib/api/meshing';
 import type {
+  CopySessionBody,
+  FromChamberBody,
   MeshImportConversion,
   MeshManifest,
   MeshingConfig,
@@ -62,6 +66,30 @@ export function useCreateMeshingSession() {
     mutationFn: ({ name, engine }: { name: string; engine: MeshingEngine }) =>
       createMeshingSession(name, engine),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: meshingSessionsKey });
+    },
+  });
+}
+
+/** Copy a session's setup into a new session, then refresh the list. */
+export function useCopyMeshingSession() {
+  const queryClient = useQueryClient();
+  return useMutation<MeshingSession, Error, CopySessionBody>({
+    mutationFn: (body) => copyMeshingSession(body),
+    onSuccess: (session) => {
+      queryClient.setQueryData(meshingSessionKey(session.id), session);
+      void queryClient.invalidateQueries({ queryKey: meshingSessionsKey });
+    },
+  });
+}
+
+/** Import a chamber build into a meshing session, then refresh the list. */
+export function useTransferChamberToMeshing() {
+  const queryClient = useQueryClient();
+  return useMutation<MeshingSession, Error, FromChamberBody>({
+    mutationFn: (body) => transferChamberToMeshing(body),
+    onSuccess: (session) => {
+      queryClient.setQueryData(meshingSessionKey(session.id), session);
       void queryClient.invalidateQueries({ queryKey: meshingSessionsKey });
     },
   });

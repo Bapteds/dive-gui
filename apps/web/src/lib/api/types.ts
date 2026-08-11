@@ -835,6 +835,18 @@ export interface MeshingSessionResponse {
   session: import('@dive/shared').MeshingSession;
 }
 
+/** Body for `POST /meshing/copy`. */
+export interface CopySessionBody {
+  sourceId: string;
+  name?: string;
+}
+
+/** Body for `POST /meshing/from-chamber` (discriminated by `mode`). */
+export type FromChamberBody =
+  | { mode: 'new'; chamberHash: string; name: string; engine: import('@dive/shared').MeshingEngine }
+  | { mode: 'existing'; chamberHash: string; sessionId: string }
+  | { mode: 'copyFrom'; chamberHash: string; sourceId: string; name?: string };
+
 /** `POST /meshing/:id/run` — the refreshed session plus the per-step run report. */
 export interface RunSnappyResponse {
   session: import('@dive/shared').MeshingSession;
