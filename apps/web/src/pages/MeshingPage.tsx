@@ -3,7 +3,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Link } from 'react-router-dom';
-import { Check, ChevronRight, Minus } from 'lucide-react';
+import { Check, ChevronRight, Copy, Minus } from 'lucide-react';
 import { PageHeader } from '@/components/common/PageHeader';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ErrorState } from '@/components/common/ErrorState';
@@ -24,7 +24,11 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from '@/components/ui/sonner';
 import { ApiError } from '@/lib/api/client';
 import type { MeshingSessionSummary } from '@/lib/api/types';
-import { useCreateMeshingSession, useMeshingSessions } from '@/features/meshing/useMeshing';
+import {
+  useCopyMeshingSession,
+  useCreateMeshingSession,
+  useMeshingSessions,
+} from '@/features/meshing/useMeshing';
 
 /**
  * MeshingPage - create and list meshing sessions (STL -> snappyHexMesh ->
@@ -163,6 +167,7 @@ function CreateSessionForm() {
 
 /** The visible session list. Names link to the detail page. */
 function SessionsTable({ sessions }: { sessions: MeshingSessionSummary[] }) {
+  const copy = useCopyMeshingSession();
   return (
     <div className="overflow-hidden rounded-md border border-border bg-surface shadow-sm">
       <Table>
@@ -178,6 +183,9 @@ function SessionsTable({ sessions }: { sessions: MeshingSessionSummary[] }) {
             </TableHead>
             <TableHead scope="col" className="hidden text-right md:table-cell">
               Created
+            </TableHead>
+            <TableHead scope="col" className="text-right">
+              <span className="sr-only">Actions</span>
             </TableHead>
           </TableRow>
         </TableHeader>
@@ -217,6 +225,31 @@ function SessionsTable({ sessions }: { sessions: MeshingSessionSummary[] }) {
               <TableCell className="hidden text-right text-text-secondary tabular-nums md:table-cell">
                 {formatCreated(session.createdAt)}
               </TableCell>
+              <TableCell className="text-right">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={copy.isPending && copy.variables?.sourceId === session.id}
+                  onClick={() => {
+                    copy.mutate(
+                      { sourceId: session.id },
+                      {
+                        onSuccess: () => toast.success('Session duplicated.'),
+                        onError: (err) =>
+                          toast.error(
+                            err instanceof ApiError
+                              ? err.message
+                              : 'Could not duplicate the session.',
+                          ),
+                      },
+                    );
+                  }}
+                >
+                  <Copy className="size-4" strokeWidth={1.75} aria-hidden="true" />
+                  Duplicate
+                </Button>
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>
@@ -243,6 +276,9 @@ function SessionsSkeleton({ rows = 4 }: { rows?: number }) {
             <TableHead scope="col" className="hidden text-right md:table-cell">
               Created
             </TableHead>
+            <TableHead scope="col" className="text-right">
+              <span className="sr-only">Actions</span>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody aria-hidden="true">
@@ -267,6 +303,11 @@ function SessionsSkeleton({ rows = 4 }: { rows?: number }) {
               <TableCell className="hidden md:table-cell">
                 <div className="flex justify-end">
                   <Skeleton className="h-4 w-20" />
+                </div>
+              </TableCell>
+              <TableCell className="text-right">
+                <div className="flex justify-end">
+                  <Skeleton className="h-8 w-24" />
                 </div>
               </TableCell>
             </TableRow>
