@@ -199,4 +199,29 @@ describe('dict renderers', () => {
     expect(dict).toContain('rotor { level (2 4); }');
     expect(dict).toContain('stator { level (0 1); }');
   });
+
+  it('excludes a surface turned off in featureSurfaces from the extraction dict', () => {
+    const dict = renderSurfaceFeatureExtractDict(
+      ['rotor.stl', 'stator.stl'],
+      config({ featureSurfaces: ['rotor.stl'] }),
+    );
+    expect(dict).toContain('rotor.stl');
+    expect(dict).not.toContain('stator.stl');
+  });
+
+  it('excludes an off surface from the snappy features list', () => {
+    const dict = renderSnappyHexMeshDict(
+      ['rotor.stl', 'stator.stl'],
+      domain,
+      config({ featureSurfaces: ['rotor.stl'] }),
+    );
+    expect(dict).toContain('file "rotor.eMesh"');
+    expect(dict).not.toContain('stator.eMesh');
+  });
+
+  it('includes every surface when featureSurfaces is empty (legacy default)', () => {
+    const dict = renderSurfaceFeatureExtractDict(['rotor.stl', 'stator.stl'], config({ featureSurfaces: [] }));
+    expect(dict).toContain('rotor.stl');
+    expect(dict).toContain('stator.stl');
+  });
 });
