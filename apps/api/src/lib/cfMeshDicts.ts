@@ -92,6 +92,25 @@ export function renderMeshDict(
     if (config.addLayers.maxFirstLayerThickness && config.addLayers.maxFirstLayerThickness > 0) {
       layer.push(`    maxFirstLayerThickness ${fmt(config.addLayers.maxFirstLayerThickness)};`);
     }
+    // Per-patch overrides: cfMesh's native patchBoundaryLayers sub-block, keyed by
+    // patch name. Only emitted when the user set at least one override.
+    const perPatch = Object.entries(config.addLayers.perPatch ?? {});
+    if (perPatch.length > 0) {
+      layer.push('    patchBoundaryLayers', '    {');
+      for (const [name, spec] of perPatch) {
+        layer.push(
+          `        "${name}"`,
+          '        {',
+          `            nLayers ${Math.max(1, Math.round(spec.nLayers))};`,
+          `            thicknessRatio ${fmt(Math.max(1, spec.thicknessRatio))};`,
+        );
+        if (spec.maxFirstLayerThickness && spec.maxFirstLayerThickness > 0) {
+          layer.push(`            maxFirstLayerThickness ${fmt(spec.maxFirstLayerThickness)};`);
+        }
+        layer.push('            allowDiscontinuity 0;', '        }');
+      }
+      layer.push('    }');
+    }
     // Smooth the layer over the whole boundary; standard cfMesh tutorial setting.
     layer.push('    allowDiscontinuity 0;', '    optimiseLayer 1;', '}');
     lines.push('', ...layer);

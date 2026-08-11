@@ -68,4 +68,32 @@ describe('renderMeshDict', () => {
     expect(dict).toContain('thicknessRatio 1.3;');
     expect(dict).toContain('maxFirstLayerThickness 0.01;');
   });
+
+  it('emits a patchBoundaryLayers block for per-patch overrides only', () => {
+    const dict = renderMeshDict(
+      config({
+        addLayers: {
+          enabled: true, nLayers: 3, thicknessRatio: 1.2, maxFirstLayerThickness: null,
+          perPatch: { walls: { nLayers: 5, thicknessRatio: 1.4, maxFirstLayerThickness: 0.01 } },
+        },
+      }),
+      'constant/triSurface/combined.fms',
+      0.4,
+    );
+    expect(dict).toContain('patchBoundaryLayers');
+    expect(dict).toContain('"walls"');
+    expect(dict).toContain('nLayers 5;');
+    expect(dict).toContain('thicknessRatio 1.4;');
+    expect(dict).toContain('maxFirstLayerThickness 0.01;');
+  });
+
+  it('omits patchBoundaryLayers when there are no per-patch overrides', () => {
+    const dict = renderMeshDict(
+      config({ addLayers: { enabled: true, nLayers: 3, thicknessRatio: 1.2, maxFirstLayerThickness: null } }),
+      'x.fms',
+      0.4,
+    );
+    expect(dict).toContain('boundaryLayers');
+    expect(dict).not.toContain('patchBoundaryLayers');
+  });
 });
