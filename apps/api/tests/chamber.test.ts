@@ -193,6 +193,34 @@ describe('Chamber Creation', () => {
     expect(on.body.outputs).toHaveLength(12);
   });
 
+  it('accepts an outlet ratio and keys the build on it', async () => {
+    setCommandRunner(successRunner);
+    const auth = authHeader(await createTestUser());
+
+    const r35 = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, guideVanes: true, outletRatio: 0.35 })
+      .expect(200);
+    const r50 = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, guideVanes: true, outletRatio: 0.5 })
+      .expect(200);
+
+    // Different outlet ratio => different geometry => different cache key.
+    expect(r35.body.hash).not.toBe(r50.body.hash);
+  });
+
+  it('rejects an outlet ratio outside 0.35-0.50', async () => {
+    const auth = authHeader(await createTestUser());
+    await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, guideVanes: true, outletRatio: 0.6 })
+      .expect(422);
+  });
+
   it('rejects a foot angle outside 0–180', async () => {
     const auth = authHeader(await createTestUser());
     await request(app)

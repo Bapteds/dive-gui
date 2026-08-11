@@ -209,6 +209,19 @@ export function ChamberInputsForm({
             {...register('vaneAngleDeg', { valueAsNumber: true })}
           />
         </Field>
+        <Field
+          label="Outlet ratio"
+          error={errors.outletRatio?.message}
+          helperText="Guide-vane builds only: inner/outer diameter ratio 0.35–0.50 (0.45 = default)"
+        >
+          <Input
+            type="number"
+            step="0.01"
+            min="0.35"
+            max="0.5"
+            {...register('outletRatio', { valueAsNumber: true })}
+          />
+        </Field>
       </div>
 
       {variant === 'hollow' && (

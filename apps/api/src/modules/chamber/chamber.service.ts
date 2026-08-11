@@ -114,6 +114,13 @@ function resolveGeometryParams(
   // hollow/dome) — the box + axis stay fixed. The builder clamps up-scaling to
   // the box height. Part of the cache key, so a new scale => a new build.
   params.partScale = input.partScale ?? 1;
+  // Outlet inner/outer ratio (0.35..0.50, default 0.45) — guide-vane builds only,
+  // but set unconditionally (like vaneAngleDeg/partScale) so it is always part of
+  // the cache key. Part of the cache key, so a new ratio => a new build.
+  params.outletRatio = input.outletRatio ?? 0.45;
+  // Outlet OUTER diameter tracks X1 directly (metres). X1 is mm; params are metres.
+  // Part of the cache key, so a different X1 => a different build.
+  params.outletOuterD = input.x1 * MM_TO_M;
   for (const key of CHAMBER_OUTPUT_KEYS) {
     params[key] = outputFinal(outputs, key) * MM_TO_M;
   }

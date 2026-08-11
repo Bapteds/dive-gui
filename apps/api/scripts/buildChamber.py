@@ -82,6 +82,23 @@ FOOT_ANGLES_DEG = (0, 90, 180, 270)     # azimuth positions (aligned with the in
 VANE_BASE_ANGLE_DEG = 50.0   # the guide-vane open angle baked into the asset. The
                              # vaneAngleDeg param is this ABSOLUTE angle; the pitch
                              # actually applied is (vaneAngleDeg - VANE_BASE_ANGLE_DEG).
+VANE_OUTLET_SAFE_MARGIN = 0.97   # outlet outer radius clamp: stay this fraction inside
+                                 # the vane's own inner working radius (R_anchor in
+                                 # make_vane_patches) so the blade always has shroud/hub
+                                 # material to seat on and never overhangs the hole.
+
+# --- parametric hub/shroud baseline (spec 2026-08-10) ------------------------
+# Hub meridional interior points (asset space = absolute metres), measured from
+# guideVanes_walls.stl by RDP reduction (_diag_rdp.py). Each is (r, z_asset);
+# z_asset maps to build z via the existing HLE map z = z_sb + z_asset*sz.
+VANE_HUB_P1 = (0.29548, 0.22608)     # duct-top -> shoulder (tracks rim: duct vertical)
+VANE_HUB_P2 = (0.39274, 0.51575)     # shoulder knee (half-rate)
+VANE_HUB_P3 = (0.61465, 0.64565)     # roof break; z_asset == asset height -> lands at z_mid_top
+VANE_P3_RATIO = 0.93840              # P3 r / outletOuterR: P3 tracks R_shroud (X1), ratio-independent
+# Shroud floor fillet = axis-aligned ellipse; semi-axes as fractions of R_shroud
+# (fit in _diag_shroudcurve.py). a = radial, b = vertical.
+VANE_SHROUD_ELL_A = 0.160
+VANE_SHROUD_ELL_B = 0.119
 
 PATCH_ORDER = ("inlet", "outlet", "cylinder_walls", "walls")
 PATCH_TYPES = {
@@ -362,7 +379,73 @@ def _split_hub_shroud(np, walls):
     return hub, shroud
 
 
-def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_angle_deg=0.0):
+def _hub_point_radii(R_hub_new, R_shroud_new, meta):
+    """Radial positions of the hub shoulder points under the X1/ratio rule
+    (spec 2026-08-10 §4). Radial only; the caller applies z via the HLE map.
+    P1 tracks the rim (full delta), P2 half, P3 proportional to R_shroud."""
+    dr_hub = R_hub_new - meta["outletInnerR"]      # R_hub0 = asset inner rim (absolute)
+    r_rim = R_hub_new
+    r_p1 = VANE_HUB_P1[0] + dr_hub
+    r_p2 = VANE_HUB_P2[0] + dr_hub / 2.0
+    r_p3 = VANE_P3_RATIO * R_shroud_new
+    return r_rim, r_p1, r_p2, r_p3
+
+
+def _shroud_fillet_profile(np, R_shroud_new, z_brim, r_wall, n=48):
+    """Shroud floor meridional (r, z): a quarter-ellipse fillet seated at the inner
+    rim r=R_shroud_new (vertical tangent) rising to a horizontal tangent at the brim
+    z=z_brim, then flat out to r_wall (spec 2026-08-10 §5). Semi-axes scale with
+    R_shroud so R_curve/R_shroud is constant. Fillet bottom is at z_brim - b."""
+    a = VANE_SHROUD_ELL_A * R_shroud_new     # radial
+    b = VANE_SHROUD_ELL_B * R_shroud_new     # vertical
+    cr, cz = R_shroud_new + a, z_brim - b     # ellipse centre: leftmost@rim, top@brim
+    th = np.linspace(np.pi, np.pi / 2.0, n)   # pi -> leftmost (rim); pi/2 -> top (brim)
+    r = cr + a * np.cos(th)                   # rim -> cr
+    z = cz + b * np.sin(th)                   # (z_brim-b) -> z_brim
+    prof = np.column_stack([r, z])
+    return np.vstack([prof, [r_wall, z_brim]])   # flat brim run to the wall
+
+
+def _densify(np, profile_rz, step=0.003):
+    """Insert intermediate points so no meridional segment exceeds `step`, giving a
+    finely tessellated surface/solid of revolution (the analytic corner polylines are
+    otherwise 4-5 points -> one coarse quad-row per segment). `step` is kept below the
+    verification's r-bin width (~0.004) so every bin gets a top-surface sample.
+    Corners are preserved."""
+    prof = np.asarray(profile_rz, dtype=float)
+    out = [prof[0]]
+    for i in range(1, len(prof)):
+        a, b = prof[i - 1], prof[i]
+        d = float(np.hypot(b[0] - a[0], b[1] - a[1]))
+        n = max(1, int(np.ceil(d / step)))
+        for k in range(1, n + 1):
+            out.append(a + (b - a) * (k / n))
+    return np.array(out, dtype=float)
+
+
+def _revolve_open(np, trimesh, profile_rz, cx, cy, sections=128):
+    """Revolve an OPEN (r, z) polyline about the vertical axis at (cx, cy) into an
+    open surface of revolution (a lofted band, no end caps) — the analytic hub/shroud
+    refinement + classification patch. Each profile point becomes a ring of `sections`
+    vertices; consecutive rings are joined by quads (two triangles)."""
+    prof = np.asarray(profile_rz, dtype=float)
+    th = np.linspace(0.0, 2.0 * np.pi, sections, endpoint=False)
+    ct, st = np.cos(th), np.sin(th)
+    rings = [np.column_stack([cx + r * ct, cy + r * st, np.full(sections, z)])
+             for r, z in prof]
+    verts = np.vstack(rings)
+    faces = []
+    for i in range(len(prof) - 1):
+        a0, b0 = i * sections, (i + 1) * sections
+        for j in range(sections):
+            j1 = (j + 1) % sections
+            faces.append([a0 + j, b0 + j, b0 + j1])
+            faces.append([a0 + j, b0 + j1, a0 + j1])
+    return trimesh.Trimesh(vertices=verts, faces=np.array(faces, dtype=np.int64), process=False)
+
+
+def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_angle_deg=0.0,
+                       outlet_outer_d=None, outlet_ratio=None):
     """Return {patch_name: Trimesh} for the guide-vane throat: the SOLID vane
     surfaces (blades + contoured hub/shroud walls + the outlet annulus) that sit
     as obstacles in the fluid box, centred at (cx, cy).
@@ -374,7 +457,18 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
     top and the hub roof meets the upper-cylinder base. The curved throat keeps its
     shape (scaled in z, never flattened) and continues down to the outlet. No
     bounding cylinder is used — the vanes are obstacles in the open box cavity, so
-    the fluid flows directly around them."""
+    the fluid flows directly around them.
+
+    `outlet_outer_d` (metres, the resolved X1) and `outlet_ratio` (0.35..0.50) size
+    the OUTLET: outer radius = outlet_outer_d/2 (clamped, see VANE_OUTLET_SAFE_MARGIN
+    below), inner radius = outlet_ratio * outer. Both None (old cached builds that
+    predate this feature) reproduces the exact historical asset-derived rims. The
+    hub throat, shroud and outlet asset are all remapped by a single monotonic
+    piecewise-linear radius function pinned at the two outlet rims and fading to
+    IDENTITY at the vane's own inner working radius (R_anchor) — so the vane band,
+    hub roof and shroud brim/wall never move; only the outlet throat/fillet reshapes.
+    Returns two extra float keys, "outlet_ri"/"outlet_ro", the resolved (possibly
+    clamped) rims — main() uses these downstream instead of recomputing them."""
     adir = _vane_assets_dir()
     meta = _load_vane_meta()
     blade = trimesh.load(os.path.join(adir, "guideVanes_blade.stl"))
@@ -408,24 +502,70 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
         m.apply_translation((cx, cy, z_sb))         # asset bottom (z=0) -> z_sb
         return m
 
-    # The SHROUD is the fixed reference (plain place() below, never moves). The HUB and
-    # OUTLET scale by sz via a UNIFORM radial map ABOUT the shroud outer rim r_shroud:
-    #   r_new = r_shroud + (r_asset*s - r_shroud) * sz
-    # The shroud edge (r_asset*s == r_shroud) is invariant; every other radius scales
-    # linearly toward/away from it. Being a single linear map (no z ramp, no shear) it
-    # is MONOTONIC in radius, so the converging throat stays monotonic — it cannot dip
-    # below its own rim and produce a bump. The hub inner rim lands at
-    #   ri_target = r_shroud + (outletInnerR*s - r_shroud) * sz
-    # elongate (sz>1) -> ri_target smaller (outlet widens inward); clip (sz<1) -> larger
-    # (narrower). The straight vertical duct below the rim then sits at ri_target, so
-    # the throat->outlet connection is a straight vertical wall.
-    r_shroud = meta["outletOuterR"] * s
+    # Build the reference blade (placed + pitched) FIRST, before any outlet-rim
+    # work: R_anchor (the vane's own inner working radius, below) is measured from
+    # it, and pitch/placement only move the blade radially — the shroud-floor DRAPE
+    # applied later only moves Z, so measuring here (pre-drape) is exact.
+    bc = np.asarray(blade.vertices, dtype=float).mean(axis=0)
+    theta0 = np.arctan2(bc[1], bc[0])               # reference blade angular position
+    piv_x = meta["pivotRadius"] * s * np.cos(theta0) + cx
+    piv_y = meta["pivotRadius"] * s * np.sin(theta0) + cy
+    pang = np.radians(vane_angle_deg)
+    Rp = np.array([[np.cos(pang), -np.sin(pang), 0, 0],
+                   [np.sin(pang), np.cos(pang), 0, 0],
+                   [0, 0, 1, 0], [0, 0, 0, 1]])
 
+    base = place(blade)
+    if vane_angle_deg:
+        base.apply_translation((-piv_x, -piv_y, 0))     # pitch about the spindle
+        base.apply_transform(Rp)
+        base.apply_translation((piv_x, piv_y, 0))
+    R_anchor = float(np.hypot(base.vertices[:, 0] - cx, base.vertices[:, 1] - cy).min())
+
+    # Remap INPUT x-knots: where the asset's two outlet rims land after the pure
+    # radial scale s (i.e. BEFORE any outlet retargeting). These are the asset-space
+    # rim radii * s — NOT the old sz-adjusted OUTPUT positions.
+    ri_in = meta["outletInnerR"] * s
+    ro_in = meta["outletOuterR"] * s                 # == the old r_shroud
+    # Remap OUTPUT y-knots (the resolved rim targets). Fallback (either param None:
+    # old cached builds that predate this feature) reproduces the OLD map's rim
+    # OUTPUTS: the old map was r_out = ro_in + (r_in - ro_in) * sz for every radius,
+    # so its shroud rim stayed at ro_in and its hub rim landed at
+    # ro_in + (ri_in - ro_in) * sz — exactly the values below.
+    if outlet_outer_d is None or outlet_ratio is None:
+        ro_target = ro_in
+        ri_target = max(ro_in + (ri_in - ro_in) * sz, 1e-3)
+    else:
+        ro_target = outlet_outer_d / 2.0
+        if ro_target >= VANE_OUTLET_SAFE_MARGIN * R_anchor:
+            print("WARNING: outlet outer radius %.4f clamped to %.4f "
+                  "(X1 too large for this vane/d_last combination)"
+                  % (ro_target, VANE_OUTLET_SAFE_MARGIN * R_anchor))
+            ro_target = VANE_OUTLET_SAFE_MARGIN * R_anchor
+        ri_target = max(outlet_ratio * ro_target, 1e-3)
+
+    # The HUB throat, SHROUD and OUTLET are all remapped by the SAME monotonic
+    # piecewise-linear radius function: pinned at (0,0), the two ASSET-SCALED input
+    # rims (ri_in, ro_in) -> their TARGETS (ri_target, ro_target), and IDENTITY from
+    # R_anchor (the vane's own inner radius) outward — so the vane band, hub roof and
+    # shroud brim/wall are geometrically untouched; only the outlet throat/fillet
+    # (r <= R_anchor) reshapes. On [ri_in, ro_in] the interpolated slope is exactly
+    # the old map's sz in the fallback, so the converging throat is reproduced; the
+    # map only differs from the old single-slope map OUTSIDE that span (below the
+    # outlet rim, where the throat has no vertices, and above ro_in where it holds
+    # identity instead of extrapolating into the vane band).
     def place_throat(mesh):
         m = mesh.copy()
         v = np.asarray(m.vertices, dtype=float)
         r = np.hypot(v[:, 0], v[:, 1])                       # asset radius about the ring axis
-        r_new = np.maximum(r_shroud + (r * s - r_shroud) * sz, 1e-3)
+        r_scaled = r * s
+        r_new = np.where(
+            r_scaled <= R_anchor,
+            np.interp(r_scaled, [0.0, ri_in, ro_in, R_anchor],
+                      [0.0, ri_target, ro_target, R_anchor]),
+            r_scaled,
+        )
+        r_new = np.maximum(r_new, 1e-3)
         ux = np.where(r > 1e-12, v[:, 0] / r, 0.0)           # unit radial (angle preserved)
         uy = np.where(r > 1e-12, v[:, 1] / r, 0.0)
         m.vertices = np.column_stack([cx + r_new * ux, cy + r_new * uy, z_sb + v[:, 2] * sz])
@@ -453,67 +593,92 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
     # from — hence the synthesised roof below (out to the upper-cyl wall) is what caps
     # the core silhouette, not a surface that is emitted verbatim.
     #
-    # HUB mesh = the place_throat THROAT + a synthesised flat ROOF. place_throat scales
-    # the asset roof by the vertical band factor (it balloons past the wall when sz>1 and
-    # shrinks short of it when sz<1), so instead of using that roof we rebuild it as a
-    # clean annulus from the throat top out to the upper-cyl wall (d_last/2). The roof
-    # then reaches the wall for ANY HLE band, so the hub-core silhouette is full-width.
-    _hub_placed = place_throat(hub_walls)
-    _hf = _hub_placed.vertices[_hub_placed.faces].mean(axis=1)
-    _hfnz = _hub_placed.face_normals[:, 2]
-    _roof_face = (np.abs(_hf[:, 2] - z_mid_top) < 0.02 * band) & (np.abs(_hfnz) > 0.7)
-    _throat = _hub_placed.submesh([np.where(~_roof_face)[0]], append=True)
-    _tv = np.asarray(_throat.vertices, dtype=float)
-    _tr = np.hypot(_tv[:, 0] - cx, _tv[:, 1] - cy)
-    _throat_top_r = float(_tr[_tv[:, 2] > z_mid_top - 0.02 * band].max())
-    _roof = _flat_annulus(np, trimesh, cx, cy, z_mid_top, _throat_top_r, d_last / 2.0)
-    hub_mesh = trimesh.util.concatenate([_throat, _roof])
+    # ANALYTIC path (spec 2026-08-10): when the X1/ratio params are present, build the
+    # hub + shroud from parametric meridional profiles instead of remapping the asset
+    # mesh. z uses the existing HLE map (radius is X1-driven, z is not).
+    analytic = outlet_outer_d is not None and outlet_ratio is not None
 
-    # The SHROUD stays fixed; place the FULL shroud once to derive its FLOOR profile
-    # f(r) = top-surface z per radius. The shroud is a surface of revolution, so the
-    # floor the blades rest on depends only on radius from the ring axis. Reading it off
-    # the ACTUALLY-PLACED shroud makes the blade drape below track HLE (via the vertical
-    # scale sz) and diameter (via s) automatically.
-    shroud_placed = place(shroud_walls)
-    _sv = np.asarray(shroud_placed.vertices, dtype=float)
-    _sr = np.hypot(_sv[:, 0] - cx, _sv[:, 1] - cy)
-    _nb = 240
-    _edges = np.linspace(_sr.min(), _sr.max(), _nb + 1)
-    _rc = 0.5 * (_edges[:-1] + _edges[1:])
-    _idx = np.clip(np.searchsorted(_edges, _sr) - 1, 0, _nb - 1)
-    _zf = np.full(_nb, -np.inf)
-    np.maximum.at(_zf, _idx, _sv[:, 2])             # per-radius top surface = the floor
-    _ok = np.isfinite(_zf)
-    _rc_v, _zf_v = _rc[_ok], _zf[_ok]
+    def _z(z_asset):                                    # HLE vertical map (z unchanged by X1)
+        return z_sb + z_asset * sz
+
+    hub_profile = None
+    if analytic:
+        # HUB = the 3-point meridional polyline (rim -> P1 -> P2 -> P3) + a flat roof
+        # out to the wall. Points move per _hub_point_radii; z is fixed via the HLE map.
+        r_rim, r_p1, r_p2, r_p3 = _hub_point_radii(ri_target, ro_target, meta)
+        # The real invalid case is the shoulder folding (P1 overtaking P2 at high X1).
+        # rim vs P1 is an inherent ~0.25 mm lean (P1_0 sits just inside R_hub0), not a fold.
+        if not (r_p1 <= r_p2 <= r_p3):
+            print("WARNING: hub shoulder non-monotonic (X1 too large for the point "
+                  "spacing): rim=%.4f P1=%.4f P2=%.4f P3=%.4f"
+                  % (r_rim, r_p1, r_p2, r_p3))
+        hub_profile = np.array([
+            [r_rim, _z(0.05288)],                       # outlet inner rim (passage bottom)
+            [r_p1, _z(VANE_HUB_P1[1])],
+            [r_p2, _z(VANE_HUB_P2[1])],
+            [r_p3, _z(VANE_HUB_P3[1])],                 # roof break (z == z_mid_top)
+        ], dtype=float)
+        _throat = _revolve_open(np, trimesh, _densify(np, hub_profile), cx, cy)   # throat, no roof
+        _hub_surface = np.vstack([hub_profile, [d_last / 2.0, _z(VANE_HUB_P3[1])]])
+        hub_mesh = _revolve_open(np, trimesh, _densify(np, _hub_surface), cx, cy)  # + flat roof
+    else:
+        # HUB mesh = the place_throat THROAT + a synthesised flat ROOF. place_throat scales
+        # the asset roof by the vertical band factor (it balloons past the wall when sz>1 and
+        # shrinks short of it when sz<1), so instead of using that roof we rebuild it as a
+        # clean annulus from the throat top out to the upper-cyl wall (d_last/2). The roof
+        # then reaches the wall for ANY HLE band, so the hub-core silhouette is full-width.
+        _hub_placed = place_throat(hub_walls)
+        _hf = _hub_placed.vertices[_hub_placed.faces].mean(axis=1)
+        _hfnz = _hub_placed.face_normals[:, 2]
+        _roof_face = (np.abs(_hf[:, 2] - z_mid_top) < 0.02 * band) & (np.abs(_hfnz) > 0.7)
+        _throat = _hub_placed.submesh([np.where(~_roof_face)[0]], append=True)
+        _tv = np.asarray(_throat.vertices, dtype=float)
+        _tr = np.hypot(_tv[:, 0] - cx, _tv[:, 1] - cy)
+        _throat_top_r = float(_tr[_tv[:, 2] > z_mid_top - 0.02 * band].max())
+        _roof = _flat_annulus(np, trimesh, cx, cy, z_mid_top, _throat_top_r, d_last / 2.0)
+        hub_mesh = trimesh.util.concatenate([_throat, _roof])
+
+    # SHROUD floor.
+    shroud_profile = None
+    if analytic:
+        # Analytic quarter-ellipse fillet seated at the outer rim (ro_target), rising to
+        # the flat brim, then out to the wall. Semi-axes scale with R_shroud so
+        # R_curve/(X1/2) is constant. The floor contour f(r) drives the blade drape.
+        z_brim = _z(0.09850)                        # existing brim height (asset z ~ 0.0985)
+        shroud_profile = _shroud_fillet_profile(np, ro_target, z_brim,
+                                                d_last / 2.0 + FLOOR_OVERCUT)
+        shroud_placed = _revolve_open(np, trimesh, _densify(np, shroud_profile), cx, cy)
+        _rc_v, _zf_v = shroud_profile[:, 0], shroud_profile[:, 1]
+    else:
+        # The SHROUD goes through place_throat (not the plain place()) so its outer rim
+        # lands on ro_target too — everything at r > R_anchor (the brim, floor further
+        # out) is untouched (identity). Derive its FLOOR profile f(r) = top-surface z per
+        # radius from the placed mesh; reading it off the ACTUALLY-PLACED shroud makes the
+        # blade drape below track HLE, diameter and the new rims automatically.
+        shroud_placed = place_throat(shroud_walls)
+        _sv = np.asarray(shroud_placed.vertices, dtype=float)
+        _sr = np.hypot(_sv[:, 0] - cx, _sv[:, 1] - cy)
+        _nb = 240
+        _edges = np.linspace(_sr.min(), _sr.max(), _nb + 1)
+        _rc = 0.5 * (_edges[:-1] + _edges[1:])
+        _idx = np.clip(np.searchsorted(_edges, _sr) - 1, 0, _nb - 1)
+        _zf = np.full(_nb, -np.inf)
+        np.maximum.at(_zf, _idx, _sv[:, 2])         # per-radius top surface = the floor
+        _ok = np.isfinite(_zf)
+        _rc_v, _zf_v = _rc[_ok], _zf[_ok]
 
     def shroud_floor_z(r):
         return np.interp(r, _rc_v, _zf_v)           # clamps to end values outside the range
 
-    # Guide-vane PITCH + shroud DRAPE. Each blade swings about its OWN vertical
-    # spindle (pivot axis at radius pivotRadius, at the blade's angular position) by
-    # vane_angle_deg — a +-5 deg offset on the asset's baked-in open angle. A rigid
-    # pitch shifts the (contoured) bottom edge radially onto a different part of the
-    # SLOPED shroud floor, so it would otherwise hang above (or dig into) the shroud;
-    # after pitching, the bottom BAND is re-draped onto shroud_floor_z(r) minus a small
-    # overlap, blended to zero shift a band-fraction higher up so the airfoil above
-    # stays rigid (no kink). Only Z moves, so the blade cross-section is untouched.
-    # Pitch + drape act on the reference blade; the radius-preserving ring rotation
-    # then carries identical copies to their slots (drape is a function of radius, so
-    # it survives the ring rotation).
-    bc = np.asarray(blade.vertices, dtype=float).mean(axis=0)
-    theta0 = np.arctan2(bc[1], bc[0])               # reference blade angular position
-    piv_x = meta["pivotRadius"] * s * np.cos(theta0) + cx
-    piv_y = meta["pivotRadius"] * s * np.sin(theta0) + cy
-    pang = np.radians(vane_angle_deg)
-    Rp = np.array([[np.cos(pang), -np.sin(pang), 0, 0],
-                   [np.sin(pang), np.cos(pang), 0, 0],
-                   [0, 0, 1, 0], [0, 0, 0, 1]])
-
-    base = place(blade)
-    if vane_angle_deg:
-        base.apply_translation((-piv_x, -piv_y, 0))     # pitch about the spindle
-        base.apply_transform(Rp)
-        base.apply_translation((piv_x, piv_y, 0))
+    # Guide-vane shroud DRAPE. The blade was already placed + pitched above (to
+    # measure R_anchor); a rigid pitch shifts the (contoured) bottom edge radially
+    # onto a different part of the SLOPED shroud floor, so it would otherwise hang
+    # above (or dig into) the shroud — the bottom BAND is re-draped onto
+    # shroud_floor_z(r) minus a small overlap, blended to zero shift a band-fraction
+    # higher up so the airfoil above stays rigid (no kink). Only Z moves, so the
+    # blade cross-section is untouched. The radius-preserving ring rotation below
+    # then carries identical copies to their slots (drape is a function of radius,
+    # so it survives the ring rotation).
     _bv = np.asarray(base.vertices, dtype=float)
     _br = np.hypot(_bv[:, 0] - cx, _bv[:, 1] - cy)
     _overlap = 0.01 * band                          # small penetration into the shroud: seals the
@@ -542,23 +707,31 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
     blades_m = trimesh.util.concatenate(blades)
 
     # Outlet = the passage's whole bottom annular face (hub -> shroud), the real
-    # CAD outlet cap. Placed by the SAME ramped throat transform as the walls, so it
-    # lands exactly at the (sz-scaled) passage bottom and keeps its slight conical
-    # form — the full cross-section after the curve, not a synthesised flat ring.
+    # CAD outlet cap. Placed by the SAME remap as the walls, so it lands exactly on
+    # the (ratio/X1-scaled) rims and keeps its slight conical form — the full
+    # cross-section after the curve, not a synthesised flat ring.
     outlet = place_throat(outlet_asset)
 
     return {
         # FULL hub/shroud surfaces (roof/floor + throat/funnel), the true refinement
-        # surfaces. Hub roof synthesised to meet the wall for any band; shroud is the
-        # fixed reference placement (radial s, so its floor reaches the wall regardless
-        # of the band).
+        # surfaces. Hub roof synthesised to meet the wall for any band; shroud now
+        # goes through the same pinned-rim remap as the throat/outlet.
         "hub": hub_mesh,
         # THROAT only (funnel + duct, NO flat roof) — the hub-core solid is revolved
         # from this so the throat->roof corner is not cut. Not a CFD patch (not emitted).
         "hub_throat": _throat,
-        "shroud": shroud_placed,                 # FIXED: natural (s, s, sz), full surface
+        "shroud": shroud_placed,
         "outlet": outlet,
         "guide_vanes": blades_m,
+        # Resolved (possibly clamped) outlet rims — main() uses these downstream
+        # instead of recomputing them, so there is exactly one source of truth.
+        "outlet_ri": ri_target,
+        "outlet_ro": ro_target,
+        # Analytic meridional profiles (None on the mesh fallback path) — main() revolves
+        # these into the hub-core / shroud-casing solids; hub_pts drives the meta dump.
+        "hub_profile": hub_profile,
+        "shroud_profile": shroud_profile,
+        "hub_pts": ([r_rim, r_p1, r_p2, r_p3] if analytic else []),
     }
 
 
@@ -874,6 +1047,10 @@ def main():
         def num(key):
             return float(P[key])
 
+        def num_opt(key):
+            v = P.get(key)
+            return float(v) if v is not None else None
+
         # resolved geometry params (metres)
         width = num("width")
         height = num("height")
@@ -1041,22 +1218,13 @@ def main():
         # sole surfaces there; being closed, they seal the hub core and the base, which
         # the mesher then removes.
         vane_z_first_top = z_floor + h_first
-        vane_s = vane_nat_h = vane_outlet_ri = vane_outlet_ro = vane_z_sb = 0.0
+        vane_outlet_ri = vane_outlet_ro = 0.0
         if guide_vanes:
-            _vmeta = _load_vane_meta()
-            vane_s, vane_nat_h = vane_scale_and_height(_vmeta, d_last)
-            # Outlet scales by the vertical band factor sz ABOUT THE FIXED SHROUD rim
-            # (elongate -> wider, clip -> narrower): the shroud outer rim never moves,
-            # the hub inner rim slides toward/away from the axis. Straight vertical
-            # ducts drop from each rim to the floor (see make_vane_patches.place_throat,
-            # which scales the mesh rims to match).
-            _vane_sz = h_middle / (_vmeta["height"] - _vmeta["bladeBottomZ"])
-            vane_outlet_ro = _vmeta["outletOuterR"] * vane_s              # shroud rim: FIXED
-            vane_outlet_ri = vane_outlet_ro + (_vmeta["outletInnerR"] * vane_s - vane_outlet_ro) * _vane_sz
-            vane_outlet_ri = max(vane_outlet_ri, 1e-3)                    # hub rim, never past the axis
-            vane_z_sb = (z_floor + h_first + h_middle) - vane_nat_h  # natural passage bottom
             # Carve the whole distributor footprint (a full disk of the upper-cyl radius)
-            # out of the first cylinder, leaving only the outer ring.
+            # out of the first cylinder, leaving only the outer ring. (The outlet rims
+            # themselves are resolved inside make_vane_patches below — it needs the
+            # placed/pitched blade's own footprint (R_anchor) to clamp against, which
+            # is not available until that call runs.)
             vane_ring_ri = d_last / 2.0
             _cavity = (cq.Workplane("XY", origin=(target_x, target_y, z_floor))
                        .circle(vane_ring_ri).extrude(h_first))
@@ -1084,7 +1252,10 @@ def main():
             z_mid_top = z_floor + h_first + h_middle   # upper-cyl base (HLE band top)
             vane_patches = make_vane_patches(
                 trimesh, np, target_x, target_y, z_mid_base, z_mid_top, d_last,
-                vane_angle_deg=vane_pitch)
+                vane_angle_deg=vane_pitch,
+                outlet_outer_d=num_opt("outletOuterD"), outlet_ratio=num_opt("outletRatio"))
+            vane_outlet_ri = vane_patches["outlet_ri"]
+            vane_outlet_ro = vane_patches["outlet_ro"]
             # The hub and shroud are the FULL true surfaces and continue straight down
             # from their natural passage bottom as mesh DUCTS (open cylinders at the
             # hub-inner rim vane_outlet_ri and the shroud-outer rim vane_outlet_ro). The
@@ -1122,10 +1293,34 @@ def main():
             # z_mid_top so the throat->roof corner is preserved (see _hub_core_solid).
             _hub_throat = trimesh.util.concatenate(
                 [vane_patches["hub_throat"], _hub_ext])
-            _core = _hub_core_solid(np, trimesh, _hub_throat, target_x, target_y,
-                                    z_top=z_mid_top)
-            _casing = _shroud_casing_solid(np, trimesh, vane_patches["shroud"],
-                                           target_x, target_y, d_last)
+            if vane_patches.get("hub_profile") is not None:
+                # Analytic core: revolve the closed hub silhouette (duct bottom ->
+                # rim -> P1 -> P2 -> P3) capped flat at z_mid_top from P3 in to the
+                # axis. r > P3 (the flat roof) is supplied by the OCC upper cylinder.
+                _hp = vane_patches["hub_profile"]
+                _rr = float(_hp[0, 0])
+                _core_prof = ([(0.0, z_duct_bottom), (_rr, z_duct_bottom)]
+                              + [(float(r), float(z)) for r, z in _hp]
+                              + [(0.0, z_mid_top)])
+                _core = _revolve_profile(np, trimesh, _densify(np, _core_prof),
+                                         target_x, target_y)
+            else:
+                _core = _hub_core_solid(np, trimesh, _hub_throat, target_x, target_y,
+                                        z_top=z_mid_top)
+            if vane_patches.get("shroud_profile") is not None:
+                # Analytic casing: revolve the annulus under the shroud floor —
+                # box-floor (duct bottom) -> outer wall up -> floor contour back in
+                # -> inner wall down (closed by revolve).
+                _sp = vane_patches["shroud_profile"]
+                _rin, _rout = float(_sp[0, 0]), float(_sp[-1, 0])
+                _cas_prof = ([(_rin, z_duct_bottom), (_rout, z_duct_bottom)]
+                             + [(float(r), float(z)) for r, z in _sp[::-1]]
+                             + [(_rin, z_duct_bottom)])   # close the annular loop (first==last)
+                _casing = _revolve_profile(np, trimesh, _densify(np, _cas_prof),
+                                           target_x, target_y)
+            else:
+                _casing = _shroud_casing_solid(np, trimesh, vane_patches["shroud"],
+                                               target_x, target_y, d_last)
             # Prisms span below the shroud floor (z_duct_bottom) up past the hub roof
             # (z_mid_top) so they fully pierce both; the portion below the floor sits
             # inside the casing (absorbed by the union) and the portion above the roof
@@ -1238,7 +1433,14 @@ def main():
                                "z_mid_base": z_mid_base, "z_mid_top": z_mid_top,
                                "z_box_floor": z_box_floor, "d_last": d_last,
                                "vane_outlet_ri": vane_outlet_ri,
-                               "vane_outlet_ro": vane_outlet_ro}, _mf)
+                               "vane_outlet_ro": vane_outlet_ro,
+                               # analytic hub/shroud invariants (spec 2026-08-10) —
+                               # empty/absent on the mesh fallback path.
+                               "hub_pts": list(vane_patches.get("hub_pts", [])),
+                               "shroud_ell": ([VANE_SHROUD_ELL_A * vane_outlet_ro,
+                                               VANE_SHROUD_ELL_B * vane_outlet_ro]
+                                              if vane_patches.get("hub_pts") else [])},
+                              _mf)
 
         # --- GLB scene + manifest + edges ----------------------------------
         scene = trimesh.Scene()

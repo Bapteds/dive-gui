@@ -42,6 +42,10 @@ export const chamberBuildSchema = z
     // swings about its own spindle by (vaneAngleDeg - 50). Range 45..55. Guide-vane
     // builds only. A different angle => a different cached build.
     vaneAngleDeg: z.number().finite().min(45).max(55).default(50),
+    // Outlet inner/outer diameter ratio (0.35..0.50, default 0.45). The outlet's
+    // outer diameter is X1; the inner diameter is outletRatio * outer. Guide-vane
+    // builds only. A different ratio => a different cached build.
+    outletRatio: z.number().finite().min(0.35).max(0.5).default(0.45),
     // Uniform scale for the whole internal assembly (cylinders + feet + vanes +
     // hollow/dome) about its floor-anchored axis; the box + axis stay fixed.
     // Geometry-only; up-scaling is clamped to the box height by the builder.

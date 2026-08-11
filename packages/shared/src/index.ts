@@ -2282,6 +2282,13 @@ export interface ChamberInput {
    */
   vaneAngleDeg?: number;
   /**
+   * Outlet inner/outer diameter ratio (0.35..0.50, default 0.45). The outlet's
+   * OUTER diameter is X1 (see resolveGeometryParams); the inner diameter is
+   * outletRatio * outer. Geometry-only (not part of the empirical model). Only
+   * affects guide-vane builds (ignored when guideVanes is false).
+   */
+  outletRatio?: number;
+  /**
    * Uniform scale for the WHOLE internal assembly at once — the three cylinders
    * (and the hollow-variant cup / central cylinder / dome), the four torque feet,
    * and the guide vanes (which key off the last diameter). The BOX (width /

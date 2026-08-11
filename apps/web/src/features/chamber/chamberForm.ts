@@ -32,6 +32,8 @@ export interface ChamberFormValues {
   guideVanes: boolean;
   /** Absolute guide-vane open angle (deg, 45..55; asset baked at 50°); each blade swings about its spindle. Guide-vane builds only. */
   vaneAngleDeg: number;
+  /** Outlet inner/outer diameter ratio (0.35..0.50, default 0.45). Guide-vane builds only. */
+  outletRatio: number;
   /** Box length along Y (mm); blank => auto 2 x width. */
   lengthOverride?: number;
   /** Hollow last-cylinder height (mm); required when variant === 'hollow'. */
@@ -64,6 +66,10 @@ export const chamberFormSchema = z
       .number({ invalid_type_error: 'Enter a number' })
       .min(45, 'Min 45°')
       .max(55, 'Max 55°'),
+    outletRatio: z
+      .number({ invalid_type_error: 'Enter a number' })
+      .min(0.35, 'Min 0.35')
+      .max(0.5, 'Max 0.50'),
     lengthOverride: optionalPositive,
     hollowLength: optionalPositive,
     wallThickness: optionalPositive,
@@ -90,6 +96,7 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   partScale: 1,
   guideVanes: false,
   vaneAngleDeg: 50,
+  outletRatio: 0.45,
   lengthOverride: undefined,
   hollowLength: 200,
   wallThickness: CHAMBER_WALL_THICKNESS_MM,
