@@ -815,6 +815,7 @@ export type {
   SnappyConfig,
   CfMeshConfig,
   CfMeshLayersConfig,
+  CfMeshPatchLayerSpec,
   CfMeshPatchType,
   MeshingPatch,
   SurfaceRefinement,

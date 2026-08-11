@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { CFMESH_PATCH_TYPES, DEFAULT_CFMESH_CONFIG } from '@/lib/api/types';
-import type { CfMeshConfig, CfMeshPatchType, MeshBounds, MeshingPatch, StlFile } from '@/lib/api/types';
+import type { CfMeshConfig, CfMeshPatchLayerSpec, CfMeshPatchType, MeshBounds, MeshingPatch, StlFile } from '@/lib/api/types';
 
 /** The type set for a discovered patch: the saved choice, its FMS type, else wall. */
 function seedPatchType(
@@ -18,6 +18,24 @@ function seedPatchType(
     return patch.type as CfMeshPatchType;
   }
   return 'wall';
+}
+
+type PatchLayerInput = { n: string; ratio: string; maxFirst: string };
+type PatchLayerMap = Record<string, PatchLayerInput>;
+
+/** Seed the per-patch layer values from the saved config (or the globals). */
+function seedPatchLayers(patches: MeshingPatch[], init: CfMeshConfig): PatchLayerMap {
+  const g = init.addLayers;
+  const map: PatchLayerMap = {};
+  for (const p of patches) {
+    const s = init.addLayers.perPatch?.[p.name];
+    map[p.name] = {
+      n: String(s?.nLayers ?? g.nLayers),
+      ratio: String(s?.thicknessRatio ?? g.thicknessRatio),
+      maxFirst: s?.maxFirstLayerThickness ? String(s.maxFirstLayerThickness) : '',
+    };
+  }
+  return map;
 }
 
 /**
@@ -112,6 +130,7 @@ export function CfMeshConfigForm({
     for (const p of patches) map[p.name] = seedPatchType(p, init.patchTypes);
     return map;
   });
+  const [patchLayers, setPatchLayers] = useState<PatchLayerMap>(() => seedPatchLayers(patches, init));
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   useEffect(() => {
@@ -126,6 +145,17 @@ export function CfMeshConfigForm({
     setPatchTypes((prev) => {
       const next: Record<string, CfMeshPatchType> = {};
       for (const p of patches) next[p.name] = prev[p.name] ?? seedPatchType(p, init.patchTypes);
+      const same =
+        Object.keys(next).length === Object.keys(prev).length &&
+        Object.keys(next).every((k) => prev[k] === next[k]);
+      return same ? prev : next;
+    });
+    setPatchLayers((prev) => {
+      const g = DEFAULT_CFMESH_CONFIG.addLayers;
+      const next: PatchLayerMap = {};
+      for (const p of patches) {
+        next[p.name] = prev[p.name] ?? { n: String(g.nLayers), ratio: String(g.thicknessRatio), maxFirst: '' };
+      }
       const same =
         Object.keys(next).length === Object.keys(prev).length &&
         Object.keys(next).every((k) => prev[k] === next[k]);
@@ -150,8 +180,18 @@ export function CfMeshConfigForm({
     return out;
   }, [patches, patchTypes]);
 
-  const config = useMemo<CfMeshConfig>(
-    () => ({
+  const config = useMemo<CfMeshConfig>(() => {
+    // Per-patch layer values, one entry per discovered patch (mirrors patchTypes).
+    const perPatch: Record<string, CfMeshPatchLayerSpec> = {};
+    for (const p of patches) {
+      const s = patchLayers[p.name] ?? { n: '3', ratio: '1.2', maxFirst: '' };
+      perPatch[p.name] = {
+        nLayers: Math.max(1, Math.round(Number(s.n) || DEFAULT_CFMESH_CONFIG.addLayers.nLayers)),
+        thicknessRatio: Math.max(1, Number(s.ratio) || DEFAULT_CFMESH_CONFIG.addLayers.thicknessRatio),
+        maxFirstLayerThickness: parseSize(s.maxFirst),
+      };
+    }
+    return {
       engine: 'cfmesh',
       maxCellSize: parseSize(maxCellSize),
       minCellSize: parseSize(minCellSize),
@@ -164,14 +204,14 @@ export function CfMeshConfigForm({
         nLayers: Math.max(1, Math.round(Number(nLayers) || 3)),
         thicknessRatio: Math.max(1, Number(thicknessRatio) || 1.2),
         maxFirstLayerThickness: parseSize(maxFirstLayer),
+        perPatch: Object.keys(perPatch).length > 0 ? perPatch : undefined,
       },
       cores: clampCores(String(cores), maxCores),
-    }),
-    [
-      maxCellSize, minCellSize, boundaryCellSize, extractFeatures, featureAngle, chosenPatchTypes,
-      layersOn, nLayers, thicknessRatio, maxFirstLayer, cores, maxCores,
-    ],
-  );
+    };
+  }, [
+    maxCellSize, minCellSize, boundaryCellSize, extractFeatures, featureAngle, chosenPatchTypes,
+    layersOn, nLayers, thicknessRatio, maxFirstLayer, patchLayers, patches, cores, maxCores,
+  ]);
 
   const handleGenerate = () => onGenerate(config);
 
@@ -354,35 +394,79 @@ export function CfMeshConfigForm({
                 Add boundary layers
               </label>
               {layersOn && (
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <Field label="Number of layers">
-                    <Input
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={nLayers}
-                      onChange={(e) => setNLayers(e.target.value)}
-                    />
-                  </Field>
-                  <Field label="Thickness ratio" helperText="Growth per layer (≥ 1).">
-                    <Input
-                      type="number"
-                      min="1"
-                      step="any"
-                      value={thicknessRatio}
-                      onChange={(e) => setThicknessRatio(e.target.value)}
-                    />
-                  </Field>
-                  <Field label="Max first layer (m)" helperText="Blank = auto.">
-                    <Input
-                      type="number"
-                      min="0"
-                      step="any"
-                      placeholder="auto"
-                      value={maxFirstLayer}
-                      onChange={(e) => setMaxFirstLayer(e.target.value)}
-                    />
-                  </Field>
+                <div className="flex flex-col gap-4">
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <Field label="Number of layers">
+                      <Input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={nLayers}
+                        onChange={(e) => setNLayers(e.target.value)}
+                      />
+                    </Field>
+                    <Field label="Thickness ratio" helperText="Growth per layer (≥ 1).">
+                      <Input
+                        type="number"
+                        min="1"
+                        step="any"
+                        value={thicknessRatio}
+                        onChange={(e) => setThicknessRatio(e.target.value)}
+                      />
+                    </Field>
+                    <Field label="Max first layer (m)" helperText="Blank = auto.">
+                      <Input
+                        type="number"
+                        min="0"
+                        step="any"
+                        placeholder="auto"
+                        value={maxFirstLayer}
+                        onChange={(e) => setMaxFirstLayer(e.target.value)}
+                      />
+                    </Field>
+                  </div>
+                  {patches.length > 0 && (
+                    <fieldset className="flex flex-col gap-2">
+                      <legend className="text-sm font-medium text-text">Per-patch layers</legend>
+                      <p className="text-xs text-text-secondary">
+                        Override count · thickness ratio · max first-layer per patch (blank max = auto). Rows left at
+                        the defaults above still send those values.
+                      </p>
+                      <div className="flex flex-col gap-2">
+                        {patches.map((patch) => {
+                          const s = patchLayers[patch.name] ?? { n: '3', ratio: '1.2', maxFirst: '' };
+                          return (
+                            <div key={patch.name} className="flex flex-wrap items-center gap-2">
+                              <span className="min-w-0 flex-1 truncate font-mono text-sm text-text" title={patch.name} translate="no">
+                                {patch.name}
+                              </span>
+                              <div className="flex items-center gap-1.5">
+                                <Input
+                                  type="number" min="1" step="1" className="w-16"
+                                  aria-label={`${patch.name} number of layers`}
+                                  value={s.n}
+                                  onChange={(e) => setPatchLayers((prev) => ({ ...prev, [patch.name]: { ...prev[patch.name], n: e.target.value } }))}
+                                />
+                                <Input
+                                  type="number" min="1" step="any" className="w-16"
+                                  aria-label={`${patch.name} thickness ratio`}
+                                  value={s.ratio}
+                                  onChange={(e) => setPatchLayers((prev) => ({ ...prev, [patch.name]: { ...prev[patch.name], ratio: e.target.value } }))}
+                                />
+                                <Input
+                                  type="number" min="0" step="any" className="w-20"
+                                  placeholder="auto"
+                                  aria-label={`${patch.name} max first layer thickness`}
+                                  value={s.maxFirst}
+                                  onChange={(e) => setPatchLayers((prev) => ({ ...prev, [patch.name]: { ...prev[patch.name], maxFirst: e.target.value } }))}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </fieldset>
+                  )}
                 </div>
               )}
             </fieldset>
