@@ -30,6 +30,8 @@ export interface ChamberFormValues {
   partScale: number;
   /** Replace the middle cylinder with a guide-vane ring (both variants). */
   guideVanes: boolean;
+  /** Cut the two corners at the box's inlet end. Geometry-only. */
+  chamferEnabled: boolean;
   /** Absolute guide-vane open angle (deg, 45..55; asset baked at 50°); each blade swings about its spindle. Guide-vane builds only. */
   vaneAngleDeg: number;
   /** Outlet inner/outer diameter ratio (0.35..0.50, default 0.45). Guide-vane builds only. */
@@ -54,6 +56,7 @@ export const chamberFormSchema = z
     relationsMaster: z.boolean(),
     relations: z.record(z.boolean()),
     guideVanes: z.boolean(),
+    chamferEnabled: z.boolean(),
     footAngleDeg: z
       .number({ invalid_type_error: 'Enter a number' })
       .min(0, 'Min 0° (tangential)')
@@ -95,6 +98,7 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   footAngleDeg: 40,
   partScale: 1,
   guideVanes: false,
+  chamferEnabled: true,
   vaneAngleDeg: 50,
   outletRatio: 0.45,
   lengthOverride: undefined,
