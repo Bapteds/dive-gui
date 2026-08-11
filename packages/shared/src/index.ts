@@ -935,6 +935,13 @@ export interface SnappyConfig {
   featureAngle: number;
   /** Per-STL feature overrides keyed by file name; absent key => the two globals above. */
   featureRefinements?: Record<string, FeatureRefinement>;
+  /**
+   * STL surfaces (by file name) whose feature edges are extracted + refined. Omitted
+   * or empty means EVERY surface (legacy default), so an old config keeps working. A
+   * surface not in this list is excluded from surfaceFeatureExtractDict AND from the
+   * snappyHexMeshDict `features` list — its edges are not captured.
+   */
+  featureSurfaces?: string[];
   /** Explicit keep-point; null => derive from bounds + domainType. */
   locationInMesh: [number, number, number] | null;
   /** Boundary-layer (prism) growth on the surfaces. */
