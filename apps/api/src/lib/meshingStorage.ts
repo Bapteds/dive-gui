@@ -118,6 +118,32 @@ export async function createSession(name: string, engine: MeshingEngine): Promis
   return meta;
 }
 
+/**
+ * Copy a session's reusable setup into a NEW session: its engine (meta) + the
+ * autosaved config.json + every file under constant/triSurface/. Deliberately
+ * omits run output (run.json, constant/polyMesh, system/, .viz) — the copy is
+ * meant to be re-meshed with fresh geometry. `name` defaults to "<source> (copy)".
+ * @throws when the source session has no readable metadata.
+ */
+export async function copySessionSetup(sourceId: string, name?: string): Promise<MeshingMeta> {
+  const source = await readMeta(sourceId);
+  if (!source) {
+    throw new Error(`Meshing session "${sourceId}" not found.`);
+  }
+  const meta = await createSession(name ?? `${source.name} (copy)`, source.engine);
+  // Copy the input surfaces (if any) verbatim.
+  const srcTri = triSurfaceDir(sourceId);
+  try {
+    await fs.cp(srcTri, triSurfaceDir(meta.id), { recursive: true });
+  } catch {
+    // No triSurface dir on the source (never had a surface) — nothing to copy.
+  }
+  // Copy the autosaved config (round-trips through the validated type).
+  const config = await readConfig(sourceId);
+  if (config) await writeConfig(meta.id, config);
+  return meta;
+}
+
 /** Read one session's metadata, or null when absent/unreadable. */
 export async function readMeta(sessionId: string): Promise<MeshingMeta | null> {
   try {
