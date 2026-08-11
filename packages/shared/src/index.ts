@@ -866,6 +866,21 @@ export interface SurfaceRefinement {
   max: number;
 }
 
+/**
+ * Per-surface boundary-layer override (snappy), keyed by STL file name. Absent key
+ * => the config's global nLayers / expansionRatio / finalLayerThickness are used.
+ * `relativeSizes` is NOT here: it is a single addLayersControls switch with no
+ * per-region equivalent in OpenFOAM, so it stays global on AddLayersConfig.
+ */
+export interface SurfaceLayerSpec {
+  /** Number of prism layers on this surface (>= 1). */
+  nLayers: number;
+  /** Growth ratio between successive layers (>= 1). */
+  expansionRatio: number;
+  /** Near-wall layer thickness (relative or absolute per the global relativeSizes). */
+  finalLayerThickness: number;
+}
+
 /** Boundary-layer (prism) growth controls for the surfaces. */
 export interface AddLayersConfig {
   enabled: boolean;
@@ -875,17 +890,20 @@ export interface AddLayersConfig {
    * so an old config keeps working; the UI lists one checkbox per surface.
    */
   surfaces?: string[];
-  /** Number of prism layers grown on the surfaces. */
+  /** Global default number of prism layers (per-surface override wins). */
   nLayers: number;
   /**
    * When true, `finalLayerThickness` is a fraction of the local cell size;
    * when false it is an absolute length (metres). Maps to snappy `relativeSizes`.
+   * GLOBAL only — OpenFOAM has no per-region relativeSizes.
    */
   relativeSizes: boolean;
-  /** Thickness of the layer nearest the surface (relative or absolute per `relativeSizes`). */
+  /** Global default near-wall layer thickness (per-surface override wins). */
   finalLayerThickness: number;
-  /** Growth ratio between successive layers (>= 1). */
+  /** Global default growth ratio between successive layers (>= 1) (per-surface override wins). */
   expansionRatio: number;
+  /** Per-surface overrides keyed by STL file name; absent key => the globals above. */
+  perSurface?: Record<string, SurfaceLayerSpec>;
 }
 
 /**
@@ -952,20 +970,36 @@ export const DEFAULT_SNAPPY_CONFIG: SnappyConfig = {
 };
 
 /**
- * cfMesh (cartesianMesh) boundary-layer controls. cfMesh sizes are ABSOLUTE
- * lengths and use a different vocabulary from snappy: growth is `thicknessRatio`
- * and the near-wall layer is capped by `maxFirstLayerThickness` (rather than
- * snappy's relativeSizes / finalLayerThickness / expansionRatio). Applied to all
- * boundaries (per-patch layers are a later refinement).
+ * Per-patch boundary-layer override (cfMesh), keyed by patch name (STL solid / FMS
+ * patch). Absent key => the config's global cfMesh layer values are used. Rendered
+ * as a `patchBoundaryLayers` sub-block, cfMesh's native per-patch mechanism.
  */
-export interface CfMeshLayersConfig {
-  enabled: boolean;
-  /** Number of prism layers. */
+export interface CfMeshPatchLayerSpec {
+  /** Number of prism layers on this patch (>= 1). */
   nLayers: number;
-  /** Growth ratio between successive layers (>= 1). Maps to cfMesh thicknessRatio. */
+  /** Growth ratio (cfMesh thicknessRatio, >= 1). */
   thicknessRatio: number;
   /** Cap on the first (near-wall) layer thickness in metres; null => cfMesh decides. */
   maxFirstLayerThickness: number | null;
+}
+
+/**
+ * cfMesh (cartesianMesh) boundary-layer controls. cfMesh sizes are ABSOLUTE
+ * lengths and use a different vocabulary from snappy: growth is `thicknessRatio`
+ * and the near-wall layer is capped by `maxFirstLayerThickness` (rather than
+ * snappy's relativeSizes / finalLayerThickness / expansionRatio). The global
+ * fields are the default; `perPatch` overrides them for named patches.
+ */
+export interface CfMeshLayersConfig {
+  enabled: boolean;
+  /** Global default number of prism layers. */
+  nLayers: number;
+  /** Global default growth ratio (>= 1). Maps to cfMesh thicknessRatio. */
+  thicknessRatio: number;
+  /** Global default cap on the first-layer thickness (m); null => cfMesh decides. */
+  maxFirstLayerThickness: number | null;
+  /** Per-patch overrides keyed by patch name; absent key => the globals above. */
+  perPatch?: Record<string, CfMeshPatchLayerSpec>;
 }
 
 /**
