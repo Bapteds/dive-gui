@@ -8,8 +8,10 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import AdmZip from 'adm-zip';
 import { app, authHeader, createTestUser, resetDatabase } from './helpers';
 import { setCommandRunner, type CommandResult, type CommandRunner } from '../src/lib/commandRunner';
+import { chamberPaths } from '../src/lib/chamberStorage';
 
 /** Build a minimal binary STL from a list of triangles (each = 3 xyz vertices). */
 function binaryStl(triangles: number[][][]): Buffer {
@@ -339,5 +341,123 @@ describe('Meshing sessions', () => {
     const id = body.session.id as string;
     await request(app).delete(`/api/v1/meshing/${id}`).set('Authorization', auth).expect(200);
     await request(app).get(`/api/v1/meshing/${id}`).set('Authorization', auth).expect(404);
+  });
+});
+
+/** One-facet ASCII STL solid (parseStlBounds needs a real triangle to accept it). */
+function asciiSolid(name: string): string {
+  return [
+    `solid ${name}`,
+    '  facet normal 0 0 1',
+    '    outer loop',
+    '      vertex 0 0 0',
+    '      vertex 1 0 0',
+    '      vertex 0 1 0',
+    '    endloop',
+    '  endfacet',
+    `endsolid ${name}`,
+  ].join('\n');
+}
+
+/** Seed a fake chamber build's trisurface.zip on disk (2 patches + domain.stl). */
+async function seedChamberBuild(hash: string): Promise<void> {
+  const zip = new AdmZip();
+  const inlet = asciiSolid('inlet');
+  const walls = asciiSolid('walls');
+  zip.addFile('inlet.stl', Buffer.from(inlet));
+  zip.addFile('walls.stl', Buffer.from(walls));
+  zip.addFile('domain.stl', Buffer.from(`${inlet}\n${walls}`)); // must be excluded
+  const { exportsDir } = chamberPaths(hash);
+  await fs.mkdir(exportsDir, { recursive: true });
+  await fs.writeFile(path.join(exportsDir, 'trisurface.zip'), zip.toBuffer());
+}
+
+describe('Meshing transfer + copy', () => {
+  it('copies a session (engine + config + surfaces), leaving the source intact', async () => {
+    const auth = authHeader(await createTestUser());
+    const created = await request(app)
+      .post('/api/v1/meshing')
+      .set('Authorization', auth)
+      .send({ name: 'Src', engine: 'snappy' })
+      .expect(201);
+    const srcId = created.body.session.id as string;
+    await request(app)
+      .post(`/api/v1/meshing/${srcId}/stl`)
+      .set('Authorization', auth)
+      .attach('files', CUBE_STL, 'cube.stl')
+      .expect(201);
+
+    const copied = await request(app)
+      .post('/api/v1/meshing/copy')
+      .set('Authorization', auth)
+      .send({ sourceId: srcId })
+      .expect(201);
+    expect(copied.body.session.id).not.toBe(srcId);
+    expect(copied.body.session.engine).toBe('snappy');
+    expect(copied.body.session.stlCount).toBe(1);
+    expect(copied.body.session.hasMesh).toBe(false);
+  });
+
+  it('imports a chamber build into a NEW session, excluding domain.stl', async () => {
+    const auth = authHeader(await createTestUser());
+    await seedChamberBuild('deadbeefdeadbeef');
+    const res = await request(app)
+      .post('/api/v1/meshing/from-chamber')
+      .set('Authorization', auth)
+      .send({ mode: 'new', chamberHash: 'deadbeefdeadbeef', name: 'From chamber', engine: 'snappy' })
+      .expect(201);
+    const names = (res.body.session.stls as { name: string }[]).map((s) => s.name).sort();
+    expect(names).toEqual(['inlet.stl', 'walls.stl']);
+  });
+
+  it('imports a chamber build into an EXISTING session (overwrite by name)', async () => {
+    const auth = authHeader(await createTestUser());
+    await seedChamberBuild('cafecafecafecafe');
+    const created = await request(app)
+      .post('/api/v1/meshing')
+      .set('Authorization', auth)
+      .send({ name: 'Target', engine: 'snappy' })
+      .expect(201);
+    const id = created.body.session.id as string;
+    const res = await request(app)
+      .post('/api/v1/meshing/from-chamber')
+      .set('Authorization', auth)
+      .send({ mode: 'existing', chamberHash: 'cafecafecafecafe', sessionId: id })
+      .expect(201);
+    expect((res.body.session.stls as { name: string }[]).map((s) => s.name).sort()).toEqual([
+      'inlet.stl',
+      'walls.stl',
+    ]);
+  });
+
+  it('copies a session AND injects a chamber build in one call (copyFrom)', async () => {
+    const auth = authHeader(await createTestUser());
+    await seedChamberBuild('f00df00df00df00d');
+    const created = await request(app)
+      .post('/api/v1/meshing')
+      .set('Authorization', auth)
+      .send({ name: 'Ref setup', engine: 'snappy' })
+      .expect(201);
+    const srcId = created.body.session.id as string;
+    const res = await request(app)
+      .post('/api/v1/meshing/from-chamber')
+      .set('Authorization', auth)
+      .send({ mode: 'copyFrom', chamberHash: 'f00df00df00df00d', sourceId: srcId })
+      .expect(201);
+    expect(res.body.session.id).not.toBe(srcId);
+    expect((res.body.session.stls as { name: string }[]).map((s) => s.name).sort()).toEqual([
+      'inlet.stl',
+      'walls.stl',
+    ]);
+  });
+
+  it('returns 409 CHAMBER_NOT_BUILT for an unknown chamber hash', async () => {
+    const auth = authHeader(await createTestUser());
+    const res = await request(app)
+      .post('/api/v1/meshing/from-chamber')
+      .set('Authorization', auth)
+      .send({ mode: 'new', chamberHash: 'notarealhash1234', name: 'X', engine: 'snappy' })
+      .expect(409);
+    expect(res.body.error.code).toBe('CHAMBER_NOT_BUILT');
   });
 });

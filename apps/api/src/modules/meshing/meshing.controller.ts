@@ -6,12 +6,14 @@ import type { Request, Response } from 'express';
 import { AppError } from '../../lib/AppError';
 import {
   addStlFiles,
+  copyMeshingSession,
   createMeshingSession,
   downloadSessionZip,
   getMeshingSession,
   getResultEdges,
   getResultGeometry,
   getResultManifest,
+  importChamberIntoMeshing,
   listMeshingSessions,
   readStlBytes,
   removeMeshingSession,
@@ -20,7 +22,13 @@ import {
   saveMeshingConfig,
   type StlUpload,
 } from './meshing.service';
-import type { CreateSessionInput, MeshingConfigInput, StlNameQuery } from './meshing.schemas';
+import type {
+  CopySessionInput,
+  CreateSessionInput,
+  FromChamberInput,
+  MeshingConfigInput,
+  StlNameQuery,
+} from './meshing.schemas';
 
 /** GET /meshing — list all sessions (summaries). */
 export async function listSessionsController(_req: Request, res: Response): Promise<void> {
@@ -32,6 +40,19 @@ export async function listSessionsController(_req: Request, res: Response): Prom
 export async function createSessionController(req: Request, res: Response): Promise<void> {
   const { name, engine } = req.body as CreateSessionInput;
   const session = await createMeshingSession(name, engine);
+  res.status(201).json({ session });
+}
+
+/** POST /meshing/copy — duplicate a session's engine + config + surfaces. */
+export async function copySessionController(req: Request, res: Response): Promise<void> {
+  const { sourceId, name } = req.body as CopySessionInput;
+  const session = await copyMeshingSession(sourceId, name);
+  res.status(201).json({ session });
+}
+
+/** POST /meshing/from-chamber — import a chamber build's patches into a session. */
+export async function fromChamberController(req: Request, res: Response): Promise<void> {
+  const session = await importChamberIntoMeshing(req.body as FromChamberInput);
   res.status(201).json({ session });
 }
 

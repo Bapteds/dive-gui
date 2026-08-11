@@ -6,11 +6,13 @@ import { requireAuth } from '../../middleware/requireAuth';
 import { validate } from '../../middleware/validate';
 import { parseCaseUpload } from '../projects/files.controller';
 import {
+  copySessionController,
   createSessionController,
   deleteSessionController,
   deleteStlController,
   downloadSessionController,
   downloadStlController,
+  fromChamberController,
   getMeshEdgesController,
   getMeshGeometryController,
   getMeshManifestController,
@@ -21,7 +23,9 @@ import {
   uploadStlController,
 } from './meshing.controller';
 import {
+  copySessionSchema,
   createSessionSchema,
+  fromChamberSchema,
   meshingConfigSchema,
   sessionIdParamSchema,
   stlNameQuerySchema,
@@ -36,6 +40,14 @@ export function createMeshingRouter(): Router {
   // Sessions: list + create.
   router.get('/', asyncHandler(listSessionsController));
   router.post('/', validate({ body: createSessionSchema }), asyncHandler(createSessionController));
+
+  // Copy a session's setup; import a chamber build's patches (new/existing/copyFrom).
+  router.post('/copy', validate({ body: copySessionSchema }), asyncHandler(copySessionController));
+  router.post(
+    '/from-chamber',
+    validate({ body: fromChamberSchema }),
+    asyncHandler(fromChamberController),
+  );
 
   // One session: read + delete.
   router.get('/:id', validate({ params: sessionIdParamSchema }), asyncHandler(getSessionController));

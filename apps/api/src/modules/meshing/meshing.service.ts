@@ -22,7 +22,8 @@ import type {
   MeshingSession,
   MeshingSessionSummary,
 } from '@dive/shared';
-import { FMS_EXTENSION, STL_EXTENSION } from '@dive/shared';
+import { CHAMBER_TRANSFER_EXCLUDED_STL, FMS_EXTENSION, STL_EXTENSION } from '@dive/shared';
+import AdmZip from 'adm-zip';
 import { env } from '../../config/env';
 import { AppError } from '../../lib/AppError';
 import { coreBudget } from '../../lib/cores';
@@ -34,6 +35,7 @@ import { mergedSolidNames } from '../../lib/stlMerge';
 import { runSnappyPipeline } from '../../lib/snappyPipeline';
 import { runCfMeshPipeline } from '../../lib/cfMeshPipeline';
 import {
+  copySessionSetup,
   createSession as createSessionDir,
   deleteSession,
   deleteStl,
@@ -51,6 +53,8 @@ import {
   writeStl,
   type MeshingMeta,
 } from '../../lib/meshingStorage';
+import { readChamberExport } from '../../lib/chamberStorage';
+import type { FromChamberInput } from './meshing.schemas';
 import {
   meshingVizDir,
   meshingVizIsStale,
@@ -173,6 +177,60 @@ export async function createMeshingSession(
 export async function getMeshingSession(sessionId: string): Promise<MeshingSession> {
   const meta = await requireSession(sessionId);
   return assembleSession(meta);
+}
+
+/** Copy a session's setup (engine + config + surfaces) into a new session. */
+export async function copyMeshingSession(sourceId: string, name?: string): Promise<MeshingSession> {
+  await requireSession(sourceId); // clean 404 when the source is absent
+  const meta = await copySessionSetup(sourceId, name);
+  return assembleSession(meta);
+}
+
+/**
+ * Read a built chamber's triSurface zip and return its per-patch STLs as uploads,
+ * excluding the pre-merged domain.stl. @throws 409 CHAMBER_NOT_BUILT when the
+ * build/zip is absent, 422 when the zip carries no usable patch STL.
+ */
+async function chamberPatchUploads(chamberHash: string): Promise<StlUpload[]> {
+  const zipBytes = await readChamberExport(chamberHash, 'trisurface');
+  if (!zipBytes) {
+    throw new AppError(409, 'CHAMBER_NOT_BUILT', 'This chamber has not been built yet.');
+  }
+  const zip = new AdmZip(zipBytes);
+  const uploads: StlUpload[] = [];
+  for (const entry of zip.getEntries()) {
+    if (entry.isDirectory) continue;
+    const base = entry.entryName.split('/').pop() ?? entry.entryName;
+    if (!base.toLowerCase().endsWith('.stl')) continue;
+    if (base === CHAMBER_TRANSFER_EXCLUDED_STL) continue;
+    uploads.push({ name: base, data: entry.getData() });
+  }
+  if (uploads.length === 0) {
+    throw new AppError(422, 'INVALID_STL', 'The chamber export has no patch surfaces to transfer.');
+  }
+  return uploads;
+}
+
+/**
+ * Import a chamber build's patches into a meshing session (new / existing /
+ * copyFrom) and return the resulting session. Reuses addStlFiles, so a cfMesh
+ * target still enforces its one-surfaceFile rules and every STL is validated.
+ */
+export async function importChamberIntoMeshing(input: FromChamberInput): Promise<MeshingSession> {
+  const uploads = await chamberPatchUploads(input.chamberHash);
+  let sessionId: string;
+  if (input.mode === 'new') {
+    const meta = await createSessionDir(input.name, input.engine);
+    sessionId = meta.id;
+  } else if (input.mode === 'existing') {
+    const meta = await requireSession(input.sessionId);
+    sessionId = meta.id;
+  } else {
+    await requireSession(input.sourceId); // clean 404 when the source is absent
+    const meta = await copySessionSetup(input.sourceId, input.name);
+    sessionId = meta.id;
+  }
+  return addStlFiles(sessionId, uploads);
 }
 
 /** Delete a session entirely. @throws 404 when absent. */
