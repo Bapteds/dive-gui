@@ -55,7 +55,7 @@ async function writeDicts(
     fs.writeFile(path.join(systemDir, 'blockMeshDict'), renderBlockMeshDict(domain), 'utf8'),
     fs.writeFile(
       path.join(systemDir, 'surfaceFeatureExtractDict'),
-      renderSurfaceFeatureExtractDict(stlNames),
+      renderSurfaceFeatureExtractDict(stlNames, config),
       'utf8',
     ),
     fs.writeFile(

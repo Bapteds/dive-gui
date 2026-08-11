@@ -233,18 +233,21 @@ mergePatchPairs ();
 ${FOOTER}`;
 }
 
-/** surfaceFeatureExtractDict: one feature-extraction block per STL region. */
-export function renderSurfaceFeatureExtractDict(stlNames: string[]): string {
+/** surfaceFeatureExtractDict: one feature-extraction block per STL region. The
+ *  includedAngle is per-patch (featureRefinements) with the global featureAngle
+ *  as the fallback for any surface with no override. */
+export function renderSurfaceFeatureExtractDict(stlNames: string[], config: SnappyConfig): string {
   const blocks = stlNames
-    .map(
-      (name) => `${name}
+    .map((name) => {
+      const angle = config.featureRefinements?.[name]?.includedAngle ?? config.featureAngle;
+      return `${name}
 {
     extractionMethod    extractFromSurface;
-    extractFromSurfaceCoeffs { includedAngle 150; }
+    extractFromSurfaceCoeffs { includedAngle ${angle}; }
     subsetFeatures { nonManifoldEdges no; openEdges yes; }
     writeObj no;
-}`,
-    )
+}`;
+    })
     .join('\n\n');
   return `${foamHeader('dictionary', 'surfaceFeatureExtractDict', 'system')}
 ${blocks}
@@ -269,7 +272,10 @@ export function renderSnappyHexMeshDict(
     .map((r) => `    ${r.file} { type triSurfaceMesh; name ${r.region}; }`)
     .join('\n');
   const features = regions
-    .map((r) => `        { file "${r.emesh}"; level ${config.featureLevel}; }`)
+    .map((r) => {
+      const level = config.featureRefinements?.[r.file]?.level ?? config.featureLevel;
+      return `        { file "${r.emesh}"; level ${level}; }`;
+    })
     .join('\n');
   const refinementSurfaces = regions
     .map((r) => {

@@ -61,11 +61,35 @@ describe('dict renderers', () => {
     expect(dict).toContain('domainBoundary');
   });
 
-  it('renders one feature-extraction block per STL', () => {
-    const dict = renderSurfaceFeatureExtractDict(['rotor.stl', 'stator.stl']);
+  it('renders one feature-extraction block per STL at the global angle', () => {
+    const dict = renderSurfaceFeatureExtractDict(['rotor.stl', 'stator.stl'], config());
     expect(dict).toContain('rotor.stl');
     expect(dict).toContain('stator.stl');
     expect(dict).toContain('extractFromSurface');
+    // Global default angle 150 applied to every block.
+    expect(dict).toContain('includedAngle 150;');
+  });
+
+  it('applies a per-patch includedAngle override, others at the global', () => {
+    const dict = renderSurfaceFeatureExtractDict(
+      ['rotor.stl', 'stator.stl'],
+      config({ featureAngle: 150, featureRefinements: { 'rotor.stl': { includedAngle: 100, level: 2 } } }),
+    );
+    // rotor block carries 100; the stator block keeps the global 150.
+    const rotorBlock = dict.slice(dict.indexOf('rotor.stl'), dict.indexOf('stator.stl'));
+    expect(rotorBlock).toContain('includedAngle 100;');
+    const statorBlock = dict.slice(dict.indexOf('stator.stl'));
+    expect(statorBlock).toContain('includedAngle 150;');
+  });
+
+  it('applies a per-patch feature level override in the snappy dict', () => {
+    const dict = renderSnappyHexMeshDict(
+      ['rotor.stl', 'stator.stl'],
+      domain,
+      config({ featureLevel: 2, featureRefinements: { 'rotor.stl': { includedAngle: 150, level: 5 } } }),
+    );
+    expect(dict).toContain('file "rotor.eMesh"; level 5;');
+    expect(dict).toContain('file "stator.eMesh"; level 2;');
   });
 
   it('renders a snappyHexMeshDict wiring each region, feature, and location', () => {
