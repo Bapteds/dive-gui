@@ -1135,18 +1135,29 @@ def main():
             h_last = num("hLast")
             if h_last <= 0:
                 raise ValueError("hLast must be > 0")
-            unscaled_part_height = h_first + h_middle + h_last
+            # The last cylinder is pinned to the box top; only the shoulder
+            # (first+middle) grows with partScale, so the clamp is sized against
+            # the shoulder (not the whole stack) below.
+            unscaled_shoulder = h_first + h_middle
 
-        # Clamp the scale UP so the scaled stack still fits under the box top (the
-        # box height is fixed). Scaling DOWN is always allowed. Same float slack as
-        # the exceed-box guard below, so partScale == 1 stays an exact no-op when
-        # the stack already equals the box height (the stepped identity P2=P11+P12).
-        if unscaled_part_height > 0 and part_scale * unscaled_part_height > height + 1e-6:
-            clamped = height / unscaled_part_height
+        # Clamp the scale UP so the internal assembly still fits. Scaling DOWN is
+        # always allowed.
+        #  - hollow: the whole stack must stay under the box top (unchanged).
+        #  - stepped: the last cylinder is pinned THROUGH the box top, so only the
+        #    shoulder (first+middle) grows with partScale; clamp so the shoulder
+        #    stays below the top with room for at least MIN_LAST_CYL_H of last cyl.
+        if variant == "hollow":
+            clamp_basis = unscaled_part_height
+            clamp_limit = height
+        else:
+            clamp_basis = unscaled_shoulder
+            clamp_limit = height + 2 * FLOOR_OVERCUT - MIN_LAST_CYL_H
+        if clamp_basis > 0 and part_scale * clamp_basis > clamp_limit + 1e-6:
+            clamped = clamp_limit / clamp_basis
             sys.stderr.write(
-                "WARN: partScale %.4f would push the stack (%.4f) past the box "
-                "height %.4f; clamped to %.4f\n"
-                % (part_scale, part_scale * unscaled_part_height, height, clamped))
+                "WARN: partScale %.4f exceeds the box budget (basis %.4f, limit "
+                "%.4f); clamped to %.4f\n"
+                % (part_scale, clamp_basis, clamp_limit, clamped))
             part_scale = clamped
 
         # Apply the uniform scale to every internal dimension. d_first / d_middle
@@ -1175,18 +1186,31 @@ def main():
             part_height = h_first + h_middle + max(hollow_len, c_h + dome_h)
             rmax = max(d_first, d_middle, d_last) / 2
         else:
-            h_last *= part_scale
+            h_last *= part_scale  # scaled model value (kept for reference/logging)
+            # Pin the last cylinder's TOP a hair above the box top so box.cut opens
+            # it through the top at ANY partScale (mirrors the floor overcut). Base
+            # stays at the scaled shoulder (h_first+h_middle); only the top is
+            # decoupled from the scale. Diameter still scales via d_last above.
+            # Part is later translated by z_floor = -height/2 - FLOOR_OVERCUT, so a
+            # local top of (height + 2*FLOOR_OVERCUT) lands at +height/2 + FLOOR_OVERCUT.
+            last_h_local = (height + 2 * FLOOR_OVERCUT) - (h_first + h_middle)
             part = make_part(cq, d_first, h_first, d_middle, h_middle, d_last, h_last,
-                             omit_middle=guide_vanes)
-            part_height = h_first + h_middle + h_last
+                             omit_middle=guide_vanes, h_last_override=last_h_local)
+            part_height = h_first + h_middle + last_h_local  # == height + 2*FLOOR_OVERCUT
             rmax = max(d_first, d_middle, d_last) / 2
 
-        # height now equals part_height exactly for the stepped variant (the model
-        # sets P2 = P11 + P12); allow a micron of float slack so that identity does
-        # not trip a false "part exceeds box" failure.
-        if part_height > height + 1e-6:
-            raise ValueError(
-                "part height %.4f exceeds box height %.4f" % (part_height, height))
+        # Hollow: the stack must fit under the box top. Stepped: the last cylinder
+        # is intentionally pinned THROUGH the top, so guard its height is positive
+        # instead (the clamp above guarantees the shoulder leaves room).
+        if variant == "hollow":
+            if part_height > height + 1e-6:
+                raise ValueError(
+                    "part height %.4f exceeds box height %.4f" % (part_height, height))
+        else:
+            if last_h_local <= 0:
+                raise ValueError(
+                    "last cylinder height %.4f <= 0 (shoulder above the box top)"
+                    % last_h_local)
 
         box = make_box(cq, width, length, height,
                        CHAMFER_END, BIG_CORNER_SIDE, ch_big, ch_small,
