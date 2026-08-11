@@ -5,7 +5,14 @@ import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { SegmentedRadioGroup } from '@/components/ui/segmented';
 import { DEFAULT_SNAPPY_CONFIG } from '@/lib/api/types';
-import type { DomainType, MeshBounds, SnappyConfig, StlFile, SurfaceRefinement } from '@/lib/api/types';
+import type {
+  DomainType,
+  FeatureRefinement,
+  MeshBounds,
+  SnappyConfig,
+  StlFile,
+  SurfaceRefinement,
+} from '@/lib/api/types';
 
 /**
  * SnappyConfigForm - the snappyHexMesh tunables for one run. Surface refinement
@@ -63,6 +70,21 @@ function defaultCores(max: number): number {
 type RefinementInput = { min: string; max: string };
 type RefinementMap = Record<string, RefinementInput>;
 
+type FeatureInput = { angle: string; level: string };
+type FeatureMap = Record<string, FeatureInput>;
+
+/** Seed the per-surface feature map from the last run (or the global defaults). */
+function seedFeatures(stls: StlFile[], initial: SnappyConfig | null): FeatureMap {
+  const gAngle = initial?.featureAngle ?? DEFAULT_SNAPPY_CONFIG.featureAngle;
+  const gLevel = initial?.featureLevel ?? DEFAULT_SNAPPY_CONFIG.featureLevel;
+  const map: FeatureMap = {};
+  for (const stl of stls) {
+    const f = initial?.featureRefinements?.[stl.name];
+    map[stl.name] = { angle: String(f?.includedAngle ?? gAngle), level: String(f?.level ?? gLevel) };
+  }
+  return map;
+}
+
 /** Seed the per-surface map from the last run (or defaults), covering every current STL. */
 function seedRefinements(stls: StlFile[], initial: SnappyConfig | null): RefinementMap {
   const fallback = initial?.surfaceRefinement ?? DEFAULT_SNAPPY_CONFIG.surfaceRefinement;
@@ -114,7 +136,7 @@ export function SnappyConfigForm({
   const [cellSize, setCellSize] = useState(init.baseCellSize ? String(init.baseCellSize) : '');
   const [refinements, setRefinements] = useState<RefinementMap>(() => seedRefinements(stls, initialConfig));
   const [marginFactor, setMarginFactor] = useState(String(init.marginFactor));
-  const [featureLevel, setFeatureLevel] = useState(String(init.featureLevel));
+  const [features, setFeatures] = useState<FeatureMap>(() => seedFeatures(stls, initialConfig));
   const [layersOn, setLayersOn] = useState(init.addLayers.enabled);
   const [layerSurfaceOn, setLayerSurfaceOn] = useState<Record<string, boolean>>(() =>
     seedLayerSurfaces(stls, initialConfig),
@@ -162,6 +184,17 @@ export function SnappyConfigForm({
         Object.keys(next).every((k) => prev[k] === next[k]);
       return same ? prev : next;
     });
+    // Same sync for the per-surface feature map: a new surface defaults to globals.
+    setFeatures((prev) => {
+      const gAngle = String(DEFAULT_SNAPPY_CONFIG.featureAngle);
+      const gLevel = String(DEFAULT_SNAPPY_CONFIG.featureLevel);
+      const next: FeatureMap = {};
+      for (const stl of stls) next[stl.name] = prev[stl.name] ?? { angle: gAngle, level: gLevel };
+      const same =
+        Object.keys(next).length === Object.keys(prev).length &&
+        Object.keys(next).every((k) => prev[k] === next[k]);
+      return same ? prev : next;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stlKey]);
 
@@ -186,6 +219,10 @@ export function SnappyConfigForm({
     setRefinements((prev) => ({ ...prev, [name]: { ...prev[name], [key]: value } }));
   };
 
+  const setFeat = (name: string, key: 'angle' | 'level', value: string) => {
+    setFeatures((prev) => ({ ...prev, [name]: { ...prev[name], [key]: value } }));
+  };
+
   // The assembled config, shared by the run CTA and the debounced autosave. A
   // stable reference while the inputs are unchanged (so autosave does not loop).
   const config = useMemo<SnappyConfig>(() => {
@@ -207,6 +244,21 @@ export function SnappyConfigForm({
     const surfaceRefinement =
       (firstName && surfaceRefinements[firstName]) || DEFAULT_SNAPPY_CONFIG.surfaceRefinement;
 
+    // Per-patch feature overrides, one entry per current STL (mirrors surfaceRefinements).
+    const featureRefinements: Record<string, FeatureRefinement> = {};
+    for (const stl of stls) {
+      const f = features[stl.name] ?? { angle: '150', level: '2' };
+      featureRefinements[stl.name] = {
+        includedAngle: Math.min(180, Math.max(0, Number(f.angle) || DEFAULT_SNAPPY_CONFIG.featureAngle)),
+        level: Math.max(0, Math.round(Number(f.level) || DEFAULT_SNAPPY_CONFIG.featureLevel)),
+      };
+    }
+    // Scalar globals: the first surface's values, else the defaults (like surfaceRefinement).
+    const featureScalar =
+      firstName && featureRefinements[firstName]
+        ? featureRefinements[firstName]
+        : { includedAngle: DEFAULT_SNAPPY_CONFIG.featureAngle, level: DEFAULT_SNAPPY_CONFIG.featureLevel };
+
     return {
       engine: 'snappy',
       domainType,
@@ -214,7 +266,9 @@ export function SnappyConfigForm({
       marginFactor: margin,
       surfaceRefinement,
       surfaceRefinements,
-      featureLevel: Math.max(0, Math.round(Number(featureLevel) || DEFAULT_SNAPPY_CONFIG.featureLevel)),
+      featureLevel: featureScalar.level,
+      featureAngle: featureScalar.includedAngle,
+      featureRefinements,
       locationInMesh: location && location.every(Number.isFinite) ? location : null,
       addLayers: {
         enabled: layersOn,
@@ -228,7 +282,7 @@ export function SnappyConfigForm({
       cores: clampCores(String(cores), maxCores),
     };
   }, [
-    domainType, cellSize, refinements, margin, featureLevel, layersOn, layerSurfaceOn, nLayers,
+    domainType, cellSize, refinements, margin, features, layersOn, layerSurfaceOn, nLayers,
     relativeSizes, finalThickness, expansionRatio, manualPoint, px, py, pz, cores, maxCores, stls,
   ]);
 
@@ -385,15 +439,50 @@ export function SnappyConfigForm({
                   onChange={(e) => setMarginFactor(e.target.value)}
                 />
               </Field>
-              <Field label="Feature-edge level" helperText="Refinement on sharp edges.">
-                <Input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={featureLevel}
-                  onChange={(e) => setFeatureLevel(e.target.value)}
-                />
-              </Field>
+              <fieldset className="flex flex-col gap-2 sm:col-span-2">
+                <legend className="text-sm font-medium text-text">Feature edges (per surface)</legend>
+                {stls.length === 0 ? (
+                  <p className="text-xs text-text-secondary">Upload a surface to set its feature edges.</p>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {stls.map((stl) => {
+                      const f = features[stl.name] ?? { angle: '150', level: '2' };
+                      return (
+                        <div key={stl.name} className="flex flex-wrap items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate text-sm text-text" title={stl.name}>
+                            {stl.name}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type="number"
+                              min="0"
+                              max="180"
+                              step="any"
+                              aria-label={`${stl.name} feature angle (degrees)`}
+                              className="w-20"
+                              value={f.angle}
+                              onChange={(e) => setFeat(stl.name, 'angle', e.target.value)}
+                            />
+                            <span className="text-sm text-text-secondary">°, level</span>
+                            <Input
+                              type="number"
+                              min="0"
+                              step="1"
+                              aria-label={`${stl.name} feature refinement level`}
+                              className="w-20"
+                              value={f.level}
+                              onChange={(e) => setFeat(stl.name, 'level', e.target.value)}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="text-xs text-text-secondary">
+                  Angle: sharper-than-this edges are extracted (default 150°). Level: octree refinement near them (default 2).
+                </p>
+              </fieldset>
             </div>
 
             {/* CPU cores: 1 = serial, more = parallel snappyHexMesh (MPI). */}
