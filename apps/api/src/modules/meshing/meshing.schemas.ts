@@ -9,6 +9,42 @@ export const createSessionSchema = z.object({
 });
 export type CreateSessionInput = z.infer<typeof createSessionSchema>;
 
+/** Body for POST /meshing/copy — duplicate a session's engine + config + surfaces. */
+export const copySessionSchema = z.object({
+  sourceId: z.string().trim().min(1, 'A source session id is required'),
+  name: z.string().trim().min(1).max(120).optional(),
+});
+export type CopySessionInput = z.infer<typeof copySessionSchema>;
+
+/**
+ * Body for POST /meshing/from-chamber — import a built chamber's patch surfaces
+ * into a meshing session. `mode` selects the target:
+ *  - 'new':      create a session (name + engine) and import into it.
+ *  - 'existing': import into `sessionId` (its engine governs meshing).
+ *  - 'copyFrom': copy `sourceId` (engine + config + surfaces) into a new session,
+ *                then import — the combined optimization-iteration operation.
+ */
+export const fromChamberSchema = z.discriminatedUnion('mode', [
+  z.object({
+    mode: z.literal('new'),
+    chamberHash: z.string().trim().min(1),
+    name: z.string().trim().min(1).max(120),
+    engine: z.enum(MESHING_ENGINES).default('snappy'),
+  }),
+  z.object({
+    mode: z.literal('existing'),
+    chamberHash: z.string().trim().min(1),
+    sessionId: z.string().trim().min(1),
+  }),
+  z.object({
+    mode: z.literal('copyFrom'),
+    chamberHash: z.string().trim().min(1),
+    sourceId: z.string().trim().min(1),
+    name: z.string().trim().min(1).max(120).optional(),
+  }),
+]);
+export type FromChamberInput = z.infer<typeof fromChamberSchema>;
+
 /** Route params carrying a session id. */
 export const sessionIdParamSchema = z.object({
   id: z.string().min(1, 'Session id is required'),

@@ -1003,6 +1003,14 @@ export interface CfMeshConfig {
 /** The config a run/session carries; its `engine` selects the shape. */
 export type MeshingConfig = SnappyConfig | CfMeshConfig;
 
+/**
+ * A chamber build's patches transfer into a meshing session as one STL per patch;
+ * the pre-merged domain.stl in trisurface.zip is NEVER transferred (it would
+ * duplicate every patch's triangles). Both engines consume the per-patch files:
+ * snappy directly, cfMesh via its existing run-time merge.
+ */
+export const CHAMBER_TRANSFER_EXCLUDED_STL = 'domain.stl';
+
 /** The auto/minimal cfMesh defaults the config form starts from. */
 export const DEFAULT_CFMESH_CONFIG: CfMeshConfig = {
   engine: 'cfmesh',
