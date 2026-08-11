@@ -490,6 +490,19 @@ describe('runSnappySchema — per-patch feature edges', () => {
   });
 });
 
+describe('runSnappySchema — feature surfaces gate', () => {
+  const base = { engine: 'snappy', domainType: 'internal', surfaceRefinement: { min: 1, max: 2 } };
+
+  it('accepts a featureSurfaces list', () => {
+    const parsed = runSnappySchema.parse({ ...base, featureSurfaces: ['rotor.stl'] });
+    expect(parsed.featureSurfaces).toEqual(['rotor.stl']);
+  });
+
+  it('leaves featureSurfaces undefined when omitted', () => {
+    expect(runSnappySchema.parse(base).featureSurfaces).toBeUndefined();
+  });
+});
+
 describe('per-patch boundary layers — schema', () => {
   const snappyBase = { engine: 'snappy', domainType: 'internal', surfaceRefinement: { min: 1, max: 2 } };
   const cfBase = { engine: 'cfmesh' };

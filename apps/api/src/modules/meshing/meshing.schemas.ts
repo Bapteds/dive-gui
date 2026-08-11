@@ -104,6 +104,8 @@ export const runSnappySchema = z.object({
   featureAngle: z.number().min(0).max(180).default(150),
   // Per-patch feature overrides keyed by STL file name; absent key => the globals above.
   featureRefinements: z.record(z.string(), featureRefinementSchema).optional(),
+  // Surfaces (STL file names) whose feature edges are extracted+refined; omitted/empty ⇒ all.
+  featureSurfaces: z.array(z.string()).optional(),
   locationInMesh: z
     .tuple([z.number().finite(), z.number().finite(), z.number().finite()])
     .nullable()
