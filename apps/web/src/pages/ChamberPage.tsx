@@ -1,7 +1,7 @@
 import { Suspense, lazy, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Send } from 'lucide-react';
 import { computeChamberOutputs } from '@dive/shared';
 import type { ChamberConstraint, ChamberOutput, ChamberOutputKey } from '@/lib/api/types';
 import { ApiError } from '@/lib/api/client';
@@ -15,6 +15,8 @@ import {
 } from '@/features/chamber/chamberForm';
 import { ChamberOutputsTable } from '@/features/chamber/ChamberOutputsTable';
 import { ChamberExportButtons } from '@/features/chamber/ChamberExportButtons';
+import { SendToMeshingDialog } from '@/features/chamber/SendToMeshingDialog';
+import { Button } from '@/components/ui/button';
 import { useBuildChamber } from '@/features/chamber/useChamber';
 
 // The 3D viewer pulls in three.js; lazy-load it so the initial bundle stays lean
@@ -47,6 +49,7 @@ export function ChamberPage() {
     {},
   );
   const [hash, setHash] = useState<string | null>(null);
+  const [sendOpen, setSendOpen] = useState(false);
   const build = useBuildChamber();
 
   const values = watch();
@@ -129,6 +132,21 @@ export function ChamberPage() {
               Download the built chamber for meshing or CAD.
             </p>
             <ChamberExportButtons hash={hash} />
+            <div className="mt-4 border-t border-border pt-4">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={!hash}
+                onClick={() => setSendOpen(true)}
+              >
+                <Send className="size-4" strokeWidth={1.75} aria-hidden="true" />
+                Send to Meshing
+              </Button>
+            </div>
+            {hash && (
+              <SendToMeshingDialog hash={hash} open={sendOpen} onOpenChange={setSendOpen} />
+            )}
           </div>
         </div>
 
