@@ -131,6 +131,13 @@ export function CfMeshConfigForm({
     return map;
   });
   const [patchLayers, setPatchLayers] = useState<PatchLayerMap>(() => seedPatchLayers(patches, init));
+  // Which patches use a CUSTOM per-patch layer override (vs inherit the global block).
+  // Seeds on iff the saved config carried a perPatch entry for the patch.
+  const [patchLayerOn, setPatchLayerOn] = useState<Record<string, boolean>>(() => {
+    const map: Record<string, boolean> = {};
+    for (const p of patches) map[p.name] = !!init.addLayers.perPatch?.[p.name];
+    return map;
+  });
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   useEffect(() => {
@@ -161,6 +168,14 @@ export function CfMeshConfigForm({
         Object.keys(next).every((k) => prev[k] === next[k]);
       return same ? prev : next;
     });
+    setPatchLayerOn((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const p of patches) next[p.name] = prev[p.name] ?? false;
+      const same =
+        Object.keys(next).length === Object.keys(prev).length &&
+        Object.keys(next).every((k) => prev[k] === next[k]);
+      return same ? prev : next;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [patchKey]);
 
@@ -181,9 +196,12 @@ export function CfMeshConfigForm({
   }, [patches, patchTypes]);
 
   const config = useMemo<CfMeshConfig>(() => {
-    // Per-patch layer values, one entry per discovered patch (mirrors patchTypes).
+    // Only patches with the Override box ticked get a perPatch entry; the rest inherit
+    // the global boundaryLayers block (the renderer emits patchBoundaryLayers only for
+    // patches present here).
     const perPatch: Record<string, CfMeshPatchLayerSpec> = {};
     for (const p of patches) {
+      if (!patchLayerOn[p.name]) continue;
       const s = patchLayers[p.name] ?? { n: '3', ratio: '1.2', maxFirst: '' };
       perPatch[p.name] = {
         nLayers: Math.max(1, Math.round(Number(s.n) || DEFAULT_CFMESH_CONFIG.addLayers.nLayers)),
@@ -210,7 +228,7 @@ export function CfMeshConfigForm({
     };
   }, [
     maxCellSize, minCellSize, boundaryCellSize, extractFeatures, featureAngle, chosenPatchTypes,
-    layersOn, nLayers, thicknessRatio, maxFirstLayer, patchLayers, patches, cores, maxCores,
+    layersOn, nLayers, thicknessRatio, maxFirstLayer, patchLayers, patchLayerOn, patches, cores, maxCores,
   ]);
 
   const handleGenerate = () => onGenerate(config);
@@ -429,26 +447,35 @@ export function CfMeshConfigForm({
                     <fieldset className="flex flex-col gap-2">
                       <legend className="text-sm font-medium text-text">Per-patch layers</legend>
                       <p className="text-xs text-text-secondary">
-                        Override count · thickness ratio · max first-layer per patch (blank max = auto). Rows left at
-                        the defaults above still send those values.
+                        Tick a patch to override the global layers for it (count · thickness ratio · max first-layer,
+                        blank max = auto). Unticked patches inherit the global settings above.
                       </p>
                       <div className="flex flex-col gap-2">
                         {patches.map((patch) => {
+                          const on = patchLayerOn[patch.name] ?? false;
                           const s = patchLayers[patch.name] ?? { n: '3', ratio: '1.2', maxFirst: '' };
                           return (
                             <div key={patch.name} className="flex flex-wrap items-center gap-2">
-                              <span className="min-w-0 flex-1 truncate font-mono text-sm text-text" title={patch.name} translate="no">
-                                {patch.name}
-                              </span>
+                              <label className="flex min-w-0 flex-1 items-center gap-2 font-mono text-sm text-text" title={patch.name} translate="no">
+                                <input
+                                  type="checkbox"
+                                  className="size-4 shrink-0 rounded-sm border-border-strong text-cta focus-visible:ring-2 focus-visible:ring-focus-ring"
+                                  checked={on}
+                                  onChange={(e) => setPatchLayerOn((prev) => ({ ...prev, [patch.name]: e.target.checked }))}
+                                />
+                                <span className="min-w-0 truncate">{patch.name}</span>
+                              </label>
                               <div className="flex items-center gap-1.5">
                                 <Input
                                   type="number" min="1" step="1" className="w-16"
+                                  disabled={!on}
                                   aria-label={`${patch.name} number of layers`}
                                   value={s.n}
                                   onChange={(e) => setPatchLayers((prev) => ({ ...prev, [patch.name]: { ...prev[patch.name], n: e.target.value } }))}
                                 />
                                 <Input
                                   type="number" min="1" step="any" className="w-16"
+                                  disabled={!on}
                                   aria-label={`${patch.name} thickness ratio`}
                                   value={s.ratio}
                                   onChange={(e) => setPatchLayers((prev) => ({ ...prev, [patch.name]: { ...prev[patch.name], ratio: e.target.value } }))}
@@ -456,6 +483,7 @@ export function CfMeshConfigForm({
                                 <Input
                                   type="number" min="0" step="any" className="w-20"
                                   placeholder="auto"
+                                  disabled={!on}
                                   aria-label={`${patch.name} max first layer thickness`}
                                   value={s.maxFirst}
                                   onChange={(e) => setPatchLayers((prev) => ({ ...prev, [patch.name]: { ...prev[patch.name], maxFirst: e.target.value } }))}
