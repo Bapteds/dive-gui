@@ -820,6 +820,7 @@ export type {
   SurfaceRefinement,
   FeatureRefinement,
   AddLayersConfig,
+  SurfaceLayerSpec,
   StlFile,
   MeshingRun,
   MeshingSession,
