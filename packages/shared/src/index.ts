@@ -888,6 +888,17 @@ export interface AddLayersConfig {
   expansionRatio: number;
 }
 
+/**
+ * Per-patch feature-edge extraction override (snappy), keyed by STL file name.
+ * Absent key => the config's global `featureAngle` / `featureLevel` are used.
+ */
+export interface FeatureRefinement {
+  /** surfaceFeatureExtract includedAngle threshold in degrees (0–180). */
+  includedAngle: number;
+  /** snappy octree refinement level applied near the extracted edges (int 0–10). */
+  level: number;
+}
+
 export interface SnappyConfig {
   /** Discriminates the meshing-config union; always 'snappy' here. */
   engine: 'snappy';
@@ -900,8 +911,12 @@ export interface SnappyConfig {
   surfaceRefinement: SurfaceRefinement;
   /** Per-surface refinement keyed by STL file name; falls back to `surfaceRefinement`. */
   surfaceRefinements?: Record<string, SurfaceRefinement>;
-  /** Feature-edge (eMesh) refinement level. */
+  /** Global default feature-edge (eMesh) refinement level; per-patch override wins. */
   featureLevel: number;
+  /** Global default surfaceFeatureExtract includedAngle (deg); per-patch override wins. */
+  featureAngle: number;
+  /** Per-STL feature overrides keyed by file name; absent key => the two globals above. */
+  featureRefinements?: Record<string, FeatureRefinement>;
   /** Explicit keep-point; null => derive from bounds + domainType. */
   locationInMesh: [number, number, number] | null;
   /** Boundary-layer (prism) growth on the surfaces. */
@@ -924,6 +939,7 @@ export const DEFAULT_SNAPPY_CONFIG: SnappyConfig = {
   marginFactor: 0.1,
   surfaceRefinement: { min: 1, max: 2 },
   featureLevel: 2,
+  featureAngle: 150,
   locationInMesh: null,
   addLayers: {
     enabled: false,
