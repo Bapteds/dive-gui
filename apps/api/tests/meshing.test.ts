@@ -541,4 +541,16 @@ describe('per-patch boundary layers — schema', () => {
       }),
     ).toThrow();
   });
+
+  it('rejects an out-of-range per-patch layer value', () => {
+    expect(() =>
+      runCfMeshSchema.parse({
+        ...cfBase,
+        addLayers: {
+          enabled: true, nLayers: 3, thicknessRatio: 1.2, maxFirstLayerThickness: null,
+          perPatch: { walls: { nLayers: 5, thicknessRatio: 50, maxFirstLayerThickness: null } },
+        },
+      }),
+    ).toThrow();
+  });
 });

@@ -78,6 +78,20 @@ const featureRefinementSchema = z.object({
   level: z.number().int().min(0).max(10),
 });
 
+/** A per-surface (snappy) boundary layer override. */
+const surfaceLayerSpecSchema = z.object({
+  nLayers: z.number().int().min(1).max(20),
+  expansionRatio: z.number().min(1).max(5),
+  finalLayerThickness: z.number().positive(),
+});
+
+/** A per-patch (cfMesh) boundary layer override. */
+const cfMeshPatchLayerSpecSchema = z.object({
+  nLayers: z.number().int().min(1).max(20),
+  thicknessRatio: z.number().min(1).max(5),
+  maxFirstLayerThickness: z.number().positive().nullable().default(null),
+});
+
 export const runSnappySchema = z.object({
   engine: z.literal('snappy'),
   domainType: z.enum(DOMAIN_TYPES),
@@ -104,16 +118,7 @@ export const runSnappySchema = z.object({
       finalLayerThickness: z.number().positive().default(0.5),
       expansionRatio: z.number().min(1).max(5).default(1.2),
       // Per-surface layer overrides keyed by STL file name; absent key => the globals.
-      perSurface: z
-        .record(
-          z.string(),
-          z.object({
-            nLayers: z.number().int().min(1).max(20),
-            expansionRatio: z.number().min(1).max(5),
-            finalLayerThickness: z.number().positive(),
-          }),
-        )
-        .optional(),
+      perSurface: z.record(z.string(), surfaceLayerSpecSchema).optional(),
     })
     .default({
       enabled: false,
@@ -151,16 +156,7 @@ export const runCfMeshSchema = z.object({
       thicknessRatio: z.number().min(1).max(5).default(1.2),
       maxFirstLayerThickness: z.number().positive().nullable().default(null),
       // Per-patch layer overrides keyed by patch name; absent key => the globals.
-      perPatch: z
-        .record(
-          z.string(),
-          z.object({
-            nLayers: z.number().int().min(1).max(20),
-            thicknessRatio: z.number().min(1).max(5),
-            maxFirstLayerThickness: z.number().positive().nullable().default(null),
-          }),
-        )
-        .optional(),
+      perPatch: z.record(z.string(), cfMeshPatchLayerSpecSchema).optional(),
     })
     .default({ enabled: false, nLayers: 3, thicknessRatio: 1.2, maxFirstLayerThickness: null }),
   cores: z.number().int().min(1).max(1024).default(1),
