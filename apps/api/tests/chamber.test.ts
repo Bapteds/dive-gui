@@ -193,6 +193,27 @@ describe('Chamber Creation', () => {
     expect(on.body.outputs).toHaveLength(12);
   });
 
+  it('keys the build on the chamfer-enabled flag, defaulting to on', async () => {
+    setCommandRunner(successRunner);
+    const auth = authHeader(await createTestUser());
+
+    const enabled = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(BUILD)
+      .expect(200);
+    const disabled = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, chamferEnabled: false })
+      .expect(200);
+
+    // Disabling the chamfer changes the geometry => a different cache key,
+    // but the twelve outputs (the model) are untouched either way.
+    expect(enabled.body.hash).not.toBe(disabled.body.hash);
+    expect(disabled.body.outputs).toEqual(enabled.body.outputs);
+  });
+
   it('accepts an outlet ratio and keys the build on it', async () => {
     setCommandRunner(successRunner);
     const auth = authHeader(await createTestUser());

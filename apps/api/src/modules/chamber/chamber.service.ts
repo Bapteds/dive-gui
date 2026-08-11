@@ -107,6 +107,11 @@ function resolveGeometryParams(
   params.footAngleDeg = input.footAngleDeg ?? 40;
   // Guide-vane throat (geometry-only): a different flag => a different build.
   params.guideVanes = input.guideVanes ?? false;
+  // Whether the box's two inlet-end corners get cut. Geometry-only: the
+  // chamfer's own model values (chamferLength1/2 etc., in the loop below) are
+  // computed unconditionally either way, and only this flag decides whether
+  // make_box() actually cuts them. Default true (today's always-on behaviour).
+  params.chamferEnabled = input.chamferEnabled ?? true;
   // Absolute guide-vane open angle (deg, 45..55; asset baked at 50°); only affects
   // guide-vane builds. Part of the cache key, so a new angle => a new build.
   params.vaneAngleDeg = input.vaneAngleDeg ?? 50;

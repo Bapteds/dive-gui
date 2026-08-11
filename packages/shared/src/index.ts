@@ -2274,6 +2274,15 @@ export interface ChamberInput {
    */
   guideVanes?: boolean;
   /**
+   * Cut the two asymmetric corners at the box's inlet end (the chamfer).
+   * Geometry-only (not part of the empirical model) — the chamfer's own model
+   * values (chamferLength1/2, chamferWidth1/2, distFromSideChamfer1,
+   * distFromEnd) are still computed and shown in the outputs table, and the
+   * internal part's position is unaffected, regardless of this flag. Default
+   * true.
+   */
+  chamferEnabled?: boolean;
+  /**
    * Absolute guide-vane open angle in degrees. The asset is baked at 50°; the
    * builder swings each blade about its OWN vertical spindle (pivot) axis at
    * pivotRadius by (vaneAngleDeg − 50) to reach this angle. Range 45..55 (±5° about

@@ -38,6 +38,10 @@ export const chamberBuildSchema = z
     // Replace the middle cylinder with a guide-vane ring (geometry-only; both
     // variants). A different flag => a different cached build.
     guideVanes: z.boolean().default(false),
+    // Cut the two corners at the box's inlet end (geometry-only; the chamfer's
+    // own model values keep being computed regardless). A different flag =>
+    // a different cached build.
+    chamferEnabled: z.boolean().default(true),
     // Absolute guide-vane open angle (deg); the asset is baked at 50° and each blade
     // swings about its own spindle by (vaneAngleDeg - 50). Range 45..55. Guide-vane
     // builds only. A different angle => a different cached build.
