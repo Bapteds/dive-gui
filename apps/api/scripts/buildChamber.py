@@ -57,6 +57,8 @@ import zipfile
 RATIO_D_FIRST_OVER_LAST = 1.147030    # from the original Part.stl (2.81550/2.45460)
 RATIO_D_MIDDLE_OVER_LAST = 0.80       # middle = 0.80 x D_LAST (both variants)
 FLOOR_OVERCUT = 0.01                  # push the part below the floor so it opens
+MIN_LAST_CYL_H = 0.05                 # stepped: min height kept for the last (top)
+                                      # cylinder when up-scaling pushes the shoulder up
 CHAMFER_END = ">Y"                    # the chamfered end (a width-side)
 BIG_CORNER_SIDE = ">X"                # X-wall whose +Y corner gets the big chamfer
 TESS_TOL = 0.01                       # tessellation tolerance (m)
@@ -144,18 +146,23 @@ def make_box(cq, width, length, height, end, big_side, ch_big, ch_small, enabled
     return b
 
 
-def make_part(cq, d_first, h_first, d_middle, h_middle, d_last, h_last, omit_middle=False):
+def make_part(cq, d_first, h_first, d_middle, h_middle, d_last, h_last,
+              omit_middle=False, h_last_override=None):
     """Three coaxial cylinders stacked along +Z, base of the FIRST at z = 0
     (the 'stepped' variant). With omit_middle the MIDDLE cylinder is left out
     (the guide-vane band is open): first (0..h_first) + last, the last floating
-    at its usual height (h_first+h_middle .. +h_last) so the band is fluid."""
+    at its usual height (h_first+h_middle .. +h_last) so the band is fluid.
+    h_last_override, when given, is the last cylinder's extrude length instead of
+    h_last -- the stepped build passes it to pin the last cylinder's TOP to the
+    box top regardless of partScale (base unchanged at h_first+h_middle)."""
+    last_h = h_last if h_last_override is None else h_last_override
     part = cq.Workplane("XY").circle(d_first / 2).extrude(h_first)
     if omit_middle:
         last = (cq.Workplane("XY", origin=(0, 0, h_first + h_middle))
-                .circle(d_last / 2).extrude(h_last))
+                .circle(d_last / 2).extrude(last_h))
         return part.union(last)
     part = part.faces(">Z").workplane().circle(d_middle / 2).extrude(h_middle)
-    part = part.faces(">Z").workplane().circle(d_last / 2).extrude(h_last)
+    part = part.faces(">Z").workplane().circle(d_last / 2).extrude(last_h)
     return part
 
 
