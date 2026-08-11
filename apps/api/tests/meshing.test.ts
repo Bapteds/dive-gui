@@ -12,6 +12,7 @@ import AdmZip from 'adm-zip';
 import { app, authHeader, createTestUser, resetDatabase } from './helpers';
 import { setCommandRunner, type CommandResult, type CommandRunner } from '../src/lib/commandRunner';
 import { chamberPaths } from '../src/lib/chamberStorage';
+import { runSnappySchema } from '../src/modules/meshing/meshing.schemas';
 
 /** Build a minimal binary STL from a list of triangles (each = 3 xyz vertices). */
 function binaryStl(triangles: number[][][]): Buffer {
@@ -459,5 +460,32 @@ describe('Meshing transfer + copy', () => {
       .send({ mode: 'new', chamberHash: 'notarealhash1234', name: 'X', engine: 'snappy' })
       .expect(409);
     expect(res.body.error.code).toBe('CHAMBER_NOT_BUILT');
+  });
+});
+
+describe('runSnappySchema — per-patch feature edges', () => {
+  const base = { engine: 'snappy', domainType: 'internal', surfaceRefinement: { min: 1, max: 2 } };
+
+  it('defaults featureAngle to 150 and leaves featureRefinements undefined', () => {
+    const parsed = runSnappySchema.parse(base);
+    expect(parsed.featureAngle).toBe(150);
+    expect(parsed.featureRefinements).toBeUndefined();
+  });
+
+  it('accepts a per-patch feature override', () => {
+    const parsed = runSnappySchema.parse({
+      ...base,
+      featureRefinements: { 'rotor.stl': { includedAngle: 120, level: 4 } },
+    });
+    expect(parsed.featureRefinements?.['rotor.stl']).toEqual({ includedAngle: 120, level: 4 });
+  });
+
+  it('rejects an out-of-range angle and a non-integer level', () => {
+    expect(() =>
+      runSnappySchema.parse({ ...base, featureRefinements: { 'r.stl': { includedAngle: 200, level: 2 } } }),
+    ).toThrow();
+    expect(() =>
+      runSnappySchema.parse({ ...base, featureRefinements: { 'r.stl': { includedAngle: 90, level: 1.5 } } }),
+    ).toThrow();
   });
 });

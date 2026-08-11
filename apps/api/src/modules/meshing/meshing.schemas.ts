@@ -72,6 +72,12 @@ const refinementSchema = z
     path: ['max'],
   });
 
+/** A per-patch feature-edge override: extraction angle + snappy refinement level. */
+const featureRefinementSchema = z.object({
+  includedAngle: z.number().min(0).max(180),
+  level: z.number().int().min(0).max(10),
+});
+
 export const runSnappySchema = z.object({
   engine: z.literal('snappy'),
   domainType: z.enum(DOMAIN_TYPES),
@@ -81,6 +87,9 @@ export const runSnappySchema = z.object({
   // Per-surface overrides keyed by STL file name; each must also be min <= max.
   surfaceRefinements: z.record(z.string(), refinementSchema).optional(),
   featureLevel: z.number().int().min(0).max(10).default(2),
+  featureAngle: z.number().min(0).max(180).default(150),
+  // Per-patch feature overrides keyed by STL file name; absent key => the globals above.
+  featureRefinements: z.record(z.string(), featureRefinementSchema).optional(),
   locationInMesh: z
     .tuple([z.number().finite(), z.number().finite(), z.number().finite()])
     .nullable()
