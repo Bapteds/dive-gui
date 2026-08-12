@@ -1382,13 +1382,18 @@ def main():
             cq.exporters.export(result, _tmp_stl, tolerance=STL_TOLERANCE)
             _result_mesh = trimesh.load(_tmp_stl, file_type="stl")
             os.unlink(_tmp_stl)
-            # OCC -> STL tessellation can shed a stray degenerate shell (e.g. a single
-            # sliver triangle at the hollow cup's rim), which leaves _result_mesh a non-
-            # volume and breaks the manifold boolean. Keep only the real fluid body — the
-            # largest connected component (the true watertight domain).
+            # OCC -> STL tessellation can shed extra shells besides the real solid
+            # body, which leave _result_mesh a non-volume and break the manifold
+            # boolean. Keep only the real fluid body — the connected component with
+            # the largest SIGNED volume. Selecting by volume (not face count) is
+            # essential: when an internal cavity is not vented to the outside (e.g.
+            # the hollow cup with the torque feet turned OFF), OCC emits that cavity
+            # as a separate INVERTED shell whose face count can EXCEED the real
+            # body's but whose volume is negative — manifold rejects it. The true
+            # outward body always has the largest positive volume.
             _rcomps = _result_mesh.split(only_watertight=False)
             if len(_rcomps) > 1:
-                _result_mesh = max(_rcomps, key=lambda m: len(m.faces))
+                _result_mesh = max(_rcomps, key=lambda m: m.volume)
             fluid_F = trimesh.boolean.difference([_result_mesh, _solid],
                                                  engine="manifold")
             # Classification sources: the OCC box/part patches (inlet, walls,
