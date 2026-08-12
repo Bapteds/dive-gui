@@ -1382,18 +1382,22 @@ def main():
             cq.exporters.export(result, _tmp_stl, tolerance=STL_TOLERANCE)
             _result_mesh = trimesh.load(_tmp_stl, file_type="stl")
             os.unlink(_tmp_stl)
-            # OCC -> STL tessellation can shed extra shells besides the real solid
-            # body, which leave _result_mesh a non-volume and break the manifold
-            # boolean. Keep only the real fluid body — the connected component with
-            # the largest SIGNED volume. Selecting by volume (not face count) is
-            # essential: when an internal cavity is not vented to the outside (e.g.
-            # the hollow cup with the torque feet turned OFF), OCC emits that cavity
-            # as a separate INVERTED shell whose face count can EXCEED the real
-            # body's but whose volume is negative — manifold rejects it. The true
-            # outward body always has the largest positive volume.
+            # OCC -> STL tessellation can shed a stray degenerate shell (e.g. a
+            # single sliver triangle at the hollow cup's rim), which is not a volume
+            # and breaks the manifold boolean. Drop ONLY those degenerate slivers and
+            # keep every CLOSED (watertight) shell. A solid with an enclosed internal
+            # void — e.g. the hollow cup + cylinders when the torque feet don't vent
+            # it to the outside — legitimately tessellates as TWO watertight shells:
+            # the outer body AND the inner cavity (inward normals). BOTH are needed
+            # for a valid box.cut(part) volume; keeping only one (by face count OR by
+            # volume) fills the cavity and destroys the cup/cone/cylinder/vane
+            # geometry. For a normally-vented solid there is exactly one closed shell,
+            # so this is identical to the old behaviour.
             _rcomps = _result_mesh.split(only_watertight=False)
             if len(_rcomps) > 1:
-                _result_mesh = max(_rcomps, key=lambda m: m.volume)
+                _closed = [m for m in _rcomps if m.is_watertight]
+                if _closed:
+                    _result_mesh = trimesh.util.concatenate(_closed)
             fluid_F = trimesh.boolean.difference([_result_mesh, _solid],
                                                  engine="manifold")
             # Classification sources: the OCC box/part patches (inlet, walls,
