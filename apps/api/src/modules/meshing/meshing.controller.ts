@@ -18,6 +18,7 @@ import {
   readStlBytes,
   removeMeshingSession,
   removeStlFile,
+  renameMeshingSession,
   runMeshing,
   saveMeshingConfig,
   type StlUpload,
@@ -27,6 +28,7 @@ import type {
   CreateSessionInput,
   FromChamberInput,
   MeshingConfigInput,
+  RenameSessionInput,
   StlNameQuery,
 } from './meshing.schemas';
 
@@ -59,6 +61,13 @@ export async function fromChamberController(req: Request, res: Response): Promis
 /** GET /meshing/:id — one session's detail. */
 export async function getSessionController(req: Request, res: Response): Promise<void> {
   const session = await getMeshingSession(req.params.id);
+  res.status(200).json({ session });
+}
+
+/** PATCH /meshing/:id — rename a session (display name only). */
+export async function renameSessionController(req: Request, res: Response): Promise<void> {
+  const { name } = req.body as RenameSessionInput;
+  const session = await renameMeshingSession(req.params.id, name);
   res.status(200).json({ session });
 }
 

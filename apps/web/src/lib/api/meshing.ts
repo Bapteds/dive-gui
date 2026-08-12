@@ -53,6 +53,12 @@ export async function getMeshingSession(id: string): Promise<MeshingSession> {
   return data.session;
 }
 
+/** Rename a session (display name only; id/engine unchanged). */
+export async function renameMeshingSession(id: string, name: string): Promise<MeshingSession> {
+  const data = await apiClient.patch<MeshingSessionResponse>(`/meshing/${id}`, { name });
+  return data.session;
+}
+
 /** Delete a session. */
 export async function deleteMeshingSession(id: string): Promise<void> {
   await apiClient.delete(`/meshing/${id}`);

@@ -1,11 +1,13 @@
+import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Link } from 'react-router-dom';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, Pencil } from 'lucide-react';
 import { useAuth } from '@/features/auth/AuthProvider';
 import { PageHeader } from '@/components/common/PageHeader';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ErrorState } from '@/components/common/ErrorState';
+import { RenameDialog } from '@/components/common/RenameDialog';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
@@ -21,7 +23,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from '@/components/ui/sonner';
 import { ApiError } from '@/lib/api/client';
 import type { Project } from '@/lib/api/types';
-import { useCreateProject, useProjectsQuery } from '@/features/projects/useProjects';
+import { useCreateProject, useProjectsQuery, useRenameProject } from '@/features/projects/useProjects';
 import { createProjectSchema, type CreateProjectFormValues } from '@/features/projects/schemas';
 
 /**
@@ -69,7 +71,11 @@ export function ProjectsPage() {
           description="Create your first project with the form above."
         />
       ) : (
-        <ProjectsTable projects={projects} currentUserId={user?.id ?? ''} />
+        <ProjectsTable
+          projects={projects}
+          currentUserId={user?.id ?? ''}
+          isSuperAdmin={user?.role === 'SUPER_ADMIN'}
+        />
       )}
     </div>
   );
@@ -140,10 +146,16 @@ function CreateProjectForm() {
 function ProjectsTable({
   projects,
   currentUserId,
+  isSuperAdmin,
 }: {
   projects: Project[];
   currentUserId: string;
+  isSuperAdmin: boolean;
 }) {
+  const rename = useRenameProject();
+  // The project currently being renamed (drives the modal); null when closed.
+  const [renaming, setRenaming] = useState<Project | null>(null);
+
   return (
     <div className="overflow-hidden rounded-md border border-border bg-surface shadow-sm">
       <Table>
@@ -156,30 +168,76 @@ function ProjectsTable({
             <TableHead scope="col" className="hidden text-right sm:table-cell">
               Created
             </TableHead>
+            <TableHead scope="col" className="text-right">
+              <span className="sr-only">Actions</span>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {projects.map((project) => (
-            <TableRow key={project.id}>
-              <TableCell className="font-medium">
-                <Link
-                  to={`/projects/${project.id}`}
-                  className="inline-flex items-center gap-1 rounded-sm text-text hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
-                >
-                  {project.title}
-                  <ChevronRight className="size-4 text-neutral" strokeWidth={1.75} aria-hidden="true" />
-                </Link>
-              </TableCell>
-              <TableCell className="hidden text-text-secondary md:table-cell">
-                {project.owner.id === currentUserId ? 'You' : project.owner.email}
-              </TableCell>
-              <TableCell className="hidden text-right text-text-secondary tabular-nums sm:table-cell">
-                {formatCreated(project.createdAt)}
-              </TableCell>
-            </TableRow>
-          ))}
+          {projects.map((project) => {
+            const canManage = isSuperAdmin || project.owner.id === currentUserId;
+            return (
+              <TableRow key={project.id}>
+                <TableCell className="font-medium">
+                  <Link
+                    to={`/projects/${project.id}`}
+                    className="inline-flex items-center gap-1 rounded-sm text-text hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
+                  >
+                    {project.title}
+                    <ChevronRight className="size-4 text-neutral" strokeWidth={1.75} aria-hidden="true" />
+                  </Link>
+                </TableCell>
+                <TableCell className="hidden text-text-secondary md:table-cell">
+                  {project.owner.id === currentUserId ? 'You' : project.owner.email}
+                </TableCell>
+                <TableCell className="hidden text-right text-text-secondary tabular-nums sm:table-cell">
+                  {formatCreated(project.createdAt)}
+                </TableCell>
+                <TableCell className="text-right">
+                  {canManage && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setRenaming(project)}
+                    >
+                      <Pencil className="size-4" strokeWidth={1.75} aria-hidden="true" />
+                      Rename
+                    </Button>
+                  )}
+                </TableCell>
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
+
+      <RenameDialog
+        open={renaming !== null}
+        onOpenChange={(open) => {
+          if (!open) setRenaming(null);
+        }}
+        title="Rename project"
+        label="Project title"
+        currentName={renaming?.title ?? ''}
+        pending={rename.isPending}
+        onSubmit={(title) => {
+          if (!renaming) return;
+          rename.mutate(
+            { id: renaming.id, title },
+            {
+              onSuccess: () => {
+                toast.success('Project renamed.');
+                setRenaming(null);
+              },
+              onError: (err) =>
+                toast.error(
+                  err instanceof ApiError ? err.message : 'Could not rename the project.',
+                ),
+            },
+          );
+        }}
+      />
     </div>
   );
 }

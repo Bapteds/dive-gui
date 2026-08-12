@@ -51,6 +51,57 @@ describe('POST /api/v1/projects', () => {
   });
 });
 
+describe('PATCH /api/v1/projects/:id', () => {
+  async function createProject(user: Awaited<ReturnType<typeof createTestUser>>, title: string) {
+    const res = await request(app)
+      .post('/api/v1/projects')
+      .set('Authorization', authHeader(user))
+      .send({ title });
+    return res.body.project.id as string;
+  }
+
+  it('renames the owner\'s project and returns 200', async () => {
+    const user = await createTestUser({ email: 'renamer@dive-turbinen.test' });
+    const id = await createProject(user, 'Old title');
+
+    const res = await request(app)
+      .patch(`/api/v1/projects/${id}`)
+      .set('Authorization', authHeader(user))
+      .send({ title: 'New title' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.project).toMatchObject({ id, title: 'New title' });
+    const stored = await prisma.project.findUnique({ where: { id } });
+    expect(stored?.title).toBe('New title');
+  });
+
+  it('rejects a blank title with 422 VALIDATION_ERROR', async () => {
+    const user = await createTestUser({ email: 'blankrename@dive-turbinen.test' });
+    const id = await createProject(user, 'Keep me');
+
+    const res = await request(app)
+      .patch(`/api/v1/projects/${id}`)
+      .set('Authorization', authHeader(user))
+      .send({ title: '   ' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('returns 404 for a stranger (no existence leak)', async () => {
+    const owner = await createTestUser({ email: 'owner2@dive-turbinen.test' });
+    const stranger = await createTestUser({ email: 'stranger@dive-turbinen.test' });
+    const id = await createProject(owner, 'Private');
+
+    const res = await request(app)
+      .patch(`/api/v1/projects/${id}`)
+      .set('Authorization', authHeader(stranger))
+      .send({ title: 'Hijack' });
+
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('GET /api/v1/projects', () => {
   it('lists only the current user\'s own projects, newest first', async () => {
     const alice = await createTestUser({ email: 'alice@dive-turbinen.test' });

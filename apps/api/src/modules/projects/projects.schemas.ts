@@ -7,6 +7,11 @@ export const createProjectSchema = z.object({
   title: z.string().trim().min(1, 'Title is required').max(PROJECT_TITLE_MAX_LENGTH),
 });
 
+/** Body for renaming a project: a new non-empty title. */
+export const renameProjectSchema = z.object({
+  title: z.string().trim().min(1, 'Title is required').max(PROJECT_TITLE_MAX_LENGTH),
+});
+
 /** Body for adding a collaborator: the target user's email. */
 export const addCollaboratorSchema = z.object({
   email: z.string().trim().email('A valid email is required'),
@@ -25,4 +30,5 @@ export const collaboratorParamSchema = z.object({
 
 /** Inferred input types. */
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
+export type RenameProjectInput = z.infer<typeof renameProjectSchema>;
 export type AddCollaboratorInput = z.infer<typeof addCollaboratorSchema>;

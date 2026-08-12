@@ -18,6 +18,7 @@ import {
   getMeshManifestController,
   getSessionController,
   listSessionsController,
+  renameSessionController,
   runSnappyController,
   saveConfigController,
   uploadStlController,
@@ -27,6 +28,7 @@ import {
   createSessionSchema,
   fromChamberSchema,
   meshingConfigSchema,
+  renameSessionSchema,
   sessionIdParamSchema,
   stlNameQuerySchema,
 } from './meshing.schemas';
@@ -49,8 +51,13 @@ export function createMeshingRouter(): Router {
     asyncHandler(fromChamberController),
   );
 
-  // One session: read + delete.
+  // One session: read + rename + delete.
   router.get('/:id', validate({ params: sessionIdParamSchema }), asyncHandler(getSessionController));
+  router.patch(
+    '/:id',
+    validate({ params: sessionIdParamSchema, body: renameSessionSchema }),
+    asyncHandler(renameSessionController),
+  );
   router.delete(
     '/:id',
     validate({ params: sessionIdParamSchema }),

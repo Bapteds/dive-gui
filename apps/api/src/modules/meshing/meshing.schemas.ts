@@ -9,6 +9,12 @@ export const createSessionSchema = z.object({
 });
 export type CreateSessionInput = z.infer<typeof createSessionSchema>;
 
+/** Body for PATCH /meshing/:id — rename a session (display name only). */
+export const renameSessionSchema = z.object({
+  name: z.string().trim().min(1, 'A name is required').max(120, 'Name is too long'),
+});
+export type RenameSessionInput = z.infer<typeof renameSessionSchema>;
+
 /** Body for POST /meshing/copy — duplicate a session's engine + config + surfaces. */
 export const copySessionSchema = z.object({
   sourceId: z.string().trim().min(1, 'A source session id is required'),

@@ -119,6 +119,19 @@ export async function createSession(name: string, engine: MeshingEngine): Promis
 }
 
 /**
+ * Rename a session's DISPLAY name only; the id and on-disk directory stay stable
+ * (renaming the dir would break every stored path + reference). Returns the
+ * updated metadata, or null when the session is absent.
+ */
+export async function renameSession(sessionId: string, name: string): Promise<MeshingMeta | null> {
+  const meta = await readMeta(sessionId);
+  if (!meta) return null;
+  const updated: MeshingMeta = { ...meta, name: name.trim() };
+  await writeMeta(updated);
+  return updated;
+}
+
+/**
  * Copy a session's reusable setup into a NEW session: its engine (meta) + the
  * autosaved config.json + every file under constant/triSurface/. Deliberately
  * omits run output (run.json, constant/polyMesh, system/, .viz) — the copy is

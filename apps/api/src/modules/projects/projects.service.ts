@@ -134,6 +134,24 @@ export async function createProject(
   return toPublicProject(project);
 }
 
+/** Rename a project's title. Owner or super-admin only. */
+export async function renameProject(
+  viewer: Viewer,
+  id: string,
+  title: string,
+): Promise<PublicProject> {
+  const project = await findVisibleOrThrow(viewer, id);
+  if (!canManage(viewer, project)) {
+    throw new AppError(403, 'FORBIDDEN', 'Only the project owner can rename this project');
+  }
+  const updated = await prisma.project.update({
+    where: { id },
+    data: { title: title.trim() },
+    include: projectInclude,
+  });
+  return toPublicProject(updated);
+}
+
 /** Delete a project. Owner or super-admin only. */
 export async function deleteProject(viewer: Viewer, id: string): Promise<void> {
   const project = await findVisibleOrThrow(viewer, id);

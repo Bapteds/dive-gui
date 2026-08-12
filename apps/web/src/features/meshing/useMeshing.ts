@@ -9,6 +9,7 @@ import {
   getMeshingManifest,
   getMeshingSession,
   listMeshingSessions,
+  renameMeshingSession,
   runSnappy,
   saveMeshingConfig,
   transferChamberToMeshing,
@@ -88,6 +89,18 @@ export function useTransferChamberToMeshing() {
   const queryClient = useQueryClient();
   return useMutation<MeshingSession, Error, FromChamberBody>({
     mutationFn: (body) => transferChamberToMeshing(body),
+    onSuccess: (session) => {
+      queryClient.setQueryData(meshingSessionKey(session.id), session);
+      void queryClient.invalidateQueries({ queryKey: meshingSessionsKey });
+    },
+  });
+}
+
+/** Rename a session (display name only); update the detail + list caches. */
+export function useRenameMeshingSession() {
+  const queryClient = useQueryClient();
+  return useMutation<MeshingSession, Error, { id: string; name: string }>({
+    mutationFn: ({ id, name }) => renameMeshingSession(id, name),
     onSuccess: (session) => {
       queryClient.setQueryData(meshingSessionKey(session.id), session);
       void queryClient.invalidateQueries({ queryKey: meshingSessionsKey });

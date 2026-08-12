@@ -6,6 +6,7 @@ import {
   getProject,
   listProjects,
   removeCollaborator,
+  renameProject,
 } from '@/lib/api/projects';
 import type { CreateProjectInput, Project } from '@/lib/api/types';
 
@@ -44,6 +45,18 @@ export function useCreateProject() {
   return useMutation({
     mutationFn: (input: CreateProjectInput) => createProject(input),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: projectsQueryKey });
+    },
+  });
+}
+
+/** Rename a project; updates the detail and list caches. */
+export function useRenameProject() {
+  const queryClient = useQueryClient();
+  return useMutation<Project, Error, { id: string; title: string }>({
+    mutationFn: ({ id, title }) => renameProject(id, title),
+    onSuccess: (project) => {
+      queryClient.setQueryData(projectQueryKey(project.id), project);
       void queryClient.invalidateQueries({ queryKey: projectsQueryKey });
     },
   });

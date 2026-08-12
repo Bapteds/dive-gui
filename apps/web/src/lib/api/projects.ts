@@ -68,6 +68,12 @@ export async function createProject(input: CreateProjectInput): Promise<Project>
   return data.project;
 }
 
+/** Rename a project's title (owner or super-admin). */
+export async function renameProject(id: string, title: string): Promise<Project> {
+  const data = await apiClient.patch<ProjectResponse>(`/projects/${id}`, { title });
+  return data.project;
+}
+
 /** Delete a project (owner or super-admin). */
 export async function deleteProject(id: string): Promise<void> {
   await apiClient.delete<void>(`/projects/${id}`);

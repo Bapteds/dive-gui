@@ -44,6 +44,7 @@ import {
   listStl,
   readConfig,
   readMeta,
+  renameSession,
   readRun,
   readStl,
   sessionCaseDir,
@@ -176,6 +177,17 @@ export async function createMeshingSession(
 /** Get one session's full detail. @throws 404 when absent. */
 export async function getMeshingSession(sessionId: string): Promise<MeshingSession> {
   const meta = await requireSession(sessionId);
+  return assembleSession(meta);
+}
+
+/** Rename a session's display name (id/dir unchanged). @throws 404 when absent. */
+export async function renameMeshingSession(
+  sessionId: string,
+  name: string,
+): Promise<MeshingSession> {
+  await requireSession(sessionId); // clean 404 before the write
+  const meta = await renameSession(sessionId, name);
+  if (!meta) throw new AppError(404, 'NOT_FOUND', 'Meshing session not found.');
   return assembleSession(meta);
 }
 

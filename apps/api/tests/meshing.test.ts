@@ -135,6 +135,54 @@ describe('Meshing sessions', () => {
     expect(list.body.sessions.some((s: { id: string }) => s.id === id)).toBe(true);
   });
 
+  it('renames a session (display name only; id/engine unchanged)', async () => {
+    const user = await createTestUser();
+    const auth = authHeader(user);
+
+    const created = await request(app)
+      .post('/api/v1/meshing')
+      .set('Authorization', auth)
+      .send({ name: 'Original', engine: 'cfmesh' })
+      .expect(201);
+    const id = created.body.session.id as string;
+
+    const renamed = await request(app)
+      .patch(`/api/v1/meshing/${id}`)
+      .set('Authorization', auth)
+      .send({ name: 'Renamed tube' })
+      .expect(200);
+    expect(renamed.body.session).toMatchObject({ id, name: 'Renamed tube', engine: 'cfmesh' });
+
+    // Persists across a fresh read.
+    const fetched = await request(app)
+      .get(`/api/v1/meshing/${id}`)
+      .set('Authorization', auth)
+      .expect(200);
+    expect(fetched.body.session.name).toBe('Renamed tube');
+  });
+
+  it('rejects a blank rename with 422 and a missing session with 404', async () => {
+    const user = await createTestUser();
+    const auth = authHeader(user);
+    const created = await request(app)
+      .post('/api/v1/meshing')
+      .set('Authorization', auth)
+      .send({ name: 'Keep' })
+      .expect(201);
+    const id = created.body.session.id as string;
+
+    await request(app)
+      .patch(`/api/v1/meshing/${id}`)
+      .set('Authorization', auth)
+      .send({ name: '   ' })
+      .expect(422);
+    await request(app)
+      .patch('/api/v1/meshing/does-not-exist')
+      .set('Authorization', auth)
+      .send({ name: 'Whatever' })
+      .expect(404);
+  });
+
   it('rejects a non-STL upload', async () => {
     const user = await createTestUser();
     const auth = authHeader(user);
