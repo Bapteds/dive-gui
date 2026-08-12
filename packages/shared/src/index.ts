@@ -2348,6 +2348,13 @@ export interface ChamberInput {
    */
   chamferEnabled?: boolean;
   /**
+   * Cut the four torque-foot voids (both variants). Geometry-only (not part of
+   * the empirical model) — footAngleDeg is still validated/shown, but no feet
+   * are cut when this is false, so the box keeps solid corners there. Default
+   * true.
+   */
+  feetEnabled?: boolean;
+  /**
    * Absolute guide-vane open angle in degrees. The asset is baked at 50°; the
    * builder swings each blade about its OWN vertical spindle (pivot) axis at
    * pivotRadius by (vaneAngleDeg − 50) to reach this angle. Range 45..55 (±5° about

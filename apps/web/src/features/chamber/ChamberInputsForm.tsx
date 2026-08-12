@@ -162,6 +162,21 @@ export function ChamberInputsForm({
         </span>
       </label>
 
+      <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-bg p-3">
+        <input
+          type="checkbox"
+          {...register('feetEnabled')}
+          className="mt-0.5 size-4 shrink-0 cursor-pointer rounded-sm border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40"
+        />
+        <span className="text-sm">
+          <span className="font-medium text-text">Feet</span>
+          <span className="mt-0.5 block text-text-secondary">
+            Cut the four torque-foot voids (legs and their planks). Turn off to keep the box
+            solid where the feet would be - the cylinders and outputs table are unaffected.
+          </span>
+        </span>
+      </label>
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="X1" error={errors.x1?.message} helperText={`Valid ${r.x1.min}–${r.x1.max}`}>
           <Input type="number" step="any" {...register('x1', { valueAsNumber: true })} />

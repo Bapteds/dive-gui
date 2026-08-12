@@ -112,6 +112,10 @@ function resolveGeometryParams(
   // computed unconditionally either way, and only this flag decides whether
   // make_box() actually cuts them. Default true (today's always-on behaviour).
   params.chamferEnabled = input.chamferEnabled ?? true;
+  // Whether the four torque-foot voids are cut. Geometry-only (footAngleDeg is
+  // still validated either way); this flag decides whether make_feet() runs and
+  // its result is cut. Part of the cache key, so a flip => a different build.
+  params.feetEnabled = input.feetEnabled ?? true;
   // Absolute guide-vane open angle (deg, 45..55; asset baked at 50°); only affects
   // guide-vane builds. Part of the cache key, so a new angle => a new build.
   params.vaneAngleDeg = input.vaneAngleDeg ?? 50;

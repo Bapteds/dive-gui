@@ -1078,6 +1078,7 @@ def main():
         foot_angle = float(P.get("footAngleDeg", FOOT_ANGLE_DEG))
         guide_vanes = bool(P.get("guideVanes", False))
         chamfer_enabled = bool(P.get("chamferEnabled", True))
+        feet_enabled = bool(P.get("feetEnabled", True))
         # Absolute guide-vane open angle (deg). The asset is baked at
         # VANE_BASE_ANGLE_DEG (50); each blade swings about its own spindle by
         # (vane_angle - VANE_BASE_ANGLE_DEG) to reach the requested angle. Range is
@@ -1237,16 +1238,22 @@ def main():
         z_last_base = z_floor + h_first + h_middle
         # Feet scale uniformly with the rest of the assembly: every foot LENGTH is
         # multiplied by part_scale (the leg height scales via z_last_base above).
-        feet, foot_r_outer = make_feet(
-            cq, target_x, target_y, z_floor, z_last_base,
-            d_last / 2, d_first, foot_angle_deg=foot_angle,
-            width=FOOT_WIDTH * part_scale, length=FOOT_LENGTH * part_scale,
-            taper=FOOT_TAPER * part_scale, chamfer=FOOT_CHAMFER * part_scale,
-            plank_thick=FOOT_PLANK_THICK * part_scale,
-            plank_overlap=FOOT_PLANK_OVERLAP * part_scale,
-            gusset_min_base=FOOT_GUSSET_MIN_BASE * part_scale,
-            clear=FOOT_CLEARANCE * part_scale,
-        )
+        # When feet are disabled, skip make_feet entirely (its geometric refusal
+        # must not block a feetless build) and cut nothing; foot_r_outer = 0 so the
+        # pocket classifier radius falls back to the cavity extent (rmax).
+        if feet_enabled:
+            feet, foot_r_outer = make_feet(
+                cq, target_x, target_y, z_floor, z_last_base,
+                d_last / 2, d_first, foot_angle_deg=foot_angle,
+                width=FOOT_WIDTH * part_scale, length=FOOT_LENGTH * part_scale,
+                taper=FOOT_TAPER * part_scale, chamfer=FOOT_CHAMFER * part_scale,
+                plank_thick=FOOT_PLANK_THICK * part_scale,
+                plank_overlap=FOOT_PLANK_OVERLAP * part_scale,
+                gusset_min_base=FOOT_GUSSET_MIN_BASE * part_scale,
+                clear=FOOT_CLEARANCE * part_scale,
+            )
+        else:
+            feet, foot_r_outer = None, 0.0
         # Guide-vane builds: carve the first cylinder into a RING outside the vane
         # distributor. The whole distributor footprint (r < d_last/2, the upper-cyl
         # radius, which is also the shroud's outer radius) is cut away down to the box
@@ -1268,7 +1275,9 @@ def main():
                        .circle(vane_ring_ri).extrude(h_first))
             part = part.cut(_cavity)
 
-        result = box.cut(part).cut(feet)
+        result = box.cut(part)
+        if feet is not None:
+            result = result.cut(feet)
 
         # --- split into patches --------------------------------------------
         faces = result.faces().vals()

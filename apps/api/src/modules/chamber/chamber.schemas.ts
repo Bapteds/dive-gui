@@ -42,6 +42,9 @@ export const chamberBuildSchema = z
     // own model values keep being computed regardless). A different flag =>
     // a different cached build.
     chamferEnabled: z.boolean().default(true),
+    // Cut the four torque-foot voids (geometry-only; footAngleDeg keeps being
+    // validated regardless). A different flag => a different cached build.
+    feetEnabled: z.boolean().default(true),
     // Absolute guide-vane open angle (deg); the asset is baked at 50° and each blade
     // swings about its own spindle by (vaneAngleDeg - 50). Range 45..55. Guide-vane
     // builds only. A different angle => a different cached build.
