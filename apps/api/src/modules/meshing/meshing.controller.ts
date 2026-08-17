@@ -12,6 +12,7 @@ import {
   getMeshingSession,
   getResultEdges,
   getResultGeometry,
+  getMeshingLog,
   getResultManifest,
   importChamberIntoMeshing,
   listMeshingSessions,
@@ -19,8 +20,9 @@ import {
   removeMeshingSession,
   removeStlFile,
   renameMeshingSession,
-  runMeshing,
   saveMeshingConfig,
+  startMeshingRun,
+  stopMeshingRun,
   type StlUpload,
 } from './meshing.service';
 import type {
@@ -106,11 +108,23 @@ export async function deleteStlController(req: Request, res: Response): Promise<
   res.status(200).json({ session });
 }
 
-/** POST /meshing/:id/run — run the session's mesher (snappyHexMesh or cfMesh). */
+/** POST /meshing/:id/run — START the session's mesher as a background job. */
 export async function runSnappyController(req: Request, res: Response): Promise<void> {
   const config = req.body as MeshingConfigInput;
-  const { session, result } = await runMeshing(req.params.id, config);
-  res.status(200).json({ session, result });
+  const { session, status } = await startMeshingRun(req.params.id, config);
+  res.status(202).json({ session, status });
+}
+
+/** GET /meshing/:id/run/log — poll the live log + lifecycle status of the run. */
+export async function getRunLogController(req: Request, res: Response): Promise<void> {
+  const log = await getMeshingLog(req.params.id);
+  res.status(200).json({ log });
+}
+
+/** POST /meshing/:id/run/stop — request a stop of the running mesh. */
+export async function stopRunController(req: Request, res: Response): Promise<void> {
+  const { session } = await stopMeshingRun(req.params.id);
+  res.status(200).json({ session });
 }
 
 /** PUT /meshing/:id/config — autosave the edited config (no run). */

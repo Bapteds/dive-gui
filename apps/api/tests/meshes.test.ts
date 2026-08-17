@@ -1332,13 +1332,18 @@ function restoreCaseBackup(id: string, auth: string) {
 /**
  * mergeRunner for the merge toolchain + the source-viz extractor (writes GLB +
  * manifest + edges) for the post-restore viz build — so a base=case merge AND the
- * subsequent restore both work under a single runner.
+ * subsequent restore both work under a single runner. The extractor is the only
+ * call that writes a GLB (`args: [script, caseDir, glb, manifest]`); route it by
+ * that. EVERYTHING else — including splitMeshRegions, which a base=case merge runs
+ * — must go to mergeRunner (which handles the whole merge toolchain and no-ops any
+ * other tool). Routing a merge command to sourceVizRunner made it treat the case
+ * dir as a manifest path and crash the merge (EISDIR), stranding stray files.
  */
 const mergeAndVizRunner: CommandRunner = async (spec) => {
-  if (spec.command === 'mergeMeshes' || spec.command === 'stitchMesh' || spec.command === 'checkMesh') {
-    return mergeRunner(spec);
+  if (spec.args.some((arg) => arg.endsWith('.glb'))) {
+    return sourceVizRunner(spec);
   }
-  return sourceVizRunner(spec);
+  return mergeRunner(spec);
 };
 
 describe('GET /projects/:id/meshes/assembly + POST /meshes/merge (Disassemble)', () => {

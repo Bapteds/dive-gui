@@ -6,22 +6,26 @@ import {
   deleteStl,
   getMeshingEdges,
   getMeshingGeometry,
+  getMeshingLog,
   getMeshingManifest,
   getMeshingSession,
   listMeshingSessions,
   renameMeshingSession,
   runSnappy,
   saveMeshingConfig,
+  stopMeshing,
   transferChamberToMeshing,
   uploadStl,
 } from '@/lib/api/meshing';
+import { isMeshingRunActive } from '@/lib/api/types';
 import type {
   CopySessionBody,
   FromChamberBody,
-  MeshImportConversion,
   MeshManifest,
   MeshingConfig,
   MeshingEngine,
+  MeshingLogPayload,
+  MeshingRunState,
   MeshingSession,
   MeshingSessionSummary,
 } from '@/lib/api/types';
@@ -38,8 +42,12 @@ import type {
 
 const FIVE_MINUTES = 5 * 60 * 1000;
 
+/** Poll cadence while a mesh run is active (matches the solver's live log). */
+const RUN_POLL_MS = 1200;
+
 export const meshingSessionsKey = ['meshing'] as const;
 export const meshingSessionKey = (id: string) => ['meshing', id] as const;
+export const meshingRunLogKey = (id: string) => ['meshing', id, 'run', 'log'] as const;
 export const meshingManifestKey = (id: string) => ['meshing', id, 'mesh', 'manifest'] as const;
 export const meshingGeometryKey = (id: string) => ['meshing', id, 'mesh', 'glb'] as const;
 export const meshingEdgesKey = (id: string) => ['meshing', id, 'mesh', 'edges'] as const;
@@ -144,24 +152,72 @@ export function useDeleteStl(id: string) {
 }
 
 /**
- * Run the snappy pipeline. Resolves with the report even on a tool failure
- * (result.success === false); a successful run invalidates the result-mesh
- * render so the viewer rebuilds. Always refreshes the session (last-run record).
+ * START a mesh run (background job). Resolves as soon as the run is queued with the
+ * refreshed session (now 'running') and the running status; the live output is then
+ * polled by useMeshingRunLog. Rejects on 409 MESH_IN_PROGRESS if one is active.
  */
-export function useRunSnappy(id: string) {
+export function useStartMeshing(id: string) {
   const queryClient = useQueryClient();
-  return useMutation<{ session: MeshingSession; result: MeshImportConversion }, Error, MeshingConfig>({
+  return useMutation<{ session: MeshingSession; status: MeshingRunState }, Error, MeshingConfig>({
     mutationFn: (config) => runSnappy(id, config),
-    onSuccess: ({ session, result }) => {
+    onSuccess: ({ session }) => {
       queryClient.setQueryData(meshingSessionKey(id), session);
       void queryClient.invalidateQueries({ queryKey: meshingSessionsKey });
-      if (result.success) {
-        queryClient.removeQueries({ queryKey: meshingManifestKey(id) });
-        queryClient.removeQueries({ queryKey: meshingGeometryKey(id) });
-        queryClient.removeQueries({ queryKey: meshingEdgesKey(id) });
-      }
+      // Reset any stale log payload so the panel starts clean for the new run.
+      void queryClient.invalidateQueries({ queryKey: meshingRunLogKey(id) });
     },
   });
+}
+
+/**
+ * Poll the live log + lifecycle status of a session's run. Polls at a steady
+ * cadence while the run is active (the payload's own status drives it), then stops
+ * once terminal. Enabled only when a run exists/executes to keep an idle tab quiet.
+ */
+export function useMeshingRunLog(id: string, enabled: boolean) {
+  return useQuery<MeshingLogPayload>({
+    queryKey: meshingRunLogKey(id),
+    queryFn: () => getMeshingLog(id),
+    enabled,
+    refetchInterval: (query) => {
+      // Keep polling until we have SEEN a terminal status; on a failed fetch the
+      // data stays undefined, so treat unknown-or-active as "keep polling".
+      const status = query.state.data?.status;
+      if (status && !isMeshingRunActive(status)) return false;
+      return RUN_POLL_MS;
+    },
+  });
+}
+
+/**
+ * Stop the running mesh. Resolves with the refreshed session; the log poll then
+ * reports the run 'stopped'. Refreshes the session + list caches.
+ */
+export function useStopMeshing(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation<MeshingSession, Error, void>({
+    mutationFn: () => stopMeshing(id),
+    onSuccess: (session) => {
+      queryClient.setQueryData(meshingSessionKey(id), session);
+      void queryClient.invalidateQueries({ queryKey: meshingSessionsKey });
+    },
+  });
+}
+
+/**
+ * Called by the page when a run reaches a terminal status: refresh the session
+ * (hasMesh / lastRun changed) and drop the result-mesh render caches so the viewer
+ * rebuilds from the new polyMesh. Idempotent — safe to call once per transition.
+ */
+export function useOnMeshingRunSettled(id: string) {
+  const queryClient = useQueryClient();
+  return () => {
+    void queryClient.invalidateQueries({ queryKey: meshingSessionKey(id) });
+    void queryClient.invalidateQueries({ queryKey: meshingSessionsKey });
+    queryClient.removeQueries({ queryKey: meshingManifestKey(id) });
+    queryClient.removeQueries({ queryKey: meshingGeometryKey(id) });
+    queryClient.removeQueries({ queryKey: meshingEdgesKey(id) });
+  };
 }
 
 /**

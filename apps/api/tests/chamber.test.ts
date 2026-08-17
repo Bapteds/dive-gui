@@ -254,6 +254,55 @@ describe('Chamber Creation', () => {
     expect(r35.body.hash).not.toBe(r50.body.hash);
   });
 
+  it('keys the build on the manual runner-case / guide-vanes diameter overrides', async () => {
+    setCommandRunner(successRunner);
+    const auth = authHeader(await createTestUser());
+
+    const auto = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(BUILD)
+      .expect(200);
+    const dFirst = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, dFirst: 3000 })
+      .expect(200);
+    const dMiddle = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, dMiddle: 2000 })
+      .expect(200);
+
+    // Each override changes the geometry => a distinct cache key, but the twelve
+    // model outputs are untouched (these are geometry-only overrides).
+    expect(dFirst.body.hash).not.toBe(auto.body.hash);
+    expect(dMiddle.body.hash).not.toBe(auto.body.hash);
+    expect(dFirst.body.hash).not.toBe(dMiddle.body.hash);
+    expect(dFirst.body.outputs).toEqual(auto.body.outputs);
+  });
+
+  it('keys the hollow build on the generator diameter / height / dome overrides', async () => {
+    setCommandRunner(successRunner);
+    const auth = authHeader(await createTestUser());
+    const hollow = { ...BUILD, variant: 'hollow', hollowLength: 2000 };
+
+    const auto = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(hollow)
+      .expect(200);
+    const overridden = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...hollow, centralDiameter: 900, centralHeight: 1200, domeHeight: 250 })
+      .expect(200);
+
+    // The generator/dome overrides reshape the hollow geometry => a different key.
+    expect(overridden.body.hash).not.toBe(auto.body.hash);
+    expect(overridden.body.outputs).toEqual(auto.body.outputs);
+  });
+
   it('rejects an outlet ratio outside 0.35-0.50', async () => {
     const auth = authHeader(await createTestUser());
     await request(app)

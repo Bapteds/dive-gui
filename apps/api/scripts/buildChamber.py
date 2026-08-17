@@ -12,7 +12,7 @@ The empirical model (X1/X2/X3 -> 12 parameters) lives in the Node/TS layer; this
 script is a PURE geometry builder that receives the already-resolved parameters
 (in metres) as a JSON file, so there is no model logic to keep in sync here.
 
-Geometry (ported from the standalone box.py + prepare_openfoam.py):
+Geometry (originally prototyped standalone, since folded in here):
   * a rectangular box (WIDTH x LENGTH x HEIGHT),
   * two asymmetric chamfers on the two vertical corners of ONE end (the +Y end),
   * a stepped stack of three coaxial cylinders (first/middle/last) subtracted
@@ -114,7 +114,7 @@ PATCH_TYPES = {
 }
 
 
-# --- geometry (ported from box.py) ------------------------------------------
+# --- geometry ----------------------------------------------------------------
 def _corner_prism(cq, width, length, height, sx, sy, len_set, wid_set):
     """Full-height triangular prism trimming one vertical corner: cuts WID_SET
     along X and LEN_SET along Y away from corner (sx*W/2, sy*L/2)."""
@@ -330,13 +330,12 @@ def _load_vane_meta():
         return json.load(fh)
 
 
-def vane_scale_and_height(meta, d_last):
-    """The uniform vane scale and scaled contour height for a given (scaled)
-    d_last. `s` pins the blade pivot-circle Ø to 0.80 x d_last; `nat_h` is the
-    scaled top-to-outlet contour height (the vane passage's full height). Shared
-    by main() (to size the first cylinder under the vanes) and make_vane_patches
-    (to place them), so the two never drift."""
-    s = (RATIO_D_MIDDLE_OVER_LAST * d_last) / (2.0 * meta["pivotRadius"])
+def vane_scale_and_height(meta, d_ring):
+    """The uniform vane scale and scaled contour height for a given guide-vanes RING
+    diameter `d_ring` (the middle-cylinder diameter: 0.80 x d_last by default, or a
+    manual override). `s` pins the blade pivot-circle Ø to d_ring; `nat_h` is the
+    scaled top-to-outlet contour height (the vane passage's full height)."""
+    s = d_ring / (2.0 * meta["pivotRadius"])
     return s, meta["height"] * s
 
 
@@ -457,7 +456,7 @@ def _revolve_open(np, trimesh, profile_rz, cx, cy, sections=128):
 
 
 def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_angle_deg=0.0,
-                       outlet_outer_d=None, outlet_ratio=None):
+                       outlet_outer_d=None, outlet_ratio=None, d_ring=None):
     """Return {patch_name: Trimesh} for the guide-vane throat: the SOLID vane
     surfaces (blades + contoured hub/shroud walls + the outlet annulus) that sit
     as obstacles in the fluid box, centred at (cx, cy).
@@ -487,7 +486,11 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
     walls = trimesh.load(os.path.join(adir, "guideVanes_walls.stl"))
     outlet_asset = trimesh.load(os.path.join(adir, "guideVanes_outlet.stl"))
 
-    s, _ = vane_scale_and_height(meta, d_last)      # RADIAL scale: pivot Ø -> 0.80 d_last
+    # RADIAL scale keys off the guide-vanes ring diameter d_ring (the middle-cylinder
+    # Ø: 0.80 d_last by default, or a manual override); d_last still sets the shroud
+    # OUTER radius (d_last/2, the upper-cylinder wall) below, so a vane-Ø override
+    # resizes the blade ring without moving the shroud rim.
+    s, _ = vane_scale_and_height(meta, d_ring if d_ring is not None else RATIO_D_MIDDLE_OVER_LAST * d_last)
     # Scale RADIALLY by s (fixes the blade pivot circle to 0.80 d_last, so the blade
     # ANGLE and all radii are preserved), then adapt VERTICALLY to the HLE band
     # [z_mid_base, z_mid_top] via the z scale sz = band / channel-height, anchored so
@@ -745,6 +748,155 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
         "shroud_profile": shroud_profile,
         "hub_pts": ([r_rim, r_p1, r_p2, r_p3] if analytic else []),
     }
+
+
+# --- guide-vane STEP export (OCC BREP) --------------------------------------
+# The GLB/STL/triSurface/classification transport is driven by the mesh fluid body
+# fluid_F (the meshing/viewer source of truth). For a clean, EDITABLE chamber.step,
+# guide-vane builds ALSO rebuild the distributor as OCC BREP and cut it from the OCC
+# `result`, in parallel. Hub + shroud are revolved from the SAME analytic (r,z)
+# profiles the mesh distributor uses; blades are the committed clean airfoil
+# (assets/guideVanes_blade_profile.json) fitted onto each placed mesh blade section
+# and lofted through a periodic spline (smooth faces). The OCC solid is trusted only
+# when it is a single valid solid whose volume matches fluid_F within
+# VANE_STEP_VOL_TOL; otherwise the caller falls back to the vane-less STEP. Nothing
+# here can fail the build — every failure path returns None -> vane-less fallback.
+VANE_STEP_VOL_TOL = 0.005      # 0.5%: ~80x the observed faithful-build error (spike)
+
+
+def _load_vane_blade_profile(np):
+    """The committed clean airfoil loop (asset frame, (N,2) metres), or None when the
+    asset is absent (then the STEP falls back to vane-less)."""
+    try:
+        with open(os.path.join(_vane_assets_dir(), "guideVanes_blade_profile.json")) as fh:
+            data = json.load(fh)
+        arr = np.asarray(data["airfoil"], dtype=float)
+        return arr if arr.ndim == 2 and arr.shape[1] == 2 and len(arr) >= 8 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _resample_loop(np, ring, n):
+    """Uniform arc-length resample of a closed 2D ring to n points (or None)."""
+    ring = np.asarray(ring, dtype=float)[:, :2]
+    closed = np.vstack([ring, ring[:1]])
+    seg = np.diff(closed, axis=0)
+    cum = np.concatenate([[0.0], np.cumsum(np.hypot(seg[:, 0], seg[:, 1]))])
+    if cum[-1] <= 0:
+        return None
+    t = np.linspace(0.0, cum[-1], n, endpoint=False)
+    return np.column_stack([np.interp(t, cum, closed[:, 0]), np.interp(t, cum, closed[:, 1])])
+
+
+def _similarity_2d(np, X, Y):
+    """Best 2D similarity (scale c, rotation R, translation t) mapping X->Y (Umeyama);
+    returns (c, R, t, maxdev)."""
+    muX, muY = X.mean(0), Y.mean(0)
+    Xc = X - muX
+    varX = float((Xc ** 2).sum() / len(X))
+    Sigma = ((Y - muY).T @ Xc) / len(X)
+    U, D, Vt = np.linalg.svd(Sigma)
+    S = np.eye(2)
+    if np.linalg.det(U) * np.linalg.det(Vt) < 0:
+        S[-1, -1] = -1.0
+    R = U @ S @ Vt
+    c = float((D * np.diag(S)).sum() / varX) if varX > 0 else 1.0
+    t = muY - c * (R @ muX)
+    dev = float(np.hypot(*((c * (R @ X.T).T + t) - Y).T).max())
+    return c, R, t, dev
+
+
+def _fit_airfoil(np, src, tgt):
+    """Best (c, R, t, dev) mapping closed loop src onto tgt over all cyclic shifts and
+    a reversal (the two loops are the same airfoil, unknown start/winding)."""
+    best = None
+    for rev in (src, src[::-1]):
+        for sh in range(len(src)):
+            cand = _similarity_2d(np, np.roll(rev, sh, axis=0), tgt)
+            if best is None or cand[3] < best[3]:
+                best = cand
+    return best
+
+
+def build_vane_step_solid(cq, np, trimesh, result, core_prof, cas_prof, airfoil,
+                          blades_mesh, cx, cy, z0, z1, fluid_volume,
+                          vol_tol=VANE_STEP_VOL_TOL):
+    """Return the OCC BREP fluid Workplane with the vane distributor carved, or None
+    when it cannot be trusted (no blades, invalid solid, volume mismatch, or any
+    error). Hub/shroud revolve the analytic profiles about the LOCAL-Y axis (global
+    Z); each blade is the clean airfoil fitted onto its placed mesh section, lofted
+    through a periodic spline and extruded across [z0, z1]."""
+    def _revolve(prof):
+        # (r, z) on the XZ workplane -> revolve about local Y (== global Z); (0,0,1)
+        # is degenerate. Then move onto the part axis (cx, cy).
+        pts = [(float(r), float(z)) for r, z in prof]
+        return (cq.Workplane("XZ").polyline(pts).close()
+                .revolve(360.0, (0, 0, 0), (0, 1, 0)).translate((cx, cy, 0)))
+
+    dbg = os.environ.get("CHAMBER_STEP_DEBUG")
+    n = len(airfoil)
+    dist = _revolve(core_prof).union(_revolve(cas_prof))
+    nb = 0
+    for bl in blades_mesh.split(only_watertight=False):
+        bz = np.asarray(bl.vertices, dtype=float)[:, 2]
+        zc = 0.5 * (float(bz.min()) + float(bz.max()))
+        sec = bl.section(plane_origin=[0.0, 0.0, zc], plane_normal=[0.0, 0.0, 1.0])
+        if sec is None:
+            continue
+        tgt = _resample_loop(np, np.asarray(max(sec.discrete, key=len)), n)
+        if tgt is None:
+            continue
+        c, R, t, dev = _fit_airfoil(np, airfoil, tgt)
+        placed = (c * (R @ airfoil.T).T) + t
+        pts = [(float(x), float(y)) for x, y in placed]
+        blade = (cq.Workplane("XY").spline(pts, periodic=True).close()
+                 .extrude(z1 - z0).translate((0, 0, z0)))
+        if dbg:
+            bv = blade.val()
+            sys.stderr.write("STEPDBG blade %d fit_c=%.4f dev=%.5f valid=%s vol=%.6f\n"
+                             % (nb, c, dev, bv.isValid(), bv.Volume()))
+        dist = dist.union(blade)
+        nb += 1
+    if nb == 0:
+        return None
+    occ = result.cut(dist)
+    # Unify coplanar/duplicate faces the boolean may have fragmented (ShapeUpgrade).
+    # This also repairs the self-overlapping BREP that otherwise round-trips badly
+    # through STEP (observed on the hollow variant).
+    try:
+        occ = occ.clean()
+    except Exception:  # noqa: BLE001
+        pass
+    if len(occ.solids().vals()) != 1 or not occ.val().isValid():
+        if dbg:
+            sys.stderr.write("STEPDBG reject: nsolids=%d valid=%s\n"
+                             % (len(occ.solids().vals()), occ.val().isValid()))
+        return None
+    # GATE on exactly what ships: OCC's own Volume()/isValid() and even an STL
+    # tessellation can BOTH be fooled by a self-overlapping boolean result (the STEP
+    # then re-imports with a wrong volume). So export to a STEP, RE-IMPORT it, and
+    # trust it only if the round-tripped solid is single and matches fluid_F.
+    import tempfile as _tmpf
+    _fd, _tp = _tmpf.mkstemp(suffix=".step")
+    os.close(_fd)
+    try:
+        cq.exporters.export(occ, _tp)
+        _ri = cq.importers.importStep(_tp)
+    finally:
+        os.unlink(_tp)
+    _sols = _ri.solids().vals()
+    if len(_sols) != 1:
+        if dbg:
+            sys.stderr.write("STEPDBG reject: re-import nsolids=%d\n" % len(_sols))
+        return None
+    _vol = float(sum(s.Volume() for s in _sols))
+    rel = abs(_vol - fluid_volume) / fluid_volume if fluid_volume > 0 else 1.0
+    if dbg:
+        sys.stderr.write("STEPDBG gate: reimportVol=%.6f fluidF=%.6f rel=%.4f%%\n"
+                         % (_vol, fluid_volume, 100 * rel))
+    if rel > vol_tol:
+        return None
+    return occ
 
 
 # --- patch classification (ported from prepare_openfoam.py) -----------------
@@ -1141,12 +1293,19 @@ def main():
             # the shoulder (not the whole stack) below.
             unscaled_shoulder = h_first + h_middle
 
-        # Clamp the scale UP so the internal assembly still fits. Scaling DOWN is
-        # always allowed.
-        #  - hollow: the whole stack must stay under the box top (unchanged).
+        # Does the internal assembly fit the box at the requested partScale?
+        #  - hollow: the whole stack must stay under the box top.
         #  - stepped: the last cylinder is pinned THROUGH the box top, so only the
-        #    shoulder (first+middle) grows with partScale; clamp so the shoulder
-        #    stays below the top with room for at least MIN_LAST_CYL_H of last cyl.
+        #    shoulder (first+middle) grows with partScale; it must leave room for at
+        #    least MIN_LAST_CYL_H of last cylinder.
+        # The two designs behave DIFFERENTLY when it does not fit:
+        #  - STEPPED shoulders normally sit far below the box, so an overflow means
+        #    the entered HLE / Part scale cannot be honored — REFUSE rather than
+        #    silently shrink the whole assembly (which would ignore the heights).
+        #  - HOLLOW is designed so the generator + dome fill and usually EXCEED the
+        #    box; scaling the assembly DOWN to fit is its load-bearing behavior (most
+        #    hollow builds overflow at partScale 1). Keep it, but WARN so a down-
+        #    scaled build is not entirely silent.
         if variant == "hollow":
             clamp_basis = unscaled_part_height
             clamp_limit = height
@@ -1154,21 +1313,38 @@ def main():
             clamp_basis = unscaled_shoulder
             clamp_limit = height + 2 * FLOOR_OVERCUT - MIN_LAST_CYL_H
         if clamp_basis > 0 and part_scale * clamp_basis > clamp_limit + 1e-6:
-            clamped = clamp_limit / clamp_basis
-            sys.stderr.write(
-                "WARN: partScale %.4f exceeds the box budget (basis %.4f, limit "
-                "%.4f); clamped to %.4f\n"
-                % (part_scale, clamp_basis, clamp_limit, clamped))
-            part_scale = clamped
+            if variant == "hollow":
+                clamped = clamp_limit / clamp_basis
+                sys.stderr.write(
+                    "WARN: the hollow stack %.4f m exceeds H Kammer %.4f m; the internal "
+                    "part is scaled to %.4f to fit (its heights are reduced to match)\n"
+                    % (part_scale * clamp_basis, clamp_limit, clamped))
+                part_scale = clamped
+            else:
+                scaled = part_scale * clamp_basis
+                scale_note = "" if abs(part_scale - 1.0) < 1e-9 else (" (scaled x %.4g)" % part_scale)
+                part_lever = "" if abs(part_scale - 1.0) < 1e-9 else " / reduce Part scale"
+                raise ValueError(
+                    "the cylinder shoulder (first + middle height, i.e. 2 x HLE) is %.4f m "
+                    "tall%s but H Kammer only allows %.4f m. To fit, lower HLE%s, or "
+                    "increase H Kammer." % (scaled, scale_note, clamp_limit, part_lever))
+
+        # Manual diameter overrides (metres, UNSCALED) for the runner case (first
+        # cylinder) and the guide-vanes/middle cylinder. None => use the D_last ratio.
+        d_first_override = num_opt("dFirst")
+        d_middle_override = num_opt("dMiddle")
 
         # Apply the uniform scale to every internal dimension. d_first / d_middle
         # are ratios of the (scaled) d_last, so they scale with it; the guide-vane
-        # ring also keys off d_last downstream, so it scales too.
+        # ring also keys off d_middle downstream, so it scales too. A manual override
+        # is the value at partScale = 1, so it is multiplied by part_scale to match.
         d_last *= part_scale
         h_middle *= part_scale
         h_first *= part_scale
-        d_first = d_last * RATIO_D_FIRST_OVER_LAST
-        d_middle = d_last * RATIO_D_MIDDLE_OVER_LAST
+        d_first = (d_first_override * part_scale
+                   if d_first_override is not None else d_last * RATIO_D_FIRST_OVER_LAST)
+        d_middle = (d_middle_override * part_scale
+                    if d_middle_override is not None else d_last * RATIO_D_MIDDLE_OVER_LAST)
 
         # --- build the part (per variant) -----------------------------------
         if variant == "hollow":
@@ -1299,7 +1475,7 @@ def main():
             z_mid_top = z_floor + h_first + h_middle   # upper-cyl base (HLE band top)
             vane_patches = make_vane_patches(
                 trimesh, np, target_x, target_y, z_mid_base, z_mid_top, d_last,
-                vane_angle_deg=vane_pitch,
+                vane_angle_deg=vane_pitch, d_ring=d_middle,
                 outlet_outer_d=num_opt("outletOuterD"), outlet_ratio=num_opt("outletRatio"))
             vane_outlet_ri = vane_patches["outlet_ri"]
             vane_outlet_ro = vane_patches["outlet_ro"]
@@ -1561,14 +1737,51 @@ def main():
             json.dump(manifest, fh)
 
         # exports: whole solid STL + STEP. For guide-vane builds the STL is the true
-        # boolean fluid F (core + casing removed); STEP stays the OCC solid (a mesh
-        # cannot be written as STEP, and the distributor booleans are mesh-only).
+        # boolean fluid F (core + casing removed).
         if guide_vanes:
             fluid_F.export(os.path.join(exports_dir, "chamber.stl"))
         else:
             cq.exporters.export(result, os.path.join(exports_dir, "chamber.stl"),
                                 tolerance=STL_TOLERANCE)
-        cq.exporters.export(result, os.path.join(exports_dir, "chamber.step"))
+
+        # STEP. Non-guide-vane builds: the OCC `result` (already the true solid).
+        # Guide-vane builds: try to carve the distributor as OCC BREP so the STEP
+        # carries editable vanes; on ANY failure fall back to the vane-less OCC solid
+        # (a STEP issue must never fail the build). step_has_vanes: True/False for
+        # guide-vane builds (False = vane-less fallback), None = not a vane build.
+        step_has_vanes = None
+        if guide_vanes:
+            step_has_vanes = False
+            occ_fluid = None
+            airfoil = _load_vane_blade_profile(np)
+            try:
+                _core_prof_ref, _cas_prof_ref = _core_prof, _cas_prof   # analytic path only
+            except NameError:
+                _core_prof_ref = _cas_prof_ref = None
+            if airfoil is not None and _core_prof_ref is not None and _cas_prof_ref is not None:
+                try:
+                    occ_fluid = build_vane_step_solid(
+                        cq, np, trimesh, result, _core_prof_ref, _cas_prof_ref, airfoil,
+                        vane_patches["guide_vanes"], target_x, target_y,
+                        z_duct_bottom, z_mid_top + 2.0 * FLOOR_OVERCUT,
+                        float(fluid_F.volume))
+                except Exception as _step_exc:  # noqa: BLE001
+                    sys.stderr.write("WARN: OCC vane STEP reconstruction failed: %s\n" % _step_exc)
+            if occ_fluid is not None:
+                cq.exporters.export(occ_fluid, os.path.join(exports_dir, "chamber.step"))
+                step_has_vanes = True
+            else:
+                sys.stderr.write(
+                    "WARN: chamber.step falls back to the vane-less solid (no vanes carved)\n")
+                cq.exporters.export(result, os.path.join(exports_dir, "chamber.step"))
+        else:
+            cq.exporters.export(result, os.path.join(exports_dir, "chamber.step"))
+
+        # per-build meta: does the STEP carry the guide vanes? (guide-vane builds only;
+        # non-vane builds write no meta file -> the API reports stepHasVanes = null).
+        if step_has_vanes is not None:
+            with open(os.path.join(out_dir, "build-meta.json"), "w") as fh:
+                json.dump({"stepHasVanes": bool(step_has_vanes)}, fh)
 
         # exports: OpenFOAM triSurface zip (per-patch STL + combined domain.stl)
         with zipfile.ZipFile(os.path.join(exports_dir, "trisurface.zip"), "w",

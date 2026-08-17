@@ -16,11 +16,13 @@ import {
   getMeshEdgesController,
   getMeshGeometryController,
   getMeshManifestController,
+  getRunLogController,
   getSessionController,
   listSessionsController,
   renameSessionController,
   runSnappyController,
   saveConfigController,
+  stopRunController,
   uploadStlController,
 } from './meshing.controller';
 import {
@@ -82,11 +84,21 @@ export function createMeshingRouter(): Router {
     asyncHandler(deleteStlController),
   );
 
-  // Run the snappyHexMesh pipeline.
+  // Start the mesher as a background job, poll its live log, request a stop.
   router.post(
     '/:id/run',
     validate({ params: sessionIdParamSchema, body: meshingConfigSchema }),
     asyncHandler(runSnappyController),
+  );
+  router.get(
+    '/:id/run/log',
+    validate({ params: sessionIdParamSchema }),
+    asyncHandler(getRunLogController),
+  );
+  router.post(
+    '/:id/run/stop',
+    validate({ params: sessionIdParamSchema }),
+    asyncHandler(stopRunController),
   );
 
   // Autosave the edited config (persist without running).

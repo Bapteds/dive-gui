@@ -824,9 +824,13 @@ export type {
   SurfaceLayerSpec,
   StlFile,
   MeshingRun,
+  MeshingRunState,
+  MeshingRunStatus,
+  MeshingLogPayload,
   MeshingSession,
   MeshingSessionSummary,
 } from '@dive/shared';
+export { isMeshingRunActive } from '@dive/shared';
 
 /** `GET /meshing` — the session list. */
 export interface MeshingSessionsResponse {
@@ -850,8 +854,13 @@ export type FromChamberBody =
   | { mode: 'existing'; chamberHash: string; sessionId: string }
   | { mode: 'copyFrom'; chamberHash: string; sourceId: string; name?: string };
 
-/** `POST /meshing/:id/run` — the refreshed session plus the per-step run report. */
+/** `POST /meshing/:id/run` — starts the background job: refreshed session + running status. */
 export interface RunSnappyResponse {
   session: import('@dive/shared').MeshingSession;
-  result: MeshImportConversion;
+  status: import('@dive/shared').MeshingRunState;
+}
+
+/** `GET /meshing/:id/run/log` — the live-log poll payload (status + tail + report). */
+export interface MeshingLogResponse {
+  log: import('@dive/shared').MeshingLogPayload;
 }

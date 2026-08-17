@@ -55,11 +55,21 @@ export const chamberBuildSchema = z
     outletRatio: z.number().finite().min(0.35).max(0.5).default(0.45),
     // Uniform scale for the whole internal assembly (cylinders + feet + vanes +
     // hollow/dome) about its floor-anchored axis; the box + axis stay fixed.
-    // Geometry-only; up-scaling is clamped to the box height by the builder.
+    // Geometry-only. Stepped: a scale that overgrows the box height is refused;
+    // hollow: the internal part is scaled down to fit (with a warning).
     partScale: z.number().finite().positive().max(5).default(1),
     lengthOverride: z.number().finite().positive().optional(),
     hollowLength: z.number().finite().positive().optional(),
     wallThickness: z.number().finite().positive().optional(),
+    // Manual overrides for otherwise-derived dimensions (mm). Omitted => the fixed
+    // empirical relation is used. dFirst/dMiddle apply to both variants; the three
+    // central/dome ones only affect the hollow variant. A different value => a
+    // different cached build (they flow into resolveGeometryParams's hash).
+    dFirst: z.number().finite().positive().optional(),
+    dMiddle: z.number().finite().positive().optional(),
+    centralDiameter: z.number().finite().positive().optional(),
+    centralHeight: z.number().finite().positive().optional(),
+    domeHeight: z.number().finite().positive().optional(),
   })
   .superRefine((v, ctx) => {
     if (v.variant === 'hollow' && v.hollowLength == null) {

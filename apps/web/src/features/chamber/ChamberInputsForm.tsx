@@ -29,6 +29,25 @@ const r = CHAMBER_INPUT_RANGES;
 /** Map a blank field to undefined (so an optional number stays optional). */
 const numOrUndef = (v: unknown) => (v === '' || v == null ? undefined : Number(v));
 
+/** The auto (empirical) values shown as placeholders on the blank override fields. */
+export interface ChamberAutoDims {
+  /** Runner case (first cylinder) Ø, mm. */
+  dFirst: number | null;
+  /** Guide vanes / middle cylinder Ø, mm. */
+  dMiddle: number | null;
+  /** Generator (central cylinder) Ø, mm (hollow variant). */
+  centralDiameter: number | null;
+  /** Generator (central cylinder) height, mm (hollow variant). */
+  centralHeight: number | null;
+  /** Dome height, mm (hollow variant). */
+  domeHeight: number | null;
+}
+
+/** Helper text for an override field: "Blank = auto ≈ N mm" (or a bare fallback). */
+function autoHint(mm: number | null): string {
+  return mm != null ? `Blank = auto ≈ ${Math.round(mm)} mm` : 'Blank = auto';
+}
+
 export function ChamberInputsForm({
   register,
   errors,
@@ -36,6 +55,7 @@ export function ChamberInputsForm({
   isBuilding,
   variant,
   autoLengthMm,
+  autoDims,
   relationsMaster,
   relations,
   onRelationChange,
@@ -46,6 +66,8 @@ export function ChamberInputsForm({
   isBuilding: boolean;
   variant: ChamberVariant;
   autoLengthMm: number | null;
+  /** Auto (empirical) placeholders for the five manual dimension overrides. */
+  autoDims: ChamberAutoDims;
   /** Current master switch state (governs whether individual relations apply). */
   relationsMaster: boolean;
   /** Current per-relation on/off, keyed by the driven output. */
@@ -217,7 +239,7 @@ export function ChamberInputsForm({
         <Field
           label="Part scale (×)"
           error={errors.partScale?.message}
-          helperText="Scales all cylinders, feet & vanes together; box & axis stay fixed. >1 is clamped to the box height"
+          helperText="Scales all cylinders, feet & vanes together; box & axis stay fixed. Stepped: overgrowing the box is refused; cone: scaled down to fit"
         >
           <Input
             type="number"
@@ -252,6 +274,30 @@ export function ChamberInputsForm({
             {...register('outletRatio', { valueAsNumber: true })}
           />
         </Field>
+        <Field
+          label="Runner case Ø (mm)"
+          error={errors.dFirst?.message}
+          helperText={autoHint(autoDims.dFirst)}
+        >
+          <Input
+            type="number"
+            step="any"
+            placeholder="auto"
+            {...register('dFirst', { setValueAs: numOrUndef })}
+          />
+        </Field>
+        <Field
+          label="Guide vanes Ø (mm)"
+          error={errors.dMiddle?.message}
+          helperText={`${autoHint(autoDims.dMiddle)} · sets the vane ring in guide-vane builds`}
+        >
+          <Input
+            type="number"
+            step="any"
+            placeholder="auto"
+            {...register('dMiddle', { setValueAs: numOrUndef })}
+          />
+        </Field>
       </div>
 
       {variant === 'hollow' && (
@@ -276,6 +322,42 @@ export function ChamberInputsForm({
               type="number"
               step="any"
               {...register('wallThickness', { setValueAs: numOrUndef })}
+            />
+          </Field>
+          <Field
+            label="Generator Ø (mm)"
+            error={errors.centralDiameter?.message}
+            helperText={autoHint(autoDims.centralDiameter)}
+          >
+            <Input
+              type="number"
+              step="any"
+              placeholder="auto"
+              {...register('centralDiameter', { setValueAs: numOrUndef })}
+            />
+          </Field>
+          <Field
+            label="Generator height (mm)"
+            error={errors.centralHeight?.message}
+            helperText={autoHint(autoDims.centralHeight)}
+          >
+            <Input
+              type="number"
+              step="any"
+              placeholder="auto"
+              {...register('centralHeight', { setValueAs: numOrUndef })}
+            />
+          </Field>
+          <Field
+            label="Dome height (mm)"
+            error={errors.domeHeight?.message}
+            helperText={autoHint(autoDims.domeHeight)}
+          >
+            <Input
+              type="number"
+              step="any"
+              placeholder="auto"
+              {...register('domeHeight', { setValueAs: numOrUndef })}
             />
           </Field>
         </div>

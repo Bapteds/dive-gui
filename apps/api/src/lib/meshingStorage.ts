@@ -18,7 +18,7 @@
 // pinned to the meshing root. Mirrors meshStorage.ts (the per-project analogue).
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { MeshingConfig, MeshingEngine, MeshingRun, StlFile } from '@dive/shared';
+import type { MeshingConfig, MeshingEngine, MeshingRun, MeshingRunState, StlFile } from '@dive/shared';
 import { FMS_EXTENSION, MESHING_ENGINES, STL_EXTENSION } from '@dive/shared';
 import {
   assertSafeId,
@@ -300,6 +300,89 @@ export async function readRun(sessionId: string): Promise<MeshingRun | null> {
   } catch {
     return null;
   }
+}
+
+// --- Live run: streamed log + lifecycle status --------------------------------
+//
+// A run is a background job: its stdout+stderr stream to mesh.log (tailed live by
+// the client) and its lifecycle state is a status.json sidecar. Both live at the
+// session root, deliberately NOT under triSurface/ or system/, so copySessionSetup
+// (which copies only the reusable setup) never carries a stale log/status into a
+// fresh session, and cleanPriorMeshArtifacts (mesh output only) never touches them.
+
+/** Absolute path to the session's streamed mesher log. */
+export function meshLogAbsolute(sessionId: string): string {
+  return path.join(sessionDirAbsolute(sessionId), 'mesh.log');
+}
+
+/** Reset the log to empty at the start of a fresh run (creating the session dir). */
+export async function truncateMeshLog(sessionId: string): Promise<void> {
+  const file = meshLogAbsolute(sessionId);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, '', 'utf8');
+}
+
+/** Append a chunk to the session's mesher log (creating it if needed). */
+export async function appendMeshLog(sessionId: string, chunk: string): Promise<void> {
+  const file = meshLogAbsolute(sessionId);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.appendFile(file, chunk, 'utf8');
+}
+
+/**
+ * Read at most the last `maxBytes` of the mesher log, plus its total size on disk.
+ * Bounds memory on the per-poll hot path (the log can grow large), exactly like the
+ * solver's readRunLog. Returns empty/0 when no log exists yet.
+ */
+export async function readMeshLog(
+  sessionId: string,
+  maxBytes: number,
+): Promise<{ content: string; size: number }> {
+  const file = meshLogAbsolute(sessionId);
+  try {
+    const { size } = await fs.stat(file);
+    const start = size > maxBytes ? size - maxBytes : 0;
+    const length = size - start;
+    if (length <= 0) return { content: '', size };
+    const handle = await fs.open(file, 'r');
+    try {
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, start);
+      return { content: buffer.toString('utf8'), size };
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return { content: '', size: 0 };
+  }
+}
+
+/** Persist the session's run lifecycle state (status.json). */
+export async function writeMeshStatus(sessionId: string, state: MeshingRunState): Promise<void> {
+  const file = path.join(sessionDirAbsolute(sessionId), 'status.json');
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify(state), 'utf8');
+}
+
+/** Read the session's run lifecycle state, or null when no run has ever started. */
+export async function readMeshStatus(sessionId: string): Promise<MeshingRunState | null> {
+  try {
+    const file = path.join(sessionDirAbsolute(sessionId), 'status.json');
+    return JSON.parse(await fs.readFile(file, 'utf8')) as MeshingRunState;
+  } catch {
+    return null;
+  }
+}
+
+/** Session ids whose persisted status is still 'running' (for boot reconciliation). */
+export async function listRunningSessionIds(): Promise<string[]> {
+  const metas = await listSessions();
+  const running: string[] = [];
+  for (const meta of metas) {
+    const state = await readMeshStatus(meta.id);
+    if (state?.status === 'running') running.push(meta.id);
+  }
+  return running;
 }
 
 /**

@@ -9,8 +9,13 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import AdmZip from 'adm-zip';
-import { app, authHeader, createTestUser, resetDatabase } from './helpers';
-import { setCommandRunner, type CommandResult, type CommandRunner } from '../src/lib/commandRunner';
+import { app, authHeader, createTestUser, logicalCommand, resetDatabase } from './helpers';
+import {
+  setStreamRunner,
+  type StreamExit,
+  type StreamHandle,
+  type StreamSpec,
+} from '../src/lib/streamRunner';
 import { chamberPaths } from '../src/lib/chamberStorage';
 import { runCfMeshSchema, runSnappySchema } from '../src/modules/meshing/meshing.schemas';
 
@@ -45,39 +50,86 @@ const CUBE_STL = binaryStl([
 
 const POLYMESH_FILES = ['points', 'faces', 'owner', 'neighbour', 'boundary'] as const;
 
-function ok(spec: { command: string; args: string[] }, stdout = 'ok'): CommandResult {
-  return { command: spec.command, args: spec.args, exitCode: 0, stdout, stderr: '', durationMs: 1, timedOut: false };
-}
-
 /** The caseDir a command was invoked against (the arg after `-case`). */
 function caseDirOf(args: string[]): string {
   const i = args.indexOf('-case');
   return i >= 0 ? args[i + 1] : '';
 }
 
-/** Fake runner: every tool succeeds; the mesher writes constant/polyMesh. */
-const successRunner: CommandRunner = async (spec) => {
-  if (spec.command === 'snappyHexMesh' || spec.command === 'cartesianMesh') {
-    const dir = path.join(caseDirOf(spec.args), 'constant', 'polyMesh');
-    await fs.mkdir(dir, { recursive: true });
-    for (const name of POLYMESH_FILES) {
-      await fs.writeFile(path.join(dir, name), `${name}-data`);
-    }
-  }
-  return ok(spec);
-};
+/**
+ * Fake STREAM runner: every step streams a line to its log and exits 0; the mesher
+ * step (snappyHexMesh / cartesianMesh) also writes the constant/polyMesh the real
+ * tool would. `commands` (optional) records each underlying tool in order. Sees
+ * through the OPENFOAM_BASHRC `bash -c` wrapper via logicalCommand.
+ */
+function successStreamRunner(commands?: string[]): (spec: StreamSpec) => StreamHandle {
+  return (spec) => {
+    const { command, args } = logicalCommand(spec);
+    commands?.push(command);
+    const onExit = (async (): Promise<StreamExit> => {
+      await fs.appendFile(spec.logFile, `[${command}] ran\n`).catch(() => undefined);
+      if (command === 'snappyHexMesh' || command === 'cartesianMesh') {
+        const dir = path.join(caseDirOf(args), 'constant', 'polyMesh');
+        await fs.mkdir(dir, { recursive: true });
+        for (const name of POLYMESH_FILES) await fs.writeFile(path.join(dir, name), `${name}-data`);
+      }
+      return { exitCode: 0, signal: null };
+    })();
+    return { pid: 4321, onExit, stop: () => undefined };
+  };
+}
 
-/** Fake runner: the first tool is missing (ENOENT), the rest never run. */
-const notFoundRunner: CommandRunner = async (spec) => ({
-  command: spec.command,
-  args: spec.args,
-  exitCode: null,
-  stdout: '',
-  stderr: '',
-  durationMs: 0,
-  timedOut: false,
-  spawnError: 'ENOENT: command not found',
-});
+/** Fake STREAM runner: the first tool is missing (spawn ENOENT); the rest are skipped. */
+function notFoundStreamRunner(): (spec: StreamSpec) => StreamHandle {
+  return () => ({
+    pid: null,
+    onExit: Promise.resolve<StreamExit>({
+      exitCode: null,
+      signal: null,
+      spawnError: 'ENOENT: command not found',
+    }),
+    stop: () => undefined,
+  });
+}
+
+/**
+ * Fake STREAM runner that HANGS: each step's onExit resolves only when stop() is
+ * called (as a killed process would). Lets a test observe a 'running' run and then
+ * cancel it. The resolvers are captured so a test can also settle it directly.
+ */
+function hangingStreamRunner(): (spec: StreamSpec) => StreamHandle {
+  return () => {
+    let resolve!: (exit: StreamExit) => void;
+    const onExit = new Promise<StreamExit>((r) => {
+      resolve = r;
+    });
+    return { pid: 999, onExit, stop: () => resolve({ exitCode: null, signal: 'SIGTERM' }) };
+  };
+}
+
+/**
+ * Poll the run-log endpoint until the run leaves 'running'; returns the final
+ * payload. The deadline is generous (well under vitest's 20s testTimeout) because
+ * the background pipeline is fs-heavy (Allclean + dict writes) and slow on WSL/CI
+ * disk — a tight deadline would flake, not catch a real hang.
+ */
+async function pollMeshLog(
+  id: string,
+  auth: string,
+  timeoutMs = 15000,
+): Promise<{ status: string; logTail: string; logBytes: number; run: { result: { success: boolean; steps: { status: string; label: string; stderr: string }[] } } | null }> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const res = await request(app)
+      .get(`/api/v1/meshing/${id}/run/log`)
+      .set('Authorization', auth)
+      .expect(200);
+    const log = res.body.log;
+    if (log.status !== 'running') return log;
+    if (Date.now() > deadline) throw new Error(`mesh run stuck at ${log.status}`);
+    await new Promise((r) => setTimeout(r, 15));
+  }
+}
 
 const CONFIG = {
   engine: 'snappy',
@@ -103,7 +155,7 @@ const CFMESH_CONFIG = {
 beforeEach(async () => {
   await resetDatabase();
 });
-afterEach(() => setCommandRunner(null));
+afterEach(() => setStreamRunner(null));
 
 describe('Meshing sessions', () => {
   it('requires authentication', async () => {
@@ -198,39 +250,55 @@ describe('Meshing sessions', () => {
       .expect(422);
   });
 
-  it('runs the pipeline and produces a mesh (fake toolchain)', async () => {
-    setCommandRunner(successRunner);
-    const user = await createTestUser();
+  /** Create a session with the given engine + a cube STL; returns its id + auth. */
+  async function seedRunnableSession(
+    engine: 'snappy' | 'cfmesh',
+    surfaces: string[] = ['cube.stl'],
+  ): Promise<{ id: string; auth: string }> {
+    const user = await createTestUser({ email: `mesh-run-${Math.random().toString(36).slice(2)}@dive.test` });
     const auth = authHeader(user);
-
     const { body: c } = await request(app)
       .post('/api/v1/meshing')
       .set('Authorization', auth)
-      .send({ name: 'Runnable' })
+      .send({ name: `Run ${engine}`, engine })
       .expect(201);
     const id = c.session.id as string;
-    await request(app)
-      .post(`/api/v1/meshing/${id}/stl`)
-      .set('Authorization', auth)
-      .attach('files', CUBE_STL, 'cube.stl')
-      .expect(201);
+    let req = request(app).post(`/api/v1/meshing/${id}/stl`).set('Authorization', auth);
+    for (const name of surfaces) req = req.attach('files', CUBE_STL, name);
+    await req.expect(201);
+    return { id, auth };
+  }
 
-    const run = await request(app)
+  it('starts a background run that streams a log and produces a mesh', async () => {
+    setStreamRunner(successStreamRunner());
+    const { id, auth } = await seedRunnableSession('snappy');
+
+    // The run STARTS (202) and returns immediately as 'running'.
+    const start = await request(app)
       .post(`/api/v1/meshing/${id}/run`)
       .set('Authorization', auth)
       .send(CONFIG)
-      .expect(200);
-    expect(run.body.result.success).toBe(true);
-    expect(run.body.result.steps.map((s: { status: string }) => s.status)).toEqual([
+      .expect(202);
+    expect(start.body.status.status).toBe('running');
+    expect(start.body.session.runStatus).toBe('running');
+
+    // Poll the live log until it finishes; the per-step report is on the payload.
+    const log = await pollMeshLog(id, auth);
+    expect(log.status).toBe('succeeded');
+    expect(log.logBytes).toBeGreaterThan(0);
+    expect(log.run?.result.success).toBe(true);
+    expect(log.run?.result.steps.map((s) => s.status)).toEqual([
       'success',
       'success',
       'success',
       'success',
     ]);
-    expect(run.body.session.hasMesh).toBe(true);
-    expect(run.body.session.lastRun).not.toBeNull();
 
-    // The produced case downloads as a zip.
+    // The session reflects the finished mesh; the produced case downloads as a zip.
+    const detail = await request(app).get(`/api/v1/meshing/${id}`).set('Authorization', auth).expect(200);
+    expect(detail.body.session.hasMesh).toBe(true);
+    expect(detail.body.session.lastRun).not.toBeNull();
+    expect(detail.body.session.runStatus).toBe('succeeded');
     const zip = await request(app)
       .get(`/api/v1/meshing/${id}/download`)
       .set('Authorization', auth)
@@ -240,89 +308,43 @@ describe('Meshing sessions', () => {
 
   it('runs a cfMesh session (cartesianMesh) and produces a mesh', async () => {
     const commands: string[] = [];
-    setCommandRunner(async (spec) => {
-      commands.push(spec.command);
-      return successRunner(spec);
-    });
-    const user = await createTestUser();
-    const auth = authHeader(user);
+    setStreamRunner(successStreamRunner(commands));
+    const { id, auth } = await seedRunnableSession('cfmesh');
 
-    const { body: c } = await request(app)
-      .post('/api/v1/meshing')
-      .set('Authorization', auth)
-      .send({ name: 'cfMesh runnable', engine: 'cfmesh' })
-      .expect(201);
-    expect(c.session.engine).toBe('cfmesh');
-    const id = c.session.id as string;
     await request(app)
-      .post(`/api/v1/meshing/${id}/stl`)
-      .set('Authorization', auth)
-      .attach('files', CUBE_STL, 'cube.stl')
-      .expect(201);
-
-    const run = await request(app)
       .post(`/api/v1/meshing/${id}/run`)
       .set('Authorization', auth)
       .send(CFMESH_CONFIG)
-      .expect(200);
-    expect(run.body.result.success).toBe(true);
-    expect(run.body.session.hasMesh).toBe(true);
+      .expect(202);
+    const log = await pollMeshLog(id, auth);
+    expect(log.status).toBe('succeeded');
+    expect(log.run?.result.success).toBe(true);
     // One STL + feature extraction -> surfaceFeatureEdges then cartesianMesh + checkMesh.
     expect(commands).toEqual(['surfaceFeatureEdges', 'cartesianMesh', 'checkMesh']);
   });
 
   it('cfMesh merges several STLs in-process before meshing', async () => {
     const commands: string[] = [];
-    setCommandRunner(async (spec) => {
-      commands.push(spec.command);
-      return successRunner(spec);
-    });
-    const user = await createTestUser();
-    const auth = authHeader(user);
+    setStreamRunner(successStreamRunner(commands));
+    const { id, auth } = await seedRunnableSession('cfmesh', ['rotor.stl', 'stator.stl']);
 
-    const { body: c } = await request(app)
-      .post('/api/v1/meshing')
-      .set('Authorization', auth)
-      .send({ name: 'cfMesh multi', engine: 'cfmesh' })
-      .expect(201);
-    const id = c.session.id as string;
     await request(app)
-      .post(`/api/v1/meshing/${id}/stl`)
-      .set('Authorization', auth)
-      .attach('files', CUBE_STL, 'rotor.stl')
-      .attach('files', CUBE_STL, 'stator.stl')
-      .expect(201);
-
-    const run = await request(app)
       .post(`/api/v1/meshing/${id}/run`)
       .set('Authorization', auth)
       .send(CFMESH_CONFIG)
-      .expect(200);
-    expect(run.body.result.success).toBe(true);
+      .expect(202);
+    const log = await pollMeshLog(id, auth);
+    expect(log.run?.result.success).toBe(true);
     // The merge is in-process (not a command); the tools are unchanged.
     expect(commands).toEqual(['surfaceFeatureEdges', 'cartesianMesh', 'checkMesh']);
-    const labels = run.body.result.steps.map((s: { label: string }) => s.label);
-    expect(labels[0]).toBe('Combine surfaces');
+    expect(log.run?.result.steps[0].label).toBe('Combine surfaces');
   });
 
   it('rejects a config whose engine differs from the session', async () => {
-    setCommandRunner(successRunner);
-    const user = await createTestUser();
-    const auth = authHeader(user);
+    setStreamRunner(successStreamRunner());
+    const { id, auth } = await seedRunnableSession('snappy');
 
-    const { body: c } = await request(app)
-      .post('/api/v1/meshing')
-      .set('Authorization', auth)
-      .send({ name: 'Snappy session' })
-      .expect(201);
-    const id = c.session.id as string;
-    await request(app)
-      .post(`/api/v1/meshing/${id}/stl`)
-      .set('Authorization', auth)
-      .attach('files', CUBE_STL, 'cube.stl')
-      .expect(201);
-
-    // A cfMesh config on a snappy session is a 400 ENGINE_MISMATCH.
+    // A cfMesh config on a snappy session is a 400 ENGINE_MISMATCH (before starting).
     const run = await request(app)
       .post(`/api/v1/meshing/${id}/run`)
       .set('Authorization', auth)
@@ -332,36 +354,79 @@ describe('Meshing sessions', () => {
   });
 
   it('reports a clean per-step failure when the toolchain is missing', async () => {
-    setCommandRunner(notFoundRunner);
-    const user = await createTestUser();
-    const auth = authHeader(user);
+    setStreamRunner(notFoundStreamRunner());
+    const { id, auth } = await seedRunnableSession('snappy');
 
-    const { body: c } = await request(app)
-      .post('/api/v1/meshing')
-      .set('Authorization', auth)
-      .send({ name: 'No tools' })
-      .expect(201);
-    const id = c.session.id as string;
     await request(app)
-      .post(`/api/v1/meshing/${id}/stl`)
-      .set('Authorization', auth)
-      .attach('files', CUBE_STL, 'cube.stl')
-      .expect(201);
-
-    const run = await request(app)
       .post(`/api/v1/meshing/${id}/run`)
       .set('Authorization', auth)
       .send(CONFIG)
-      .expect(200);
-    expect(run.body.result.success).toBe(false);
-    expect(run.body.result.steps[0].status).toBe('failed');
-    expect(run.body.result.steps[0].stderr).toContain('ENOENT');
-    expect(run.body.result.steps.slice(1).map((s: { status: string }) => s.status)).toEqual([
+      .expect(202);
+    const log = await pollMeshLog(id, auth);
+    expect(log.status).toBe('failed');
+    expect(log.run?.result.success).toBe(false);
+    expect(log.run?.result.steps[0].status).toBe('failed');
+    expect(log.run?.result.steps[0].stderr).toContain('ENOENT');
+    expect(log.run?.result.steps.slice(1).map((s) => s.status)).toEqual([
       'skipped',
       'skipped',
       'skipped',
     ]);
-    expect(run.body.session.hasMesh).toBe(false);
+
+    const detail = await request(app).get(`/api/v1/meshing/${id}`).set('Authorization', auth).expect(200);
+    expect(detail.body.session.hasMesh).toBe(false);
+    expect(detail.body.session.runStatus).toBe('failed');
+  });
+
+  it('reports idle for a session that has never run', async () => {
+    const { id, auth } = await seedRunnableSession('snappy');
+    const res = await request(app)
+      .get(`/api/v1/meshing/${id}/run/log`)
+      .set('Authorization', auth)
+      .expect(200);
+    expect(res.body.log.status).toBe('idle');
+    expect(res.body.log.logBytes).toBe(0);
+    expect(res.body.log.run).toBeNull();
+  });
+
+  it('rejects a second run while one is already in progress (409), then stops it', async () => {
+    setStreamRunner(hangingStreamRunner());
+    const { id, auth } = await seedRunnableSession('snappy');
+
+    await request(app).post(`/api/v1/meshing/${id}/run`).set('Authorization', auth).send(CONFIG).expect(202);
+    // A concurrent start is rejected while the first run is active.
+    const second = await request(app)
+      .post(`/api/v1/meshing/${id}/run`)
+      .set('Authorization', auth)
+      .send(CONFIG)
+      .expect(409);
+    expect(second.body.error.code).toBe('MESH_IN_PROGRESS');
+
+    // Stopping settles the hung run so it does not leak past the test.
+    await request(app).post(`/api/v1/meshing/${id}/run/stop`).set('Authorization', auth).expect(200);
+    const log = await pollMeshLog(id, auth);
+    expect(log.status).toBe('stopped');
+  });
+
+  it('stops a running mesh and records it stopped', async () => {
+    setStreamRunner(hangingStreamRunner());
+    const { id, auth } = await seedRunnableSession('snappy');
+
+    await request(app).post(`/api/v1/meshing/${id}/run`).set('Authorization', auth).send(CONFIG).expect(202);
+    // The run is observably active before we stop it.
+    const mid = await request(app).get(`/api/v1/meshing/${id}/run/log`).set('Authorization', auth).expect(200);
+    expect(mid.body.log.status).toBe('running');
+
+    const stop = await request(app)
+      .post(`/api/v1/meshing/${id}/run/stop`)
+      .set('Authorization', auth)
+      .expect(200);
+    expect(stop.body.session).toBeDefined();
+
+    const log = await pollMeshLog(id, auth);
+    expect(log.status).toBe('stopped');
+    const detail = await request(app).get(`/api/v1/meshing/${id}`).set('Authorization', auth).expect(200);
+    expect(detail.body.session.runStatus).toBe('stopped');
   });
 
   it('rejects a run with no STL', async () => {

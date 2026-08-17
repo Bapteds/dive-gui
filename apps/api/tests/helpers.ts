@@ -84,6 +84,27 @@ export function authHeader(user: User): string {
 }
 
 /**
+ * The logical command an OpenFOAM utility mock should match, regardless of
+ * whether OPENFOAM_BASHRC is set. planOpenfoamCommand wraps the tool as
+ * `bash -c 'source "$OPENFOAM_BASHRC" && exec "$@"' bash <bin> <args…>` when the
+ * bashrc is configured, and runs `<bin> <args…>` directly otherwise. Fake
+ * runners key off the tool name and its argv, so they must see through the
+ * wrapper — otherwise every OpenFOAM mock silently misses when a developer's
+ * .env points OPENFOAM_BASHRC at a local install. Returns the unwrapped
+ * `{ command, args }` in both configurations.
+ */
+export function logicalCommand(spec: { command: string; args: string[] }): {
+  command: string;
+  args: string[];
+} {
+  if (spec.command === 'bash' && spec.args[0] === '-c' && spec.args[2] === 'bash') {
+    // Wrapped form: ['-c', <script>, 'bash', <bin>, ...args].
+    return { command: spec.args[3], args: spec.args.slice(4) };
+  }
+  return { command: spec.command, args: spec.args };
+}
+
+/**
  * Extract the value of the refresh_token cookie from a supertest response's
  * Set-Cookie header. Returns the raw token (without attributes), or null.
  */

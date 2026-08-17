@@ -25,7 +25,9 @@ import {
   cleanPriorMeshArtifacts,
   finalize,
   runSteps,
+  runStepsStreaming,
   type PlannedStep,
+  type StreamRunControls,
 } from './meshPipelineRun';
 import {
   computeDomain,
@@ -155,6 +157,7 @@ export async function runSnappyPipeline(
   stlNames: string[],
   bounds: MeshBounds,
   config: SnappyConfig,
+  stream?: { logFile: string; controls?: StreamRunControls },
 ): Promise<MeshImportConversion> {
   const cores = Math.max(1, Math.floor(config.cores || 1));
   const domain = computeDomain(bounds, config);
@@ -164,7 +167,10 @@ export async function runSnappyPipeline(
   await cleanPriorMeshArtifacts(caseDir);
   await writeDicts(caseDir, stlNames, domain, config, cores);
 
-  const steps = await runSteps(planSteps(caseDir, cores), env.SNAPPY_STEP_TIMEOUT_MS);
+  const planned = planSteps(caseDir, cores);
+  const steps = stream
+    ? await runStepsStreaming(planned, env.SNAPPY_STEP_TIMEOUT_MS, stream.logFile, stream.controls)
+    : await runSteps(planned, env.SNAPPY_STEP_TIMEOUT_MS);
 
   // Parallel: tidy the processor* dirs once the mesh is reassembled (kept on a
   // reconstruct failure so the decomposed result stays available for debugging).

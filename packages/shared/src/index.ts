@@ -1100,6 +1100,53 @@ export interface MeshingRun {
   at: string;
 }
 
+/**
+ * The lifecycle status of a meshing run, a background job (mirrors the solver's
+ * run states, pared to what the mesher needs):
+ *  - 'running'   — the pipeline is executing; the log is streaming.
+ *  - 'succeeded' — every step passed (a usable polyMesh was produced).
+ *  - 'failed'    — a step failed (a tool error, or a missing binary).
+ *  - 'stopped'   — the user cancelled the run mid-flight.
+ */
+export type MeshingRunStatus = 'running' | 'succeeded' | 'failed' | 'stopped';
+
+/** Meshing statuses that are still executing (worth polling the log for). */
+export const ACTIVE_MESHING_STATUSES: readonly MeshingRunStatus[] = ['running'];
+
+/** Is this meshing status still active (the run is executing)? 'idle'/undefined ⇒ no. */
+export function isMeshingRunActive(status: MeshingRunStatus | 'idle' | undefined): boolean {
+  return status !== undefined && (ACTIVE_MESHING_STATUSES as readonly string[]).includes(status);
+}
+
+/** Persisted lifecycle state of a session's most recent run (the status.json sidecar). */
+export interface MeshingRunState {
+  status: MeshingRunStatus;
+  /** ISO 8601 timestamp the run started. */
+  startedAt: string;
+  /** ISO 8601 timestamp the run finished, or null while it is still running. */
+  finishedAt: string | null;
+}
+
+/**
+ * Live-log poll payload for a meshing session's current/last run — the mesher's
+ * analogue of the solver's RunLogPayload. Polled by the client while a run is
+ * active, then once more when it reaches a terminal status.
+ */
+export interface MeshingLogPayload {
+  /** The run's lifecycle status; 'idle' when no run has ever started. */
+  status: MeshingRunStatus | 'idle';
+  /** ISO 8601 start time, or null when idle. */
+  startedAt: string | null;
+  /** ISO 8601 finish time, or null while running / idle. */
+  finishedAt: string | null;
+  /** Bounded tail of the streamed mesher output (the whole log when small). */
+  logTail: string;
+  /** Total size of the log on disk in bytes. */
+  logBytes: number;
+  /** The finished run report (config + per-step steps), present once a run completes. */
+  run: MeshingRun | null;
+}
+
 /** A meshing session as shown in the list (no surface/run detail). */
 export interface MeshingSessionSummary {
   id: string;
@@ -1128,6 +1175,12 @@ export interface MeshingSession extends MeshingSessionSummary {
   savedConfig: MeshingConfig | null;
   /** Max cores a run may request (the machine's core budget). */
   maxCores: number;
+  /**
+   * Lifecycle status of the session's current/last run ('idle' when none has ever
+   * started). Lets the page lock the Run button and resume tailing a live run on
+   * load, before the first log poll returns.
+   */
+  runStatus: MeshingRunStatus | 'idle';
   /**
    * Boundary patches discovered from the input surface (cfMesh only): the FMS
    * patches (with their current type), the STL solid names, or the merged file
@@ -2301,6 +2354,23 @@ export type ChamberVariant = (typeof CHAMBER_VARIANTS)[number];
 /** Default wall thickness (mm) of the hollow last cylinder in the 'hollow' variant. */
 export const CHAMBER_WALL_THICKNESS_MM = 50;
 
+// Fixed geometry ratios that derive secondary dimensions from the model outputs.
+// Single source of truth for the derivation used when a manual override is absent:
+// consumed by the API (resolveGeometryParams) and mirrored as the placeholder
+// "auto" hints in the web form. The Python builder keeps its own copies of the two
+// diameter ratios (it cannot import TS) — keep the values here in sync with it.
+
+/** Runner-case (first cylinder) Ø = this × D_last (from the original Part.stl). */
+export const CHAMBER_D_FIRST_OVER_LAST = 1.14703;
+/** Guide-vanes / middle-cylinder Ø = this × D_last (both variants). */
+export const CHAMBER_D_MIDDLE_OVER_LAST = 0.8;
+/** Generator (central cylinder) Ø = this × X1 (hollow variant). */
+export const CHAMBER_CENTRAL_DIAMETER_OVER_X1 = 0.75;
+/** Generator (central cylinder) height = this × its own diameter (hollow variant). */
+export const CHAMBER_CENTRAL_HEIGHT_OVER_DIAMETER = 1.33;
+/** Dome height = this × the central cylinder height (hollow variant). */
+export const CHAMBER_DOME_HEIGHT_OVER_CENTRAL_HEIGHT = 0.2;
+
 /**
  * The chamber build request: the three empirical inputs, optional per-output
  * Min / Max / Exact overrides, the cylinder design variant, and geometry inputs
@@ -2376,10 +2446,12 @@ export interface ChamberInput {
    * length / height), the chamfers, and the part AXIS (positioned by
    * distFromSideChamfer1 / distFromEnd) are NOT scaled, so the cavity grows or
    * shrinks about its own floor-anchored axis inside an unchanged box. Geometry-
-   * only (not part of the empirical model). Default 1. Scaling down is unbounded;
-   * scaling up is clamped by the builder so the cylinder stack never outgrows the
-   * box height (in the stepped variant the stack height already equals the box
-   * height, so up-scaling clamps to 1).
+   * only (not part of the empirical model). Default 1. Scaling down is unbounded.
+   * When the internal stack would overgrow the box height the two designs differ:
+   * the STEPPED design REFUSES the build (a clear error) so the entered heights are
+   * never silently ignored; the HOLLOW (cone) design — whose generator + dome are
+   * meant to fill and usually exceed the box — scales the internal part down to fit
+   * (with a warning), which also reduces its heights.
    */
   partScale?: number;
   /** Box length along Y (mm). Omitted => 2 x the (final) width. */
@@ -2388,6 +2460,36 @@ export interface ChamberInput {
   hollowLength?: number;
   /** Wall thickness (mm) of the hollow last cylinder. Default CHAMBER_WALL_THICKNESS_MM. */
   wallThickness?: number;
+  /**
+   * Manual override for the RUNNER CASE (first cylinder) diameter, in mm. Omitted =>
+   * CHAMBER_D_FIRST_OVER_LAST × D_last. Scaled by partScale like the derived value.
+   * Both variants. Geometry-only.
+   */
+  dFirst?: number;
+  /**
+   * Manual override for the GUIDE-VANES / middle-cylinder diameter, in mm. Omitted =>
+   * CHAMBER_D_MIDDLE_OVER_LAST × D_last. In a guide-vane build this drives the vane
+   * ring's radial scale (the blade pivot-circle Ø); otherwise it is the middle
+   * cylinder's diameter. Scaled by partScale. Both variants. Geometry-only.
+   */
+  dMiddle?: number;
+  /**
+   * Manual override for the GENERATOR (central cylinder) diameter, in mm. Omitted =>
+   * CHAMBER_CENTRAL_DIAMETER_OVER_X1 × X1. Hollow variant only. Geometry-only.
+   */
+  centralDiameter?: number;
+  /**
+   * Manual override for the GENERATOR (central cylinder) height, in mm. Omitted =>
+   * CHAMBER_CENTRAL_HEIGHT_OVER_DIAMETER × the (resolved) central diameter. Hollow
+   * variant only. Geometry-only.
+   */
+  centralHeight?: number;
+  /**
+   * Manual override for the DOME height, in mm. Omitted =>
+   * CHAMBER_DOME_HEIGHT_OVER_CENTRAL_HEIGHT × the (resolved) central height. Hollow
+   * variant only. Geometry-only.
+   */
+  domeHeight?: number;
 }
 
 /** What the FINAL clamp did to a model value, mirroring the calculator. A value

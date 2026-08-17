@@ -44,6 +44,16 @@ export interface ChamberFormValues {
   hollowLength?: number;
   /** Hollow wall thickness (mm); defaults to CHAMBER_WALL_THICKNESS_MM. */
   wallThickness?: number;
+  /** Runner case (first cylinder) Ø (mm); blank => auto from D_last. Both variants. */
+  dFirst?: number;
+  /** Guide vanes / middle cylinder Ø (mm); blank => auto from D_last. Both variants. */
+  dMiddle?: number;
+  /** Generator (central cylinder) Ø (mm); blank => auto from X1. Hollow variant only. */
+  centralDiameter?: number;
+  /** Generator (central cylinder) height (mm); blank => auto from its diameter. Hollow only. */
+  centralHeight?: number;
+  /** Dome height (mm); blank => auto from the central height. Hollow variant only. */
+  domeHeight?: number;
 }
 
 const optionalPositive = z.number({ invalid_type_error: 'Enter a number' }).positive().optional();
@@ -79,6 +89,11 @@ export const chamberFormSchema = z
     lengthOverride: optionalPositive,
     hollowLength: optionalPositive,
     wallThickness: optionalPositive,
+    dFirst: optionalPositive,
+    dMiddle: optionalPositive,
+    centralDiameter: optionalPositive,
+    centralHeight: optionalPositive,
+    domeHeight: optionalPositive,
   })
   .superRefine((v, ctx) => {
     if (v.variant === 'hollow' && v.hollowLength == null) {
@@ -108,4 +123,9 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   lengthOverride: undefined,
   hollowLength: 200,
   wallThickness: CHAMBER_WALL_THICKNESS_MM,
+  dFirst: undefined,
+  dMiddle: undefined,
+  centralDiameter: undefined,
+  centralHeight: undefined,
+  domeHeight: undefined,
 };

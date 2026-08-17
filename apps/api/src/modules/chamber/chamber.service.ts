@@ -13,6 +13,9 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
+  CHAMBER_CENTRAL_DIAMETER_OVER_X1,
+  CHAMBER_CENTRAL_HEIGHT_OVER_DIAMETER,
+  CHAMBER_DOME_HEIGHT_OVER_CENTRAL_HEIGHT,
   CHAMBER_OUTPUT_KEYS,
   CHAMBER_WALL_THICKNESS_MM,
   computeChamberOutputs,
@@ -37,13 +40,6 @@ import {
 
 /** Sheet/model values are millimetres; the builder works in metres. */
 const MM_TO_M = 1 / 1000;
-
-/**
- * Hollow variant: the central cylinder's height is a fixed ratio of its own
- * diameter (independent of the empirical P12/hLast, which drives only the stepped
- * last cylinder). Height = 1.33 x central diameter.
- */
-const CENTRAL_HEIGHT_OVER_DIAMETER = 1.33;
 
 /** The result of a build request: the cache key + the twelve computed outputs. */
 export interface ChamberBuildResult {
@@ -130,20 +126,31 @@ function resolveGeometryParams(
   // Outlet OUTER diameter tracks X1 directly (metres). X1 is mm; params are metres.
   // Part of the cache key, so a different X1 => a different build.
   params.outletOuterD = input.x1 * MM_TO_M;
+  // Manual overrides for the runner-case / guide-vanes diameters (mm -> m), passed
+  // UNSCALED — the builder applies partScale and, when absent, the D_last ratios.
+  // Both variants. Part of the cache key, so a new value => a new build.
+  if (input.dFirst != null) params.dFirst = input.dFirst * MM_TO_M;
+  if (input.dMiddle != null) params.dMiddle = input.dMiddle * MM_TO_M;
   for (const key of CHAMBER_OUTPUT_KEYS) {
     params[key] = outputFinal(outputs, key) * MM_TO_M;
   }
 
   if (variant === 'hollow') {
     const wallMm = input.wallThickness ?? CHAMBER_WALL_THICKNESS_MM;
-    const centralDiameterMm = 0.75 * input.x1; // 0.75 * X1
-    // Central cylinder height scales with its diameter (no longer tied to P12).
-    const centralHeightMm = CENTRAL_HEIGHT_OVER_DIAMETER * centralDiameterMm;
+    // Generator (central cylinder) + dome dims: each falls back to its fixed ratio
+    // when no manual override is given, and the chain uses the RESOLVED value above
+    // it (override or default) — so overriding only the diameter still auto-derives
+    // a matching height, and only the height still auto-derives a matching dome.
+    const centralDiameterMm = input.centralDiameter ?? CHAMBER_CENTRAL_DIAMETER_OVER_X1 * input.x1;
+    const centralHeightMm =
+      input.centralHeight ?? CHAMBER_CENTRAL_HEIGHT_OVER_DIAMETER * centralDiameterMm;
+    const domeHeightMm =
+      input.domeHeight ?? CHAMBER_DOME_HEIGHT_OVER_CENTRAL_HEIGHT * centralHeightMm;
     params.wallThickness = wallMm * MM_TO_M;
     params.hollowLength = (input.hollowLength ?? 0) * MM_TO_M;
     params.centralDiameter = centralDiameterMm * MM_TO_M;
     params.centralHeight = centralHeightMm * MM_TO_M;
-    params.domeHeight = 0.2 * centralHeightMm * MM_TO_M; // 20% of the central height
+    params.domeHeight = domeHeightMm * MM_TO_M;
   }
   return params;
 }
