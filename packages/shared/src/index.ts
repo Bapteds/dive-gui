@@ -1007,6 +1007,14 @@ export interface CfMeshLayersConfig {
   maxFirstLayerThickness: number | null;
   /** Per-patch overrides keyed by patch name; absent key => the globals above. */
   perPatch?: Record<string, CfMeshPatchLayerSpec>;
+  /**
+   * Patches that grow NO boundary layers, keyed by patch name. Rendered as a
+   * `patchBoundaryLayers { "<patch>" { nLayers 0; } }` entry. Absent or empty =>
+   * no patch is force-disabled (every patch inherits the global block unless it
+   * has a `perPatch` custom override). A name in both `perPatch` and here is
+   * treated as custom (perPatch wins).
+   */
+  noLayerPatches?: string[];
 }
 
 /**
@@ -1032,6 +1040,16 @@ export interface MeshingPatch {
  * "derive from the STL bounds" (diag/40), which requires known bounds — a raw FMS
  * has none, so `maxCellSize` must be set for an FMS input.
  */
+/**
+ * Per-patch local cell-size refinement (cfMesh), keyed by patch name. Rendered as a
+ * meshDict `localRefinement { "<patch>" { cellSize X; } }` entry. Absent key => the
+ * patch uses the global sizing (boundaryCellSize if set, else maxCellSize).
+ */
+export interface CfMeshLocalRefinement {
+  /** Target cell size at this patch, in metres (> 0). */
+  cellSize: number;
+}
+
 export interface CfMeshConfig {
   /** Discriminates the meshing-config union; always 'cfmesh' here. */
   engine: 'cfmesh';
@@ -1053,6 +1071,11 @@ export interface CfMeshConfig {
    * Written to meshDict as a `renameBoundary` block.
    */
   patchTypes?: Record<string, CfMeshPatchType>;
+  /**
+   * Per-patch local cell-size refinement keyed by patch name; absent key => the
+   * patch uses the global sizing. Rendered as a meshDict `localRefinement` block.
+   */
+  localRefinement?: Record<string, CfMeshLocalRefinement>;
   /** OpenMP threads for cartesianMesh (cfMesh is multithreaded, not MPI-decomposed). */
   cores: number;
 }

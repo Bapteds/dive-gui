@@ -816,6 +816,7 @@ export type {
   CfMeshConfig,
   CfMeshLayersConfig,
   CfMeshPatchLayerSpec,
+  CfMeshLocalRefinement,
   CfMeshPatchType,
   MeshingPatch,
   SurfaceRefinement,
