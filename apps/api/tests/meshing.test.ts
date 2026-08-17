@@ -680,3 +680,38 @@ describe('per-patch boundary layers — schema', () => {
     ).toThrow();
   });
 });
+
+describe('cfMesh — local refinement + layer off-list (schema)', () => {
+  const cfBase = { engine: 'cfmesh' };
+
+  it('accepts a per-patch local refinement cell size', () => {
+    const parsed = runCfMeshSchema.parse({
+      ...cfBase,
+      localRefinement: { blade: { cellSize: 0.002 } },
+    });
+    expect(parsed.localRefinement?.blade).toEqual({ cellSize: 0.002 });
+  });
+
+  it('rejects a non-positive local refinement cell size', () => {
+    expect(() =>
+      runCfMeshSchema.parse({ ...cfBase, localRefinement: { blade: { cellSize: 0 } } }),
+    ).toThrow();
+  });
+
+  it('accepts a noLayerPatches list on addLayers', () => {
+    const parsed = runCfMeshSchema.parse({
+      ...cfBase,
+      addLayers: {
+        enabled: true, nLayers: 3, thicknessRatio: 1.2, maxFirstLayerThickness: null,
+        noLayerPatches: ['inlet', 'outlet'],
+      },
+    });
+    expect(parsed.addLayers.noLayerPatches).toEqual(['inlet', 'outlet']);
+  });
+
+  it('leaves the new fields undefined when omitted', () => {
+    const c = runCfMeshSchema.parse({ ...cfBase });
+    expect(c.localRefinement).toBeUndefined();
+    expect(c.addLayers.noLayerPatches).toBeUndefined();
+  });
+});

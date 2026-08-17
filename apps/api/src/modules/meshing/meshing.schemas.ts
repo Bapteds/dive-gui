@@ -98,6 +98,11 @@ const cfMeshPatchLayerSpecSchema = z.object({
   maxFirstLayerThickness: z.number().positive().nullable().default(null),
 });
 
+/** A per-patch local cell-size refinement (cfMesh). */
+const cfMeshLocalRefinementSchema = z.object({
+  cellSize: z.number().positive(),
+});
+
 export const runSnappySchema = z.object({
   engine: z.literal('snappy'),
   domainType: z.enum(DOMAIN_TYPES),
@@ -157,6 +162,9 @@ export const runCfMeshSchema = z.object({
   // Per-patch boundary type (patch name -> OpenFOAM type); a patch absent keeps its
   // FMS/cfMesh default. Written to meshDict as renameBoundary.
   patchTypes: z.record(z.string(), z.enum(CFMESH_PATCH_TYPES)).optional(),
+  // Per-patch local cell-size refinement (patch name -> cellSize in metres); a patch
+  // absent uses the global sizing. Written to meshDict as a localRefinement block.
+  localRefinement: z.record(z.string(), cfMeshLocalRefinementSchema).optional(),
   addLayers: z
     .object({
       enabled: z.boolean(),
@@ -165,6 +173,8 @@ export const runCfMeshSchema = z.object({
       maxFirstLayerThickness: z.number().positive().nullable().default(null),
       // Per-patch layer overrides keyed by patch name; absent key => the globals.
       perPatch: z.record(z.string(), cfMeshPatchLayerSpecSchema).optional(),
+      // Patches that grow NO layers (rendered nLayers 0); absent/empty => none off.
+      noLayerPatches: z.array(z.string()).optional(),
     })
     .default({ enabled: false, nLayers: 3, thicknessRatio: 1.2, maxFirstLayerThickness: null }),
   cores: z.number().int().min(1).max(1024).default(1),
