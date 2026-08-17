@@ -146,9 +146,18 @@ export function CfMeshConfigForm({
     return map;
   });
   const [patchLayers, setPatchLayers] = useState<PatchLayerMap>(() => seedPatchLayers(patches, init));
-  // Which patches use a CUSTOM per-patch layer override (vs inherit the global block).
-  // Seeds on iff the saved config carried a perPatch entry for the patch.
-  const [patchLayerOn, setPatchLayerOn] = useState<Record<string, boolean>>(() => {
+  // Per-patch layer state is tri-state: enabled (checkbox) × custom (Customize toggle).
+  //  - enabled=false             → no layers on this patch (goes to noLayerPatches).
+  //  - enabled=true, custom=false → mirror the global block (rendered as nothing).
+  //  - enabled=true, custom=true  → independent values (goes to perPatch).
+  // Default enabled=true (mirror), so an old config's un-overridden patches keep layers.
+  const [patchLayerEnabled, setPatchLayerEnabled] = useState<Record<string, boolean>>(() => {
+    const off = new Set(init.addLayers.noLayerPatches ?? []);
+    const map: Record<string, boolean> = {};
+    for (const p of patches) map[p.name] = !off.has(p.name);
+    return map;
+  });
+  const [patchLayerCustom, setPatchLayerCustom] = useState<Record<string, boolean>>(() => {
     const map: Record<string, boolean> = {};
     for (const p of patches) map[p.name] = !!init.addLayers.perPatch?.[p.name];
     return map;
@@ -183,7 +192,15 @@ export function CfMeshConfigForm({
         Object.keys(next).every((k) => prev[k] === next[k]);
       return same ? prev : next;
     });
-    setPatchLayerOn((prev) => {
+    setPatchLayerEnabled((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const p of patches) next[p.name] = prev[p.name] ?? true;
+      const same =
+        Object.keys(next).length === Object.keys(prev).length &&
+        Object.keys(next).every((k) => prev[k] === next[k]);
+      return same ? prev : next;
+    });
+    setPatchLayerCustom((prev) => {
       const next: Record<string, boolean> = {};
       for (const p of patches) next[p.name] = prev[p.name] ?? false;
       const same =
@@ -227,12 +244,16 @@ export function CfMeshConfigForm({
   }, [patches, patchTypes]);
 
   const config = useMemo<CfMeshConfig>(() => {
-    // Only patches with the Override box ticked get a perPatch entry; the rest inherit
-    // the global boundaryLayers block (the renderer emits patchBoundaryLayers only for
-    // patches present here).
+    // Tri-state per patch: unticked → noLayerPatches (nLayers 0); ticked + custom →
+    // perPatch override; ticked + mirror → neither (inherits the global block).
     const perPatch: Record<string, CfMeshPatchLayerSpec> = {};
+    const noLayerPatches: string[] = [];
     for (const p of patches) {
-      if (!patchLayerOn[p.name]) continue;
+      if (!patchLayerEnabled[p.name]) {
+        noLayerPatches.push(p.name);
+        continue;
+      }
+      if (!patchLayerCustom[p.name]) continue; // mirror the global block
       const s = patchLayers[p.name] ?? { n: '3', ratio: '1.2', maxFirst: '' };
       perPatch[p.name] = {
         nLayers: Math.max(1, Math.round(Number(s.n) || DEFAULT_CFMESH_CONFIG.addLayers.nLayers)),
@@ -263,12 +284,13 @@ export function CfMeshConfigForm({
         thicknessRatio: Math.max(1, Number(thicknessRatio) || 1.2),
         maxFirstLayerThickness: parseSize(maxFirstLayer),
         perPatch: Object.keys(perPatch).length > 0 ? perPatch : undefined,
+        noLayerPatches: noLayerPatches.length > 0 ? noLayerPatches : undefined,
       },
       cores: clampCores(String(cores), maxCores),
     };
   }, [
     maxCellSize, minCellSize, boundaryCellSize, extractFeatures, featureAngle, chosenPatchTypes,
-    layersOn, nLayers, thicknessRatio, maxFirstLayer, patchLayers, patchLayerOn, patches, cores, maxCores,
+    layersOn, nLayers, thicknessRatio, maxFirstLayer, patchLayers, patchLayerEnabled, patchLayerCustom, patches, cores, maxCores,
     patchRefineOn, patchRefine,
   ]);
 
@@ -529,48 +551,84 @@ export function CfMeshConfigForm({
                     <fieldset className="flex flex-col gap-2">
                       <legend className="text-sm font-medium text-text">Per-patch layers</legend>
                       <p className="text-xs text-text-secondary">
-                        Tick a patch to override the global layers for it (count · thickness ratio · max first-layer,
-                        blank max = auto). Unticked patches inherit the global settings above.
+                        Untick a patch for no layers on it. Ticked patches follow the global
+                        values above; hit <span className="font-medium">Customize</span> to give a
+                        patch its own count · thickness ratio · max first-layer.
                       </p>
                       <div className="flex flex-col gap-2">
                         {patches.map((patch) => {
-                          const on = patchLayerOn[patch.name] ?? false;
+                          const enabled = patchLayerEnabled[patch.name] ?? true;
+                          const custom = patchLayerCustom[patch.name] ?? false;
                           const s = patchLayers[patch.name] ?? { n: '3', ratio: '1.2', maxFirst: '' };
+                          // Mirror rows display the current GLOBAL values (read-only).
+                          const shown = custom ? s : { n: nLayers, ratio: thicknessRatio, maxFirst: maxFirstLayer };
                           return (
                             <div key={patch.name} className="flex flex-wrap items-center gap-2">
-                              <label className="flex min-w-0 flex-1 items-center gap-2 font-mono text-sm text-text" title={patch.name} translate="no">
+                              <label
+                                className="flex min-w-0 flex-1 items-center gap-2 font-mono text-sm text-text"
+                                title={patch.name}
+                                translate="no"
+                              >
                                 <input
                                   type="checkbox"
                                   className="size-4 shrink-0 rounded-sm border-border-strong text-cta focus-visible:ring-2 focus-visible:ring-focus-ring"
-                                  checked={on}
-                                  onChange={(e) => setPatchLayerOn((prev) => ({ ...prev, [patch.name]: e.target.checked }))}
+                                  checked={enabled}
+                                  onChange={(e) => setPatchLayerEnabled((prev) => ({ ...prev, [patch.name]: e.target.checked }))}
                                 />
                                 <span className="min-w-0 truncate">{patch.name}</span>
                               </label>
-                              <div className="flex items-center gap-1.5">
-                                <Input
-                                  type="number" min="1" step="1" className="w-16"
-                                  disabled={!on}
-                                  aria-label={`${patch.name} number of layers`}
-                                  value={s.n}
-                                  onChange={(e) => setPatchLayers((prev) => ({ ...prev, [patch.name]: { ...prev[patch.name], n: e.target.value } }))}
-                                />
-                                <Input
-                                  type="number" min="1" step="any" className="w-16"
-                                  disabled={!on}
-                                  aria-label={`${patch.name} thickness ratio`}
-                                  value={s.ratio}
-                                  onChange={(e) => setPatchLayers((prev) => ({ ...prev, [patch.name]: { ...prev[patch.name], ratio: e.target.value } }))}
-                                />
-                                <Input
-                                  type="number" min="0" step="any" className="w-20"
-                                  placeholder="auto"
-                                  disabled={!on}
-                                  aria-label={`${patch.name} max first layer thickness`}
-                                  value={s.maxFirst}
-                                  onChange={(e) => setPatchLayers((prev) => ({ ...prev, [patch.name]: { ...prev[patch.name], maxFirst: e.target.value } }))}
-                                />
-                              </div>
+                              {enabled && (
+                                <div className="flex items-center gap-1.5">
+                                  <Input
+                                    type="number" min="1" step="1" className="w-16"
+                                    disabled={!custom}
+                                    aria-label={`${patch.name} number of layers`}
+                                    value={shown.n}
+                                    onChange={(e) => setPatchLayers((prev) => ({ ...prev, [patch.name]: { ...s, n: e.target.value } }))}
+                                  />
+                                  <Input
+                                    type="number" min="1" step="any" className="w-16"
+                                    disabled={!custom}
+                                    aria-label={`${patch.name} thickness ratio`}
+                                    value={shown.ratio}
+                                    onChange={(e) => setPatchLayers((prev) => ({ ...prev, [patch.name]: { ...s, ratio: e.target.value } }))}
+                                  />
+                                  <Input
+                                    type="number" min="0" step="any" className="w-20"
+                                    placeholder="auto"
+                                    disabled={!custom}
+                                    aria-label={`${patch.name} max first layer thickness`}
+                                    value={shown.maxFirst}
+                                    onChange={(e) => setPatchLayers((prev) => ({ ...prev, [patch.name]: { ...s, maxFirst: e.target.value } }))}
+                                  />
+                                  {custom ? (
+                                    <button
+                                      type="button"
+                                      className="rounded-sm px-1.5 text-xs font-medium text-text-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                                      onClick={() => setPatchLayerCustom((prev) => ({ ...prev, [patch.name]: false }))}
+                                    >
+                                      Reset to global
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="rounded-sm px-1.5 text-xs font-medium text-cta hover:text-cta-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                                      onClick={() =>
+                                        setPatchLayerCustom((prev) => {
+                                          // Seed the custom fields from the current globals on first customize.
+                                          setPatchLayers((pl) => ({
+                                            ...pl,
+                                            [patch.name]: { n: nLayers, ratio: thicknessRatio, maxFirst: maxFirstLayer },
+                                          }));
+                                          return { ...prev, [patch.name]: true };
+                                        })
+                                      }
+                                    >
+                                      Customize
+                                    </button>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
