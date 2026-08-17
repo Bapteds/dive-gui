@@ -82,6 +82,18 @@ export function renderMeshDict(
     lines.push(`boundaryCellSize ${fmt(config.boundaryCellSize)};`);
   }
 
+  // Per-patch local refinement: cfMesh's localRefinement block, one entry per patch
+  // the user gave a target cell size. Only emitted when at least one is set.
+  const localRefine = Object.entries(config.localRefinement ?? {});
+  if (localRefine.length > 0) {
+    const block: string[] = ['localRefinement', '{'];
+    for (const [name, spec] of localRefine) {
+      block.push(`    "${name}"`, '    {', `        cellSize ${fmt(spec.cellSize)};`, '    }');
+    }
+    block.push('}');
+    lines.push('', ...block);
+  }
+
   if (config.addLayers.enabled) {
     const layer: string[] = [
       'boundaryLayers',
@@ -93,9 +105,14 @@ export function renderMeshDict(
       layer.push(`    maxFirstLayerThickness ${fmt(config.addLayers.maxFirstLayerThickness)};`);
     }
     // Per-patch overrides: cfMesh's native patchBoundaryLayers sub-block, keyed by
-    // patch name. Only emitted when the user set at least one override.
+    // patch name. Custom entries carry values; noLayerPatches force nLayers 0 (a
+    // patch present in both is treated as custom — perPatch wins).
     const perPatch = Object.entries(config.addLayers.perPatch ?? {});
-    if (perPatch.length > 0) {
+    const customNames = new Set(perPatch.map(([name]) => name));
+    const offPatches = (config.addLayers.noLayerPatches ?? []).filter(
+      (name) => !customNames.has(name),
+    );
+    if (perPatch.length > 0 || offPatches.length > 0) {
       layer.push('    patchBoundaryLayers', '    {');
       for (const [name, spec] of perPatch) {
         layer.push(
@@ -108,6 +125,9 @@ export function renderMeshDict(
           layer.push(`            maxFirstLayerThickness ${fmt(spec.maxFirstLayerThickness)};`);
         }
         layer.push('            allowDiscontinuity 0;', '        }');
+      }
+      for (const name of offPatches) {
+        layer.push(`        "${name}"`, '        {', '            nLayers 0;', '        }');
       }
       layer.push('    }');
     }

@@ -96,4 +96,53 @@ describe('renderMeshDict', () => {
     expect(dict).toContain('boundaryLayers');
     expect(dict).not.toContain('patchBoundaryLayers');
   });
+
+  it('emits a localRefinement block for per-patch cell sizes only', () => {
+    const dict = renderMeshDict(
+      config({ localRefinement: { blade: { cellSize: 0.002 } } }),
+      'constant/triSurface/combined.fms',
+      0.4,
+    );
+    expect(dict).toContain('localRefinement');
+    expect(dict).toContain('"blade"');
+    expect(dict).toContain('cellSize 0.002;');
+  });
+
+  it('omits localRefinement when there are no per-patch sizes', () => {
+    const dict = renderMeshDict(config({}), 'x.fms', 0.4);
+    expect(dict).not.toContain('localRefinement');
+  });
+
+  it('emits nLayers 0 for a noLayerPatches entry', () => {
+    const dict = renderMeshDict(
+      config({
+        addLayers: {
+          enabled: true, nLayers: 3, thicknessRatio: 1.2, maxFirstLayerThickness: null,
+          noLayerPatches: ['inlet'],
+        },
+      }),
+      'x.fms',
+      0.4,
+    );
+    expect(dict).toContain('patchBoundaryLayers');
+    expect(dict).toContain('"inlet"');
+    expect(dict).toContain('nLayers 0;');
+  });
+
+  it('lets a custom perPatch override win over noLayerPatches for the same patch', () => {
+    const dict = renderMeshDict(
+      config({
+        addLayers: {
+          enabled: true, nLayers: 3, thicknessRatio: 1.2, maxFirstLayerThickness: null,
+          perPatch: { walls: { nLayers: 5, thicknessRatio: 1.4, maxFirstLayerThickness: null } },
+          noLayerPatches: ['walls'],
+        },
+      }),
+      'x.fms',
+      0.4,
+    );
+    // 'walls' renders as the custom block (nLayers 5), NOT nLayers 0.
+    expect(dict).toContain('nLayers 5;');
+    expect(dict).not.toContain('nLayers 0;');
+  });
 });
