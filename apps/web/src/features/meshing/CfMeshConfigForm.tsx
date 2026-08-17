@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { CFMESH_PATCH_TYPES, DEFAULT_CFMESH_CONFIG } from '@/lib/api/types';
-import type { CfMeshConfig, CfMeshPatchLayerSpec, CfMeshPatchType, MeshBounds, MeshingPatch, StlFile } from '@/lib/api/types';
+import type { CfMeshConfig, CfMeshLocalRefinement, CfMeshPatchLayerSpec, CfMeshPatchType, MeshBounds, MeshingPatch, StlFile } from '@/lib/api/types';
 
 /** The type set for a discovered patch: the saved choice, its FMS type, else wall. */
 function seedPatchType(
@@ -130,6 +130,21 @@ export function CfMeshConfigForm({
     for (const p of patches) map[p.name] = seedPatchType(p, init.patchTypes);
     return map;
   });
+  // Per-patch local refinement (cell size in metres). Tick a patch to override the
+  // global boundary cell size for it; seeded on iff the saved config had an entry.
+  const [patchRefineOn, setPatchRefineOn] = useState<Record<string, boolean>>(() => {
+    const map: Record<string, boolean> = {};
+    for (const p of patches) map[p.name] = !!init.localRefinement?.[p.name];
+    return map;
+  });
+  const [patchRefine, setPatchRefine] = useState<Record<string, string>>(() => {
+    const map: Record<string, string> = {};
+    for (const p of patches) {
+      const cell = init.localRefinement?.[p.name]?.cellSize;
+      map[p.name] = cell ? String(cell) : '';
+    }
+    return map;
+  });
   const [patchLayers, setPatchLayers] = useState<PatchLayerMap>(() => seedPatchLayers(patches, init));
   // Which patches use a CUSTOM per-patch layer override (vs inherit the global block).
   // Seeds on iff the saved config carried a perPatch entry for the patch.
@@ -176,6 +191,22 @@ export function CfMeshConfigForm({
         Object.keys(next).every((k) => prev[k] === next[k]);
       return same ? prev : next;
     });
+    setPatchRefineOn((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const p of patches) next[p.name] = prev[p.name] ?? false;
+      const same =
+        Object.keys(next).length === Object.keys(prev).length &&
+        Object.keys(next).every((k) => prev[k] === next[k]);
+      return same ? prev : next;
+    });
+    setPatchRefine((prev) => {
+      const next: Record<string, string> = {};
+      for (const p of patches) next[p.name] = prev[p.name] ?? '';
+      const same =
+        Object.keys(next).length === Object.keys(prev).length &&
+        Object.keys(next).every((k) => prev[k] === next[k]);
+      return same ? prev : next;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [patchKey]);
 
@@ -209,6 +240,14 @@ export function CfMeshConfigForm({
         maxFirstLayerThickness: parseSize(s.maxFirst),
       };
     }
+    // Per-patch local refinement: ticked patches with a positive cell size only.
+    const localRefinement: Record<string, CfMeshLocalRefinement> = {};
+    for (const p of patches) {
+      if (!patchRefineOn[p.name]) continue;
+      const size = parseSize(patchRefine[p.name]);
+      if (size == null) continue;
+      localRefinement[p.name] = { cellSize: size };
+    }
     return {
       engine: 'cfmesh',
       maxCellSize: parseSize(maxCellSize),
@@ -217,6 +256,7 @@ export function CfMeshConfigForm({
       extractFeatures,
       featureAngle: Math.min(180, Math.max(0, Number(featureAngle) || DEFAULT_CFMESH_CONFIG.featureAngle)),
       patchTypes: Object.keys(chosenPatchTypes).length > 0 ? chosenPatchTypes : undefined,
+      localRefinement: Object.keys(localRefinement).length > 0 ? localRefinement : undefined,
       addLayers: {
         enabled: layersOn,
         nLayers: Math.max(1, Math.round(Number(nLayers) || 3)),
@@ -229,6 +269,7 @@ export function CfMeshConfigForm({
   }, [
     maxCellSize, minCellSize, boundaryCellSize, extractFeatures, featureAngle, chosenPatchTypes,
     layersOn, nLayers, thicknessRatio, maxFirstLayer, patchLayers, patchLayerOn, patches, cores, maxCores,
+    patchRefineOn, patchRefine,
   ]);
 
   const handleGenerate = () => onGenerate(config);
@@ -378,6 +419,47 @@ export function CfMeshConfigForm({
                 />
               </Field>
             </div>
+
+            {patches.length > 0 && (
+              <fieldset className="flex flex-col gap-2">
+                <legend className="text-sm font-medium text-text">Local refinement (per patch)</legend>
+                <p className="text-xs text-text-secondary">
+                  Tick a patch to set its own cell size (m); it overrides the global boundary
+                  cell size for that patch only. Unticked patches use the global sizing.
+                </p>
+                <div className="flex flex-col gap-2">
+                  {patches.map((patch) => {
+                    const on = patchRefineOn[patch.name] ?? false;
+                    const size = patchRefine[patch.name] ?? '';
+                    return (
+                      <div key={patch.name} className="flex flex-wrap items-center gap-2">
+                        <label
+                          className="flex min-w-0 flex-1 items-center gap-2 font-mono text-sm text-text"
+                          title={patch.name}
+                          translate="no"
+                        >
+                          <input
+                            type="checkbox"
+                            className="size-4 shrink-0 rounded-sm border-border-strong text-cta focus-visible:ring-2 focus-visible:ring-focus-ring"
+                            checked={on}
+                            onChange={(e) => setPatchRefineOn((prev) => ({ ...prev, [patch.name]: e.target.checked }))}
+                          />
+                          <span className="min-w-0 truncate">{patch.name}</span>
+                        </label>
+                        <Input
+                          type="number" min="0" step="any" className="w-28"
+                          placeholder="cell size (m)"
+                          disabled={!on}
+                          aria-label={`${patch.name} local cell size in metres`}
+                          value={size}
+                          onChange={(e) => setPatchRefine((prev) => ({ ...prev, [patch.name]: e.target.value }))}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            )}
 
             {/* CPU threads (OpenMP). */}
             <Field
