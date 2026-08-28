@@ -1,186 +1,183 @@
-# Handover — Guide-vane hub & shroud, X1-driven parametric reshaping
+# Handover — Guide-vane STEP export (editable BREP) + chamber/meshing branch state
 
-> Branch: `feat/chamber-creation`. Latest work is **committed** (`7e2fd7d`), not pushed.
-> Supersedes the previous handover in this file (2026-08-06, "outlet sizing / next task").
-> That "next task" is what this handover's §2 describes as **done**.
+> Branch: `feat/chamber-creation`. Latest work is **committed AND pushed** (`1b542bf`).
+> **PR not yet opened** — open it here (no `gh` CLI / HTTP token on this machine, so it needs a browser):
+> https://github.com/Bapteds/dive-gui/compare/main...feat/chamber-creation?expand=1
+> Supersedes the previous handover (2026-08-10, "hub & shroud X1 reshaping") — that work is done
+> and folded into the branch; its detail now lives in the `PLAN.md` changelog.
+> The full, per-feature French changelog for everything on this branch is at the bottom of `PLAN.md`.
 
-## 0. Access & toolchain (unchanged — READ FIRST if new to this repo)
+---
+
+## 0. Access & toolchain (READ FIRST if new to this repo — unchanged)
 
 The toolchain lives in **WSL**, outside this folder:
 
-- `npm`/`node` are **WSL-only** — Bash/PowerShell on Windows fail with "npx: command not found".
-- CadQuery Python is a **WSL venv**: `/home/hristo/cadquery-env/bin/python`.
+- `npm`/`node` are **WSL-only** — Git Bash / PowerShell on Windows fail with "npx: command not found".
+- CadQuery Python is a **WSL venv**: `/home/hristo/cadquery-env/bin/python`
+  (the API reads it via `CHAMBER_PYTHON_BIN`; the mesh viewer uses `MESH_PYTHON_BIN` →
+  `/home/hristo/mesh-viz-env`, a separate venv with pyvista/trimesh — see PLAN.md).
 - Invoke via `wsl -e bash -lc "cd /mnt/c/Users/Hristo.Dimitrov/Desktop/dive-gui/... && ..."`.
-  WSL prints harmless `Failed to translate 'H:\bin'` lines on every call — ignore.
+  WSL prints harmless `Failed to translate 'H:\bin'` lines on every call — ignore them
+  (silence with `wsl -e bash 2>/dev/null -lc '...'`).
 
 ```bash
-# Build ONE chamber (params JSON -> output dir: chamber.glb, manifest.json, exports/)
-wsl -e bash -lc 'cd /mnt/c/Users/Hristo.Dimitrov/Desktop/dive-gui/apps/api/scripts && \
+# Build ONE chamber (params JSON -> outDir: chamber.glb, manifest.json, exports/, build-meta.json)
+wsl -e bash 2>/dev/null -lc 'cd /mnt/c/Users/Hristo.Dimitrov/Desktop/dive-gui/apps/api/scripts && \
   CHAMBER_DEBUG_DUMP=1 /home/hristo/cadquery-env/bin/python buildChamber.py <params.json> <outDir>'
 
-# Chamber test gate
-wsl -e bash -lc 'cd /mnt/c/Users/Hristo.Dimitrov/Desktop/dive-gui && npx --workspace @dive/api vitest run chamber'
+# Chamber test gate (FAKE builder — never runs real CadQuery; TS logic only)
+wsl -e bash 2>/dev/null -lc 'cd /mnt/c/Users/Hristo.Dimitrov/Desktop/dive-gui && \
+  npx --workspace @dive/api vitest run chamber'
 
-# Pure hub/shroud math unit tests (no build needed)
-wsl -e bash -lc 'cd /mnt/c/Users/Hristo.Dimitrov/Desktop/dive-gui/apps/api/scripts && \
-  /home/hristo/cadquery-env/bin/python _test_hub_shroud_math.py'
-
-# Full geometry regression (after CHAMBER_DEBUG_DUMP=1 build): watertight, rims, ellipse/hub invariants
-wsl -e bash -lc 'cd /mnt/c/Users/Hristo.Dimitrov/Desktop/dive-gui/apps/api/scripts && \
-  /home/hristo/cadquery-env/bin/python _verify_outlet_ratio.py <outDir> <X1_metres> <outletRatio>'
+# Typecheck (shared must build first)
+wsl -e bash 2>/dev/null -lc 'cd /mnt/c/Users/Hristo.Dimitrov/Desktop/dive-gui && \
+  npm run -w @dive/shared build && \
+  npx tsc -p apps/api/tsconfig.json --noEmit && npx tsc -p apps/web/tsconfig.json --noEmit'
 ```
 
-- **Pre-existing failing test, unrelated to this work**: `apps/api/tests/meshes.test.ts >
-  GET /projects/:id/meshes/assembly + POST /meshes/merge (Disassemble) > clears the assembly
-  record when the mesh backup is restored (undo-all)` — an `EISDIR` on `.work/m1`. Predates and
-  is outside chamber-creation work; don't chase it unless asked.
 - After **any** `buildChamber.py` change, **purge the build cache**:
   `rm -rf apps/api/storage/chamber/*` (builds are hashed on params, not code).
-- `CHAMBER_DEBUG_DUMP=1` dumps `core.stl`, `casing.stl`, `result.stl`, `hub_throat.stl`,
-  `hub_source.stl`, `shroud_source.stl`, `vanes_source.stl`, `F.stl`, `meta.json` into
-  `<outDir>/_debug/` — the main diagnostic tool for this geometry.
-- **Scratch discipline**: any one-off diagnostic script/build output goes under
-  `apps/api/scripts/_diag_*` / `_dm_*` / similar underscore-prefixed names — `git clean -ndx --
-  apps/api/scripts` previews them, `-fdx` removes them. Never let scratch leak into a commit
-  (stage explicit file lists, not `git add -A`).
+- `CHAMBER_DEBUG_DUMP=1` dumps `core.stl`, `casing.stl`, `result.stl`, `F.stl`, `meta.json`, etc.
+  into `<outDir>/_debug/` — the main diagnostic tool for the geometry.
+- **The full API vitest suite is slow on WSL disk I/O (times out ~7 min).** Run targeted suites
+  (`chamber`, `meshing`, `snappyPipeline`, `mesh`, `meshes`) rather than the whole thing.
+- **Scratch discipline**: one-off diagnostic scripts/builds go under underscore-prefixed names
+  (`apps/api/scripts/_diag_*`, or the session scratchpad). Never `git add -A`; stage explicit
+  file lists so scratch never enters a commit.
 
-## 1. What this is (current architecture)
+---
 
-Guide-vane builds (`guideVanes: true`) replace the middle cylinder with a **radial distributor**
-(16 blades + hub + shroud + outlet). The hub and shroud are built one of two ways, chosen per
-build by whether the outlet-sizing params are present:
+## 1. Latest work: guide-vane STEP export as editable BREP (main change in `1b542bf`)
 
-- **Analytic path** (when `outletOuterD` + `outletRatio` are both present in params — the normal
-  case today): hub and shroud are **parametric meridional profiles** (a 3-point polyline for the
-  hub, an ellipse fillet for the shroud), revolved directly into solids. §2 below.
-- **Mesh fallback path** (either param absent — old cached builds only): hub/shroud are built by
-  remapping the `guideVanes_walls.stl` asset mesh (`place_throat`) + PCHIP-smoothing a silhouette
-  off it. Preserved byte-identical to before this feature for backward compatibility.
+**Ask (user):** *"make the step file also export properly in the case of present guide vanes."*
+**Confirmed scope:** consumer = editable desktop CAD → needs **genuine analytic/NURBS BREP**, not
+faceted; failure policy = **fall back to a vane-less STEP + warn**; safety = **volume-match gate**.
 
-Either way: the vane blades are extruded into watertight prisms, the hub-core/shroud-casing
-solids + prisms are **unioned**, and that union is **subtracted from the OCC fluid box**
-(`trimesh.boolean.difference`, manifold engine). The resulting true wetted boundary `F` is then
-re-split into named patches (`hub`, `shroud`, `outlet`, `guide_vanes`, plus OCC-derived
-`inlet`/`cylinder_walls`/`walls`) by nearest-source classification.
+**Why it's hard (the core fact):** a STEP file can only hold **BREP** (analytic/NURBS solids). The
+guide vanes in the pipeline are **mesh** (STL triangles) — you cannot put a mesh into a STEP. So
+the vane-less STEP always exported fine (it's an OCC `result` solid), but to get vanes into the
+STEP they must be **reconstructed as BREP** and boolean-cut from the fluid solid.
 
-Key functions in `apps/api/scripts/buildChamber.py`:
-- `_hub_point_radii(R_hub_new, R_shroud_new, meta)` — pure function, the hub 3-point radial rule.
-- `_shroud_fillet_profile(np, R_shroud_new, z_brim, r_wall)` — pure function, the shroud ellipse.
-- `_revolve_open` / `_densify` — surface-of-revolution + tessellation-density helpers for the
-  analytic profiles (density matters — see §2's "pitfalls" below).
-- `make_vane_patches(...)` — branches into analytic vs. mesh fallback; returns hub/shroud/outlet/
-  blade meshes plus `hub_profile`/`shroud_profile`/`hub_pts` (analytic-path extras, empty on
-  fallback).
-- `main()`'s `guide_vanes` branch — revolves `hub_profile`/`shroud_profile` into `_core`/`_casing`
-  when present (analytic), else calls `_hub_core_solid`/`_shroud_casing_solid` (mesh fallback);
-  orchestrates the union/subtract/classify and emits patches.
+**Architecture — a parallel, additive path.** The mesh/viewer/solver source of truth is unchanged:
+`fluid_F` (the trimesh manifold difference) still feeds GLB / STL / edges / triSurface / patch
+classification. The STEP work is a **separate OCC computation** that only produces `chamber.step`;
+it never feeds the mesher. Changing it cannot affect the mesh.
 
-## 2. Current state: hub & shroud parametric reshaping (DONE, committed)
+**Files:**
+- `apps/api/scripts/buildChamber.py`
+  - `VANE_STEP_VOL_TOL = 0.005` (0.5%).
+  - `build_vane_step_solid(cq, np, trimesh, result, core_prof, cas_prof, airfoil, blades_mesh,
+    cx, cy, z0, z1, fluid_volume, vol_tol=…)` — revolves analytic hub/shroud
+    (**revolve axis `(0,1,0)` = global Z; `(0,0,1)` gives ZERO volume — an OCC gotcha**), fits a
+    clean airfoil onto each placed blade section via 2D Procrustes (`_similarity_2d` / `_fit_airfoil`
+    / `_resample_loop`), spline-extrudes each blade, unions into a distributor, `result.cut(dist)`,
+    `.clean()`, then **gates on a STEP round-trip**: exports a temp STEP, re-imports it, and checks
+    `abs(vol − fluid_volume)/fluid_volume ≤ vol_tol`. Returns the solid or `None`.
+  - Helper `_load_vane_blade_profile` reads the baked airfoil asset.
+  - Export block (~L1748): guide-vane builds try `build_vane_step_solid`; on `None`/any exception
+    they **fall back** to exporting the vane-less `result` and warn. `build-meta.json`
+    `{"stepHasVanes": bool}` is written for guide-vane builds only (non-vane builds write no meta).
+  - `CHAMBER_STEP_DEBUG` env var enables gate/blade logging (off by default, harmless).
+- `apps/api/scripts/bakeVaneBladeProfile.py` — **offline** one-shot bake: loads the supplied blade
+  STEP, identifies the blade shell by r-range/height/azimuth (not by index), sections it at
+  mid-height, aligns to the STL blade by 2D Procrustes (cyclic shift + reflection), asserts
+  maxDev ≤ 2 mm, writes the canonical 160-point airfoil.
+- `apps/api/scripts/assets/guideVanes_blade_profile.json` — the generated asset (scale 1.00106,
+  maxDev 1.55 mm, sectionZAsset 0.7925, centroid radius 0.8687). Committed; regenerate only if the
+  blade geometry changes.
+- Spec: `docs/superpowers/specs/2026-08-13-guide-vane-step-export-design.md`
+- Plan: `docs/superpowers/plans/2026-08-13-guide-vane-step-export.md`
 
-Spec: `docs/superpowers/specs/2026-08-10-hub-shroud-x1-adaptation-design.md`.
-Plan: `docs/superpowers/plans/2026-08-10-hub-shroud-x1-adaptation.md` (all 5 tasks executed
-inline, TDD where testable).
-Commit: `7e2fd7d` — also carries the earlier X1/`outletRatio` plumbing (shared type, zod schema,
-web form field, service) from the same working tree, called out explicitly in the commit body.
+**Outcome:**
+- ✅ **Stepped** guide-vane builds ship a STEP with **editable analytic vanes** — round-trip
+  135.42 m³ vs `fluid_F` 135.42 (0.005%), 123 smooth faces. `stepHasVanes=true`.
+- ⚠️ **Hollow** guide-vane builds hit a **malformed OCC boolean**: the solid tessellates fine
+  (153 m³, watertight) but STEP round-trips to **+30% / 199 m³** — a topological doubling from
+  coincident faces at the `z_mid_top` interface **plus** the hollow cup's enclosed internal void.
+  `.clean()` (UnifySameDomain) does not repair it. The gate catches it → **safe fallback** to the
+  vane-less STEP, `stepHasVanes=false`. No wrong STEP can ship.
 
-**What changed:** the hub and shroud now **adapt to the outlet size** (X1, and for the hub also
-`outletRatio`), replacing the pinned-rim mesh remap with **analytic meridional profiles**.
+**Descoped by user decision (2026-08-13):** *"leave the build as it is, I don't need a good STEP
+file anymore."* Plan Tasks 4–6 (wire `stepHasVanes` through the API + surface the fallback in the
+web UI + dedicated tests) were **not done**. The flag is written to `build-meta.json` but **not
+consumed** — there is deliberately **no `stepHasVanes` reference anywhere in TS**, so there is no
+half-wiring and the build is clean. To resume: read the plan's Tasks 4–6 (API
+`readChamberBuildMeta` in `chamberStorage.ts`, `ChamberBuildResult.stepHasVanes` in
+`chamber.service.ts`, shared type, web `types.ts` + `ChamberPage` + `ChamberExportButtons`, tests
+incl. cache-hit).
 
-**Hub — 3-point rule.** Baseline points measured from `guideVanes_walls.stl` by objective RDP
-(Ramer–Douglas–Peucker) polyline reduction — confirmed exactly 3 interior corners, no more (an
-earlier 4th "point" was a plotting artifact, not real geometry):
+---
 
-| point | baseline (r, z), asset/absolute metres | move rule |
-|---|---|---|
-| inner rim | r = 0.29573 | → `R_hub_new = outletRatio · X1/2` |
-| P1 | (0.29548, 0.22608) | `P1₀ + Δr_hub` (full — tracks the rim, duct stays vertical) |
-| P2 | (0.39274, 0.51575) | `P2₀ + Δr_hub/2` (half — user's explicit choice) |
-| P3 | (0.61465, 0.64565) | `0.93840 · R_shroud_new` (proportional to the OUTER rim, X1 only — ratio-independent) |
+## 2. Verifying the STEP path (real CadQuery — TS tests can't)
 
-`Δr_hub = R_hub_new − 0.29573`. **z is unchanged** by X1/ratio — it stays on the existing HLE
-vertical map (`z_sb + z_asset·sz`). **Known accepted limitation**: because P1 moves at rate 1 and
-P2 at rate 0.5, P1 can overtake P2 at very high X1 (a "fold") — the user explicitly chose to keep
-the simple half-rate rule and accept this, rather than a proportional (fold-proof) rule. The
-builder prints a `WARNING` when it detects `P1 > P2` but does **not** clamp. In practice this is
-rarely reachable because the pre-existing `VANE_OUTLET_SAFE_MARGIN` clamp (0.97·R_anchor) already
-bounds `R_shroud` — see the verification note below.
+The TS `chamber.test.ts` uses a **fake builder** and never runs CadQuery, so STEP/geometry
+correctness must be checked in the WSL cadquery-env. Cached guide-vane params live under
+`apps/api/storage/chamber/<hash>/params.json`; convenient reference hashes:
+- `052bccd7ac0ea7ec` — **stepped + vanes** (should ship vanes)
+- `0ee2a0131b351f62` — **hollow + vanes** (should fall back)
 
-**Shroud — ellipse fillet.** The floor curve was characterized (circle vs. ellipse fit against
-the real STL curve) and found to be a wide axis-aligned ellipse, not a circle (RMS 0.00038 vs.
-0.00064). Rebuilt as `a = 0.160·R_shroud_new` (radial), `b = 0.119·R_shroud_new` (vertical),
-seated at the outer rim, tangent-horizontal into the flat brim. Both semi-axes scale with
-`R_shroud`, so `R_curve/(X1/2)` is held **exactly** constant — the user's original ask.
+Recipe: purge the cache, build each params into a scratch dir with the cadquery-env python, then
+re-import `exports/chamber.step` with `cadquery.importers.importStep`, sum solid volumes, and
+compare against `exports/chamber.stl`'s volume (trimesh) and against `build-meta.json`'s
+`stepHasVanes`. Expected: stepped rel-err ~0.005% with `stepHasVanes=true`; hollow `stepHasVanes=false`
+with the STEP being the vane-less solid.
 
-**Pitfalls hit and fixed during implementation** (read before touching this code again):
-1. **Non-watertight casing.** An annular revolve profile must be explicitly closed
-   (first point == last point) for `trimesh.creation.revolve` — the hub core "accidentally" works
-   without this because it touches the axis (auto-capped), the shroud casing (an annulus) does
-   not.
-2. **Coarse tessellation → misclassification.** `_revolve_open` naively puts one ring per profile
-   point (4-5 points on the raw hub/shroud polylines) — far too coarse for the boolean +
-   nearest-source classification, which caused a real bug (hub duct wall not owned by the hub
-   patch near the floor) and a false monotonicity failure in the shroud contour check (some
-   verification r-bins caught zero top-surface samples). Fixed with `_densify`, which inserts
-   points so no meridional segment exceeds a step **smaller than the verification script's r-bin
-   width** — if you change either the verify script's `nb` (bin count) or `_densify`'s `step`,
-   re-check they stay consistent.
-3. **Spurious fold warning at the default case.** The naive check `rim ≤ P1` fires even at
-   baseline because `P1₀` (0.29548) sits ~0.25mm inside the baseline rim (0.29573) by
-   construction, not because of a real fold. The real invariant to check is `P1 ≤ P2 ≤ P3`.
+---
 
-**Verified**: pure-function unit tests (`_test_hub_shroud_math.py`, standalone, no build) all
-pass. Full sweep {cone, tall, short} × ratio {0.35, 0.45, 0.50} × X1 {low, default, high} = 27
-builds, **27/27 ALL PASS** (F watertight/1-component, rims exact, `a/R_shroud`/`b/R_shroud`
-constant, `P3 = 0.9384·R_shroud`, hub owns its duct wall, shroud casing monotone, no stray/
-misclassified faces). Additionally: an oversized-X1 case correctly hits the pre-existing
-`R_anchor` clamp (not the hub-fold path); a non-hollow "stepped" variant builds clean (path
-generalizes beyond the hollow/dome case); the no-params fallback takes the mesh path (empty
-`hub_pts`/`shroud_ell` in the debug meta) and still builds watertight. 31/31 `chamber` vitest
-tests pass.
+## 3. Also on this branch (previously uncommitted — folded into `1b542bf`)
 
-**Not yet done — the one gate I could not run**: a **live look at the rendered GLB in the app**
-(chamber page is behind a login wall). Purge the cache first:
-```bash
-rm -rf apps/api/storage/chamber/*
-```
-then generate a guide-vane chamber at default settings and at a couple of X1/ratio extremes, and
-confirm the hub shoulder (3-point shape) and shroud fillet (ellipse) read correctly in the
-rendered mesh — not just pass the numeric checks above.
+Full detail per feature is in the `PLAN.md` changelog. Summary:
+- **Meshing live run log + Stop** — file-backed background job (`mesh.log` + `status.json`
+  sidecars), non-blocking `POST /:id/run` (202), `GET /:id/run/log`, `POST /:id/run/stop`, boot
+  reconciliation, Run button locked while active.
+- **Rename** for meshing sessions (`PATCH /meshing/:id`) and projects (`PATCH /projects/:id`,
+  manager-only) + reusable `RenameDialog`.
+- **Chamber feet on/off** toggle (`feetEnabled`, legs+planks together).
+- **Adjustable derived chamber dimensions** — `dFirst / dMiddle / centralDiameter / centralHeight
+  / domeHeight` overridable in the UI, empirical-relation fallback when blank; shared ratio
+  constants are the single source of truth.
+- **Stepped fit-to-box refusal** — stepped now *rejects* (KO → toast) when the stack exceeds
+  H Kammer instead of silently shrinking; hollow keeps the fit-to-box clamp (it's load-bearing —
+  21/26 cached hollow builds legitimately exceed the box).
 
-## 3. Possible next steps (not requested yet, just flagged)
+---
 
-- If the user ever wants the **hub fold to be fold-proof** instead of warn-only: the
-  spec/handover discussion (see git history around 2026-08-10) worked out a "pin-both-ends"
-  proportional alternative (`P2` at a baseline-derived fraction between the rim and P3) that
-  cannot fold by construction — the user explicitly declined it in favor of the simpler half-rate
-  rule with an accepted limitation, but the alternative is documented in the conversation if
-  revisited.
-- The **normal orientation** question from the previous handover (STLs should point INTO the
-  fluid, not the current outward-from-fluid/OpenFOAM-standard convention) was raised, the user
-  asked for the flip, then redirected to other work before it was done. **Still not done.** It's a
-  one-line change (negate/flip winding on the emitted triangles, consistently across every
-  patch — they share the same `fluid_F` boundary) but needs re-verification of `F.volume` sign
-  and a manual normal check after. Confirm with the user whether this should also flip
-  `chamber.stl` (whole-domain export) and whether `extractPatches.py`'s consumers care (viewer is
-  double-sided/orientation-agnostic per earlier investigation, so likely no viewer impact).
+## 4. Known limitations & possible next steps (not requested — flagged)
 
-## 4. Repo conventions (unchanged)
+- **Hollow guide-vane STEP has no vanes** (falls back). If wanted, ranked by effort/odds:
+  1. **Fuzzy boolean** — do the `result.cut(dist)` via OCP `BRepAlgoAPI_Cut` with a small
+     `SetFuzzyValue` (~1e-6–1e-5 m) to merge the coincident faces. Cheapest, textbook fix for this
+     failure mode. Keep the fuzzy value as small as works (a too-large value could round tiny
+     features if the STEP is later re-meshed; the volume gate backstops gross error).
+  2. **Overcuts** — extend the hub core / blade prisms slightly past the `z_mid_top` interface into
+     already-void space so no boolean shares an exact coplanar face. Volume-neutral by construction
+     (the code already has a `FLOOR_OVERCUT` constant used for z1).
+  3. **Reconstruct the hollow cup/dome as analytic BREP** (like hub/shroud) so the whole `result`
+     is clean analytic BREP and the boolean is well-conditioned. Highest odds, most work; removes
+     the mesh-derived enclosed-void fragility for good.
+  Note: fuzzy/overcuts live **only** in the OCC/STEP branch and are consumed by the boolean — they
+  cannot affect the solver mesh (which uses `fluid_F`), and the 0.5% gate rejects any that change
+  the volume.
+- **Normal orientation** (from an older handover): STL patch normals point outward
+  (OpenFOAM-standard), not into the fluid; a flip was raised, then deprioritized. **Still not
+  done.** One-line winding flip across all patches (they share `fluid_F`), but needs `F.volume`
+  sign re-check + a manual normal check, and a decision on whether `chamber.stl` should flip too.
+- **Pre-existing flaky/failing test unrelated to this work**: `apps/api/tests/meshes.test.ts`
+  undo-all was fixed on this branch (see PLAN.md), but the full suite is slow on WSL — prefer
+  targeted runs.
 
-- `CLAUDE.md`'s frontend skill sequence (ui-ux-pro-max → frontend-design → design-taste-frontend
-  → web-design-guidelines) applies to **UI (JSX/CSS) only**, not the Python builder.
+---
+
+## 5. Repo conventions (unchanged)
+
+- `CLAUDE.md`'s frontend skill sequence (ui-ux-pro-max → frontend-design → design-taste-frontend →
+  web-design-guidelines) applies to **UI (JSX/CSS) only**, not the Python builder.
 - Log every code change as a **French** note at the bottom of `PLAN.md`, matching the existing
-  entries' style and level of detail.
-- Branch `feat/chamber-creation`; main branch is `main`. Don't push without being asked.
-- **Commit discipline**: this repo batches — implement + verify fully, then commit once with the
-  user's explicit go-ahead, not per-task. Stage explicit file paths, never `git add -A` (scratch
-  diagnostic output must never enter a commit).
-- The mesh-seal fallback approach (`_backup_meshseal_buildChamber.py`) was deleted per the user's
-  explicit request once the boolean approach was fully verified — don't recreate it speculatively.
-
-## 5. Stray files noticed but NOT touched
-
-At the root and under `apps/api/`, a few untracked items predate this session's work and are of
-unclear origin — left alone rather than guessed at: `apps/api/-case`, `dive-turbinen@1.0.0`,
-`npm`, `prisma`, `test2.txt` (all empty or near-empty; look like accidental artifacts from some
-past command, not scratch from this feature). Worth asking the user whether they're safe to
-delete, rather than assuming.
+  entries' style and detail.
+- Branch `feat/chamber-creation`; main is `main`. Don't push without being asked (this push was
+  requested).
+- **Commit discipline**: batch — implement + verify fully, then commit once with the user's
+  explicit go-ahead. Stage explicit file paths, never `git add -A`.
+- No secrets in commits: `apps/api/.env` (holds `CHAMBER_PYTHON_BIN` / `MESH_PYTHON_BIN` /
+  `OPENFOAM_BASHRC`) is gitignored — environment config is not committed.
