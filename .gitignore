@@ -28,6 +28,7 @@ apps/api/test-storage/
 # Python bytecode cache
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Logs
 logs/

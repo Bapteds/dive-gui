@@ -1,0 +1,16 @@
+# Pinned environment for the REAL chamber-geometry test suite
+# (apps/api/scripts/tests). Mirrors the local WSL cadquery venv exactly so CI
+# and every dev machine build byte-comparable geometry — OCC kernel changes can
+# shift tessellated volumes, so bumping cadquery/OCP here may require refreshing
+# the golden values in test_build_chamber.py.
+#
+# Install:  pip install -r requirements-geometry.txt
+# Run:      pytest apps/api/scripts/tests
+cadquery==2.8.0
+trimesh==4.12.2
+numpy==2.4.6
+scipy==1.18.0
+networkx==3.6.1
+manifold3d==3.5.2
+shapely==2.1.2
+pytest>=8,<9
