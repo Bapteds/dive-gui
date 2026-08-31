@@ -357,20 +357,36 @@ export async function readMeshLog(
   }
 }
 
-/** Persist the session's run lifecycle state (status.json). */
+/**
+ * Persist the session's run lifecycle state (status.json). Written to a temp file
+ * and renamed into place: the log endpoint polls this file while the run finalizer
+ * rewrites it, and a plain writeFile (truncate-then-write) would let a concurrent
+ * read see an empty/partial file and mislabel a live run as 'idle'.
+ */
 export async function writeMeshStatus(sessionId: string, state: MeshingRunState): Promise<void> {
   const file = path.join(sessionDirAbsolute(sessionId), 'status.json');
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify(state), 'utf8');
+  const tmp = `${file}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(state), 'utf8');
+  await fs.rename(tmp, file);
 }
 
-/** Read the session's run lifecycle state, or null when no run has ever started. */
+/**
+ * Read the session's run lifecycle state, or null when no run has ever started.
+ * A concurrent atomic replace by writeMeshStatus can still surface as a transient
+ * ENOENT or partial read on non-POSIX filesystems (notably WSL's /mnt/c), so a
+ * failed read is retried briefly before concluding there is no state — otherwise
+ * a poll could mislabel a live run as 'idle'.
+ */
 export async function readMeshStatus(sessionId: string): Promise<MeshingRunState | null> {
-  try {
-    const file = path.join(sessionDirAbsolute(sessionId), 'status.json');
-    return JSON.parse(await fs.readFile(file, 'utf8')) as MeshingRunState;
-  } catch {
-    return null;
+  const file = path.join(sessionDirAbsolute(sessionId), 'status.json');
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return JSON.parse(await fs.readFile(file, 'utf8')) as MeshingRunState;
+    } catch {
+      if (attempt >= 4) return null;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
   }
 }
 

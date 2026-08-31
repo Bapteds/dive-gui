@@ -8,10 +8,12 @@ import {
   createSession,
   listStl,
   readConfig,
+  readMeshStatus,
   sanitizeStlName,
   sessionDirAbsolute,
   slugifySessionName,
   writeConfig,
+  writeMeshStatus,
   writeStl,
 } from '../src/lib/meshingStorage';
 
@@ -39,6 +41,45 @@ describe('sanitizeStlName', () => {
 
   it('falls back to "surface" when the stem is empty', () => {
     expect(sanitizeStlName('.stl')).toBe('surface.stl');
+  });
+});
+
+describe('writeMeshStatus / readMeshStatus', () => {
+  it('a concurrent reader never observes a torn status mid-rewrite (atomic replace)', async () => {
+    // Regression for a poll flake: the log endpoint polls readMeshStatus while the
+    // run finalizer rewrites status.json ('running' -> terminal). A non-atomic
+    // truncate-then-write briefly exposes an empty/partial file, which readMeshStatus
+    // reports as null and the API then mislabels a live run as 'idle'.
+    const session = await createSession('Atomic status', 'cfmesh');
+    const at = new Date().toISOString();
+    await writeMeshStatus(session.id, { status: 'running', startedAt: at, finishedAt: null });
+
+    let writing = true;
+    const writer = (async () => {
+      for (let i = 0; i < 200; i++) {
+        await writeMeshStatus(
+          session.id,
+          i % 2 === 0
+            ? { status: 'succeeded', startedAt: at, finishedAt: new Date().toISOString() }
+            : { status: 'running', startedAt: at, finishedAt: null },
+        );
+      }
+      writing = false;
+    })();
+
+    // Read as fast as possible while the writer churns; a status has existed since
+    // before the writer started, so every read must return a complete state.
+    let tornReads = 0;
+    let totalReads = 0;
+    while (writing) {
+      const state = await readMeshStatus(session.id);
+      totalReads++;
+      if (state === null) tornReads++;
+    }
+    await writer;
+
+    expect(totalReads).toBeGreaterThan(0);
+    expect(tornReads).toBe(0);
   });
 });
 
