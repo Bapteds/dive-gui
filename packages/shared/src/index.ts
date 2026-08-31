@@ -2515,6 +2515,30 @@ export interface ChamberInput {
   domeHeight?: number;
 }
 
+/** Longest allowed saved-chamber-build name (trimmed). */
+export const CHAMBER_SAVE_NAME_MAX = 80;
+
+/** Attribution shown on a saved chamber build (its author). */
+export interface ChamberSaveOwner {
+  id: string;
+  fullName: string;
+}
+
+/**
+ * A named, team-shared saved chamber build: the exact `POST /chamber/build`
+ * body (`ChamberInput`) under a unique name. Everyone can list and load every
+ * save; only the author (or a super-admin) may overwrite, rename, or delete
+ * one. Saving is always optional — building never requires a save.
+ */
+export interface ChamberSaveSummary {
+  id: string;
+  name: string;
+  snapshot: ChamberInput;
+  owner: ChamberSaveOwner;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** What the FINAL clamp did to a model value, mirroring the calculator. A value
  * sourced from an active structural relation reads 'from relation' and carries
  * the human relation label in `ChamberOutput.relationLabel`. */

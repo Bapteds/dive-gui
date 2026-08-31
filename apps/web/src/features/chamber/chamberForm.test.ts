@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { CHAMBER_FORM_DEFAULTS, chamberFormSchema, type ChamberFormValues } from './chamberForm';
+import type { ChamberInput } from '@dive/shared';
+import {
+  CHAMBER_FORM_DEFAULTS,
+  chamberFormSchema,
+  chamberInputToFormValues,
+  type ChamberFormValues,
+} from './chamberForm';
 
 /**
  * chamberFormSchema tests: the defaults are self-consistent, the hollow variant
@@ -63,5 +69,45 @@ describe('chamberFormSchema', () => {
     expect(CHAMBER_FORM_DEFAULTS.centralDiameter).toBeUndefined();
     expect(CHAMBER_FORM_DEFAULTS.centralHeight).toBeUndefined();
     expect(CHAMBER_FORM_DEFAULTS.domeHeight).toBeUndefined();
+  });
+});
+
+describe('chamberInputToFormValues', () => {
+  it('round-trips a full form: values -> snapshot -> values', () => {
+    const values: ChamberFormValues = {
+      ...CHAMBER_FORM_DEFAULTS,
+      x1: 1500,
+      variant: 'hollow',
+      guideVanes: true,
+      vaneAngleDeg: 52,
+      outletRatio: 0.4,
+      relations: { ...CHAMBER_FORM_DEFAULTS.relations, height: false },
+      lengthOverride: 4200,
+      hollowLength: 250,
+      dMiddle: 1900,
+    };
+    // The snapshot is exactly what Generate posts (constraints ride separately).
+    const snapshot: ChamberInput = { ...values, constraints: { width: { max: 3000 } } };
+    const loaded = chamberInputToFormValues(snapshot);
+    expect(loaded).toEqual(values);
+  });
+
+  it('fills a sparse snapshot with the same defaults as a fresh form', () => {
+    const loaded = chamberInputToFormValues({ x1: 1450, x2: 7.85, x3: 8 });
+    expect(loaded).toEqual({ ...CHAMBER_FORM_DEFAULTS, wallThickness: undefined, hollowLength: undefined });
+  });
+
+  it('keeps saved per-relation toggles and defaults the missing ones', () => {
+    const loaded = chamberInputToFormValues({
+      x1: 1450,
+      x2: 7.85,
+      x3: 8,
+      relations: { height: false },
+    });
+    expect(loaded.relations.height).toBe(false);
+    // Every other relation keeps its shipped default.
+    for (const [key, on] of Object.entries(CHAMBER_FORM_DEFAULTS.relations)) {
+      if (key !== 'height') expect(loaded.relations[key]).toBe(on);
+    }
   });
 });

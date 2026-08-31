@@ -18,8 +18,10 @@ import { ChamberInputsForm, type ChamberAutoDims } from '@/features/chamber/Cham
 import {
   CHAMBER_FORM_DEFAULTS,
   chamberFormSchema,
+  chamberInputToFormValues,
   type ChamberFormValues,
 } from '@/features/chamber/chamberForm';
+import { ChamberSavesMenu } from '@/features/chamber/ChamberSavesMenu';
 import { ChamberOutputsTable } from '@/features/chamber/ChamberOutputsTable';
 import { ChamberBuildWarnings } from '@/features/chamber/ChamberBuildWarnings';
 import { ChamberExportButtons } from '@/features/chamber/ChamberExportButtons';
@@ -46,7 +48,8 @@ export function ChamberPage() {
     handleSubmit,
     watch,
     setValue,
-    formState: { errors },
+    reset,
+    formState: { errors, isValid },
   } = useForm<ChamberFormValues>({
     resolver: zodResolver(chamberFormSchema),
     defaultValues: CHAMBER_FORM_DEFAULTS,
@@ -116,6 +119,10 @@ export function ChamberPage() {
     });
   };
 
+  // The current form as a build body for the saved-builds Save button (null
+  // while the form is invalid, which disables saving an unbuildable state).
+  const saveSnapshot = isValid ? { ...values, constraints } : null;
+
   const onGenerate = handleSubmit((v) => {
     build.mutate(
       { ...v, constraints },
@@ -141,9 +148,18 @@ export function ChamberPage() {
       <PageHeader
         title="Chamber Creation"
         subtitle="Generate a turbine chamber from three empirical inputs, preview it, and export it for OpenFOAM."
+        action={
+          <ChamberSavesMenu
+            snapshot={saveSnapshot}
+            onLoad={(save) => {
+              reset(chamberInputToFormValues(save.snapshot));
+              setConstraints(save.snapshot.constraints ?? {});
+            }}
+          />
+        }
       />
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,22rem)_1fr]">
+      <div className="grid gap-6 lg:grid-cols-[minmax(22rem,1fr)_2.5fr]">
         <div className="flex flex-col gap-4">
           <ChamberInputsForm
             register={register}
@@ -200,13 +216,18 @@ export function ChamberPage() {
         </div>
       </div>
 
-      <ChamberBuildWarnings warnings={buildWarnings} />
+      {/* The page is full-width (AppShell opts /chamber out of the centered
+          container) so the viewer can stretch; the Parameters table would be
+          unreadably wide at that size, so it keeps the classic content width. */}
+      <div className="flex w-full max-w-content flex-col gap-6">
+        <ChamberBuildWarnings warnings={buildWarnings} />
 
-      <ChamberOutputsTable
-        outputs={outputs}
-        constraints={constraints}
-        onConstraintChange={onConstraintChange}
-      />
+        <ChamberOutputsTable
+          outputs={outputs}
+          constraints={constraints}
+          onConstraintChange={onConstraintChange}
+        />
+      </div>
     </div>
   );
 }

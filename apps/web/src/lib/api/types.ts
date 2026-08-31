@@ -14,6 +14,8 @@ import type {
   ChamberConfidence,
   ChamberConstraint,
   ChamberInput,
+  ChamberSaveOwner,
+  ChamberSaveSummary,
   ChamberOutput,
   ChamberOutputKey,
   ChamberStatus,
@@ -587,6 +589,8 @@ export type {
   ChamberConstraint,
   ChamberStatus,
   ChamberConfidence,
+  ChamberSaveOwner,
+  ChamberSaveSummary,
 };
 
 /** `POST /chamber/build` response: the cache key + the twelve computed outputs

@@ -67,6 +67,9 @@ super-admin may overwrite or delete one (same guard as templates).
 - `DELETE /chamber/saves/:id` → 204; 403 unless author/admin.
 - `snapshot` is validated with the existing `chamberBuildSchema` (a save can never
   hold an unbuildable state); `name` is trimmed, 1..80 chars.
+- `PUT` accepts `name` and/or `snapshot`, so it serves both overwrite and rename.
+  Duplicate needs no endpoint: the client `POST`s the source snapshot under a new
+  name (the copy is owned by whoever duplicated).
 - Shared types (`ChamberSaveSummary`, payloads) go to `@dive/shared`.
 
 #### Frontend
@@ -80,8 +83,13 @@ super-admin may overwrite or delete one (same guard as templates).
     save's name. Submitting an existing name the user may manage → overwrite (the
     dialog says "Updates 'name'"); a new name → create. A name owned by someone
     else → inline 409 error ("pick another name").
-  - **Delete** button (enabled when a save is selected and the user is
-    author/admin) → confirm dialog, then delete + clear selection.
+  - **"⋯" menu** on the selected save (dropdown-menu primitive) with:
+    - **Rename** (author/admin): dialog with a name field → `PUT` with the new
+      name (snapshot untouched); 409 inline when the name is taken.
+    - **Duplicate** (anyone): dialog prefilled "name (copy)" → `POST` the source
+      snapshot under the new name, owned by the current user; the copy becomes
+      the selected save.
+    - **Delete** (author/admin): confirm dialog, then delete + clear selection.
   - Loading, empty ("No saved builds yet"), and error states per house rules.
 - Snapshot mapping: `{ ...formValues, constraints }` — the same object `onGenerate`
   already posts. Loading maps it back (`constraints` into page state, the rest into
@@ -96,8 +104,9 @@ migration of past builds into saves.
   name; 403 non-author overwrite/delete; super-admin override; snapshot validation
   rejects an invalid body.
 - **Web** (feature tests, existing conventions): dropdown lists and loads a save into
-  the form + constraints; save dialog creates; prefilled overwrite updates; delete
-  confirms; 409 shows the inline error.
+  the form + constraints; save dialog creates; prefilled overwrite updates; rename
+  updates the name only; duplicate creates a copy and selects it; delete confirms;
+  409 shows the inline error.
 - Layout: no unit test (visual); verified in the browser + `web-design-guidelines`
   review pass.
 

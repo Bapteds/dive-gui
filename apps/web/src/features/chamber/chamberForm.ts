@@ -5,7 +5,7 @@ import {
   CHAMBER_VARIANTS,
   CHAMBER_WALL_THICKNESS_MM,
 } from '@dive/shared';
-import type { ChamberVariant } from '@dive/shared';
+import type { ChamberInput, ChamberVariant } from '@dive/shared';
 
 /**
  * Form contract for the chamber inputs, kept apart from the component file so
@@ -129,3 +129,37 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   centralHeight: undefined,
   domeHeight: undefined,
 };
+
+/**
+ * Map a saved build snapshot (the `POST /chamber/build` body) back onto the
+ * form. Snapshot fields with server-side defaults fall back to the same values
+ * the form starts with, so loading an old, sparser snapshot behaves exactly
+ * like typing it in fresh; blank optional overrides stay blank (auto).
+ */
+export function chamberInputToFormValues(input: ChamberInput): ChamberFormValues {
+  return {
+    x1: input.x1,
+    x2: input.x2,
+    x3: input.x3,
+    variant: input.variant ?? CHAMBER_FORM_DEFAULTS.variant,
+    relationsMaster: input.relationsMaster ?? CHAMBER_FORM_DEFAULTS.relationsMaster,
+    relations: Object.fromEntries(
+      CHAMBER_RELATIONS.map((rel) => [rel.key, input.relations?.[rel.key] ?? rel.defaultOn]),
+    ),
+    footAngleDeg: input.footAngleDeg ?? CHAMBER_FORM_DEFAULTS.footAngleDeg,
+    partScale: input.partScale ?? CHAMBER_FORM_DEFAULTS.partScale,
+    guideVanes: input.guideVanes ?? CHAMBER_FORM_DEFAULTS.guideVanes,
+    chamferEnabled: input.chamferEnabled ?? CHAMBER_FORM_DEFAULTS.chamferEnabled,
+    feetEnabled: input.feetEnabled ?? CHAMBER_FORM_DEFAULTS.feetEnabled,
+    vaneAngleDeg: input.vaneAngleDeg ?? CHAMBER_FORM_DEFAULTS.vaneAngleDeg,
+    outletRatio: input.outletRatio ?? CHAMBER_FORM_DEFAULTS.outletRatio,
+    lengthOverride: input.lengthOverride,
+    hollowLength: input.hollowLength,
+    wallThickness: input.wallThickness,
+    dFirst: input.dFirst,
+    dMiddle: input.dMiddle,
+    centralDiameter: input.centralDiameter,
+    centralHeight: input.centralHeight,
+    domeHeight: input.domeHeight,
+  };
+}

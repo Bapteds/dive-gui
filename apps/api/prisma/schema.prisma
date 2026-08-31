@@ -42,6 +42,7 @@ model User {
   projects        Project[] @relation("ProjectOwner")
   collaboratingOn Project[] @relation("ProjectCollaborators")
   templates       Template[] @relation("TemplateOwner")
+  chamberSaves    ChamberSave[] @relation("ChamberSaveOwner")
 }
 
 /// A project owned by a user, optionally shared with collaborators. This base
@@ -106,6 +107,25 @@ model Template {
   owner       User     @relation("TemplateOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([ownerId])
+}
+
+/// A named, team-shared saved chamber build: the exact POST /chamber/build body
+/// captured so the form can be reloaded later (the geometry itself stays in the
+/// hash-keyed build cache; saving is always optional). Like templates, saves are
+/// visible to every authenticated user; only the author (or a super-admin) may
+/// overwrite, rename, or delete one. The owner is captured for attribution and
+/// the management guard.
+model ChamberSave {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  ownerId   String
+  owner     User     @relation("ChamberSaveOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  /// JSON-encoded ChamberInput (validated with chamberBuildSchema at write time).
+  snapshot  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([ownerId])
 }
