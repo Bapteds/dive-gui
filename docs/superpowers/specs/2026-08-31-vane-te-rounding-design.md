@@ -77,6 +77,15 @@ tangent arc.
 - Golden volumes in the suite are unaffected (the rounding moves ~1e-4 m³ against
   130–150 m³ goldens, far inside VOL_RTOL).
 
+## Observed outcome (post-implementation)
+
+All golden volumes unchanged. Side benefit: the `hollow-vanes` STEP export used to
+fall back to the vane-less solid (its OCC boolean self-overlapped and was rejected
+by the round-trip volume gate); the self-overlap originated at the blunt TE
+corners, so with the tangent rounding **both** vane variants now ship editable
+BREP vanes in `chamber.step` (`stepHasVanes: true`). The policy test was updated
+accordingly.
+
 ## Error handling
 
 The helper is fully guarded and degrades to the current blunt geometry rather than

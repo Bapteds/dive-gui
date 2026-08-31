@@ -12,9 +12,15 @@ a cadquery/OCP upgrade can legitimately shift tessellated volumes, in which
 case refresh the goldens here in the same commit that bumps the pin.
 """
 
+import importlib.util
+import io
+import json
+import os
 import zipfile
 
 import pytest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Tessellated volume tolerance. Tight enough to catch a real geometry change
 # (the feet alone are ~0.24% of the solid), loose enough to survive tiny
@@ -96,14 +102,14 @@ def test_feet_toggle_carves_the_foot_voids(build):
 
 
 def test_step_export_vane_policy(build):
-    """Stepped ships editable BREP vanes in the STEP; hollow's malformed boolean
-    is rejected by the round-trip gate and falls back to the vane-less STEP."""
-    stepped = build("stepped-vanes")
-    assert stepped.build_meta == {"stepHasVanes": True}
-
-    hollow = build("hollow-vanes")
-    assert hollow.build_meta == {"stepHasVanes": False}
-    assert "chamber.step falls back to the vane-less solid" in hollow.stderr
+    """Every guide-vane build ships editable BREP vanes in the STEP. (Hollow
+    used to fall back vane-less: its OCC boolean self-overlapped at the blunt
+    TE corners; the tangent TE rounding fixed the overlap, so both variants now
+    pass the round-trip volume gate.)"""
+    for name in ("stepped-vanes", "hollow-vanes"):
+        result = build(name)
+        assert result.build_meta == {"stepHasVanes": True}, name
+        assert "falls back to the vane-less solid" not in result.stderr, name
 
 
 def test_hollow_overflow_clamps_to_fit_with_a_warning(build):
@@ -123,3 +129,125 @@ def test_stepped_overflow_is_refused(build):
     assert "KO:" in result.stderr
     assert "H Kammer only allows" in result.stderr
     assert "reduce Part scale" in result.stderr
+
+
+# --- guide-vane trailing-edge rounding ---------------------------------------
+# The CAD blade has a BLUNT trailing edge (a flat base with two sharp corners);
+# the builder rounds it with a tangent arc so the mesher never sees the corners
+# (spec 2026-08-31). Unit-tested on the committed clean airfoil and end-to-end
+# on a built vane section.
+
+
+def _builder_module():
+    """Import buildChamber.py as a module (its heavy deps load inside main())."""
+    spec = importlib.util.spec_from_file_location(
+        "buildChamber", os.path.join(HERE, "..", "buildChamber.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _committed_airfoil(np):
+    path = os.path.join(HERE, "..", "assets", "guideVanes_blade_profile.json")
+    with open(path) as fh:
+        return np.asarray(json.load(fh)["airfoil"], dtype=float)
+
+
+def _chord_axis(np, loop):
+    """(chord length, unit chord direction, per-point chordwise coord t)."""
+    X = loop - loop.mean(axis=0)
+    _u, _s, vt = np.linalg.svd(X, full_matrices=False)
+    t = X @ vt[0]
+    return float(np.ptp(t)), vt[0], t
+
+
+def _fit_circle(np, pts):
+    """Least-squares circle through pts (M,2) -> (radius, max residual)."""
+    A = np.column_stack([2.0 * pts, np.ones(len(pts))])
+    b = (pts ** 2).sum(axis=1)
+    sol, *_ = np.linalg.lstsq(A, b, rcond=None)
+    ctr = sol[:2]
+    radius = float(np.sqrt(sol[2] + ctr @ ctr))
+    res = float(np.abs(np.hypot(*(pts - ctr).T) - radius).max())
+    return radius, res
+
+
+def _poly_area(np, loop):
+    x, y = loop[:, 0], loop[:, 1]
+    return 0.5 * abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
+
+
+def test_round_blade_te_replaces_the_blunt_base_with_a_tangent_arc():
+    import numpy as np
+    from shapely.geometry import Point, Polygon
+
+    bc = _builder_module()
+    P = _committed_airfoil(np)
+    Q = bc._round_blade_te(np, P)
+
+    chord, _dir, t = _chord_axis(np, P)
+    r_exp = bc.VANE_TE_ROUND_R_FRAC * chord
+    # The blunt base = the two chordwise-extreme points (the sharp TE corners).
+    corners = P[np.argsort(t)[-2:]]
+    base_mid = corners.mean(axis=0)
+
+    # Area is preserved (the corners are tiny) and the airfoil away from the TE
+    # is untouched (LE radius ~6x the arc radius, so the opening restores it).
+    assert _poly_area(np, Q) == pytest.approx(_poly_area(np, P), rel=0.01)
+    src = Polygon(P)
+    far = Q[np.hypot(*(Q - base_mid).T) > 3.0 * r_exp]
+    assert max(src.exterior.distance(Point(p)) for p in far) < 5e-4
+
+    # Both sharp corners are trimmed away...
+    rounded = Polygon(Q)
+    assert all(rounded.exterior.distance(Point(c)) > 3e-4 for c in corners)
+    # ...and replaced by an arc of the expected radius (a circle fits the new
+    # points around the old base with a tiny residual).
+    arc = Q[np.hypot(*(Q - base_mid).T) < 1.2 * r_exp]
+    assert len(arc) >= 8
+    radius, res = _fit_circle(np, arc)
+    assert radius == pytest.approx(r_exp, rel=0.25)
+    assert res < 1e-4
+
+    # Rounding an already-round loop is (nearly) a no-op.
+    Q2 = bc._round_blade_te(np, Q)
+    assert _poly_area(np, Q2) == pytest.approx(_poly_area(np, Q), rel=0.002)
+
+
+def test_round_blade_te_returns_the_input_on_degenerate_loops():
+    import numpy as np
+
+    bc = _builder_module()
+    line = np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]])  # zero-area "loop"
+    assert bc._round_blade_te(np, line) is line
+
+
+def test_built_vane_sections_have_a_round_trailing_edge(build):
+    """End-to-end: a mid-height section of a built vane (from the trisurface
+    the mesher consumes) ends in a circular arc of the expected radius instead
+    of the blunt CAD base."""
+    import numpy as np
+    import trimesh
+
+    bc = _builder_module()
+    result = build("stepped-vanes")
+    assert result.exit_code == 0
+    with zipfile.ZipFile(result.export_path("trisurface.zip")) as zf:
+        data = zf.read("guide_vanes.stl")
+    vanes = trimesh.load(io.BytesIO(data), file_type="stl")
+    blade = max(vanes.split(only_watertight=False), key=lambda b: len(b.faces))
+    z = blade.vertices[:, 2]
+    sec = blade.section(plane_origin=[0.0, 0.0, 0.5 * (z.min() + z.max())],
+                        plane_normal=[0.0, 0.0, 1.0])
+    loop = np.asarray(max(sec.discrete, key=len), dtype=float)[:, :2]
+
+    chord, _dir, t = _chord_axis(np, loop)
+    r_exp = bc.VANE_TE_ROUND_R_FRAC * chord
+    fits = []
+    for tip in (loop[np.argmax(t)], loop[np.argmin(t)]):
+        near = loop[np.hypot(*(loop - tip).T) < 1.2 * r_exp]
+        if len(near) >= 6:
+            fits.append(_fit_circle(np, near))
+    assert any(abs(radius - r_exp) < 0.3 * r_exp and res < 1e-4
+               for radius, res in fits), \
+        f"no rounded trailing edge on the built vane section (fits: {fits})"

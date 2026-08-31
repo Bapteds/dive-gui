@@ -848,6 +848,10 @@ def build_vane_step_solid(cq, np, trimesh, result, core_prof, cas_prof, airfoil,
             continue
         c, R, t, dev = _fit_airfoil(np, airfoil, tgt)
         placed = (c * (R @ airfoil.T).T) + t
+        # Blunt TE -> tangent arc, applied AFTER the fit (the fit target is the
+        # raw blunt mesh section, so fitting stays exact) with the same rule as
+        # the mesh prisms — the STEP blades keep matching the meshed fluid.
+        placed = _round_blade_te(np, placed)
         pts = [(float(x), float(y)) for x, y in placed]
         blade = (cq.Workplane("XY").spline(pts, periodic=True).close()
                  .extrude(z1 - z0).translate((0, 0, z0)))
@@ -966,6 +970,58 @@ def _hub_core_solid(np, trimesh, throat_mesh, cx, cy, z_top, nb=200, nfine=90):
     return _revolve_profile(np, trimesh, prof, cx, cy)
 
 
+# --- guide-vane trailing-edge rounding ---------------------------------------
+# The CAD blade ends in a BLUNT trailing edge: a flat base ~1.11% of the chord
+# wide meeting the two blade surfaces at sharp corners. Those corners force
+# degenerate cells / heavy local refinement on the mesher at all 16 blades, so
+# every blade cross-section is rounded with a TANGENT arc before it is extruded
+# (_vane_prisms, the mesh/triSurface path) or lofted (build_vane_step_solid, the
+# STEP path — same rule, so the CAD keeps matching the meshed fluid and the
+# volume gate stays exact). A morphological OPENING (erode by r, dilate by r)
+# replaces the blunt tail — the only region of the airfoil thinner than 2r —
+# with an arc tangent to both surfaces; the leading edge (radius ~6r) and the
+# rest of the section are restored unchanged. r scales with the loop's own PCA
+# chord, so ring-diameter scale and pitch rotation need no special handling.
+VANE_TE_ROUND_R_FRAC = 0.00585  # arc radius / chord: half the CAD blunt-base
+                                # width fraction (0.01114 / 2) x 1.05 margin
+VANE_TE_ROUND_SEGS = 16         # buffer quad_segs: arc facets per quarter turn
+VANE_TE_MAX_AREA_DRIFT = 0.02   # sanity: the opening only trims two corner
+                                # slivers, it must never move >2% of the area
+
+
+def _round_blade_te(np, loop):
+    """Round the blunt trailing edge of a closed 2D blade section `loop` (N,2)
+    with a tangent arc; returns the rounded loop (M,2). On ANY doubt (shapely
+    missing, degenerate polygon, area drift beyond sanity) the input is returned
+    unchanged — a blunt TE must never fail a build."""
+    try:
+        from shapely.geometry import MultiPolygon, Polygon
+        pts = np.asarray(loop, dtype=float)[:, :2]
+        poly = Polygon(pts)
+        if not poly.is_valid:
+            poly = poly.buffer(0.0)
+        if poly.is_empty or poly.area <= 0.0:
+            return loop
+        X = pts - pts.mean(axis=0)                  # chord = PCA extent of the
+        _u, _s, vt = np.linalg.svd(X, full_matrices=False)  # section (rotation-
+        chord = float(np.ptp(X @ vt[0]))            # invariant)
+        r = VANE_TE_ROUND_R_FRAC * chord
+        eroded = poly.buffer(-r, quad_segs=VANE_TE_ROUND_SEGS)
+        if isinstance(eroded, MultiPolygon):        # a sliver split off: keep the body
+            eroded = max(eroded.geoms, key=lambda g: g.area)
+        if eroded.is_empty:
+            return loop
+        rounded = eroded.buffer(r, quad_segs=VANE_TE_ROUND_SEGS)
+        if isinstance(rounded, MultiPolygon):
+            rounded = max(rounded.geoms, key=lambda g: g.area)
+        if (rounded.is_empty
+                or abs(rounded.area - poly.area) > VANE_TE_MAX_AREA_DRIFT * poly.area):
+            return loop
+        return np.asarray(rounded.exterior.coords, dtype=float)[:-1]
+    except Exception:  # noqa: BLE001
+        return loop
+
+
 def _vane_prisms(np, trimesh, blades_mesh, cx, cy, z0, z1):
     """Turn the (prismatic) guide-vane blades into watertight vertical PRISM solids that
     span z0..z1 — below the shroud floor up to the hub roof. Each blade's airfoil
@@ -984,7 +1040,7 @@ def _vane_prisms(np, trimesh, blades_mesh, cx, cy, z0, z1):
         if sec is None:
             continue
         loop = max(sec.discrete, key=len)              # airfoil outline (world XY)
-        poly = Polygon(loop[:, :2])
+        poly = Polygon(_round_blade_te(np, loop[:, :2]))   # blunt TE -> tangent arc
         if not poly.is_valid:
             poly = poly.buffer(0.0)
         if poly.is_empty or poly.area <= 0:
