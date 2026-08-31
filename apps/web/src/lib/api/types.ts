@@ -589,10 +589,13 @@ export type {
   ChamberConfidence,
 };
 
-/** `POST /chamber/build` response: the cache key + the twelve computed outputs. */
+/** `POST /chamber/build` response: the cache key + the twelve computed outputs
+ * + any geometry clamp warnings the builder emitted (persisted per build, so a
+ * cache hit reports the same warnings as the original run). */
 export interface ChamberBuildResponse {
   hash: string;
   outputs: ChamberOutput[];
+  warnings: string[];
 }
 
 /**

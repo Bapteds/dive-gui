@@ -40,6 +40,19 @@ const successRunner: CommandRunner = async (spec) => {
   return ok(spec);
 };
 
+/** Fake builder: succeeds like successRunner but emits clamp warnings on both
+ * streams, exactly as buildChamber.py does (WARNING: on stdout, WARN: on stderr). */
+const warningRunner: CommandRunner = async (spec) => {
+  const result = await successRunner(spec);
+  return {
+    ...result,
+    stdout:
+      'WARNING: outlet outer radius 0.8400 clamped to 0.6666 (X1 too large for this vane/d_last combination)\nOK: 7 patches\n',
+    stderr:
+      'WARN: the hollow stack 3.3984 m exceeds H Kammer 2.7000 m; the internal part is scaled to 0.7945 to fit (its heights are reduced to match)\n',
+  };
+};
+
 /** Fake builder: the interpreter is missing (ENOENT); nothing is written. */
 const notFoundRunner: CommandRunner = async (spec) => ({
   command: spec.command,
@@ -107,6 +120,35 @@ describe('Chamber Creation', () => {
       .set('Authorization', auth)
       .expect(200);
     expect(stl.headers['content-type']).toContain('application/sla');
+    // A clean build reports no warnings (empty list, not undefined).
+    expect(built.body.warnings).toEqual([]);
+  });
+
+  it('surfaces builder clamp warnings in the response and persists them for cache hits', async () => {
+    setCommandRunner(warningRunner);
+    const auth = authHeader(await createTestUser());
+
+    const built = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(BUILD)
+      .expect(200);
+    // Prefixes are stripped; stderr WARNs come first, then stdout WARNINGs.
+    expect(built.body.warnings).toEqual([
+      'the hollow stack 3.3984 m exceeds H Kammer 2.7000 m; the internal part is scaled to 0.7945 to fit (its heights are reduced to match)',
+      'outlet outer radius 0.8400 clamped to 0.6666 (X1 too large for this vane/d_last combination)',
+    ]);
+
+    // The same build again is a cache hit (a failing runner proves the builder is
+    // not re-run) — the persisted warnings must still be returned.
+    setCommandRunner(notFoundRunner);
+    const cached = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(BUILD)
+      .expect(200);
+    expect(cached.body.hash).toBe(built.body.hash);
+    expect(cached.body.warnings).toEqual(built.body.warnings);
   });
 
   it('applies a Min/Max/Exact constraint to the returned outputs', async () => {

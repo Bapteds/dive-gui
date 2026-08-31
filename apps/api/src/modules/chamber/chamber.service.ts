@@ -34,17 +34,37 @@ import {
   readChamberExport,
   readChamberGlb,
   readChamberManifest,
+  readChamberWarnings,
   writeChamberParams,
+  writeChamberWarnings,
   type ChamberExportKind,
 } from '../../lib/chamberStorage';
 
 /** Sheet/model values are millimetres; the builder works in metres. */
 const MM_TO_M = 1 / 1000;
 
-/** The result of a build request: the cache key + the twelve computed outputs. */
+/** The result of a build request: the cache key + the twelve computed outputs
+ * + any geometry clamp warnings the builder emitted (persisted per build). */
 export interface ChamberBuildResult {
   hash: string;
   outputs: ChamberOutput[];
+  warnings: string[];
+}
+
+/**
+ * Extract the builder's geometry warnings — lines like `WARN: …` (stderr) and
+ * `WARNING: …` (stdout) — with the prefix stripped, stderr first. These are the
+ * clamp/fallback notices (hollow fit-to-box, outlet radius, STEP vane fallback)
+ * that must reach the UI, not just the server log.
+ */
+function extractBuilderWarnings(stderr: string, stdout: string): string[] {
+  const warnings: string[] = [];
+  for (const text of [stderr, stdout]) {
+    for (const match of text.matchAll(/^WARN(?:ING)?:\s*(.+)$/gm)) {
+      warnings.push(match[1].trim());
+    }
+  }
+  return warnings;
 }
 
 /** Resolve the builder script (configured path, else the bundled default). */
@@ -168,36 +188,43 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
   const params = resolveGeometryParams(input, outputs);
   const hash = chamberHash(params);
 
-  if (!(await chamberGlbExists(hash))) {
-    const script = buildChamberScript();
-    if (!(await pathExists(script))) {
-      throw new AppError(
-        500,
-        'SCRIPT_MISSING',
-        `Chamber builder not found at ${script}. Set BUILD_CHAMBER_SCRIPT to its absolute path.`,
-      );
-    }
-    const paths = chamberPaths(hash);
-    await writeChamberParams(hash, params);
-
-    const result = await runCommand({
-      command: env.CHAMBER_PYTHON_BIN,
-      args: [script, paths.params, paths.dir],
-      cwd: paths.dir,
-      env: process.env,
-      timeoutMs: env.CHAMBER_BUILD_TIMEOUT_MS,
-    });
-    if (
-      result.spawnError ||
-      result.timedOut ||
-      result.exitCode !== 0 ||
-      !(await pathExists(paths.glb))
-    ) {
-      throw new AppError(502, 'CHAMBER_BUILD_FAILED', summarizeFailure(result));
-    }
+  // A cached build reports the warnings persisted at build time.
+  if (await chamberGlbExists(hash)) {
+    return { hash, outputs, warnings: await readChamberWarnings(hash) };
   }
 
-  return { hash, outputs };
+  const script = buildChamberScript();
+  if (!(await pathExists(script))) {
+    throw new AppError(
+      500,
+      'SCRIPT_MISSING',
+      `Chamber builder not found at ${script}. Set BUILD_CHAMBER_SCRIPT to its absolute path.`,
+    );
+  }
+  const paths = chamberPaths(hash);
+  await writeChamberParams(hash, params);
+
+  const result = await runCommand({
+    command: env.CHAMBER_PYTHON_BIN,
+    args: [script, paths.params, paths.dir],
+    cwd: paths.dir,
+    env: process.env,
+    timeoutMs: env.CHAMBER_BUILD_TIMEOUT_MS,
+  });
+  if (
+    result.spawnError ||
+    result.timedOut ||
+    result.exitCode !== 0 ||
+    !(await pathExists(paths.glb))
+  ) {
+    throw new AppError(502, 'CHAMBER_BUILD_FAILED', summarizeFailure(result));
+  }
+
+  // Surface the builder's clamp/fallback warnings and persist them alongside
+  // the build so cache hits keep reporting them.
+  const warnings = extractBuilderWarnings(result.stderr, result.stdout);
+  await writeChamberWarnings(hash, warnings);
+  return { hash, outputs, warnings };
 }
 
 /** Return a build's patch manifest. @throws 409 CHAMBER_NOT_BUILT when absent. */

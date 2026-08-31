@@ -188,4 +188,45 @@ describe('computeChamberOutputs', () => {
     const off = byKey(computeChamberOutputs({ ...BASE, relations: { dLast: false } }));
     expect(off.get('dLast')!.model).toBeCloseTo(2439.31, 1);
   });
+
+  // LEOW (hLast) is never consumed by the builder directly (the stepped last
+  // cylinder is pinned through the box top; hollow ignores it) — its ONLY lever
+  // on the build is the H Kammer = LEB + LEOW relation. The model flags it
+  // `noEffect` whenever that lever is disconnected so the UI can say so.
+  describe('LEOW (hLast) noEffect flag', () => {
+    it('is unflagged while the H Kammer relation is on and unpinned (LEOW drives H)', () => {
+      const m = byKey(computeChamberOutputs(BASE));
+      expect(m.get('hLast')!.noEffect).toBeFalsy();
+    });
+
+    it('flags LEOW when H Kammer is set Exact (H no longer reads LEOW)', () => {
+      const m = byKey(computeChamberOutputs({ ...BASE, constraints: { height: { exact: 4200 } } }));
+      expect(m.get('hLast')!.noEffect).toBe(true);
+      expect(m.get('height')!.status).toBe('set exact');
+    });
+
+    it('flags LEOW when the H = LEB + LEOW relation is toggled off', () => {
+      const m = byKey(computeChamberOutputs({ ...BASE, relations: { height: false } }));
+      expect(m.get('hLast')!.noEffect).toBe(true);
+    });
+
+    it('flags LEOW when the relations master switch is off', () => {
+      const m = byKey(computeChamberOutputs({ ...BASE, relationsMaster: false }));
+      expect(m.get('hLast')!.noEffect).toBe(true);
+    });
+
+    it('keeps LEOW effective under a mere Min/Max on H Kammer (not a hard pin)', () => {
+      const m = byKey(computeChamberOutputs({ ...BASE, constraints: { height: { max: 9000 } } }));
+      expect(m.get('hLast')!.noEffect).toBeFalsy();
+    });
+
+    it('never flags any other output', () => {
+      const m = byKey(
+        computeChamberOutputs({ ...BASE, constraints: { height: { exact: 4200 } } }),
+      );
+      for (const [key, output] of m) {
+        if (key !== 'hLast') expect(output.noEffect).toBeFalsy();
+      }
+    });
+  });
 });

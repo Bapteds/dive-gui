@@ -22,8 +22,8 @@ const EXPORT_META: Record<ChamberExportParam['kind'], { contentType: string; fil
 /** POST /chamber/build — compute the 12 outputs and build the geometry. */
 export async function buildChamberController(req: Request, res: Response): Promise<void> {
   const input = req.body as ChamberBuildInput;
-  const { hash, outputs } = await buildChamber(input);
-  res.status(200).json({ hash, outputs });
+  const { hash, outputs, warnings } = await buildChamber(input);
+  res.status(200).json({ hash, outputs, warnings });
 }
 
 /** GET /chamber/:hash/manifest — the patch manifest for a build. */
