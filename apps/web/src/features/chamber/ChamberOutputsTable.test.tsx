@@ -45,6 +45,28 @@ describe('ChamberOutputsTable', () => {
     expect(onChange).toHaveBeenCalledWith('height', 'exact', 5000);
   });
 
+  it('marks LEOW "no effect" when H Kammer is pinned by an Exact', () => {
+    const outputs = computeChamberOutputs({
+      x1: 1450,
+      x2: 7.85,
+      x3: 8,
+      constraints: { height: { exact: 4200 } },
+    });
+    render(
+      <ChamberOutputsTable
+        outputs={outputs}
+        constraints={{ height: { exact: 4200 } }}
+        onConstraintChange={() => {}}
+      />,
+    );
+    expect(screen.getByText('no effect')).toBeInTheDocument();
+  });
+
+  it('shows no "no effect" tag while LEOW still drives H Kammer', () => {
+    render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />);
+    expect(screen.queryByText('no effect')).not.toBeInTheDocument();
+  });
+
   it('clears a constraint when its cell is emptied', () => {
     const onChange = vi.fn();
     render(

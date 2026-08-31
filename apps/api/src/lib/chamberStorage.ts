@@ -21,6 +21,7 @@ const GLB_NAME = 'chamber.glb';
 const MANIFEST_NAME = 'manifest.json';
 const EDGES_NAME = 'edges.bin';
 const PARAMS_NAME = 'params.json';
+const WARNINGS_NAME = 'warnings.json';
 const EXPORTS_DIRNAME = 'exports';
 
 /** A chamber export artifact kind and its download file. */
@@ -95,6 +96,27 @@ export async function writeChamberParams(
   const paths = chamberPaths(hash);
   await fs.mkdir(paths.dir, { recursive: true });
   await fs.writeFile(paths.params, JSON.stringify(params), 'utf8');
+}
+
+/**
+ * Persist the geometry clamp warnings the builder emitted (warnings.json in the
+ * build dir), so a later cache hit can report them without re-running the build.
+ */
+export async function writeChamberWarnings(hash: string, warnings: string[]): Promise<void> {
+  const paths = chamberPaths(hash);
+  await fs.mkdir(paths.dir, { recursive: true });
+  await fs.writeFile(path.join(paths.dir, WARNINGS_NAME), JSON.stringify(warnings), 'utf8');
+}
+
+/** Read a build's persisted warnings; [] when none were recorded (incl. older builds). */
+export async function readChamberWarnings(hash: string): Promise<string[]> {
+  try {
+    const raw = await fs.readFile(path.join(chamberPaths(hash).dir, WARNINGS_NAME), 'utf8');
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((w): w is string => typeof w === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 /** Read the rendered GLB bytes, or null when this chamber has not been built. */

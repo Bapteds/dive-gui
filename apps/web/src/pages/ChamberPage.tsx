@@ -21,6 +21,7 @@ import {
   type ChamberFormValues,
 } from '@/features/chamber/chamberForm';
 import { ChamberOutputsTable } from '@/features/chamber/ChamberOutputsTable';
+import { ChamberBuildWarnings } from '@/features/chamber/ChamberBuildWarnings';
 import { ChamberExportButtons } from '@/features/chamber/ChamberExportButtons';
 import { SendToMeshingDialog } from '@/features/chamber/SendToMeshingDialog';
 import { Button } from '@/components/ui/button';
@@ -56,6 +57,8 @@ export function ChamberPage() {
     {},
   );
   const [hash, setHash] = useState<string | null>(null);
+  // Geometry clamp warnings from the LAST build (kept in step with `hash`).
+  const [buildWarnings, setBuildWarnings] = useState<string[]>([]);
   const [sendOpen, setSendOpen] = useState(false);
   const build = useBuildChamber();
 
@@ -119,7 +122,12 @@ export function ChamberPage() {
       {
         onSuccess: (res) => {
           setHash(res.hash);
-          toast.success('Chamber generated.');
+          setBuildWarnings(res.warnings ?? []);
+          if (res.warnings?.length) {
+            toast.warning('Chamber generated with warnings — see the notes below the preview.');
+          } else {
+            toast.success('Chamber generated.');
+          }
         },
         onError: (err) => {
           toast.error(err instanceof ApiError ? err.message : 'Could not generate the chamber.');
@@ -191,6 +199,8 @@ export function ChamberPage() {
           </Suspense>
         </div>
       </div>
+
+      <ChamberBuildWarnings warnings={buildWarnings} />
 
       <ChamberOutputsTable
         outputs={outputs}

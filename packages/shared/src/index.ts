@@ -2545,6 +2545,14 @@ export interface ChamberOutput {
    * partner had a measured Exact value and the relation was on).
    */
   refined: boolean;
+  /**
+   * True when this output cannot influence the built geometry with the current
+   * settings. Only LEOW (hLast) is ever flagged: the builder never consumes it
+   * directly (the stepped last cylinder is pinned through the box top; the hollow
+   * build ignores it), so its one lever is the H Kammer = LEB + LEOW relation —
+   * an Exact H Kammer or an inactive relation disconnects it.
+   */
+  noEffect?: boolean;
 }
 
 /**
@@ -2663,6 +2671,14 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
       progressed = true;
     }
   }
+
+  // LEOW (hLast) only reaches the build through H Kammer = LEB + LEOW: the
+  // builder pins the stepped last cylinder through the box top and the hollow
+  // build never reads it. When that relation is inactive, or H Kammer is pinned
+  // by an Exact, LEOW has no effect on the geometry — flag it so the UI can say so.
+  const heightSpec = CHAMBER_OUTPUT_SPECS.find((s) => s.key === 'height')!;
+  const heightReadsLeow = relationOn(heightSpec) && constraints?.height?.exact == null;
+  if (!heightReadsLeow) byKey.get('hLast')!.noEffect = true;
 
   return CHAMBER_OUTPUT_KEYS.map((k) => byKey.get(k)!);
 }
