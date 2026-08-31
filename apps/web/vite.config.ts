@@ -10,6 +10,12 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
+      // Resolve the shared workspace package to its TypeScript source. Otherwise
+      // Vite pre-bundles its compiled dist/ and keeps serving that cached copy
+      // even after the package is rebuilt, so label/logic changes silently fail
+      // to appear until the dep cache is cleared. From source they are always
+      // current and hot-reload in dev.
+      '@dive/shared': fileURLToPath(new URL('../../packages/shared/src/index.ts', import.meta.url)),
     },
   },
   server: {
@@ -19,7 +25,6 @@ export default defineConfig({
   // re-optimize (and full-reload) when a lazy route such as Admin is first opened.
   optimizeDeps: {
     include: [
-      '@dive/shared',
       'react',
       'react-dom',
       'react-router-dom',

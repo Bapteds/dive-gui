@@ -34,6 +34,9 @@ const MeshingPage = lazy(() =>
 const MeshingSessionPage = lazy(() =>
   import('@/pages/MeshingSessionPage').then((m) => ({ default: m.MeshingSessionPage })),
 );
+const ChamberPage = lazy(() =>
+  import('@/pages/ChamberPage').then((m) => ({ default: m.ChamberPage })),
+);
 
 /**
  * router.tsx - application route tree.
@@ -71,6 +74,7 @@ export const router = createBrowserRouter([
       { path: 'templates/:id/edit', element: <TemplateEditPage /> },
       { path: 'meshing', element: <MeshingPage /> },
       { path: 'meshing/:id', element: <MeshingSessionPage /> },
+      { path: 'chamber', element: <ChamberPage /> },
       { path: 'account', element: <AccountPage /> },
       {
         path: 'admin',

@@ -17,6 +17,13 @@ function minLayerThickness(layers: AddLayersConfig): number {
   return Math.max(layers.finalLayerThickness * 0.25, 1e-6);
 }
 
+/** Whether a surface's feature edges are extracted + refined. An omitted or empty
+ *  featureSurfaces list means every surface (legacy default). */
+function featureEdgesOn(config: SnappyConfig, file: string): boolean {
+  const chosen = config.featureSurfaces;
+  return !chosen || chosen.length === 0 || chosen.includes(file);
+}
+
 /** Standard OpenFOAM dictionary banner + FoamFile header. */
 function foamHeader(className: string, object: string, location: string): string {
   return `/*--------------------------------*- C++ -*----------------------------------*\\
@@ -233,18 +240,22 @@ mergePatchPairs ();
 ${FOOTER}`;
 }
 
-/** surfaceFeatureExtractDict: one feature-extraction block per STL region. */
-export function renderSurfaceFeatureExtractDict(stlNames: string[]): string {
+/** surfaceFeatureExtractDict: one feature-extraction block per STL region. The
+ *  includedAngle is per-patch (featureRefinements) with the global featureAngle
+ *  as the fallback for any surface with no override. */
+export function renderSurfaceFeatureExtractDict(stlNames: string[], config: SnappyConfig): string {
   const blocks = stlNames
-    .map(
-      (name) => `${name}
+    .filter((name) => featureEdgesOn(config, name))
+    .map((name) => {
+      const angle = config.featureRefinements?.[name]?.includedAngle ?? config.featureAngle;
+      return `${name}
 {
     extractionMethod    extractFromSurface;
-    extractFromSurfaceCoeffs { includedAngle 150; }
+    extractFromSurfaceCoeffs { includedAngle ${angle}; }
     subsetFeatures { nonManifoldEdges no; openEdges yes; }
     writeObj no;
-}`,
-    )
+}`;
+    })
     .join('\n\n');
   return `${foamHeader('dictionary', 'surfaceFeatureExtractDict', 'system')}
 ${blocks}
@@ -269,7 +280,11 @@ export function renderSnappyHexMeshDict(
     .map((r) => `    ${r.file} { type triSurfaceMesh; name ${r.region}; }`)
     .join('\n');
   const features = regions
-    .map((r) => `        { file "${r.emesh}"; level ${config.featureLevel}; }`)
+    .filter((r) => featureEdgesOn(config, r.file))
+    .map((r) => {
+      const level = config.featureRefinements?.[r.file]?.level ?? config.featureLevel;
+      return `        { file "${r.emesh}"; level ${level}; }`;
+    })
     .join('\n');
   const refinementSurfaces = regions
     .map((r) => {
@@ -284,7 +299,13 @@ export function renderSnappyHexMeshDict(
   const layerRegions =
     chosen && chosen.length > 0 ? regions.filter((r) => chosen.includes(r.file)) : regions;
   const layers = layerRegions
-    .map((r) => `        ${r.region} { nSurfaceLayers ${config.addLayers.nLayers}; }`)
+    .map((r) => {
+      // A per-surface override carries its own count + growth + thickness; without
+      // one, keep the plain global-count form so an un-overridden dict is unchanged.
+      const spec = config.addLayers.perSurface?.[r.file];
+      if (!spec) return `        ${r.region} { nSurfaceLayers ${config.addLayers.nLayers}; }`;
+      return `        ${r.region} { nSurfaceLayers ${spec.nLayers}; expansionRatio ${fmt(spec.expansionRatio)}; finalLayerThickness ${fmt(spec.finalLayerThickness)}; }`;
+    })
     .join('\n');
   const [lx, ly, lz] = domain.locationInMesh;
 

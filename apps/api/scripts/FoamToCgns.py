@@ -159,11 +159,21 @@ def main():
         # files can be merged into one TRANSIENT CGNS afterwards (via h5py); CFD-Post
         # reads HDF5 CGNS fine. Cell data is preserved (we never interpolated).
         if all_times:
-            # WriteAllTimeSteps runs the writer once per time, suffixing the name.
+            # WriteAllTimeSteps runs the writer once per time, suffixing the name
+            # with the 0-based timestep INDEX: out_<i>.cgns holds times[i].
             try:
                 SaveData(out, proxy=reader, UseHDF5=1, WriteAllTimeSteps=1, FileNameSuffix="_%d")
             except Exception:  # noqa: BLE001 - fall back to the writer's default suffix.
                 SaveData(out, proxy=reader, UseHDF5=1, WriteAllTimeSteps=1)
+            # Sidecar mapping index -> real time, in the SAME order as the _<i>
+            # suffix, so the backend merge stamps each frame with its true time
+            # instead of re-deriving times from the case dir (which disagrees on
+            # t=0 and scientific-notation dirs). Best-effort: never fail on it.
+            try:
+                with open(out + ".times", "w") as fh:
+                    fh.write(",".join("%.17g" % float(t) for t in times))
+            except Exception:  # noqa: BLE001 - sidecar is an optimisation, not a requirement.
+                pass
         else:
             SaveData(out, proxy=reader, UseHDF5=1)
         Delete(reader)

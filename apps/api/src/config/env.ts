@@ -41,6 +41,14 @@ const envSchema = z
     // Note: uploads are currently buffered in memory, so very large values cost
     // RAM per concurrent upload; raise deliberately on a server with headroom.
     MAX_UPLOAD_MB: z.coerce.number().int().positive().default(1024),
+    // Total request-body cap for a multipart case import (all files combined),
+    // enforced from Content-Length BEFORE buffering, so a single request cannot
+    // pin gigabytes of RAM even though each file is under MAX_UPLOAD_MB (H9).
+    MAX_UPLOAD_TOTAL_MB: z.coerce.number().int().positive().default(2048),
+    // Cap on an uploaded .zip's TOTAL decompressed size, checked against the
+    // archive's declared sizes before inflating, so a small zip bomb cannot
+    // expand to gigabytes in memory (H9).
+    MAX_ARCHIVE_UNCOMPRESSED_MB: z.coerce.number().int().positive().default(2048),
     // --- CGNS -> OpenFOAM mesh conversion toolchain ---------------------------
     // The conversion runs external binaries that exist on the Debian deploy
     // target (not on a Windows dev box). Every command is configurable so the
@@ -131,6 +139,14 @@ const envSchema = z
     // (configurable, sourced via OPENFOAM_BASHRC, absent on a Windows dev box -> a
     // clean per-step "not found" rather than a crash).
     NCC_COUPLE_BIN: z.string().min(1).default('createNonConformalCouples'),
+    // Assembly: OpenFOAM splitMeshRegions, run after mergeMeshes to turn the
+    // combined (still-separate) regions into one cellZone per part — so a rotating
+    // part can be named as the turbine MRF rotor cellZone. Invoked as
+    // `splitMeshRegions -makeCellZones -overwrite -case <master>` (keeps a single
+    // mesh, adds the zones in place). Same operational model as the other OpenFOAM
+    // tools (configurable, sourced via OPENFOAM_BASHRC, absent on a Windows dev box
+    // -> a clean per-step "not found" rather than a crash).
+    SPLIT_MESH_REGIONS_BIN: z.string().min(1).default('splitMeshRegions'),
     // Per-step wall-clock timeout (ms) for a merge command (mergeMeshes /
     // stitchMesh / checkMesh on a large combined mesh). Generous, like conversion.
     MERGE_STEP_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
@@ -166,6 +182,21 @@ const envSchema = z
     // Wall-clock timeout (ms) for a single mesh-extraction run. The one-time VTK
     // read of a large ASCII mesh dominates; generous, like the conversion above.
     MESH_BUILD_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
+    // --- Chamber Creation (standalone /chamber page) --------------------------
+    // The chamber generator builds a CadQuery solid from 3 empirical inputs and
+    // splits it into named OpenFOAM patches, emitting the same GLB + manifest +
+    // edges transport the mesh viewer consumes (scripts/buildChamber.py). It runs
+    // CadQuery + trimesh, so it needs its OWN interpreter, kept separate from the
+    // pyvista mesh interpreter (MESH_PYTHON_BIN) — the two wheel sets should not
+    // share a site-packages. Point CHAMBER_PYTHON_BIN at a venv that has cadquery
+    // and trimesh installed. Absent on a bare box => a clean CHAMBER_BUILD_FAILED.
+    CHAMBER_PYTHON_BIN: z.string().min(1).default(process.platform === 'win32' ? 'python' : 'python3'),
+    // Absolute path to the chamber builder. Empty => the script bundled with the
+    // API at apps/api/scripts/buildChamber.py (resolved relative to the module,
+    // cwd-independent). Set only to point at a script kept elsewhere.
+    BUILD_CHAMBER_SCRIPT: z.string().default(''),
+    // Wall-clock timeout (ms) for one chamber build (CadQuery boolean + tessellate).
+    CHAMBER_BUILD_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
     // --- Draft-tube inlet profile (boundary-condition overlay) ----------------
     // The DraftTube object type maps a runner-exit velocity profile onto its inlet
     // via timeVaryingMappedFixedValue, which reads constant/boundaryData (NOT a CSV

@@ -135,56 +135,79 @@ def main():
         base = find_child(merged, "CGNSBase_t")
         if base is None:
             raise RuntimeError("no CGNSBase_t node")
-        zone = find_child(base, "Zone_t")
-        if zone is None:
+        # ALL zones, not just the first. Assemblies deliberately keep parts as
+        # separate zones; animating only zone[0] froze every other zone at step 0
+        # in CFD-Post (H7).
+        zones = find_children(base, "Zone_t")
+        if not zones:
             raise RuntimeError("no Zone_t node")
 
-        sols = find_children(zone, "FlowSolution_t")
-        if not sols:
-            raise RuntimeError("no FlowSolution_t in the first file")
-        # Rename the first file's solution to a clean, indexed name.
-        first = sols[0]
-        first_name = first.name.rsplit("/", 1)[-1]
-        sol_names = ["FlowSolution0"]
-        if first_name != "FlowSolution0":
-            zone.move(first_name, "FlowSolution0")
-        set_name_attr(zone["FlowSolution0"], "FlowSolution0", zone)
+        # Uniform per-step solution names, shared by every zone.
+        sol_names = ["FlowSolution%d" % i for i in range(n_steps)]
 
-        # Copy each later step's FlowSolution into the same zone, indexed.
+        # Normalise each zone's first FlowSolution to FlowSolution0. A zone with
+        # no solution (e.g. a pure coupling-interface zone) is skipped, not fatal.
+        # Keep each zone's local name + original position for cross-file matching.
+        active_zones = []  # list of (zone_group, local_name, position)
+        for pos, zone in enumerate(zones):
+            zname = zone.name.rsplit("/", 1)[-1]
+            sols = find_children(zone, "FlowSolution_t")
+            if not sols:
+                continue
+            first_name = sols[0].name.rsplit("/", 1)[-1]
+            if first_name != "FlowSolution0":
+                zone.move(first_name, "FlowSolution0")
+            set_name_attr(zone["FlowSolution0"], "FlowSolution0", zone)
+            active_zones.append((zone, zname, pos))
+
+        if not active_zones:
+            raise RuntimeError("no FlowSolution_t in any zone of the first file")
+
+        # Copy each later step's FlowSolution into the MATCHING zone, for every
+        # animated zone. Match by zone name (same mesh across steps), falling back
+        # to the original position when names differ but the count is identical.
         for i in range(1, n_steps):
             with h5py.File(inputs[i], "r") as src:
                 s_base = find_child(src, "CGNSBase_t")
-                s_zone = find_child(s_base, "Zone_t") if s_base is not None else None
-                s_sols = find_children(s_zone, "FlowSolution_t") if s_zone is not None else []
-                if not s_sols:
-                    raise RuntimeError("no FlowSolution_t in %s" % inputs[i])
-                target = "FlowSolution%d" % i
-                zone.copy(s_sols[0], target)
-            set_name_attr(zone[target], target, zone)
-            sol_names.append(target)
+                s_zones = find_children(s_base, "Zone_t") if s_base is not None else []
+                s_by_name = {z.name.rsplit("/", 1)[-1]: z for z in s_zones}
+                for zone, zname, pos in active_zones:
+                    s_zone = s_by_name.get(zname)
+                    if s_zone is None and pos < len(s_zones):
+                        s_zone = s_zones[pos]
+                    s_sols = find_children(s_zone, "FlowSolution_t") if s_zone is not None else []
+                    if not s_sols:
+                        raise RuntimeError(
+                            "no FlowSolution_t for zone %r in %s" % (zname, inputs[i])
+                        )
+                    target = "FlowSolution%d" % i
+                    zone.copy(s_sols[0], target)
+                    set_name_attr(zone[target], target, zone)
 
-        # BaseIterativeData: number of steps + the time values.
+        ref = active_zones[0][0]
+        # BaseIterativeData: number of steps + the time values (once per base).
         bid = make_node(
             base, "BaseIterativeData", "BaseIterativeData_t", "I4",
-            np.array([n_steps], dtype="int32"), zone,
+            np.array([n_steps], dtype="int32"), ref,
         )
         make_node(bid, "TimeValues", "DataArray_t", "R8",
-                  np.array(time_values, dtype="float64"), zone)
+                  np.array(time_values, dtype="float64"), ref)
 
         # ZoneIterativeData: FlowSolutionPointers, one 32-char name per step.
         # CGNS dimension is [32, n_steps] (Fortran); HDF5 stores it reversed, so
-        # the dataset shape is (n_steps, 32), space-padded names.
+        # the dataset shape is (n_steps, 32), space-padded names. Written PER zone.
         pointers = np.full((n_steps, 32), ord(" "), dtype="int8")
         for k, nm in enumerate(sol_names):
             b = nm.encode()[:32]
             pointers[k, : len(b)] = np.frombuffer(b, dtype="int8")
-        zid = make_node(zone, "ZoneIterativeData", "ZoneIterativeData_t", "MT", None, zone)
-        make_node(zid, "FlowSolutionPointers", "DataArray_t", "C1", pointers, zone)
+        for zone, _zname, _pos in active_zones:
+            zid = make_node(zone, "ZoneIterativeData", "ZoneIterativeData_t", "MT", None, zone)
+            make_node(zid, "FlowSolutionPointers", "DataArray_t", "C1", pointers, zone)
 
         # Mark the base as time-accurate (helps some readers pick up the series).
         if find_child(base, "SimulationType_t") is None:
             st = np.frombuffer(b"TimeAccurate", dtype="int8")
-            make_node(base, "SimulationType", "SimulationType_t", "C1", st, zone)
+            make_node(base, "SimulationType", "SimulationType_t", "C1", st, ref)
 
         merged.flush()
     except Exception as exc:  # noqa: BLE001 - one-shot CLI: report and fail.

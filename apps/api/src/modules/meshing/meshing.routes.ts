@@ -6,23 +6,31 @@ import { requireAuth } from '../../middleware/requireAuth';
 import { validate } from '../../middleware/validate';
 import { parseCaseUpload } from '../projects/files.controller';
 import {
+  copySessionController,
   createSessionController,
   deleteSessionController,
   deleteStlController,
   downloadSessionController,
   downloadStlController,
+  fromChamberController,
   getMeshEdgesController,
   getMeshGeometryController,
   getMeshManifestController,
+  getRunLogController,
   getSessionController,
   listSessionsController,
+  renameSessionController,
   runSnappyController,
   saveConfigController,
+  stopRunController,
   uploadStlController,
 } from './meshing.controller';
 import {
+  copySessionSchema,
   createSessionSchema,
+  fromChamberSchema,
   meshingConfigSchema,
+  renameSessionSchema,
   sessionIdParamSchema,
   stlNameQuerySchema,
 } from './meshing.schemas';
@@ -37,8 +45,21 @@ export function createMeshingRouter(): Router {
   router.get('/', asyncHandler(listSessionsController));
   router.post('/', validate({ body: createSessionSchema }), asyncHandler(createSessionController));
 
-  // One session: read + delete.
+  // Copy a session's setup; import a chamber build's patches (new/existing/copyFrom).
+  router.post('/copy', validate({ body: copySessionSchema }), asyncHandler(copySessionController));
+  router.post(
+    '/from-chamber',
+    validate({ body: fromChamberSchema }),
+    asyncHandler(fromChamberController),
+  );
+
+  // One session: read + rename + delete.
   router.get('/:id', validate({ params: sessionIdParamSchema }), asyncHandler(getSessionController));
+  router.patch(
+    '/:id',
+    validate({ params: sessionIdParamSchema, body: renameSessionSchema }),
+    asyncHandler(renameSessionController),
+  );
   router.delete(
     '/:id',
     validate({ params: sessionIdParamSchema }),
@@ -63,11 +84,21 @@ export function createMeshingRouter(): Router {
     asyncHandler(deleteStlController),
   );
 
-  // Run the snappyHexMesh pipeline.
+  // Start the mesher as a background job, poll its live log, request a stop.
   router.post(
     '/:id/run',
     validate({ params: sessionIdParamSchema, body: meshingConfigSchema }),
     asyncHandler(runSnappyController),
+  );
+  router.get(
+    '/:id/run/log',
+    validate({ params: sessionIdParamSchema }),
+    asyncHandler(getRunLogController),
+  );
+  router.post(
+    '/:id/run/stop',
+    validate({ params: sessionIdParamSchema }),
+    asyncHandler(stopRunController),
   );
 
   // Autosave the edited config (persist without running).

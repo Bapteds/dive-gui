@@ -85,6 +85,7 @@ const successResult: MergeRunResult = {
   ],
   notes: ['Combined 2 meshes with mergeMeshes.'],
   boundaryPatches: [{ name: 'foot', type: 'patch', nFaces: 8 }],
+  cellZones: [],
   entries: [{ path: 'constant/polyMesh/boundary', type: 'file', size: 10 }],
 };
 

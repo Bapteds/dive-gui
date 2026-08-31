@@ -17,16 +17,23 @@ import type {
   MeshManifest,
   MeshingConfig,
   MeshingEngine,
+  MeshingLogPayload,
   MeshingPatch,
   MeshingRun,
+  MeshingRunState,
+  MeshingRunStatus,
   MeshingSession,
   MeshingSessionSummary,
 } from '@dive/shared';
-import { FMS_EXTENSION, STL_EXTENSION } from '@dive/shared';
+import { CHAMBER_TRANSFER_EXCLUDED_STL, FMS_EXTENSION, STL_EXTENSION } from '@dive/shared';
+import AdmZip from 'adm-zip';
 import { env } from '../../config/env';
 import { AppError } from '../../lib/AppError';
+import { logger } from '../../lib/logger';
 import { coreBudget } from '../../lib/cores';
 import { runCommand, type CommandResult } from '../../lib/commandRunner';
+import type { StreamHandle } from '../../lib/streamRunner';
+import type { StreamRunControls } from '../../lib/meshPipelineRun';
 import { zipTreeAt } from '../../lib/fileTreeStorage';
 import { parseStlBounds, unionBounds } from '../../lib/stlBounds';
 import { parseFmsPatches, parseStlSolidNames } from '../../lib/meshPatches';
@@ -34,23 +41,34 @@ import { mergedSolidNames } from '../../lib/stlMerge';
 import { runSnappyPipeline } from '../../lib/snappyPipeline';
 import { runCfMeshPipeline } from '../../lib/cfMeshPipeline';
 import {
+  appendMeshLog,
+  copySessionSetup,
   createSession as createSessionDir,
   deleteSession,
   deleteStl,
   hasResultMesh,
+  listRunningSessionIds,
   listSessions as listSessionDirs,
   listStl,
+  meshLogAbsolute,
   readConfig,
+  readMeshLog,
+  readMeshStatus,
   readMeta,
+  renameSession,
   readRun,
   readStl,
   sessionCaseDir,
   sessionDirAbsolute,
+  truncateMeshLog,
   writeConfig,
+  writeMeshStatus,
   writeRun,
   writeStl,
   type MeshingMeta,
 } from '../../lib/meshingStorage';
+import { readChamberExport } from '../../lib/chamberStorage';
+import type { FromChamberInput } from './meshing.schemas';
 import {
   meshingVizDir,
   meshingVizIsStale,
@@ -121,13 +139,14 @@ async function stlSolidNamesOr(sessionId: string, stls: string[]): Promise<strin
 
 /** Assemble the full session view (summary + STLs + bounds + last run + config). */
 async function assembleSession(meta: MeshingMeta): Promise<MeshingSession> {
-  const [stls, bounds, lastRun, savedConfig, hasMesh, patches] = await Promise.all([
+  const [stls, bounds, lastRun, savedConfig, hasMesh, patches, runState] = await Promise.all([
     listStl(meta.id),
     sessionBounds(meta.id),
     readRun(meta.id),
     readConfig(meta.id),
     hasResultMesh(meta.id),
     discoverPatches(meta.id, meta.engine),
+    readMeshStatus(meta.id),
   ]);
   return {
     id: meta.id,
@@ -142,6 +161,7 @@ async function assembleSession(meta: MeshingMeta): Promise<MeshingSession> {
     savedConfig,
     maxCores: coreBudget(),
     patches,
+    runStatus: runState?.status ?? 'idle',
   };
 }
 
@@ -175,9 +195,86 @@ export async function getMeshingSession(sessionId: string): Promise<MeshingSessi
   return assembleSession(meta);
 }
 
+/** Rename a session's display name (id/dir unchanged). @throws 404 when absent. */
+export async function renameMeshingSession(
+  sessionId: string,
+  name: string,
+): Promise<MeshingSession> {
+  await requireSession(sessionId); // clean 404 before the write
+  const meta = await renameSession(sessionId, name);
+  if (!meta) throw new AppError(404, 'NOT_FOUND', 'Meshing session not found.');
+  return assembleSession(meta);
+}
+
+/** Copy a session's setup (engine + config + surfaces) into a new session. */
+export async function copyMeshingSession(sourceId: string, name?: string): Promise<MeshingSession> {
+  await requireSession(sourceId); // clean 404 when the source is absent
+  const meta = await copySessionSetup(sourceId, name);
+  return assembleSession(meta);
+}
+
+/**
+ * Read a built chamber's triSurface zip and return its per-patch STLs as uploads,
+ * excluding the pre-merged domain.stl. @throws 409 CHAMBER_NOT_BUILT when the
+ * build/zip is absent, 422 when the zip carries no usable patch STL.
+ */
+async function chamberPatchUploads(chamberHash: string): Promise<StlUpload[]> {
+  const zipBytes = await readChamberExport(chamberHash, 'trisurface');
+  if (!zipBytes) {
+    throw new AppError(409, 'CHAMBER_NOT_BUILT', 'This chamber has not been built yet.');
+  }
+  const zip = new AdmZip(zipBytes);
+  const uploads: StlUpload[] = [];
+  for (const entry of zip.getEntries()) {
+    if (entry.isDirectory) continue;
+    const base = entry.entryName.split('/').pop() ?? entry.entryName;
+    if (!base.toLowerCase().endsWith('.stl')) continue;
+    if (base === CHAMBER_TRANSFER_EXCLUDED_STL) continue;
+    uploads.push({ name: base, data: entry.getData() });
+  }
+  if (uploads.length === 0) {
+    throw new AppError(422, 'INVALID_STL', 'The chamber export has no patch surfaces to transfer.');
+  }
+  return uploads;
+}
+
+/**
+ * Import a chamber build's patches into a meshing session (new / existing /
+ * copyFrom) and return the resulting session. Reuses addStlFiles, so a cfMesh
+ * target still enforces its one-surfaceFile rules and every STL is validated.
+ */
+export async function importChamberIntoMeshing(input: FromChamberInput): Promise<MeshingSession> {
+  const uploads = await chamberPatchUploads(input.chamberHash);
+  let sessionId: string;
+  if (input.mode === 'new') {
+    const meta = await createSessionDir(input.name, input.engine);
+    sessionId = meta.id;
+  } else if (input.mode === 'existing') {
+    const meta = await requireSession(input.sessionId);
+    sessionId = meta.id;
+  } else {
+    await requireSession(input.sourceId); // clean 404 when the source is absent
+    const meta = await copySessionSetup(input.sourceId, input.name);
+    sessionId = meta.id;
+  }
+  return addStlFiles(sessionId, uploads);
+}
+
 /** Delete a session entirely. @throws 404 when absent. */
 export async function removeMeshingSession(sessionId: string): Promise<void> {
   await requireSession(sessionId);
+  // Kill any run still executing for this session so we don't orphan a mesher
+  // process after its case directory is gone.
+  const entry = activeMeshRuns.get(sessionId);
+  if (entry) {
+    entry.aborted = true;
+    try {
+      entry.handle?.stop('SIGKILL');
+    } catch {
+      /* already exited */
+    }
+    activeMeshRuns.delete(sessionId);
+  }
   await deleteSession(sessionId);
 }
 
@@ -280,54 +377,237 @@ function assertEngineMatches(meta: MeshingMeta, config: MeshingConfig): void {
   }
 }
 
+// --- Live meshing run: a background job with a streamed log + Stop ------------
+//
+// A run is no longer blocking: startMeshingRun validates, streams the pipeline's
+// output to mesh.log in the BACKGROUND, and returns immediately with a 'running'
+// status the client polls (getMeshingLog). This mirrors the solver's run model,
+// but file-backed (status.json + mesh.log in the session dir) — meshing has no DB
+// rows. One run per session is enforced by an in-process registry, which also
+// backs Stop; a status left 'running' by a crash is reconciled on boot.
+
+/** A locally-executing run: its current step's process + whether a stop was asked. */
+interface ActiveMeshRun {
+  /** The process of the step running right now, or null between steps. */
+  handle: StreamHandle | null;
+  /** Set once the user requests a stop; the finalizer then records 'stopped'. */
+  aborted: boolean;
+}
+
+/** In-process registry of runs executing in THIS API process, keyed by session id. */
+const activeMeshRuns = new Map<string, ActiveMeshRun>();
+
+/** Keep the polled log tail bounded on the wire while preserving the useful end. */
+const LOG_TAIL_CHARS = 20000;
+
+/** Is a run for this session currently executing in this process? */
+export function isMeshRunActive(sessionId: string): boolean {
+  return activeMeshRuns.has(sessionId);
+}
+
 /**
- * Run the session's mesher (snappyHexMesh or cfMesh, per its engine) with the given
- * config. Requires at least one input surface. Resolves with the refreshed session
- * and the per-step report even when a tool fails (result.success === false) — only
- * access / missing-surface / engine-mismatch problems throw. On success the cached
- * render is invalidated so the next manifest fetch rebuilds it.
+ * Drive one meshing run to completion in the background: stream the engine's
+ * pipeline to mesh.log, then persist the run report + terminal status and drop the
+ * stale render. Never throws — any unexpected error is captured as a failed run so
+ * the session never stays wedged 'running'. Always clears the active-run registry.
+ */
+async function finishMeshingRun(
+  sessionId: string,
+  config: MeshingConfig,
+  surfaceNames: string[],
+  bounds: MeshBounds | null,
+  startedAt: string,
+): Promise<void> {
+  const caseDir = sessionCaseDir(sessionId);
+  const logFile = meshLogAbsolute(sessionId);
+  const entry = activeMeshRuns.get(sessionId);
+  const controls: StreamRunControls = {
+    onHandle: (handle) => {
+      if (entry) entry.handle = handle;
+    },
+    aborted: () => entry?.aborted ?? false,
+  };
+
+  let result: MeshImportConversion;
+  try {
+    if (config.engine === 'cfmesh') {
+      result = await runCfMeshPipeline(caseDir, surfaceNames, bounds, config, { logFile, controls });
+    } else {
+      // bounds is guaranteed non-null for snappy (checked before we went async).
+      result = await runSnappyPipeline(caseDir, surfaceNames, bounds as MeshBounds, config, {
+        logFile,
+        controls,
+      });
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error(`Meshing run threw for session ${sessionId}`, err);
+    await appendMeshLog(sessionId, `\n[runner] ${message}\n`).catch(() => undefined);
+    result = { success: false, steps: [] };
+  }
+
+  const aborted = entry?.aborted ?? false;
+  const status: MeshingRunStatus = aborted ? 'stopped' : result.success ? 'succeeded' : 'failed';
+
+  // Persist the run report + config (so the report/last-run survive a reload), the
+  // terminal status, and drop the stale render so the viewer rebuilds the polyMesh.
+  const run: MeshingRun = { config, result, at: new Date().toISOString() };
+  await writeRun(sessionId, run).catch(() => undefined);
+  await writeConfig(sessionId, config).catch(() => undefined);
+  await writeMeshStatus(sessionId, { status, startedAt, finishedAt: new Date().toISOString() }).catch(
+    () => undefined,
+  );
+  await fs.rm(meshingVizDir(sessionId), { recursive: true, force: true }).catch(() => undefined);
+  await appendMeshLog(
+    sessionId,
+    `\n=== ${status === 'succeeded' ? 'Done' : status === 'stopped' ? 'Stopped' : 'Failed'} ===\n`,
+  ).catch(() => undefined);
+
+  activeMeshRuns.delete(sessionId);
+}
+
+/**
+ * START the session's mesher (snappyHexMesh or cfMesh) as a background job and
+ * return immediately with the just-started 'running' status. The client polls
+ * getMeshingLog for the live output and terminal state. Requires at least one
+ * input surface; only ONE run per session may execute at a time.
  *
  * @throws 404 when the session is absent.
  * @throws 400 ENGINE_MISMATCH when the config engine differs from the session's.
  * @throws 400 NO_STL when the session has no usable input surface.
+ * @throws 409 MESH_IN_PROGRESS when a run for this session is already executing.
  */
-export async function runMeshing(
+export async function startMeshingRun(
   sessionId: string,
   config: MeshingConfig,
-): Promise<{ session: MeshingSession; result: MeshImportConversion }> {
+): Promise<{ session: MeshingSession; status: MeshingRunState }> {
   const meta = await requireSession(sessionId);
   assertEngineMatches(meta, config);
+
+  if (activeMeshRuns.has(sessionId)) {
+    throw new AppError(409, 'MESH_IN_PROGRESS', 'A mesh run is already in progress for this session.');
+  }
 
   const surfaces = await listStl(sessionId);
   if (surfaces.length === 0) {
     throw new AppError(400, 'NO_STL', 'Add at least one input surface before meshing.');
   }
   const bounds = await sessionBounds(sessionId);
-  const caseDir = sessionCaseDir(sessionId);
   const effectiveConfig = clampCores(config);
-
-  let result: MeshImportConversion;
-  if (effectiveConfig.engine === 'cfmesh') {
-    // cfMesh takes one surfaceFile (merged STLs or an FMS); bounds may be null (FMS).
-    result = await runCfMeshPipeline(caseDir, surfaces.map((s) => s.name), bounds, effectiveConfig);
-  } else {
-    // snappyHexMesh needs a readable STL bounding box to size the background mesh.
-    if (!bounds) {
-      throw new AppError(400, 'NO_STL', 'The uploaded STL surfaces could not be read.');
-    }
-    result = await runSnappyPipeline(caseDir, surfaces.map((s) => s.name), bounds, effectiveConfig);
+  // snappyHexMesh needs a readable STL bounding box to size the background mesh —
+  // fail fast (400), before starting the background job, exactly as the old
+  // blocking path did. cfMesh may have null bounds (an FMS input carries its own).
+  if (effectiveConfig.engine === 'snappy' && !bounds) {
+    throw new AppError(400, 'NO_STL', 'The uploaded STL surfaces could not be read.');
   }
 
-  // Persist the run report + config so the UI can show the last outcome on reload,
-  // and mirror the config into the autosave sidecar so the two stay in sync.
-  const run: MeshingRun = { config: effectiveConfig, result, at: new Date().toISOString() };
-  await writeRun(sessionId, run);
+  const startedAt = new Date().toISOString();
+  const state: MeshingRunState = { status: 'running', startedAt, finishedAt: null };
+  // Register the active run BEFORE going async so a concurrent start is rejected,
+  // then reset the log and persist the running status.
+  activeMeshRuns.set(sessionId, { handle: null, aborted: false });
+  await truncateMeshLog(sessionId);
+  await appendMeshLog(sessionId, `=== Meshing (${effectiveConfig.engine}) ===\n`);
+  await writeMeshStatus(sessionId, state);
   await writeConfig(sessionId, effectiveConfig);
 
-  // Drop the stale render so the viewer rebuilds from the new polyMesh.
-  await fs.rm(meshingVizDir(sessionId), { recursive: true, force: true }).catch(() => undefined);
+  void finishMeshingRun(
+    sessionId,
+    effectiveConfig,
+    surfaces.map((s) => s.name),
+    bounds,
+    startedAt,
+  ).catch(async (err) => {
+    // Belt-and-braces: finishMeshingRun already captures its own errors, but never
+    // let a rejected job leave the session stuck 'running'.
+    logger.error(`Meshing run orchestration failed for session ${sessionId}`, err);
+    activeMeshRuns.delete(sessionId);
+    await writeMeshStatus(sessionId, {
+      status: 'failed',
+      startedAt,
+      finishedAt: new Date().toISOString(),
+    }).catch(() => undefined);
+  });
 
-  return { session: await assembleSession(meta), result };
+  return { session: await assembleSession(meta), status: state };
+}
+
+/**
+ * Live-log poll payload for a session's current/last run: the lifecycle status, a
+ * bounded tail of the streamed output, its size, and — once terminal — the run
+ * report. @throws 404 when the session is absent.
+ */
+export async function getMeshingLog(sessionId: string): Promise<MeshingLogPayload> {
+  await requireSession(sessionId);
+  const state = await readMeshStatus(sessionId);
+  // Bound memory on this per-poll hot path: read at most the last N bytes.
+  const { content, size } = await readMeshLog(sessionId, env.SOLVER_LOG_MAX_BYTES);
+  const logTail = content.length > LOG_TAIL_CHARS ? content.slice(-LOG_TAIL_CHARS) : content;
+  // The report is only meaningful once the run has finished (config + per-step steps).
+  const run = state && state.status !== 'running' ? await readRun(sessionId) : null;
+  return {
+    status: state?.status ?? 'idle',
+    startedAt: state?.startedAt ?? null,
+    finishedAt: state?.finishedAt ?? null,
+    logTail,
+    logBytes: size,
+    run,
+  };
+}
+
+/**
+ * Request a stop of the session's running mesh: mark it aborted and SIGTERM the
+ * current step's process (SIGKILL after the grace period if it lingers). The
+ * background finalizer then records the run 'stopped'. Idempotent — stopping a
+ * session with no active run is a no-op. @throws 404 when the session is absent.
+ */
+export async function stopMeshingRun(sessionId: string): Promise<{ session: MeshingSession }> {
+  const meta = await requireSession(sessionId);
+  const entry = activeMeshRuns.get(sessionId);
+  if (entry) {
+    entry.aborted = true;
+    const handle = entry.handle;
+    if (handle) {
+      handle.stop('SIGTERM');
+      // Escalate to SIGKILL if the tool has not exited within the grace period.
+      const timer = setTimeout(() => {
+        if (activeMeshRuns.get(sessionId)?.handle === handle) handle.stop('SIGKILL');
+      }, env.RUN_STOP_GRACE_MS);
+      timer.unref();
+    }
+  } else {
+    // No live handle (e.g. a status left 'running' by a crash): mark it stopped so
+    // the UI unlocks instead of polling a run that will never finish.
+    const state = await readMeshStatus(sessionId);
+    if (state?.status === 'running') {
+      await writeMeshStatus(sessionId, {
+        status: 'stopped',
+        startedAt: state.startedAt,
+        finishedAt: new Date().toISOString(),
+      });
+    }
+  }
+  return { session: await assembleSession(meta) };
+}
+
+/**
+ * On API boot, reconcile meshing runs left 'running' by the previous process: this
+ * fresh process holds no live handle for them, so they can never finish — mark them
+ * failed so the Run button unlocks. The persisted log is preserved. Returns the count.
+ */
+export async function reconcileOrphanMeshingRuns(): Promise<number> {
+  const ids = await listRunningSessionIds();
+  for (const id of ids) {
+    const state = await readMeshStatus(id);
+    if (!state || state.status !== 'running') continue;
+    await writeMeshStatus(id, {
+      status: 'failed',
+      startedAt: state.startedAt,
+      finishedAt: new Date().toISOString(),
+    }).catch(() => undefined);
+    await appendMeshLog(id, '\n[runner] Interrupted by a server restart.\n').catch(() => undefined);
+  }
+  return ids.length;
 }
 
 /**

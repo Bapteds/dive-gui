@@ -31,8 +31,10 @@ import {
   cleanPriorMeshArtifacts,
   finalize,
   runSteps,
+  runStepsStreaming,
   skipped,
   type PlannedStep,
+  type StreamRunControls,
 } from './meshPipelineRun';
 
 /** Relative (to the case dir) location of the input surfaces and the scratch dir. */
@@ -125,6 +127,7 @@ export async function runCfMeshPipeline(
   surfaceNames: string[],
   bounds: MeshBounds | null,
   config: CfMeshConfig,
+  stream?: { logFile: string; controls?: StreamRunControls },
 ): Promise<MeshImportConversion> {
   const threads = Math.max(1, Math.floor(config.cores || 1));
 
@@ -183,6 +186,8 @@ export async function runCfMeshPipeline(
   await writeCfMeshDicts(caseDir, config, surfaceFileRel, maxCellSize);
   steps.push(cartesian, check);
 
-  const ran = await runSteps(steps, env.CFMESH_STEP_TIMEOUT_MS);
+  const ran = stream
+    ? await runStepsStreaming(steps, env.CFMESH_STEP_TIMEOUT_MS, stream.logFile, stream.controls)
+    : await runSteps(steps, env.CFMESH_STEP_TIMEOUT_MS);
   return finalize([...surface.pre, ...ran]);
 }

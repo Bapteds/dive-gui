@@ -25,6 +25,7 @@ import {
   type SolverId,
 } from '@dive/shared';
 import type { Run } from '@prisma/client';
+import { promises as fs } from 'node:fs';
 import { env } from '../../config/env';
 import { AppError } from '../../lib/AppError';
 import { prisma } from '../../lib/prisma';
@@ -76,6 +77,26 @@ export interface RunLogPayload {
 const handles = new Map<string, StreamHandle>();
 /** Run ids for which the user requested a stop (so we classify exit as `stopped`). */
 const stopRequested = new Set<string>();
+
+/**
+ * A tiny FIFO async lock. `runExclusive(key, fn)` runs `fn` only after every
+ * prior call with the same key has settled, serialising a critical section
+ * across concurrent requests in this (single) API process. Used to make the
+ * start-run admission check atomic with the row create (H2).
+ */
+const locks = new Map<string, Promise<unknown>>();
+function runExclusive<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = locks.get(key) ?? Promise.resolve();
+  const result = prev.then(fn, fn);
+  locks.set(
+    key,
+    result.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return result;
+}
 
 /** Keep the catch-up log tail bounded on the wire while preserving the useful end. */
 const LOG_TAIL_CHARS = 20000;
@@ -238,7 +259,9 @@ async function finalizeRun(
 
   let log = '';
   try {
-    log = (await readRunLog(projectId, runId)).content;
+    // Classification only needs the tail (residuals + last lines); cap the read
+    // so finalizing a huge log never OOMs (same bound as the poll path, H3).
+    log = (await readRunLog(projectId, runId, 0, env.SOLVER_LOG_MAX_BYTES)).content;
   } catch {
     /* log unreadable — classify on exit alone */
   }
@@ -415,25 +438,38 @@ export async function startRun(
       `This machine has ${budget} core(s); a run cannot use ${cores}.`,
     );
   }
-  const used =
-    (
-      await prisma.run.aggregate({
-        where: { status: { in: [...ACTIVE_RUN_STATUSES] } },
-        _sum: { cores: true },
-      })
-    )._sum.cores ?? 0;
-  if (used + cores > budget) {
-    throw new AppError(
-      409,
-      'NOT_ENOUGH_CORES',
-      `Not enough free cores: ${used} in use, ${cores} requested, ${budget} total. ` +
-        'Wait for a run to finish, or use fewer cores.',
-    );
-  }
 
-  // Create the row first so we have an id to derive the log path from.
-  const created = await prisma.run.create({
-    data: { projectId, solver, cores, status: 'queued', command: '', logPath: '' },
+  // Admission (active-run guard + global core budget) and the row create must be
+  // ATOMIC. Counting then creating with a gap between them lets a double-click or
+  // two tabs both pass the checks and spawn two solvers into the SAME case
+  // directory (corrupt case), or two projects oversubscribe the machine (H2).
+  // Serialise in-process — the whole run subsystem is already process-local.
+  const created = await runExclusive('startRun', async () => {
+    const activeNow = await prisma.run.count({
+      where: { projectId, status: { in: [...ACTIVE_RUN_STATUSES] } },
+    });
+    if (activeNow >= env.SOLVER_MAX_CONCURRENT_RUNS) {
+      throw new AppError(409, 'RUN_IN_PROGRESS', 'A run is already active for this project.');
+    }
+    const used =
+      (
+        await prisma.run.aggregate({
+          where: { status: { in: [...ACTIVE_RUN_STATUSES] } },
+          _sum: { cores: true },
+        })
+      )._sum.cores ?? 0;
+    if (used + cores > budget) {
+      throw new AppError(
+        409,
+        'NOT_ENOUGH_CORES',
+        `Not enough free cores: ${used} in use, ${cores} requested, ${budget} total. ` +
+          'Wait for a run to finish, or use fewer cores.',
+      );
+    }
+    // Create inside the lock so the next contender counts this run as active.
+    return prisma.run.create({
+      data: { projectId, solver, cores, status: 'queued', command: '', logPath: '' },
+    });
   });
 
   const caseDir = caseDirAbsolute(projectId);
@@ -518,7 +554,9 @@ export async function getRunLog(
   const run = await prisma.run.findFirst({ where: { id: runId, projectId } });
   if (!run) throw new AppError(404, 'RUN_NOT_FOUND', 'Run not found');
 
-  const { content, size } = await readRunLog(projectId, runId);
+  // Bound memory on this per-poll hot path: read at most the last
+  // SOLVER_LOG_MAX_BYTES of the log, never the whole (possibly huge) file (H3).
+  const { content, size } = await readRunLog(projectId, runId, 0, env.SOLVER_LOG_MAX_BYTES);
   const parsed = parseResiduals(content);
   const series = downsampleResiduals(parsed.samples);
   const logTail =
@@ -565,11 +603,89 @@ export async function stopRun(
 }
 
 /**
- * On API boot, mark any run still in an active state as failed: the child was
- * tied to the previous process and died with it (we do not re-adopt by pid —
- * pid reuse is unsafe). The persisted log is preserved. Returns the count fixed.
+ * Force-terminate every live solver for a project (best-effort). Used when the
+ * project — or its owner's account — is being deleted, so a ghost mpirun does
+ * not keep burning cores after the run rows (and case storage) are gone. Unlike
+ * stopRun this does no visibility check and does not wait: it SIGTERMs each
+ * registered handle (mpirun forwards SIGTERM to its ranks) and marks the still-
+ * running rows stopped. The caller's cascade delete removes the rows afterwards.
+ */
+export async function stopProjectRuns(projectId: string): Promise<void> {
+  const active = await prisma.run.findMany({
+    where: { projectId, status: { in: [...ACTIVE_RUN_STATUSES] } },
+    select: { id: true },
+  });
+  for (const { id } of active) {
+    stopRequested.add(id);
+    const handle = handles.get(id);
+    if (handle) {
+      try {
+        handle.stop('SIGTERM');
+      } catch {
+        /* already exited */
+      }
+    }
+  }
+  if (active.length > 0) {
+    await prisma.run
+      .updateMany({
+        where: { projectId, status: { in: [...ACTIVE_RUN_STATUSES] } },
+        data: { status: 'stopped', reason: 'Project or account deleted', finishedAt: new Date(), pid: null },
+      })
+      .catch(() => undefined);
+  }
+}
+
+/**
+ * Kill a leftover solver by pid, but ONLY when /proc confirms it is still OUR run
+ * — its argv references this run's case directory. On Linux a child of the old
+ * API process is reparented to init and keeps running after a restart; the
+ * recorded pid may since have been reused by an unrelated process, so we verify
+ * before killing (H1). Linux-only (no /proc elsewhere): a no-op when it cannot
+ * verify. SIGTERM, then SIGKILL after the stop grace.
+ */
+async function killOrphanIfOurs(pid: number, caseDir: string): Promise<void> {
+  let cmdline: string;
+  try {
+    cmdline = await fs.readFile(`/proc/${pid}/cmdline`, 'utf8');
+  } catch {
+    return; // no /proc, or the process is already gone — cannot verify, don't kill
+  }
+  // argv is NUL-separated; a solver/mpirun for this run carries `-case <caseDir>`.
+  if (!cmdline.replace(/\0/g, ' ').includes(caseDir)) return; // not ours (or pid reused)
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    return; // already exited
+  }
+  await new Promise((resolve) => setTimeout(resolve, env.RUN_STOP_GRACE_MS));
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    /* gone */
+  }
+}
+
+/**
+ * On API boot, reconcile runs left active by the previous process: KILL any
+ * still-running child first (verified by pid via /proc so pid reuse is safe),
+ * then mark the rows failed. Without the kill, a reparented mpirun keeps burning
+ * cores unkillable from the UI while the user could launch a SECOND solver into
+ * the same case (H1). The persisted log is preserved. Returns the count fixed.
  */
 export async function reconcileOrphanRuns(): Promise<number> {
+  const orphans = await prisma.run.findMany({
+    where: { status: { in: [...ACTIVE_RUN_STATUSES] } },
+    select: { pid: true, projectId: true },
+  });
+  await Promise.all(
+    orphans.map((r) =>
+      r.pid != null
+        ? killOrphanIfOurs(r.pid, caseDirAbsolute(r.projectId)).catch(() => undefined)
+        : undefined,
+    ),
+  );
+
   const result = await prisma.run.updateMany({
     where: { status: { in: [...ACTIVE_RUN_STATUSES] } },
     data: {

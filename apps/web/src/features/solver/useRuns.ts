@@ -84,7 +84,10 @@ export function useRunsQuery(projectId: string, enabled = true) {
     enabled,
     refetchInterval: (query) => {
       const runs = query.state.data;
-      return runs?.some((run) => isRunActive(run.status)) ? POLL_MS : false;
+      // No data yet (initial load, or a failed fetch) -> keep polling. Stopping
+      // on undefined would freeze the list after a single network blip (H5).
+      if (!runs) return POLL_MS;
+      return runs.some((run) => isRunActive(run.status)) ? POLL_MS : false;
     },
   });
 }
@@ -121,6 +124,13 @@ export function useRunLogQuery(projectId: string, runId: string | null) {
     queryKey: runLogQueryKey(projectId, runId ?? 'none'),
     queryFn: () => getRunLog(projectId, runId as string),
     enabled: !!runId,
-    refetchInterval: (query) => (isRunActive(query.state.data?.run.status) ? POLL_MS : false),
+    refetchInterval: (query) => {
+      // Keep polling until we've actually SEEN a terminal status. On a failed
+      // fetch data stays undefined; stopping then froze the live chart/log on a
+      // "Running" run until a hard reload (H5). Unknown-or-active -> keep polling.
+      const status = query.state.data?.run.status;
+      if (status && !isRunActive(status)) return false;
+      return POLL_MS;
+    },
   });
 }

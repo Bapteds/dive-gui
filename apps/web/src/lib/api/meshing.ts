@@ -1,10 +1,14 @@
 import { ApiError, apiClient } from './client';
 import type {
+  CopySessionBody,
+  FromChamberBody,
   MeshManifest,
   MeshManifestResponse,
-  MeshImportConversion,
   MeshingConfig,
   MeshingEngine,
+  MeshingLogPayload,
+  MeshingLogResponse,
+  MeshingRunState,
   MeshingSession,
   MeshingSessionResponse,
   MeshingSessionSummary,
@@ -33,9 +37,27 @@ export async function createMeshingSession(
   return data.session;
 }
 
+/** Duplicate a session's engine + config + surfaces into a new session. */
+export async function copyMeshingSession(body: CopySessionBody): Promise<MeshingSession> {
+  const data = await apiClient.post<MeshingSessionResponse>('/meshing/copy', body);
+  return data.session;
+}
+
+/** Import a built chamber's patch surfaces into a meshing session (new/existing/copyFrom). */
+export async function transferChamberToMeshing(body: FromChamberBody): Promise<MeshingSession> {
+  const data = await apiClient.post<MeshingSessionResponse>('/meshing/from-chamber', body);
+  return data.session;
+}
+
 /** Get one session's full detail. */
 export async function getMeshingSession(id: string): Promise<MeshingSession> {
   const data = await apiClient.get<MeshingSessionResponse>(`/meshing/${id}`);
+  return data.session;
+}
+
+/** Rename a session (display name only; id/engine unchanged). */
+export async function renameMeshingSession(id: string, name: string): Promise<MeshingSession> {
+  const data = await apiClient.patch<MeshingSessionResponse>(`/meshing/${id}`, { name });
   return data.session;
 }
 
@@ -67,15 +89,28 @@ export async function getStlBuffer(id: string, name: string): Promise<ArrayBuffe
 }
 
 /**
- * Run the snappyHexMesh pipeline. Resolves with the refreshed session and the
- * per-step report even when a tool fails (result.success === false); only
- * access / missing-STL problems reject as ApiError.
+ * START a mesh run as a background job. Resolves immediately with the refreshed
+ * session and the just-started 'running' status; the live output + terminal state
+ * are then polled via getMeshingLog. Access / missing-STL / already-running
+ * problems reject as ApiError (409 MESH_IN_PROGRESS when one is active).
  */
 export async function runSnappy(
   id: string,
   config: MeshingConfig,
-): Promise<{ session: MeshingSession; result: MeshImportConversion }> {
+): Promise<{ session: MeshingSession; status: MeshingRunState }> {
   return apiClient.post<RunSnappyResponse>(`/meshing/${id}/run`, config);
+}
+
+/** Poll the live log + lifecycle status of a session's current/last run. */
+export async function getMeshingLog(id: string): Promise<MeshingLogPayload> {
+  const data = await apiClient.get<MeshingLogResponse>(`/meshing/${id}/run/log`);
+  return data.log;
+}
+
+/** Request a stop of the running mesh; resolves with the refreshed session. */
+export async function stopMeshing(id: string): Promise<MeshingSession> {
+  const data = await apiClient.post<MeshingSessionResponse>(`/meshing/${id}/run/stop`, {});
+  return data.session;
 }
 
 /**

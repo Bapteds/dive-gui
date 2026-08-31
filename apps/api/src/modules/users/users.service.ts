@@ -10,6 +10,8 @@ import { AuditAction, recordAudit, type AuditActionCode } from '../../lib/audit'
 import { hashPassword } from '../../lib/password';
 import { prisma } from '../../lib/prisma';
 import { removeTemplateStorage } from '../../lib/templateStorage';
+import { removeProjectStorage } from '../../lib/caseStorage';
+import { stopProjectRuns } from '../projects/runs.service';
 import { toPublicUser, type PublicUser } from '../../lib/serializeUser';
 import type { CreateUserInput, UpdateUserInput } from './users.schemas';
 
@@ -228,19 +230,25 @@ export async function deleteUser(id: string, actor: Actor): Promise<void> {
     throw new AppError(409, 'SELF_DELETE_FORBIDDEN', 'You cannot delete your own account');
   }
 
-  // The user's templates are removed by the DB cascade, but their on-disk files
-  // are not — collect the ids first so we can purge their storage afterwards.
-  const ownedTemplates = await prisma.template.findMany({
-    where: { ownerId: id },
-    select: { id: true },
-  });
+  // The user's projects and templates are removed by the DB cascade, but that
+  // (a) never stops their running solvers — a ghost mpirun keeps burning cores,
+  // unkillable — and (b) never deletes their multi-GB on-disk storage, orphaning
+  // it forever (C2). Collect the ids first, then handle both before the cascade.
+  const [ownedProjects, ownedTemplates] = await Promise.all([
+    prisma.project.findMany({ where: { ownerId: id }, select: { id: true } }),
+    prisma.template.findMany({ where: { ownerId: id }, select: { id: true } }),
+  ]);
+
+  // Stop live solvers BEFORE the run rows vanish with the cascade.
+  await Promise.all(ownedProjects.map((p) => stopProjectRuns(p.id).catch(() => undefined)));
 
   await prisma.user.delete({ where: { id } });
 
-  // Best-effort disk cleanup of the deleted user's template files.
-  await Promise.all(
-    ownedTemplates.map((template) => removeTemplateStorage(template.id).catch(() => undefined)),
-  );
+  // Best-effort disk cleanup of the deleted user's project + template files.
+  await Promise.all([
+    ...ownedProjects.map((project) => removeProjectStorage(project.id).catch(() => undefined)),
+    ...ownedTemplates.map((template) => removeTemplateStorage(template.id).catch(() => undefined)),
+  ]);
 
   await recordAudit({
     action: AuditAction.USER_DELETED,

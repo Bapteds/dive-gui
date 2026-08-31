@@ -118,6 +118,7 @@ const successResult: MergeRunResult = {
   ],
   notes: ['Combined 2 meshes with mergeMeshes.'],
   boundaryPatches: [{ name: 'blades', type: 'wall', nFaces: 300 }],
+  cellZones: ['housing', 'rotor'],
   entries: [{ path: 'constant/polyMesh/boundary', type: 'file', size: 10 }],
 };
 

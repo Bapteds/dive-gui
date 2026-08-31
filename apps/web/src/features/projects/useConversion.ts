@@ -13,6 +13,12 @@ import type {
   UploadCgnsResponse,
 } from '@/lib/api/types';
 import { caseFilesQueryKey } from '@/features/projects/useCaseFiles';
+import {
+  meshEdgesQueryKey,
+  meshGeometryQueryKey,
+  meshManifestQueryKey,
+} from '@/features/visualize/useMesh';
+import { assemblyQueryKey, meshesQueryKey, mergePlanQueryKey } from '@/features/projects/useMeshes';
 
 /**
  * useConversion - React Query hooks for a project's CGNS sources and the
@@ -70,6 +76,15 @@ export function useConvertToFoam(projectId: string) {
     onSuccess: (result) => {
       queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
       queryClient.removeQueries({ queryKey: [...caseFilesQueryKey(projectId), 'content'] });
+      // The case mesh is brand new. Drop the case render (manifest/GLB/edges,
+      // 5-min TTL) and invalidate the library/plan/assembly, or Visualize keeps
+      // showing the pre-conversion mesh and the BC dialog the old patches (H6).
+      queryClient.removeQueries({ queryKey: meshManifestQueryKey(projectId) });
+      queryClient.removeQueries({ queryKey: meshGeometryQueryKey(projectId) });
+      queryClient.removeQueries({ queryKey: meshEdgesQueryKey(projectId) });
+      void queryClient.invalidateQueries({ queryKey: meshesQueryKey(projectId) });
+      void queryClient.invalidateQueries({ queryKey: assemblyQueryKey(projectId) });
+      void queryClient.invalidateQueries({ queryKey: mergePlanQueryKey(projectId) });
     },
   });
 }

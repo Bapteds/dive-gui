@@ -4,7 +4,9 @@ Internal web platform for **DIVE Turbinen GmbH & Co. KG** to prepare, run and po
 
 The heavy OpenFOAM / ParaView / Python toolchain runs on the **Linux host where the API is deployed**. On a Windows dev box those tools are absent and each CFD action reports a clean "not found" per step instead of crashing — so you can develop the whole UI/API without a solver installed.
 
-> **Deploy target:** Debian 12 (bookworm) with **ESI OpenFOAM.com v2406** (`/usr/lib/openfoam/openfoam2406`).
+> **Deploy target:** Debian 12 (bookworm) with **ESI OpenFOAM.com v2406** (`/usr/lib/openfoam/openfoam2406`). The production server runs as **root** with the app checked out in **`/home/app`**.
+
+> **Not a developer?** A copy-paste, step-by-step install/update/run guide (root user, app in `/home/app`) lives in **[`INSTALLATION.md`](INSTALLATION.md)**. This README is the fuller technical reference; §5 below mirrors the same layout.
 
 ---
 
@@ -146,7 +148,7 @@ Meshing/merge/export step timeouts, MPI flags, solver runtime cap, upload size, 
 
 ## 5. Full deployment tutorial (Debian)
 
-Target: a fresh **Debian 12 (bookworm)** server. Run as a sudo-capable user. Adjust paths to taste.
+Target: a fresh **Debian 12 (bookworm)** server. The commands below deploy into **`/home/app`** and run the service as **root** (matching the live server and `INSTALLATION.md`). If you deploy under a non-root user instead, keep the `sudo` prefixes and adjust the paths/`User=` to taste; as root you can drop `sudo`.
 
 ### 5.1 Node.js ≥ 20
 
@@ -193,7 +195,7 @@ If `pvbatch`'s Python collides with the pip `vtk` wheel (a `PyVTKObject` SIGSEGV
 ### 5.5 Get the code and build
 
 ```bash
-sudo git clone git@github.com:Bapteds/dive-gui.git /opt/dive && cd /opt/dive
+git clone git@github.com:Bapteds/dive-gui.git /home/app && cd /home/app
 git checkout main
 
 npm ci                    # clean, lockfile-exact install of all workspaces
@@ -215,7 +217,7 @@ cp apps/api/.env.example apps/api/.env
 #   MESH_PYTHON_BIN=/opt/dive-venv/bin/python3
 #   SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD / SEED_ADMIN_NAME
 
-sudo mkdir -p /var/lib/dive/storage && sudo chown -R "$USER" /var/lib/dive
+mkdir -p /var/lib/dive/storage    # as root; add `sudo` + `chown -R "$USER" /var/lib/dive` if deploying under another user
 ```
 
 Build (this also regenerates the Prisma client **on the host**, so the Linux query engine is correct):
@@ -244,8 +246,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=dive
-WorkingDirectory=/opt/dive/apps/api
+User=root
+WorkingDirectory=/home/app/apps/api
 # Source the OpenFOAM env so mpirun and the solver binaries are on PATH:
 ExecStart=/bin/bash -lc 'source /usr/lib/openfoam/openfoam2406/etc/bashrc && npm start'
 Restart=on-failure
@@ -270,7 +272,7 @@ server {
     server_name dive.example.de;
     # ssl_certificate / ssl_certificate_key ...
 
-    root /opt/dive/apps/web/dist;
+    root /home/app/apps/web/dist;
     index index.html;
 
     # SPA routing: fall back to index.html

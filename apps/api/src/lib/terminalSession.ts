@@ -146,10 +146,22 @@ export function createTerminalSession(opts: {
   child.stdout?.on('data', emit);
   child.stderr?.on('data', emit);
 
+  let childExited = false;
+  child.once('exit', () => {
+    childExited = true;
+  });
+  // Writing to a piped stdin whose shell already died emits EPIPE. Without this
+  // 'error' listener that is an unhandled stream error and takes the whole API
+  // process down - the exact path used when node-pty is absent on the box (H10).
+  child.stdin?.on('error', () => {
+    /* shell gone; further keystrokes are dropped */
+  });
+
   return {
     pty: false,
     write: (data) => {
-      child.stdin?.write(data);
+      if (childExited) return;
+      if (child.stdin?.writable) child.stdin.write(data);
     },
     resize: () => {
       /* no TTY to resize */

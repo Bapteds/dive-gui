@@ -6,7 +6,9 @@ import {
   collapseBoundaryToSinglePatch,
   fieldBcBody,
   parseBoundaryPatches,
+  parseCellZoneNames,
   removeEmptyBoundaryPatches,
+  renameCellZone,
   renderBaseFile,
 } from '../src/lib/openfoamCase';
 import { normalizeCasePaths } from '../src/lib/caseStorage';
@@ -203,5 +205,50 @@ describe('normalizeCasePaths', () => {
   it('rejects path traversal', () => {
     expect(() => normalizeCasePaths(['../evil'])).toThrow();
     expect(() => normalizeCasePaths(['a/../../evil'])).toThrow();
+  });
+});
+
+describe('parseCellZoneNames / renameCellZone', () => {
+  const CELLZONES = `/*------------------------------*- C++ -*----------------------------------*\\
+\\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       regIOobject;
+    location    "constant/polyMesh";
+    object      cellZones;
+}
+// * * * //
+2
+(
+domain0
+{
+    type        cellZone;
+    cellLabels  List<label>
+3(0 1 2);
+}
+rotor
+{
+    type        cellZone;
+    cellLabels  List<label>
+2(3 4);
+}
+)
+`;
+
+  it('lists the cellZone names in file order (skipping the FoamFile header)', () => {
+    expect(parseCellZoneNames(CELLZONES)).toEqual(['domain0', 'rotor']);
+  });
+
+  it('returns [] for a file with no cellZones', () => {
+    expect(parseCellZoneNames('FoamFile { object cellZones; }\n0\n(\n)\n')).toEqual([]);
+  });
+
+  it('renames a zone header without touching its body or the other zones', () => {
+    const out = renameCellZone(CELLZONES, 'domain0', 'casing');
+    expect(parseCellZoneNames(out)).toEqual(['casing', 'rotor']);
+    expect(out).toMatch(/type\s+cellZone;/); // body intact
+    expect(out).not.toMatch(/\bdomain0\b/); // old header gone
   });
 });

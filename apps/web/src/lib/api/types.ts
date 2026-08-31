@@ -11,6 +11,12 @@ import type {
   ConversionStepId,
   ExportArtifacts,
   ExportResult,
+  ChamberConfidence,
+  ChamberConstraint,
+  ChamberInput,
+  ChamberOutput,
+  ChamberOutputKey,
+  ChamberStatus,
   ExportStep,
   ExportStepId,
   ExportValidation,
@@ -394,6 +400,7 @@ export type {
 export type MergeStepKind =
   | 'prepare'
   | 'mergeMeshes'
+  | 'splitMeshRegions'
   | 'stitchMesh'
   | 'nonConformalCouple'
   | 'cleanup'
@@ -568,6 +575,24 @@ export type { MeshPatch, MeshManifest, MeshPatchType, MeshPatchSetting, MeshPatc
 /** `GET /projects/:id/mesh/manifest` and `POST /projects/:id/mesh/rebuild` response. */
 export interface MeshManifestResponse {
   manifest: MeshManifest;
+}
+
+// ---- Chamber Creation ("/chamber" page) ----
+
+/** Re-export of the shared chamber shapes used by the feature. */
+export type {
+  ChamberInput,
+  ChamberOutput,
+  ChamberOutputKey,
+  ChamberConstraint,
+  ChamberStatus,
+  ChamberConfidence,
+};
+
+/** `POST /chamber/build` response: the cache key + the twelve computed outputs. */
+export interface ChamberBuildResponse {
+  hash: string;
+  outputs: ChamberOutput[];
 }
 
 /**
@@ -790,15 +815,23 @@ export type {
   SnappyConfig,
   CfMeshConfig,
   CfMeshLayersConfig,
+  CfMeshPatchLayerSpec,
+  CfMeshLocalRefinement,
   CfMeshPatchType,
   MeshingPatch,
   SurfaceRefinement,
+  FeatureRefinement,
   AddLayersConfig,
+  SurfaceLayerSpec,
   StlFile,
   MeshingRun,
+  MeshingRunState,
+  MeshingRunStatus,
+  MeshingLogPayload,
   MeshingSession,
   MeshingSessionSummary,
 } from '@dive/shared';
+export { isMeshingRunActive } from '@dive/shared';
 
 /** `GET /meshing` — the session list. */
 export interface MeshingSessionsResponse {
@@ -810,8 +843,25 @@ export interface MeshingSessionResponse {
   session: import('@dive/shared').MeshingSession;
 }
 
-/** `POST /meshing/:id/run` — the refreshed session plus the per-step run report. */
+/** Body for `POST /meshing/copy`. */
+export interface CopySessionBody {
+  sourceId: string;
+  name?: string;
+}
+
+/** Body for `POST /meshing/from-chamber` (discriminated by `mode`). */
+export type FromChamberBody =
+  | { mode: 'new'; chamberHash: string; name: string; engine: import('@dive/shared').MeshingEngine }
+  | { mode: 'existing'; chamberHash: string; sessionId: string }
+  | { mode: 'copyFrom'; chamberHash: string; sourceId: string; name?: string };
+
+/** `POST /meshing/:id/run` — starts the background job: refreshed session + running status. */
 export interface RunSnappyResponse {
   session: import('@dive/shared').MeshingSession;
-  result: MeshImportConversion;
+  status: import('@dive/shared').MeshingRunState;
+}
+
+/** `GET /meshing/:id/run/log` — the live-log poll payload (status + tail + report). */
+export interface MeshingLogResponse {
+  log: import('@dive/shared').MeshingLogPayload;
 }

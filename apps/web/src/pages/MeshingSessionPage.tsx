@@ -1,9 +1,10 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
+  CircleStop,
   Download,
   FileUp,
   Loader2,
@@ -29,14 +30,19 @@ import {
 import { toast } from '@/components/ui/sonner';
 import { ApiError } from '@/lib/api/client';
 import { getSessionZip } from '@/lib/api/meshing';
-import type { MeshingConfig, MeshingEngine, StlFile } from '@/lib/api/types';
+import { isMeshingRunActive } from '@/lib/api/types';
+import type { MeshingConfig, MeshingEngine, MeshingRunStatus, StlFile } from '@/lib/api/types';
 import { ImportReport } from '@/features/projects/ImportReport';
+import { RunLog } from '@/features/solver/RunLog';
 import {
   useDeleteMeshingSession,
   useDeleteStl,
+  useMeshingRunLog,
   useMeshingSession,
-  useRunSnappy,
+  useOnMeshingRunSettled,
   useSaveMeshingConfig,
+  useStartMeshing,
+  useStopMeshing,
   useUploadStl,
 } from '@/features/meshing/useMeshing';
 import { StlViewer } from '@/features/meshing/StlViewer';
@@ -54,12 +60,34 @@ export function MeshingSessionPage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
   const session = useMeshingSession(id);
-  const runSnappy = useRunSnappy(id);
+  const startMeshing = useStartMeshing(id);
+  const stopMeshing = useStopMeshing(id);
+  const onRunSettled = useOnMeshingRunSettled(id);
   const { mutate: saveConfig } = useSaveMeshingConfig(id);
   const deleteSession = useDeleteMeshingSession();
 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [downloading, setDownloading] = useState(false);
+
+  // A run exists (idle means none ever started) → poll its live log. The payload's
+  // own status then drives the cadence and stops the poll once terminal.
+  const sessionRunStatus = session.data?.runStatus ?? 'idle';
+  const runLog = useMeshingRunLog(id, sessionRunStatus !== 'idle');
+  const liveStatus: MeshingRunStatus | 'idle' = runLog.data?.status ?? sessionRunStatus;
+  const running = isMeshingRunActive(liveStatus);
+
+  // When a run reaches a terminal status, refresh the session + result-mesh caches
+  // once and surface the outcome. Tracks the active→settled edge so it fires once.
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (wasRunning.current && !running && liveStatus !== 'idle') {
+      onRunSettled();
+      if (liveStatus === 'succeeded') toast.success('Mesh generated.');
+      else if (liveStatus === 'stopped') toast('Mesh run stopped.');
+      else toast.error('Meshing did not complete. See the log below.');
+    }
+    wasRunning.current = running;
+  }, [running, liveStatus, onRunSettled]);
 
   // Autosave the edited config (debounced in the form). Best-effort: a lost save
   // is non-fatal, so a failure is swallowed rather than surfaced as a toast.
@@ -70,15 +98,18 @@ export function MeshingSessionPage() {
 
   const handleGenerate = async (config: MeshingConfig) => {
     try {
-      const { result } = await runSnappy.mutateAsync(config);
-      if (result.success) {
-        toast.success('Mesh generated.');
-      } else {
-        toast.error('Meshing did not complete. See the run report below.');
-      }
+      await startMeshing.mutateAsync(config);
+      // Completion is reported by the poll effect above, not here.
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : 'Could not run the mesher.');
+      toast.error(error instanceof ApiError ? error.message : 'Could not start the mesher.');
     }
+  };
+
+  const handleStop = () => {
+    stopMeshing.mutate(undefined, {
+      onError: (error) =>
+        toast.error(error instanceof ApiError ? error.message : 'Could not stop the run.'),
+    });
   };
 
   const handleDownload = async () => {
@@ -150,7 +181,8 @@ export function MeshingSessionPage() {
   }
 
   const data = session.data;
-  const running = runSnappy.isPending;
+  // Lock the Run button while a run is active (or the start is in flight).
+  const runBusy = running || startMeshing.isPending;
   const engineLabel = data.engine === 'cfmesh' ? 'cfMesh' : 'snappyHexMesh';
   // The saved (or last-run) config to seed the form; its engine matches the session.
   const seededConfig = data.savedConfig ?? data.lastRun?.config ?? null;
@@ -201,7 +233,7 @@ export function MeshingSessionPage() {
           bounds={data.bounds}
           patches={data.patches}
           disabled={data.stls.length === 0}
-          running={running}
+          running={runBusy}
           initialConfig={seededConfig?.engine === 'cfmesh' ? seededConfig : null}
           maxCores={data.maxCores}
           onGenerate={handleGenerate}
@@ -212,7 +244,7 @@ export function MeshingSessionPage() {
           stls={data.stls}
           bounds={data.bounds}
           disabled={data.stls.length === 0}
-          running={running}
+          running={runBusy}
           initialConfig={seededConfig?.engine === 'snappy' ? seededConfig : null}
           maxCores={data.maxCores}
           onGenerate={handleGenerate}
@@ -220,8 +252,23 @@ export function MeshingSessionPage() {
         />
       )}
 
-      {/* The last run's per-step report. */}
-      {data.lastRun && (
+      {/* Live run: the streamed mesher log + status, shown once a run has started
+          (running or finished). The Stop control appears only while it is active. */}
+      {liveStatus !== 'idle' && (
+        <MeshRunPanel
+          status={liveStatus}
+          logTail={runLog.data?.logTail ?? ''}
+          startedAt={runLog.data?.startedAt ?? null}
+          finishedAt={runLog.data?.finishedAt ?? null}
+          active={running}
+          onStop={handleStop}
+          stopping={stopMeshing.isPending}
+        />
+      )}
+
+      {/* The last run's per-step report (hidden while a run is streaming — the live
+          log above is the source of truth then). */}
+      {!running && data.lastRun && (
         <section className="flex flex-col gap-3 rounded-md border border-border bg-surface p-5 shadow-sm sm:p-6">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-text">Run report</h2>
@@ -293,6 +340,101 @@ function StatusPill({ success }: { success: boolean }) {
       <XCircle className="size-3.5" strokeWidth={1.75} aria-hidden="true" />
       Failed
     </Badge>
+  );
+}
+
+/** Presentation for each meshing run status: badge variant + icon + label. */
+const runStatusMeta: Record<
+  MeshingRunStatus,
+  { variant: 'primary' | 'success' | 'danger' | 'neutral'; label: string; spin?: boolean }
+> = {
+  running: { variant: 'primary', label: 'Running', spin: true },
+  succeeded: { variant: 'success', label: 'Completed' },
+  failed: { variant: 'danger', label: 'Failed' },
+  stopped: { variant: 'neutral', label: 'Stopped' },
+};
+
+/**
+ * MeshRunPanel - the live meshing run: a status badge + elapsed clock, a Stop
+ * control while it is active, and the streamed mesher log (auto-following its tail).
+ * Reuses the solver's RunLog so the two live logs read identically.
+ */
+function MeshRunPanel({
+  status,
+  logTail,
+  startedAt,
+  finishedAt,
+  active,
+  onStop,
+  stopping,
+}: {
+  status: MeshingRunStatus;
+  logTail: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  active: boolean;
+  onStop: () => void;
+  stopping: boolean;
+}) {
+  const meta = runStatusMeta[status];
+  return (
+    <section className="flex flex-col gap-3 rounded-md border border-border bg-surface p-5 shadow-sm sm:p-6">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <h2 className="text-sm font-semibold text-text">Mesh run</h2>
+          <Badge variant={meta.variant}>
+            {meta.spin ? (
+              <Loader2 className="size-3.5 animate-spin" strokeWidth={1.75} aria-hidden="true" />
+            ) : status === 'succeeded' ? (
+              <CheckCircle2 className="size-3.5" strokeWidth={1.75} aria-hidden="true" />
+            ) : status === 'failed' ? (
+              <XCircle className="size-3.5" strokeWidth={1.75} aria-hidden="true" />
+            ) : (
+              <CircleStop className="size-3.5" strokeWidth={1.75} aria-hidden="true" />
+            )}
+            {meta.label}
+          </Badge>
+          <RunElapsed startedAt={startedAt} finishedAt={finishedAt} active={active} />
+        </div>
+        {active && (
+          <Button type="button" variant="secondary" onClick={onStop} loading={stopping}>
+            <CircleStop strokeWidth={1.75} aria-hidden="true" />
+            Stop
+          </Button>
+        )}
+      </div>
+      <RunLog text={logTail} live={active} ariaLabel="Mesher output log" />
+    </section>
+  );
+}
+
+/** Elapsed wall-clock for a run; ticks every second while it is active. */
+function RunElapsed({
+  startedAt,
+  finishedAt,
+  active,
+}: {
+  startedAt: string | null;
+  finishedAt: string | null;
+  active: boolean;
+}) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(() => setTick((value) => value + 1), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+
+  if (!startedAt) return null;
+  const end = finishedAt ? new Date(finishedAt).getTime() : Date.now();
+  const total = Math.max(0, Math.floor((end - new Date(startedAt).getTime()) / 1000));
+  const minutes = String(Math.floor(total / 60)).padStart(2, '0');
+  const seconds = String(total % 60).padStart(2, '0');
+  return (
+    <span className="text-sm text-text-secondary tabular-nums">
+      <span className="sr-only">Elapsed </span>
+      {minutes}:{seconds}
+    </span>
   );
 }
 

@@ -570,6 +570,9 @@ export const MESHES_DIRNAME = 'meshes';
  * interface), so each step carries a `kind` (not a unique id) plus a human label.
  *   - prepare:                  stage a source as a case + prefix its patches (collision-free)
  *   - mergeMeshes:              combine an additional mesh into the master (OpenFOAM mergeMeshes)
+ *   - splitMeshRegions:         make one cellZone per combined region (OpenFOAM splitMeshRegions
+ *                               -makeCellZones), so the parts stay addressable after the merge
+ *                               (e.g. as the turbine MRF rotor cellZone). Runs before coupling.
  *   - stitchMesh:               conformally FUSE a chosen patch pair into an internal interface
  *   - nonConformalCouple:       NON-conformally COUPLE a chosen patch pair by retyping both
  *                               interface patches to cyclicAMI in place (keeps both parts'
@@ -580,6 +583,7 @@ export const MESHES_DIRNAME = 'meshes';
 export const MERGE_STEP_KINDS = [
   'prepare',
   'mergeMeshes',
+  'splitMeshRegions',
   'stitchMesh',
   'nonConformalCouple',
   'cleanup',
@@ -751,6 +755,13 @@ export interface MergeResult {
   notes: string[];
   /** Boundary patches of the resulting constant/polyMesh (empty on failure). */
   boundaryPatches: MeshPatch[];
+  /**
+   * cellZones of the resulting mesh — one per combined part, created by
+   * splitMeshRegions on a multi-part assembly (empty for a single mesh or on
+   * failure). These are the zones the turbine template can point MRFProperties at
+   * (a rotating region becomes the MRF rotor cellZone).
+   */
+  cellZones: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -855,6 +866,21 @@ export interface SurfaceRefinement {
   max: number;
 }
 
+/**
+ * Per-surface boundary-layer override (snappy), keyed by STL file name. Absent key
+ * => the config's global nLayers / expansionRatio / finalLayerThickness are used.
+ * `relativeSizes` is NOT here: it is a single addLayersControls switch with no
+ * per-region equivalent in OpenFOAM, so it stays global on AddLayersConfig.
+ */
+export interface SurfaceLayerSpec {
+  /** Number of prism layers on this surface (>= 1). */
+  nLayers: number;
+  /** Growth ratio between successive layers (>= 1). */
+  expansionRatio: number;
+  /** Near-wall layer thickness (relative or absolute per the global relativeSizes). */
+  finalLayerThickness: number;
+}
+
 /** Boundary-layer (prism) growth controls for the surfaces. */
 export interface AddLayersConfig {
   enabled: boolean;
@@ -864,17 +890,31 @@ export interface AddLayersConfig {
    * so an old config keeps working; the UI lists one checkbox per surface.
    */
   surfaces?: string[];
-  /** Number of prism layers grown on the surfaces. */
+  /** Global default number of prism layers (per-surface override wins). */
   nLayers: number;
   /**
    * When true, `finalLayerThickness` is a fraction of the local cell size;
    * when false it is an absolute length (metres). Maps to snappy `relativeSizes`.
+   * GLOBAL only — OpenFOAM has no per-region relativeSizes.
    */
   relativeSizes: boolean;
-  /** Thickness of the layer nearest the surface (relative or absolute per `relativeSizes`). */
+  /** Global default near-wall layer thickness (per-surface override wins). */
   finalLayerThickness: number;
-  /** Growth ratio between successive layers (>= 1). */
+  /** Global default growth ratio between successive layers (>= 1) (per-surface override wins). */
   expansionRatio: number;
+  /** Per-surface overrides keyed by STL file name; absent key => the globals above. */
+  perSurface?: Record<string, SurfaceLayerSpec>;
+}
+
+/**
+ * Per-patch feature-edge extraction override (snappy), keyed by STL file name.
+ * Absent key => the config's global `featureAngle` / `featureLevel` are used.
+ */
+export interface FeatureRefinement {
+  /** surfaceFeatureExtract includedAngle threshold in degrees (0–180). */
+  includedAngle: number;
+  /** snappy octree refinement level applied near the extracted edges (int 0–10). */
+  level: number;
 }
 
 export interface SnappyConfig {
@@ -889,8 +929,19 @@ export interface SnappyConfig {
   surfaceRefinement: SurfaceRefinement;
   /** Per-surface refinement keyed by STL file name; falls back to `surfaceRefinement`. */
   surfaceRefinements?: Record<string, SurfaceRefinement>;
-  /** Feature-edge (eMesh) refinement level. */
+  /** Global default feature-edge (eMesh) refinement level; per-patch override wins. */
   featureLevel: number;
+  /** Global default surfaceFeatureExtract includedAngle (deg); per-patch override wins. */
+  featureAngle: number;
+  /** Per-STL feature overrides keyed by file name; absent key => the two globals above. */
+  featureRefinements?: Record<string, FeatureRefinement>;
+  /**
+   * STL surfaces (by file name) whose feature edges are extracted + refined. Omitted
+   * or empty means EVERY surface (legacy default), so an old config keeps working. A
+   * surface not in this list is excluded from surfaceFeatureExtractDict AND from the
+   * snappyHexMeshDict `features` list — its edges are not captured.
+   */
+  featureSurfaces?: string[];
   /** Explicit keep-point; null => derive from bounds + domainType. */
   locationInMesh: [number, number, number] | null;
   /** Boundary-layer (prism) growth on the surfaces. */
@@ -913,6 +964,7 @@ export const DEFAULT_SNAPPY_CONFIG: SnappyConfig = {
   marginFactor: 0.1,
   surfaceRefinement: { min: 1, max: 2 },
   featureLevel: 2,
+  featureAngle: 150,
   locationInMesh: null,
   addLayers: {
     enabled: false,
@@ -925,20 +977,44 @@ export const DEFAULT_SNAPPY_CONFIG: SnappyConfig = {
 };
 
 /**
- * cfMesh (cartesianMesh) boundary-layer controls. cfMesh sizes are ABSOLUTE
- * lengths and use a different vocabulary from snappy: growth is `thicknessRatio`
- * and the near-wall layer is capped by `maxFirstLayerThickness` (rather than
- * snappy's relativeSizes / finalLayerThickness / expansionRatio). Applied to all
- * boundaries (per-patch layers are a later refinement).
+ * Per-patch boundary-layer override (cfMesh), keyed by patch name (STL solid / FMS
+ * patch). Absent key => the config's global cfMesh layer values are used. Rendered
+ * as a `patchBoundaryLayers` sub-block, cfMesh's native per-patch mechanism.
  */
-export interface CfMeshLayersConfig {
-  enabled: boolean;
-  /** Number of prism layers. */
+export interface CfMeshPatchLayerSpec {
+  /** Number of prism layers on this patch (>= 1). */
   nLayers: number;
-  /** Growth ratio between successive layers (>= 1). Maps to cfMesh thicknessRatio. */
+  /** Growth ratio (cfMesh thicknessRatio, >= 1). */
   thicknessRatio: number;
   /** Cap on the first (near-wall) layer thickness in metres; null => cfMesh decides. */
   maxFirstLayerThickness: number | null;
+}
+
+/**
+ * cfMesh (cartesianMesh) boundary-layer controls. cfMesh sizes are ABSOLUTE
+ * lengths and use a different vocabulary from snappy: growth is `thicknessRatio`
+ * and the near-wall layer is capped by `maxFirstLayerThickness` (rather than
+ * snappy's relativeSizes / finalLayerThickness / expansionRatio). The global
+ * fields are the default; `perPatch` overrides them for named patches.
+ */
+export interface CfMeshLayersConfig {
+  enabled: boolean;
+  /** Global default number of prism layers. */
+  nLayers: number;
+  /** Global default growth ratio (>= 1). Maps to cfMesh thicknessRatio. */
+  thicknessRatio: number;
+  /** Global default cap on the first-layer thickness (m); null => cfMesh decides. */
+  maxFirstLayerThickness: number | null;
+  /** Per-patch overrides keyed by patch name; absent key => the globals above. */
+  perPatch?: Record<string, CfMeshPatchLayerSpec>;
+  /**
+   * Patches that grow NO boundary layers, keyed by patch name. Rendered as a
+   * `patchBoundaryLayers { "<patch>" { nLayers 0; } }` entry. Absent or empty =>
+   * no patch is force-disabled (every patch inherits the global block unless it
+   * has a `perPatch` custom override). A name in both `perPatch` and here is
+   * treated as custom (perPatch wins).
+   */
+  noLayerPatches?: string[];
 }
 
 /**
@@ -964,6 +1040,16 @@ export interface MeshingPatch {
  * "derive from the STL bounds" (diag/40), which requires known bounds — a raw FMS
  * has none, so `maxCellSize` must be set for an FMS input.
  */
+/**
+ * Per-patch local cell-size refinement (cfMesh), keyed by patch name. Rendered as a
+ * meshDict `localRefinement { "<patch>" { cellSize X; } }` entry. Absent key => the
+ * patch uses the global sizing (boundaryCellSize if set, else maxCellSize).
+ */
+export interface CfMeshLocalRefinement {
+  /** Target cell size at this patch, in metres (> 0). */
+  cellSize: number;
+}
+
 export interface CfMeshConfig {
   /** Discriminates the meshing-config union; always 'cfmesh' here. */
   engine: 'cfmesh';
@@ -985,12 +1071,25 @@ export interface CfMeshConfig {
    * Written to meshDict as a `renameBoundary` block.
    */
   patchTypes?: Record<string, CfMeshPatchType>;
+  /**
+   * Per-patch local cell-size refinement keyed by patch name; absent key => the
+   * patch uses the global sizing. Rendered as a meshDict `localRefinement` block.
+   */
+  localRefinement?: Record<string, CfMeshLocalRefinement>;
   /** OpenMP threads for cartesianMesh (cfMesh is multithreaded, not MPI-decomposed). */
   cores: number;
 }
 
 /** The config a run/session carries; its `engine` selects the shape. */
 export type MeshingConfig = SnappyConfig | CfMeshConfig;
+
+/**
+ * A chamber build's patches transfer into a meshing session as one STL per patch;
+ * the pre-merged domain.stl in trisurface.zip is NEVER transferred (it would
+ * duplicate every patch's triangles). Both engines consume the per-patch files:
+ * snappy directly, cfMesh via its existing run-time merge.
+ */
+export const CHAMBER_TRANSFER_EXCLUDED_STL = 'domain.stl';
 
 /** The auto/minimal cfMesh defaults the config form starts from. */
 export const DEFAULT_CFMESH_CONFIG: CfMeshConfig = {
@@ -1024,6 +1123,53 @@ export interface MeshingRun {
   at: string;
 }
 
+/**
+ * The lifecycle status of a meshing run, a background job (mirrors the solver's
+ * run states, pared to what the mesher needs):
+ *  - 'running'   — the pipeline is executing; the log is streaming.
+ *  - 'succeeded' — every step passed (a usable polyMesh was produced).
+ *  - 'failed'    — a step failed (a tool error, or a missing binary).
+ *  - 'stopped'   — the user cancelled the run mid-flight.
+ */
+export type MeshingRunStatus = 'running' | 'succeeded' | 'failed' | 'stopped';
+
+/** Meshing statuses that are still executing (worth polling the log for). */
+export const ACTIVE_MESHING_STATUSES: readonly MeshingRunStatus[] = ['running'];
+
+/** Is this meshing status still active (the run is executing)? 'idle'/undefined ⇒ no. */
+export function isMeshingRunActive(status: MeshingRunStatus | 'idle' | undefined): boolean {
+  return status !== undefined && (ACTIVE_MESHING_STATUSES as readonly string[]).includes(status);
+}
+
+/** Persisted lifecycle state of a session's most recent run (the status.json sidecar). */
+export interface MeshingRunState {
+  status: MeshingRunStatus;
+  /** ISO 8601 timestamp the run started. */
+  startedAt: string;
+  /** ISO 8601 timestamp the run finished, or null while it is still running. */
+  finishedAt: string | null;
+}
+
+/**
+ * Live-log poll payload for a meshing session's current/last run — the mesher's
+ * analogue of the solver's RunLogPayload. Polled by the client while a run is
+ * active, then once more when it reaches a terminal status.
+ */
+export interface MeshingLogPayload {
+  /** The run's lifecycle status; 'idle' when no run has ever started. */
+  status: MeshingRunStatus | 'idle';
+  /** ISO 8601 start time, or null when idle. */
+  startedAt: string | null;
+  /** ISO 8601 finish time, or null while running / idle. */
+  finishedAt: string | null;
+  /** Bounded tail of the streamed mesher output (the whole log when small). */
+  logTail: string;
+  /** Total size of the log on disk in bytes. */
+  logBytes: number;
+  /** The finished run report (config + per-step steps), present once a run completes. */
+  run: MeshingRun | null;
+}
+
 /** A meshing session as shown in the list (no surface/run detail). */
 export interface MeshingSessionSummary {
   id: string;
@@ -1052,6 +1198,12 @@ export interface MeshingSession extends MeshingSessionSummary {
   savedConfig: MeshingConfig | null;
   /** Max cores a run may request (the machine's core budget). */
   maxCores: number;
+  /**
+   * Lifecycle status of the session's current/last run ('idle' when none has ever
+   * started). Lets the page lock the Run button and resume tailing a live run on
+   * load, before the first log poll returns.
+   */
+  runStatus: MeshingRunStatus | 'idle';
   /**
    * Boundary patches discovered from the input surface (cfMesh only): the FMS
    * patches (with their current type), the STL solid names, or the merged file
@@ -1996,6 +2148,525 @@ export interface ResidualSample {
   values: Partial<Record<string, number>>;
 }
 
+// ---------------------------------------------------------------------------
+// Chamber Creation (standalone /chamber page).
+//
+// Three empirical inputs (X1, X2, X3) drive twelve geometry parameters through
+// a fitted regression model (11 linear, 1 power), replacing the old Excel
+// calculator. Each output keeps the calculator's optional Min / Max / Exact
+// override -> FINAL value + Status. The twelve FINAL values (mm), plus a direct
+// LENGTH input (mm), are the geometry parameters the buildChamber.py builder
+// consumes (converted to metres). This model is the single source of truth for
+// the whole feature (the Python builder receives already-resolved params, so it
+// carries no model logic).
+// ---------------------------------------------------------------------------
+
+/**
+ * Directory name (under STORAGE_DIR) holding a chamber build's rendered
+ * artifacts, keyed by a hash of its inputs. Global, not project-scoped (mirrors
+ * MESHING_DIRNAME): the chamber generator is a standalone tool.
+ */
+export const CHAMBER_DIRNAME = 'chamber';
+
+/** Model outputs and the LENGTH input are in millimetres; the builder converts to metres. */
+export const CHAMBER_UNIT = 'mm';
+
+/**
+ * Valid input ranges for the three empirical inputs (from the fit's training
+ * span; extrapolate with care). Used by the input form's validation.
+ */
+export const CHAMBER_INPUT_RANGES = {
+  x1: { min: 700, max: 2420 },
+  x2: { min: 1.8, max: 14.9 },
+  x3: { min: 1, max: 23 },
+} as const;
+
+/**
+ * The twelve output parameter keys, in display order. Each key is also the JSON
+ * key the buildChamber.py builder reads (plus `length`, a direct input).
+ */
+export const CHAMBER_OUTPUT_KEYS = [
+  'width',
+  'height',
+  'distFromSideChamfer1',
+  'chamferLength1',
+  'chamferWidth1',
+  'chamferLength2',
+  'chamferWidth2',
+  'distFromEnd',
+  'dLast',
+  'hMiddle',
+  'hMiddlePlusFirst',
+  'hLast',
+] as const;
+export type ChamberOutputKey = (typeof CHAMBER_OUTPUT_KEYS)[number];
+
+/** Honesty labels for a parameter's leave-one-out cross-validation error. */
+export type ChamberConfidence = 'Good' | 'High' | 'Moderate' | 'Low';
+
+/** The functional form of a parameter's own X1–X3 fit. */
+export type ChamberForm = 'linear' | 'power';
+
+/** A structural relation's kind: refine a fit from a measured partner, or a
+ * linear combination of other outputs' FINAL values. */
+export type ChamberRelationKind = 'refine' | 'combination';
+
+/**
+ * A toggleable structural relation for one output. When ON it overrides the
+ * output's own X1–X3 fit (precedence: a Set-exact override still wins over it,
+ * and Min/Max still clamp after). Two shapes:
+ *  - 'refine': when the PARTNER output has a measured (Exact) value, use a sharper
+ *    fit a + b*X1 + c*X2 + d*X3 + p*(partner Exact). With no measured partner it
+ *    falls back to this output's own base fit, so toggling it on is harmless.
+ *  - 'combination': FINAL = constant + Σ coeff × partner.final (e.g. LEB = 2·HLE,
+ *    LT = LF1 + LF2, LE = 255.16 + 3.4954·HLE). Reads partners' FINAL values, so
+ *    an override on a partner propagates.
+ */
+export interface ChamberRelation {
+  kind: ChamberRelationKind;
+  /** Whether the toggle defaults to on. */
+  defaultOn: boolean;
+  /** Toggle name and (for combinations) the Status label, e.g. '= LEB + LEOW'. */
+  label: string;
+  /** One-line explanation for the per-relation dropdown. */
+  description: string;
+  /** 'refine': the partner whose measured (Exact) value sharpens this output. */
+  partner?: ChamberOutputKey;
+  /** 'refine': sharper-fit coefficients a + b*X1 + c*X2 + d*X3 + p*(partner Exact). */
+  refineCoeffs?: { a: number; b: number; c: number; d: number; p: number };
+  /** 'combination': terms of constant + Σ coeff × partner.final. */
+  terms?: readonly { key: ChamberOutputKey; coeff: number }[];
+  /** 'combination': additive constant (default 0). */
+  constant?: number;
+}
+
+/**
+ * The fitted model for one output. `form` is its own X1–X3 fit — `linear`:
+ * a + b*X1 + c*X2 + d*X3, `power`: k * X1^e1 * X2^e2 * X3^e3 — always present and
+ * used when the output has no active relation. `cvError` is the leave-one-out
+ * RMSE as a percent of the mean (lower is better); `confidence` is its honesty
+ * label. `relation`, when present, is a toggleable structural relation that
+ * overrides the base fit while it is on.
+ */
+export interface ChamberOutputSpec {
+  key: ChamberOutputKey;
+  label: string;
+  form: ChamberForm;
+  cvError: number;
+  confidence: ChamberConfidence;
+  /** Base X1–X3 fit coefficients (every output has one). */
+  coeffs:
+    | { a: number; b: number; c: number; d: number }
+    | { k: number; e1: number; e2: number; e3: number };
+  relation?: ChamberRelation;
+}
+
+/**
+ * The fitted coefficients for all twelve outputs (full precision). P4/P5
+ * (chamfer 1 length/width) intentionally share one formula. Single source of
+ * truth for the model on both the client (live preview) and the server.
+ */
+export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
+  // P1: width. Refines from a measured B1 (P3).
+  { key: 'width', label: 'B Kammer', form: 'linear', cvError: 18.8, confidence: 'Moderate',
+    coeffs: { a: 3501.480486, b: -0.01990289598, c: -104.4968392, d: 224.0149301 },
+    relation: { kind: 'refine', defaultOn: true, partner: 'distFromSideChamfer1',
+      label: 'refine from B1', description: 'Sharpen B Kammer from a measured B1 (its Exact); R² 0.51 → 0.81.',
+      refineCoeffs: { a: 1101.528235, b: 0.5004560281, c: -19.97360475, d: 78.2136825, p: 0.976665205 } } },
+  // P2: height. Own linear fit; relation = LEB + LEOW.
+  { key: 'height', label: 'H Kammer', form: 'linear', cvError: 28.6, confidence: 'Moderate',
+    coeffs: { a: -2655.561158, b: 3.469850592, c: 500.9913764, d: -178.9974433 },
+    relation: { kind: 'combination', defaultOn: true, label: '= LEB + LEOW',
+      description: 'H Kammer = LEB + LEOW (middle+first plus last cylinder height).',
+      terms: [{ key: 'hMiddlePlusFirst', coeff: 1 }, { key: 'hLast', coeff: 1 }] } },
+  // P3: distFromSideChamfer1. Refines from a measured B Kammer (P1).
+  { key: 'distFromSideChamfer1', label: 'B1', form: 'linear', cvError: 32.0, confidence: 'Low',
+    coeffs: { a: 1913.645229, b: -0.1144287145, c: -38.895132, d: 115.1237973 },
+    relation: { kind: 'refine', defaultOn: true, partner: 'width',
+      label: 'refine from B Kammer', description: 'Sharpen B1 from a measured B Kammer (its Exact); R² 0.09 → 0.62.',
+      refineCoeffs: { a: -417.365864, b: -0.2106437417, c: 14.17960421, d: -32.6306581, p: 0.7098088714 } } },
+  // P4: chamferLength1. No relation.
+  { key: 'chamferLength1', label: 'LF1', form: 'linear', cvError: 20.6, confidence: 'Moderate',
+    coeffs: { a: -2.009758353, b: 0.9116908157, c: 16.38088606, d: -19.61930855 } },
+  // P5: chamferWidth1. relation = LF1.
+  { key: 'chamferWidth1', label: 'BF1', form: 'linear', cvError: 20.6, confidence: 'Moderate',
+    coeffs: { a: -2.009758353, b: 0.9116908157, c: 16.38088606, d: -19.61930855 },
+    relation: { kind: 'combination', defaultOn: true, label: '= LF1',
+      description: 'BF1 = LF1 (chamfer 1 width equals its length).',
+      terms: [{ key: 'chamferLength1', coeff: 1 }] } },
+  // P6: chamferLength2. relation = LF1 (both chamfers equal).
+  { key: 'chamferLength2', label: 'LF2', form: 'linear', cvError: 18.6, confidence: 'Moderate',
+    coeffs: { a: 810.7255952, b: 0.1366396239, c: -70.24908474, d: 55.86948952 },
+    relation: { kind: 'combination', defaultOn: true, label: '= LF1',
+      description: 'LF2 = LF1 (both chamfers equal).',
+      terms: [{ key: 'chamferLength1', coeff: 1 }] } },
+  // P7: chamferWidth2. relation = LF2.
+  { key: 'chamferWidth2', label: 'BF2', form: 'linear', cvError: 22.0, confidence: 'Moderate',
+    coeffs: { a: 1207.055875, b: -0.137521288, c: -128.8078895, d: 79.76891504 },
+    relation: { kind: 'combination', defaultOn: true, label: '= LF2',
+      description: 'BF2 = LF2 (chamfer 2 width equals its length).',
+      terms: [{ key: 'chamferLength2', coeff: 1 }] } },
+  // P8: distFromEnd. relation = LF1 + LF2 (chamfered part).
+  { key: 'distFromEnd', label: 'LT', form: 'linear', cvError: 27.2, confidence: 'Moderate',
+    coeffs: { a: -359.9271681, b: 2.188772589, c: 48.83409566, d: -45.9108988 },
+    relation: { kind: 'combination', defaultOn: true, label: '= LF1 + LF2',
+      description: 'LT = LF1 + LF2 (the chamfered part).',
+      terms: [{ key: 'chamferLength1', coeff: 1 }, { key: 'chamferLength2', coeff: 1 }] } },
+  // P9: dLast. relation = 255.16 + 3.4954 × HLE.
+  { key: 'dLast', label: 'LE (Durchmesser)', form: 'linear', cvError: 8.1, confidence: 'Good',
+    coeffs: { a: 221.4522145, b: 1.498949106, c: -9.02505593, d: 14.40321366 },
+    relation: { kind: 'combination', defaultOn: true, label: '= f(HLE)',
+      description: 'LE = 255.16 + 3.4954 × HLE.',
+      constant: 255.16, terms: [{ key: 'hMiddle', coeff: 3.4954 }] } },
+  // P10: hMiddle. No relation.
+  { key: 'hMiddle', label: 'HLE', form: 'linear', cvError: 5.8, confidence: 'High',
+    coeffs: { a: 17.17464869, b: 0.435873881, c: -6.126007422, d: 2.320487817 } },
+  // P11: hMiddlePlusFirst. Own power fit; relation = 2 × HLE.
+  { key: 'hMiddlePlusFirst', label: 'LEB', form: 'power', cvError: 24.9, confidence: 'Moderate',
+    coeffs: { k: 0.0000000238913334, e1: 3.631996617, e2: 0.647878341, e3: -1.281050007 },
+    relation: { kind: 'combination', defaultOn: true, label: '= 2 × HLE',
+      description: 'LEB = 2 × HLE (middle+first height is twice the middle height).',
+      terms: [{ key: 'hMiddle', coeff: 2 }] } },
+  // P12: hLast. No relation.
+  { key: 'hLast', label: 'LEOW', form: 'linear', cvError: 38.9, confidence: 'Low',
+    coeffs: { a: 506.0051287, b: -0.4315856534, c: 312.7206124, d: 47.41062013 } },
+];
+
+/** UI descriptor for one toggleable relation (derived from the specs). */
+export interface ChamberRelationInfo {
+  /** The output the relation drives (also the toggle's id in ChamberInput.relations). */
+  key: ChamberOutputKey;
+  /** The output's parameter label, e.g. 'H Kammer'. */
+  label: string;
+  /** The relation's short label, e.g. '= LEB + LEOW' or 'refine from B1'. */
+  relationLabel: string;
+  /** One-line explanation for the dropdown. */
+  description: string;
+  /** Default toggle state. */
+  defaultOn: boolean;
+}
+
+/** The toggleable relations, in output order — the per-relation dropdown iterates this. */
+export const CHAMBER_RELATIONS: readonly ChamberRelationInfo[] = CHAMBER_OUTPUT_SPECS.filter(
+  (s) => s.relation,
+).map((s) => ({
+  key: s.key,
+  label: s.label,
+  relationLabel: s.relation!.label,
+  description: s.relation!.description,
+  defaultOn: s.relation!.defaultOn,
+}));
+
+/** An optional per-output override: pin an Exact value, or clamp to Min / Max. */
+export interface ChamberConstraint {
+  min?: number;
+  max?: number;
+  exact?: number;
+}
+
+/**
+ * The cylinder-stack design options:
+ *  - 'stepped': three solid coaxial cylinders (first/middle/last) - the default.
+ *  - 'hollow' : first/middle solid, the LAST cylinder an open-top hollow shell
+ *    (walls carved out) of a hand-set length, plus a central cylinder (Ø 0.75*X1,
+ *    height 0.75*P12) rising from the middle with an oval dome (20% of its height).
+ */
+export const CHAMBER_VARIANTS = ['stepped', 'hollow'] as const;
+export type ChamberVariant = (typeof CHAMBER_VARIANTS)[number];
+
+/** Default wall thickness (mm) of the hollow last cylinder in the 'hollow' variant. */
+export const CHAMBER_WALL_THICKNESS_MM = 50;
+
+// Fixed geometry ratios that derive secondary dimensions from the model outputs.
+// Single source of truth for the derivation used when a manual override is absent:
+// consumed by the API (resolveGeometryParams) and mirrored as the placeholder
+// "auto" hints in the web form. The Python builder keeps its own copies of the two
+// diameter ratios (it cannot import TS) — keep the values here in sync with it.
+
+/** Runner-case (first cylinder) Ø = this × D_last (from the original Part.stl). */
+export const CHAMBER_D_FIRST_OVER_LAST = 1.14703;
+/** Guide-vanes / middle-cylinder Ø = this × D_last (both variants). */
+export const CHAMBER_D_MIDDLE_OVER_LAST = 0.8;
+/** Generator (central cylinder) Ø = this × X1 (hollow variant). */
+export const CHAMBER_CENTRAL_DIAMETER_OVER_X1 = 0.75;
+/** Generator (central cylinder) height = this × its own diameter (hollow variant). */
+export const CHAMBER_CENTRAL_HEIGHT_OVER_DIAMETER = 1.33;
+/** Dome height = this × the central cylinder height (hollow variant). */
+export const CHAMBER_DOME_HEIGHT_OVER_CENTRAL_HEIGHT = 0.2;
+
+/**
+ * The chamber build request: the three empirical inputs, optional per-output
+ * Min / Max / Exact overrides, the cylinder design variant, and geometry inputs
+ * that are NOT part of the empirical model (all lengths in mm).
+ */
+export interface ChamberInput {
+  x1: number;
+  x2: number;
+  x3: number;
+  constraints?: Partial<Record<ChamberOutputKey, ChamberConstraint>>;
+  /**
+   * Master switch for ALL structural relations (a hard override). When false,
+   * every relation is forced off and each output uses its own X1/X2/X3 fit,
+   * regardless of `relations`. Default true.
+   */
+  relationsMaster?: boolean;
+  /**
+   * Per-relation on/off, keyed by the driven output. Only consulted when
+   * `relationsMaster` is not false. A missing entry uses the relation's own
+   * default (all ship on). Keys without a relation are ignored.
+   */
+  relations?: Partial<Record<ChamberOutputKey, boolean>>;
+  /** Cylinder design (default 'stepped'). */
+  variant?: ChamberVariant;
+  /**
+   * Torque-foot orientation in degrees, 0–180: 0/180 = tangential to the cylinder
+   * (opposite directions), 90 = radial. Default 45. The triangular gusset only
+   * forms at intermediate angles (~37–143°, excluding ~90°); near 0/90/180 the
+   * build is refused. Geometry-only (not part of the empirical model).
+   */
+  footAngleDeg?: number;
+  /**
+   * Replace the middle-cylinder throat with a scaled ring of guide vanes.
+   * Geometry-only (not part of the empirical model); works with both variants.
+   * Default false.
+   */
+  guideVanes?: boolean;
+  /**
+   * Cut the two asymmetric corners at the box's inlet end (the chamfer).
+   * Geometry-only (not part of the empirical model) — the chamfer's own model
+   * values (chamferLength1/2, chamferWidth1/2, distFromSideChamfer1,
+   * distFromEnd) are still computed and shown in the outputs table, and the
+   * internal part's position is unaffected, regardless of this flag. Default
+   * true.
+   */
+  chamferEnabled?: boolean;
+  /**
+   * Cut the four torque-foot voids (both variants). Geometry-only (not part of
+   * the empirical model) — footAngleDeg is still validated/shown, but no feet
+   * are cut when this is false, so the box keeps solid corners there. Default
+   * true.
+   */
+  feetEnabled?: boolean;
+  /**
+   * Absolute guide-vane open angle in degrees. The asset is baked at 50°; the
+   * builder swings each blade about its OWN vertical spindle (pivot) axis at
+   * pivotRadius by (vaneAngleDeg − 50) to reach this angle. Range 45..55 (±5° about
+   * the 50° base). Only affects guide-vane builds (ignored when guideVanes is
+   * false). Geometry-only (not part of the empirical model). Default 50.
+   */
+  vaneAngleDeg?: number;
+  /**
+   * Outlet inner/outer diameter ratio (0.35..0.50, default 0.45). The outlet's
+   * OUTER diameter is X1 (see resolveGeometryParams); the inner diameter is
+   * outletRatio * outer. Geometry-only (not part of the empirical model). Only
+   * affects guide-vane builds (ignored when guideVanes is false).
+   */
+  outletRatio?: number;
+  /**
+   * Uniform scale for the WHOLE internal assembly at once — the three cylinders
+   * (and the hollow-variant cup / central cylinder / dome), the four torque feet,
+   * and the guide vanes (which key off the last diameter). The BOX (width /
+   * length / height), the chamfers, and the part AXIS (positioned by
+   * distFromSideChamfer1 / distFromEnd) are NOT scaled, so the cavity grows or
+   * shrinks about its own floor-anchored axis inside an unchanged box. Geometry-
+   * only (not part of the empirical model). Default 1. Scaling down is unbounded.
+   * When the internal stack would overgrow the box height the two designs differ:
+   * the STEPPED design REFUSES the build (a clear error) so the entered heights are
+   * never silently ignored; the HOLLOW (cone) design — whose generator + dome are
+   * meant to fill and usually exceed the box — scales the internal part down to fit
+   * (with a warning), which also reduces its heights.
+   */
+  partScale?: number;
+  /** Box length along Y (mm). Omitted => 2 x the (final) width. */
+  lengthOverride?: number;
+  /** Height (mm) of the hollow last cylinder. Required for the 'hollow' variant. */
+  hollowLength?: number;
+  /** Wall thickness (mm) of the hollow last cylinder. Default CHAMBER_WALL_THICKNESS_MM. */
+  wallThickness?: number;
+  /**
+   * Manual override for the RUNNER CASE (first cylinder) diameter, in mm. Omitted =>
+   * CHAMBER_D_FIRST_OVER_LAST × D_last. Scaled by partScale like the derived value.
+   * Both variants. Geometry-only.
+   */
+  dFirst?: number;
+  /**
+   * Manual override for the GUIDE-VANES / middle-cylinder diameter, in mm. Omitted =>
+   * CHAMBER_D_MIDDLE_OVER_LAST × D_last. In a guide-vane build this drives the vane
+   * ring's radial scale (the blade pivot-circle Ø); otherwise it is the middle
+   * cylinder's diameter. Scaled by partScale. Both variants. Geometry-only.
+   */
+  dMiddle?: number;
+  /**
+   * Manual override for the GENERATOR (central cylinder) diameter, in mm. Omitted =>
+   * CHAMBER_CENTRAL_DIAMETER_OVER_X1 × X1. Hollow variant only. Geometry-only.
+   */
+  centralDiameter?: number;
+  /**
+   * Manual override for the GENERATOR (central cylinder) height, in mm. Omitted =>
+   * CHAMBER_CENTRAL_HEIGHT_OVER_DIAMETER × the (resolved) central diameter. Hollow
+   * variant only. Geometry-only.
+   */
+  centralHeight?: number;
+  /**
+   * Manual override for the DOME height, in mm. Omitted =>
+   * CHAMBER_DOME_HEIGHT_OVER_CENTRAL_HEIGHT × the (resolved) central height. Hollow
+   * variant only. Geometry-only.
+   */
+  domeHeight?: number;
+}
+
+/** What the FINAL clamp did to a model value, mirroring the calculator. A value
+ * sourced from an active structural relation reads 'from relation' and carries
+ * the human relation label in `ChamberOutput.relationLabel`. */
+export type ChamberStatus =
+  | 'within range'
+  | 'capped at max'
+  | 'raised to min'
+  | 'set exact'
+  | '! min>max'
+  | 'from relation';
+
+/** One computed output: the raw model value, the clamped FINAL, and metadata. */
+export interface ChamberOutput {
+  key: ChamberOutputKey;
+  label: string;
+  form: ChamberForm;
+  /** Raw regression value (mm). */
+  model: number;
+  /** Value after the Min / Max / Exact override (mm) — what the builder uses. */
+  final: number;
+  status: ChamberStatus;
+  /** Present when status is 'from relation': the relation label, e.g. '= LEB + LEOW'. */
+  relationLabel?: string;
+  cvError: number;
+  confidence: ChamberConfidence;
+  /**
+   * True when the model value came from an active 'refine' relation (this output's
+   * partner had a measured Exact value and the relation was on).
+   */
+  refined: boolean;
+}
+
+/**
+ * Evaluate one output's own X1–X3 fit at (x1, x2, x3). When `partnerKnown` is
+ * provided and the spec has a 'refine' relation, the sharper fit
+ * (a + b*X1 + c*X2 + d*X3 + p*partnerKnown) is used instead of the base fit.
+ */
+export function evalChamberSpec(
+  spec: ChamberOutputSpec,
+  x1: number,
+  x2: number,
+  x3: number,
+  partnerKnown?: number,
+): number {
+  if (spec.relation?.kind === 'refine' && spec.relation.refineCoeffs && partnerKnown != null) {
+    const r = spec.relation.refineCoeffs;
+    return r.a + r.b * x1 + r.c * x2 + r.d * x3 + r.p * partnerKnown;
+  }
+  if (spec.form === 'power') {
+    const c = spec.coeffs as { k: number; e1: number; e2: number; e3: number };
+    return c.k * Math.pow(x1, c.e1) * Math.pow(x2, c.e2) * Math.pow(x3, c.e3);
+  }
+  const c = spec.coeffs as { a: number; b: number; c: number; d: number };
+  return c.a + c.b * x1 + c.c * x2 + c.d * x3;
+}
+
+/**
+ * Apply a Min / Max / Exact override to a model value. `baseStatus` is what to
+ * report when no override is active — 'within range' for a fitted output, or an
+ * identity's own structural-relation label (e.g. '= LEB + LEOW'). Exact wins;
+ * an inverted range is flagged and leaves the model value; otherwise clamp.
+ */
+function resolveChamberFinal(
+  model: number,
+  con: ChamberConstraint,
+  baseStatus: ChamberStatus,
+): { final: number; status: ChamberStatus } {
+  if (con.exact != null) return { final: con.exact, status: 'set exact' };
+  if (con.min != null && con.max != null && con.min > con.max)
+    return { final: model, status: '! min>max' };
+  if (con.max != null && model > con.max) return { final: con.max, status: 'capped at max' };
+  if (con.min != null && model < con.min) return { final: con.min, status: 'raised to min' };
+  return { final: model, status: baseStatus };
+}
+
+/**
+ * Compute the twelve outputs for a set of inputs: the raw model value and the
+ * FINAL after the optional Min / Max / Exact override, with a Status. This is
+ * the one place the model lives; the Python builder receives the resolved FINAL
+ * values and does no model math.
+ */
+export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
+  const { x1, x2, x3, constraints } = input;
+  // Hard master override: when false, EVERY relation is off. Otherwise each
+  // relation follows its per-key toggle, defaulting to its own defaultOn.
+  const masterOn = input.relationsMaster !== false;
+  const relationOn = (spec: ChamberOutputSpec): boolean =>
+    masterOn && !!spec.relation && (input.relations?.[spec.key] ?? spec.relation.defaultOn);
+
+  const byKey = new Map<ChamberOutputKey, ChamberOutput>();
+  const setOutput = (
+    spec: ChamberOutputSpec,
+    model: number,
+    baseStatus: ChamberStatus,
+    refined: boolean,
+    relationLabel?: string,
+  ) => {
+    const con = constraints?.[spec.key] ?? {};
+    const { final, status } = resolveChamberFinal(model, con, baseStatus);
+    byKey.set(spec.key, {
+      key: spec.key,
+      label: spec.label,
+      form: spec.form,
+      model,
+      final,
+      status,
+      relationLabel: status === 'from relation' ? relationLabel : undefined,
+      cvError: spec.cvError,
+      confidence: spec.confidence,
+      refined,
+    });
+  };
+
+  // Pass 1: outputs whose value does NOT need another output's FINAL — i.e. no
+  // relation, an off relation, or a 'refine' relation (which reads a partner's
+  // input Exact, not its computed FINAL). 'combination' relations that are ON are
+  // deferred to pass 2. A refine relation is harmless when on but unmeasured: it
+  // falls back to the base fit.
+  for (const spec of CHAMBER_OUTPUT_SPECS) {
+    const on = relationOn(spec);
+    if (on && spec.relation!.kind === 'combination') continue; // pass 2
+    const partnerKnown =
+      on && spec.relation!.kind === 'refine' && spec.relation!.partner
+        ? constraints?.[spec.relation!.partner]?.exact
+        : undefined;
+    const refined = partnerKnown != null;
+    const model = evalChamberSpec(spec, x1, x2, x3, partnerKnown);
+    setOutput(spec, model, 'within range', refined);
+  }
+
+  // Pass 2: ON 'combination' relations — MODEL = constant + Σ coeff × partner.final.
+  // They can chain (LEB = 2·HLE, then H Kammer = LEB + LEOW), so resolve to a
+  // fixpoint: emit any whose terms are all resolved until none remain. Reading each
+  // term's FINAL means an override on a partner (or a chained relation) propagates.
+  const combos = CHAMBER_OUTPUT_SPECS.filter((s) => relationOn(s) && s.relation!.kind === 'combination');
+  let progressed = true;
+  while (progressed) {
+    progressed = false;
+    for (const spec of combos) {
+      if (byKey.has(spec.key)) continue;
+      const rel = spec.relation!;
+      if (!rel.terms!.every((t) => byKey.has(t.key))) continue;
+      const model =
+        (rel.constant ?? 0) + rel.terms!.reduce((sum, t) => sum + t.coeff * byKey.get(t.key)!.final, 0);
+      setOutput(spec, model, 'from relation', false, rel.label);
+      progressed = true;
+    }
+  }
+
+  return CHAMBER_OUTPUT_KEYS.map((k) => byKey.get(k)!);
+}
+
 /**
  * Machine-readable error codes the API may emit in its `{ error: { code } }`
  * envelope. The web client maps these to user-facing messages; it adds its own
@@ -2019,6 +2690,8 @@ export const SERVER_ERROR_CODES = [
   'NO_MESH',
   'MESH_NOT_BUILT',
   'MESH_BUILD_FAILED',
+  'CHAMBER_BUILD_FAILED',
+  'CHAMBER_NOT_BUILT',
   'NO_MESHES',
   'INVALID_MERGE_PLAN',
   'STITCH_PATCH_NOT_FOUND',

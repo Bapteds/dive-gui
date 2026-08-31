@@ -13,6 +13,7 @@ import {
   getProjectController,
   listProjectsController,
   removeCollaboratorController,
+  renameProjectController,
 } from './projects.controller';
 import {
   createCaseFileController,
@@ -107,6 +108,7 @@ import {
   collaboratorParamSchema,
   createProjectSchema,
   projectIdParamSchema,
+  renameProjectSchema,
 } from './projects.schemas';
 import {
   applyTemplateController,
@@ -139,6 +141,11 @@ export function createProjectsRouter(): Router {
     '/:id',
     validate({ params: projectIdParamSchema }),
     asyncHandler(getProjectController),
+  );
+  router.patch(
+    '/:id',
+    validate({ params: projectIdParamSchema, body: renameProjectSchema }),
+    asyncHandler(renameProjectController),
   );
   router.delete(
     '/:id',

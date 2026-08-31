@@ -5,7 +5,15 @@ import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { SegmentedRadioGroup } from '@/components/ui/segmented';
 import { DEFAULT_SNAPPY_CONFIG } from '@/lib/api/types';
-import type { DomainType, MeshBounds, SnappyConfig, StlFile, SurfaceRefinement } from '@/lib/api/types';
+import type {
+  DomainType,
+  FeatureRefinement,
+  MeshBounds,
+  SnappyConfig,
+  StlFile,
+  SurfaceLayerSpec,
+  SurfaceRefinement,
+} from '@/lib/api/types';
 
 /**
  * SnappyConfigForm - the snappyHexMesh tunables for one run. Surface refinement
@@ -63,6 +71,30 @@ function defaultCores(max: number): number {
 type RefinementInput = { min: string; max: string };
 type RefinementMap = Record<string, RefinementInput>;
 
+type FeatureInput = { angle: string; level: string };
+type FeatureMap = Record<string, FeatureInput>;
+
+/** Seed the per-surface feature map from the last run (or the global defaults). */
+function seedFeatures(stls: StlFile[], initial: SnappyConfig | null): FeatureMap {
+  const gAngle = initial?.featureAngle ?? DEFAULT_SNAPPY_CONFIG.featureAngle;
+  const gLevel = initial?.featureLevel ?? DEFAULT_SNAPPY_CONFIG.featureLevel;
+  const map: FeatureMap = {};
+  for (const stl of stls) {
+    const f = initial?.featureRefinements?.[stl.name];
+    map[stl.name] = { angle: String(f?.includedAngle ?? gAngle), level: String(f?.level ?? gLevel) };
+  }
+  return map;
+}
+
+/** Which surfaces have feature edges ON. Seeds from featureSurfaces (absent/empty ⇒ all on). */
+function seedFeatureSurfaces(stls: StlFile[], initial: SnappyConfig | null): Record<string, boolean> {
+  const chosen = initial?.featureSurfaces;
+  const all = !chosen || chosen.length === 0;
+  const map: Record<string, boolean> = {};
+  for (const stl of stls) map[stl.name] = all ? true : chosen.includes(stl.name);
+  return map;
+}
+
 /** Seed the per-surface map from the last run (or defaults), covering every current STL. */
 function seedRefinements(stls: StlFile[], initial: SnappyConfig | null): RefinementMap {
   const fallback = initial?.surfaceRefinement ?? DEFAULT_SNAPPY_CONFIG.surfaceRefinement;
@@ -83,6 +115,24 @@ function seedLayerSurfaces(stls: StlFile[], initial: SnappyConfig | null): Recor
   const map: Record<string, boolean> = {};
   for (const stl of stls) {
     map[stl.name] = chosen ? chosen.includes(stl.name) : true;
+  }
+  return map;
+}
+
+type LayerSpecInput = { n: string; exp: string; final: string };
+type LayerSpecMap = Record<string, LayerSpecInput>;
+
+/** Seed the per-surface layer values from the saved config (or the globals). */
+function seedLayerSpecs(stls: StlFile[], initial: SnappyConfig | null): LayerSpecMap {
+  const g = initial?.addLayers ?? DEFAULT_SNAPPY_CONFIG.addLayers;
+  const map: LayerSpecMap = {};
+  for (const stl of stls) {
+    const s = initial?.addLayers.perSurface?.[stl.name];
+    map[stl.name] = {
+      n: String(s?.nLayers ?? g.nLayers),
+      exp: String(s?.expansionRatio ?? g.expansionRatio),
+      final: String(s?.finalLayerThickness ?? g.finalLayerThickness),
+    };
   }
   return map;
 }
@@ -114,11 +164,15 @@ export function SnappyConfigForm({
   const [cellSize, setCellSize] = useState(init.baseCellSize ? String(init.baseCellSize) : '');
   const [refinements, setRefinements] = useState<RefinementMap>(() => seedRefinements(stls, initialConfig));
   const [marginFactor, setMarginFactor] = useState(String(init.marginFactor));
-  const [featureLevel, setFeatureLevel] = useState(String(init.featureLevel));
+  const [features, setFeatures] = useState<FeatureMap>(() => seedFeatures(stls, initialConfig));
+  const [featureSurfaceOn, setFeatureSurfaceOn] = useState<Record<string, boolean>>(() =>
+    seedFeatureSurfaces(stls, initialConfig),
+  );
   const [layersOn, setLayersOn] = useState(init.addLayers.enabled);
   const [layerSurfaceOn, setLayerSurfaceOn] = useState<Record<string, boolean>>(() =>
     seedLayerSurfaces(stls, initialConfig),
   );
+  const [layerSpecs, setLayerSpecs] = useState<LayerSpecMap>(() => seedLayerSpecs(stls, initialConfig));
   const [nLayers, setNLayers] = useState(String(init.addLayers.nLayers));
   const [relativeSizes, setRelativeSizes] = useState(init.addLayers.relativeSizes);
   const [finalThickness, setFinalThickness] = useState(String(init.addLayers.finalLayerThickness));
@@ -162,6 +216,39 @@ export function SnappyConfigForm({
         Object.keys(next).every((k) => prev[k] === next[k]);
       return same ? prev : next;
     });
+    // Same sync for the per-surface feature map: a new surface defaults to globals.
+    setFeatures((prev) => {
+      const gAngle = String(DEFAULT_SNAPPY_CONFIG.featureAngle);
+      const gLevel = String(DEFAULT_SNAPPY_CONFIG.featureLevel);
+      const next: FeatureMap = {};
+      for (const stl of stls) next[stl.name] = prev[stl.name] ?? { angle: gAngle, level: gLevel };
+      const same =
+        Object.keys(next).length === Object.keys(prev).length &&
+        Object.keys(next).every((k) => prev[k] === next[k]);
+      return same ? prev : next;
+    });
+    // Feature on/off: a new surface defaults to ON (feature edges captured).
+    setFeatureSurfaceOn((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const stl of stls) next[stl.name] = prev[stl.name] ?? true;
+      const same =
+        Object.keys(next).length === Object.keys(prev).length &&
+        Object.keys(next).every((k) => prev[k] === next[k]);
+      return same ? prev : next;
+    });
+    // Per-surface layer values: a new surface defaults to the current globals.
+    setLayerSpecs((prev) => {
+      const g = DEFAULT_SNAPPY_CONFIG.addLayers;
+      const next: LayerSpecMap = {};
+      for (const stl of stls) {
+        next[stl.name] =
+          prev[stl.name] ?? { n: String(g.nLayers), exp: String(g.expansionRatio), final: String(g.finalLayerThickness) };
+      }
+      const same =
+        Object.keys(next).length === Object.keys(prev).length &&
+        Object.keys(next).every((k) => prev[k] === next[k]);
+      return same ? prev : next;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stlKey]);
 
@@ -186,6 +273,14 @@ export function SnappyConfigForm({
     setRefinements((prev) => ({ ...prev, [name]: { ...prev[name], [key]: value } }));
   };
 
+  const setFeat = (name: string, key: 'angle' | 'level', value: string) => {
+    setFeatures((prev) => ({ ...prev, [name]: { ...prev[name], [key]: value } }));
+  };
+
+  const setLayerSpec = (name: string, key: keyof LayerSpecInput, value: string) => {
+    setLayerSpecs((prev) => ({ ...prev, [name]: { ...prev[name], [key]: value } }));
+  };
+
   // The assembled config, shared by the run CTA and the debounced autosave. A
   // stable reference while the inputs are unchanged (so autosave does not loop).
   const config = useMemo<SnappyConfig>(() => {
@@ -207,6 +302,32 @@ export function SnappyConfigForm({
     const surfaceRefinement =
       (firstName && surfaceRefinements[firstName]) || DEFAULT_SNAPPY_CONFIG.surfaceRefinement;
 
+    // Per-patch feature overrides, one entry per current STL (mirrors surfaceRefinements).
+    const featureRefinements: Record<string, FeatureRefinement> = {};
+    for (const stl of stls) {
+      const f = features[stl.name] ?? { angle: '150', level: '2' };
+      featureRefinements[stl.name] = {
+        includedAngle: Math.min(180, Math.max(0, Number(f.angle) || DEFAULT_SNAPPY_CONFIG.featureAngle)),
+        level: Math.max(0, Math.round(Number(f.level) || DEFAULT_SNAPPY_CONFIG.featureLevel)),
+      };
+    }
+    // Scalar globals: the first surface's values, else the defaults (like surfaceRefinement).
+    const featureScalar =
+      firstName && featureRefinements[firstName]
+        ? featureRefinements[firstName]
+        : { includedAngle: DEFAULT_SNAPPY_CONFIG.featureAngle, level: DEFAULT_SNAPPY_CONFIG.featureLevel };
+
+    // Per-surface layer values, one entry per current STL (mirrors surfaceRefinements).
+    const perSurface: Record<string, SurfaceLayerSpec> = {};
+    for (const stl of stls) {
+      const s = layerSpecs[stl.name] ?? { n: '3', exp: '1.2', final: '0.5' };
+      perSurface[stl.name] = {
+        nLayers: Math.max(1, Math.round(Number(s.n) || DEFAULT_SNAPPY_CONFIG.addLayers.nLayers)),
+        expansionRatio: Math.max(1, Number(s.exp) || DEFAULT_SNAPPY_CONFIG.addLayers.expansionRatio),
+        finalLayerThickness: Math.max(1e-6, Number(s.final) || DEFAULT_SNAPPY_CONFIG.addLayers.finalLayerThickness),
+      };
+    }
+
     return {
       engine: 'snappy',
       domainType,
@@ -214,7 +335,10 @@ export function SnappyConfigForm({
       marginFactor: margin,
       surfaceRefinement,
       surfaceRefinements,
-      featureLevel: Math.max(0, Math.round(Number(featureLevel) || DEFAULT_SNAPPY_CONFIG.featureLevel)),
+      featureLevel: featureScalar.level,
+      featureAngle: featureScalar.includedAngle,
+      featureRefinements,
+      featureSurfaces: stls.map((s) => s.name).filter((name) => featureSurfaceOn[name] ?? true),
       locationInMesh: location && location.every(Number.isFinite) ? location : null,
       addLayers: {
         enabled: layersOn,
@@ -224,11 +348,12 @@ export function SnappyConfigForm({
         relativeSizes,
         finalLayerThickness: Math.max(1e-6, Number(finalThickness) || 0.5),
         expansionRatio: Math.max(1, Number(expansionRatio) || 1.2),
+        perSurface,
       },
       cores: clampCores(String(cores), maxCores),
     };
   }, [
-    domainType, cellSize, refinements, margin, featureLevel, layersOn, layerSurfaceOn, nLayers,
+    domainType, cellSize, refinements, margin, features, featureSurfaceOn, layersOn, layerSurfaceOn, layerSpecs, nLayers,
     relativeSizes, finalThickness, expansionRatio, manualPoint, px, py, pz, cores, maxCores, stls,
   ]);
 
@@ -385,15 +510,62 @@ export function SnappyConfigForm({
                   onChange={(e) => setMarginFactor(e.target.value)}
                 />
               </Field>
-              <Field label="Feature-edge level" helperText="Refinement on sharp edges.">
-                <Input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={featureLevel}
-                  onChange={(e) => setFeatureLevel(e.target.value)}
-                />
-              </Field>
+              <fieldset className="flex flex-col gap-2 sm:col-span-2">
+                <legend className="text-sm font-medium text-text">Feature edges (per surface)</legend>
+                {stls.length === 0 ? (
+                  <p className="text-xs text-text-secondary">Upload a surface to set its feature edges.</p>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {stls.map((stl) => {
+                      const on = featureSurfaceOn[stl.name] ?? true;
+                      const f = features[stl.name] ?? { angle: '150', level: '2' };
+                      return (
+                        <div key={stl.name} className="flex flex-wrap items-center gap-2">
+                          <label className="flex min-w-0 flex-1 items-center gap-2 text-sm text-text" title={stl.name}>
+                            <input
+                              type="checkbox"
+                              className="size-4 shrink-0 rounded-sm border-border-strong text-cta focus-visible:ring-2 focus-visible:ring-focus-ring"
+                              checked={on}
+                              onChange={(e) =>
+                                setFeatureSurfaceOn((prev) => ({ ...prev, [stl.name]: e.target.checked }))
+                              }
+                            />
+                            <span className="min-w-0 truncate">{stl.name}</span>
+                          </label>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type="number"
+                              min="0"
+                              max="180"
+                              step="any"
+                              disabled={!on}
+                              aria-label={`${stl.name} feature angle (degrees)`}
+                              className="w-20"
+                              value={f.angle}
+                              onChange={(e) => setFeat(stl.name, 'angle', e.target.value)}
+                            />
+                            <span className="text-sm text-text-secondary">°, level</span>
+                            <Input
+                              type="number"
+                              min="0"
+                              step="1"
+                              disabled={!on}
+                              aria-label={`${stl.name} feature refinement level`}
+                              className="w-20"
+                              value={f.level}
+                              onChange={(e) => setFeat(stl.name, 'level', e.target.value)}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="text-xs text-text-secondary">
+                  Untick a surface to skip its feature edges entirely. Angle: sharper-than-this edges are
+                  extracted (default 150°). Level: octree refinement near them (default 2).
+                </p>
+              </fieldset>
             </div>
 
             {/* CPU cores: 1 = serial, more = parallel snappyHexMesh (MPI). */}
@@ -503,6 +675,9 @@ export function SnappyConfigForm({
                   {/* Which surfaces (boundaries) the layers grow on. */}
                   <fieldset className="flex flex-col gap-2">
                     <legend className="text-sm font-medium text-text">Grow layers on</legend>
+                    <p className="text-xs text-text-secondary">
+                      Per surface: on/off, then layers · expansion · final thickness (blank rows use the defaults above).
+                    </p>
                     {stls.length === 0 ? (
                       <p className="text-xs text-text-secondary">
                         Upload a surface to choose where layers grow.
@@ -510,23 +685,47 @@ export function SnappyConfigForm({
                     ) : (
                       <>
                         <div className="flex flex-col gap-1.5">
-                          {stls.map((stl) => (
-                            <label
-                              key={stl.name}
-                              className="flex items-center gap-2 text-sm text-text"
-                              title={stl.name}
-                            >
-                              <input
-                                type="checkbox"
-                                className="size-4 shrink-0 rounded-sm border-border-strong text-cta focus-visible:ring-2 focus-visible:ring-focus-ring"
-                                checked={layerSurfaceOn[stl.name] ?? true}
-                                onChange={(e) =>
-                                  setLayerSurfaceOn((prev) => ({ ...prev, [stl.name]: e.target.checked }))
-                                }
-                              />
-                              <span className="min-w-0 truncate">{stl.name}</span>
-                            </label>
-                          ))}
+                          {stls.map((stl) => {
+                            const on = layerSurfaceOn[stl.name] ?? true;
+                            const s = layerSpecs[stl.name] ?? { n: '3', exp: '1.2', final: '0.5' };
+                            return (
+                              <div key={stl.name} className="flex flex-wrap items-center gap-2">
+                                <label className="flex min-w-0 flex-1 items-center gap-2 text-sm text-text" title={stl.name}>
+                                  <input
+                                    type="checkbox"
+                                    className="size-4 shrink-0 rounded-sm border-border-strong text-cta focus-visible:ring-2 focus-visible:ring-focus-ring"
+                                    checked={on}
+                                    onChange={(e) =>
+                                      setLayerSurfaceOn((prev) => ({ ...prev, [stl.name]: e.target.checked }))
+                                    }
+                                  />
+                                  <span className="min-w-0 truncate">{stl.name}</span>
+                                </label>
+                                {on && (
+                                  <div className="flex items-center gap-1.5">
+                                    <Input
+                                      type="number" min="1" step="1" className="w-16"
+                                      aria-label={`${stl.name} number of layers`}
+                                      value={s.n}
+                                      onChange={(e) => setLayerSpec(stl.name, 'n', e.target.value)}
+                                    />
+                                    <Input
+                                      type="number" min="1" step="any" className="w-16"
+                                      aria-label={`${stl.name} expansion ratio`}
+                                      value={s.exp}
+                                      onChange={(e) => setLayerSpec(stl.name, 'exp', e.target.value)}
+                                    />
+                                    <Input
+                                      type="number" min="0" step="any" className="w-20"
+                                      aria-label={`${stl.name} final layer thickness`}
+                                      value={s.final}
+                                      onChange={(e) => setLayerSpec(stl.name, 'final', e.target.value)}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                         {stls.every((s) => !(layerSurfaceOn[s.name] ?? true)) && (
                           <p

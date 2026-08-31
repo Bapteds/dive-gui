@@ -1,0 +1,354 @@
+<title>DIVE Chamber — Parameter Map</title>
+<style>
+  :root {
+    --bg: #F5F7FA; --surface: #FFFFFF; --surface-2: #FBFCFE;
+    --text: #1A2230; --text-2: #5B6676;
+    --border: #E4E8EE; --border-strong: #BCBDBF;
+    --blue: #004A99; --blue-clair: #1E63B5; --blue-tint: #E8F0F9; --blue-dark: #003A78;
+    --orange: #EE7F00; --orange-dark: #CC6E00; --orange-tint: #FFF3E6;
+    --good: #1f9d63; --shadow: 0 1px 2px rgba(16,24,40,.05), 0 6px 16px rgba(16,24,40,.06);
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1420; --surface: #131c2b; --surface-2: #17212f;
+      --text: #E7ECF3; --text-2: #9aa7b8;
+      --border: #26313f; --border-strong: #38465a;
+      --blue: #4d90d8; --blue-clair: #6aa6e6; --blue-tint: #16283e; --blue-dark: #1b3a5c;
+      --orange: #ff9d33; --orange-dark: #e07f10; --orange-tint: #35260f;
+      --good: #35c07e; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 20px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1420; --surface: #131c2b; --surface-2: #17212f;
+    --text: #E7ECF3; --text-2: #9aa7b8;
+    --border: #26313f; --border-strong: #38465a;
+    --blue: #4d90d8; --blue-clair: #6aa6e6; --blue-tint: #16283e; --blue-dark: #1b3a5c;
+    --orange: #ff9d33; --orange-dark: #e07f10; --orange-tint: #35260f;
+    --good: #35c07e; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 20px rgba(0,0,0,.35);
+  }
+  :root[data-theme="light"] {
+    --bg: #F5F7FA; --surface: #FFFFFF; --surface-2: #FBFCFE;
+    --text: #1A2230; --text-2: #5B6676;
+    --border: #E4E8EE; --border-strong: #BCBDBF;
+    --blue: #004A99; --blue-clair: #1E63B5; --blue-tint: #E8F0F9; --blue-dark: #003A78;
+    --orange: #EE7F00; --orange-dark: #CC6E00; --orange-tint: #FFF3E6;
+    --good: #1f9d63; --shadow: 0 1px 2px rgba(16,24,40,.05), 0 6px 16px rgba(16,24,40,.06);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans);
+         line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 28px 20px 56px; }
+
+  header.head { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 20px;
+                border-bottom: 1px solid var(--border); padding-bottom: 18px; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .diamond { width: 20px; height: 20px; background: var(--blue); transform: rotate(45deg);
+             border-radius: 3px; flex: none; box-shadow: inset -3px -3px 0 rgba(0,0,0,.08); }
+  h1 { font-size: clamp(22px, 3vw, 30px); margin: 0; letter-spacing: -.01em; text-wrap: balance; }
+  .sub { color: var(--text-2); font-size: 14px; max-width: 62ch; margin: 2px 0 0; }
+  .tag { margin-left: auto; font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
+         color: var(--text-2); border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; }
+
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin: 18px 0 8px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+  .lg { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2);
+        cursor: pointer; user-select: none; border: 1px solid transparent; border-radius: 8px; padding: 4px 8px; }
+  .lg:hover { border-color: var(--border); }
+  .lg.off { opacity: .38; }
+  .swatch { width: 26px; height: 0; border-top-width: 3px; border-top-style: solid; flex: none; }
+  .swatch.refine { border-top-style: dashed; border-top-color: var(--blue); }
+  .swatch.combo { border-top-color: var(--orange); }
+  .swatch.base { border-top-color: var(--border-strong); border-top-width: 2px; }
+  .toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text);
+            cursor: pointer; user-select: none; }
+  .toggle input { accent-color: var(--blue); width: 15px; height: 15px; }
+  .reset { margin-left: auto; font: inherit; font-size: 13px; color: var(--blue); background: none;
+           border: 1px solid var(--border); border-radius: 8px; padding: 5px 12px; cursor: pointer; }
+  .reset:hover { border-color: var(--border-strong); }
+  .reset:focus-visible, .lg:focus-visible, .toggle:focus-within { outline: 2px solid var(--blue-clair); outline-offset: 2px; }
+
+  .stage { display: grid; grid-template-columns: 1fr; gap: 16px; margin-top: 8px; }
+  @media (min-width: 940px) { .stage { grid-template-columns: 1fr 300px; } }
+
+  .canvas { background:
+      linear-gradient(var(--surface), var(--surface)) padding-box,
+      var(--surface); border: 1px solid var(--border); border-radius: 16px;
+      box-shadow: var(--shadow); overflow-x: auto; }
+  svg { display: block; width: 100%; height: auto; min-width: 720px; }
+
+  .col-label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; fill: var(--text-2); }
+  .edge { fill: none; stroke-linecap: round; transition: opacity .18s ease, stroke-width .18s ease; }
+  .edge.refine { stroke: var(--blue); stroke-width: 2; stroke-dasharray: 2 6; }
+  .edge.combo { stroke: var(--orange); stroke-width: 2.4; }
+  .edge.base { stroke: var(--border-strong); stroke-width: 1.4; opacity: .5; }
+  .edge.dim { opacity: .08 !important; }
+  .edge.hot { opacity: 1 !important; stroke-width: 3.4; }
+
+  .node { cursor: pointer; }
+  .node .box { fill: var(--surface); stroke: var(--border-strong); stroke-width: 1.5;
+               transition: stroke .18s ease, filter .18s ease; }
+  .node .p { font-size: 11px; font-weight: 700; letter-spacing: .04em; }
+  .node .lbl { font-size: 15px; font-weight: 650; fill: var(--text); }
+  .node .slbl { font-size: 11px; fill: var(--text-2); }
+  .node.input .box { fill: var(--blue); stroke: var(--blue-dark); }
+  .node.input .lbl { fill: #fff; font-size: 17px; }
+  .node.input .slbl { fill: rgba(255,255,255,.82); }
+  .node.param.combo .accent { fill: var(--orange); }
+  .node.param.refine .accent { fill: var(--blue); }
+  .node.param.root .accent { fill: var(--border-strong); }
+  .node.param .p { fill: var(--text-2); }
+  .node.dim { opacity: .3; }
+  .node.hot .box { stroke: var(--blue); stroke-width: 2.5; filter: drop-shadow(0 4px 10px rgba(0,74,153,.22)); }
+  .node.sel .box { stroke-width: 3; }
+
+  aside.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+                box-shadow: var(--shadow); padding: 20px; align-self: start; position: sticky; top: 16px; }
+  .panel h2 { margin: 0 0 2px; font-size: 12px; letter-spacing: .07em; text-transform: uppercase; color: var(--text-2); }
+  .panel .pl { font-size: 22px; font-weight: 700; letter-spacing: -.01em; margin: 0; }
+  .panel .pnum { font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+  .formula { font-family: var(--mono); font-size: 14px; background: var(--surface-2);
+             border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 12px 0;
+             color: var(--text); overflow-x: auto; white-space: nowrap; }
+  .formula .op { color: var(--orange-dark); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px; margin-top: 10px; }
+  .kv dt { color: var(--text-2); }
+  .kv dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; }
+  .pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 999px; }
+  .pill.Good, .pill.High { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
+  .pill.Moderate { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
+  .pill.Low { background: var(--orange-tint); color: var(--orange-dark); }
+  .rel-tag { display:inline-block; font-size: 11px; font-weight: 600; letter-spacing:.04em; text-transform: uppercase;
+             padding: 3px 9px; border-radius: 999px; }
+  .rel-tag.refine { background: var(--blue-tint); color: var(--blue); }
+  .rel-tag.combo { background: var(--orange-tint); color: var(--orange-dark); }
+  .rel-tag.root { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
+  .hint { color: var(--text-2); font-size: 13px; }
+  .foot { margin-top: 22px; color: var(--text-2); font-size: 12.5px; max-width: 78ch; }
+  .foot code { font-family: var(--mono); background: var(--surface-2); border: 1px solid var(--border);
+               border-radius: 5px; padding: 1px 5px; font-size: 12px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header class="head">
+    <div class="brand">
+      <span class="diamond" aria-hidden="true"></span>
+      <div>
+        <h1>Chamber Parameter Map</h1>
+        <p class="sub">How the twelve chamber parameters derive from the three empirical inputs — and the structural relations that link them to each other.</p>
+      </div>
+    </div>
+    <span class="tag">DIVE Turbinen</span>
+  </header>
+
+  <div class="controls">
+    <div class="legend" role="group" aria-label="Toggle link types">
+      <span class="lg" data-kind="base" role="button" tabindex="0"><span class="swatch base"></span>X1–X3 fit</span>
+      <span class="lg" data-kind="refine" role="button" tabindex="0"><span class="swatch refine"></span>Refine (measured partner)</span>
+      <span class="lg" data-kind="combo" role="button" tabindex="0"><span class="swatch combo"></span>Combination</span>
+    </div>
+    <button class="reset" id="reset" type="button">Clear selection</button>
+  </div>
+
+  <div class="stage">
+    <div class="canvas"><svg id="map" viewBox="0 0 1180 740" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Node graph of chamber parameters and their relations"></svg></div>
+    <aside class="panel" id="panel" aria-live="polite">
+      <h2>Details</h2>
+      <p class="hint">Hover or tap a parameter to trace its links. Toggle a link type in the legend to hide it.</p>
+    </aside>
+  </div>
+
+  <p class="foot">
+    Every parameter has its own fit on the three inputs <code>X1</code>, <code>X2</code>, <code>X3</code>; that fit is the fallback whenever a relation is switched off.
+    A <strong>refine</strong> link sharpens a fit only when its partner is measured (typed as an <em>Exact</em>). A <strong>combination</strong> link makes the parameter equal a formula of other parameters' final values. Precedence per parameter: <code>Set exact</code> &gt; <code>relation (if on)</code> &gt; <code>X1–X3 fit</code> → then Min/Max clamp.
+  </p>
+</div>
+
+<script>
+(() => {
+  const SVG = "http://www.w3.org/2000/svg";
+  // cx per layer; cy hand-placed to group chamfer (top), chamber pair (mid), heights (bottom)
+  const IX = 100, L1 = 440, L2 = 760, L3 = 1060;
+  const nodes = [
+    { id:'X1', kind:'input', label:'X1', sub:'input', cx:IX, cy:250 },
+    { id:'X2', kind:'input', label:'X2', sub:'input', cx:IX, cy:370 },
+    { id:'X3', kind:'input', label:'X3', sub:'input', cx:IX, cy:490 },
+
+    { id:'P4',  p:'P4',  label:'LF1', sub:'chamfer 1 length', form:'linear', cv:20.6, conf:'Moderate', rk:'root',   cx:L1, cy:78 },
+    { id:'P1',  p:'P1',  label:'B Kammer', sub:'chamber width', form:'linear', cv:18.8, conf:'Moderate', rk:'refine', cx:L1, cy:250, rel:'refine from B1', formula:['refine from ','B1',' when B1 is measured'] },
+    { id:'P3',  p:'P3',  label:'B1', sub:'side-chamfer distance', form:'linear', cv:32.0, conf:'Low', rk:'refine', cx:L1, cy:334, rel:'refine from B Kammer', formula:['refine from ','B Kammer',' when measured'] },
+    { id:'P10', p:'P10', label:'HLE', sub:'middle cyl. height', form:'linear', cv:5.8, conf:'High', rk:'root', cx:L1, cy:520 },
+    { id:'P12', p:'P12', label:'LEOW', sub:'last cyl. height', form:'linear', cv:38.9, conf:'Low', rk:'root', cx:L1, cy:648 },
+
+    { id:'P5',  p:'P5',  label:'BF1', sub:'chamfer 1 width', form:'linear', cv:20.6, conf:'Moderate', rk:'combo', cx:L2, cy:60, rel:'= LF1', formula:['= ','LF1'] },
+    { id:'P6',  p:'P6',  label:'LF2', sub:'chamfer 2 length', form:'linear', cv:18.6, conf:'Moderate', rk:'combo', cx:L2, cy:150, rel:'= LF1', formula:['= ','LF1',' (both chamfers equal)'] },
+    { id:'P11', p:'P11', label:'LEB', sub:'middle+first height', form:'power', cv:24.9, conf:'Moderate', rk:'combo', cx:L2, cy:512, rel:'= 2 × HLE', formula:['= 2 × ','HLE'] },
+    { id:'P9',  p:'P9',  label:'LE', sub:'last diameter (Durchmesser)', form:'linear', cv:8.1, conf:'Good', rk:'combo', cx:L2, cy:648, rel:'= 255.16 + 3.4954 · HLE', formula:['= 255.16 + 3.4954 · ','HLE'] },
+
+    { id:'P7',  p:'P7',  label:'BF2', sub:'chamfer 2 width', form:'linear', cv:22.0, conf:'Moderate', rk:'combo', cx:L3, cy:120, rel:'= LF2', formula:['= ','LF2'] },
+    { id:'P8',  p:'P8',  label:'LT', sub:'distance from end', form:'linear', cv:27.2, conf:'Moderate', rk:'combo', cx:L3, cy:232, rel:'= LF1 + LF2', formula:['= ','LF1',' + ','LF2'] },
+    { id:'P2',  p:'P2',  label:'H Kammer', sub:'chamber height', form:'linear', cv:28.6, conf:'Moderate', rk:'combo', cx:L3, cy:580, rel:'= LEB + LEOW', formula:['= ','LEB',' + ','LEOW'] },
+  ];
+  const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
+
+  const rel = [
+    { from:'P3', to:'P1', kind:'refine', bi:true },
+    { from:'P4', to:'P5', kind:'combo' },
+    { from:'P4', to:'P6', kind:'combo' },
+    { from:'P6', to:'P7', kind:'combo' },
+    { from:'P4', to:'P8', kind:'combo' },
+    { from:'P6', to:'P8', kind:'combo' },
+    { from:'P10', to:'P11', kind:'combo' },
+    { from:'P10', to:'P9', kind:'combo' },
+    { from:'P11', to:'P2', kind:'combo' },
+    { from:'P12', to:'P2', kind:'combo' },
+  ];
+  const base = [];
+  for (const n of nodes) if (n.kind === 'param') for (const x of ['X1','X2','X3']) base.push({ from:x, to:n.id, kind:'base' });
+  const edges = [...base, ...rel];
+
+  const NW = 150, NH = 54;
+  const svg = document.getElementById('map');
+  const mk = (t, a={}) => { const e = document.createElementNS(SVG, t); for (const k in a) e.setAttribute(k, a[k]); return e; };
+
+  // arrow markers
+  const defs = mk('defs');
+  for (const [id, col] of [['aC','var(--orange)'], ['aR','var(--blue)']]) {
+    const m = mk('marker', { id, viewBox:'0 0 10 10', refX:'8.5', refY:'5', markerWidth:'7', markerHeight:'7', orient:'auto-start-reverse' });
+    m.appendChild(mk('path', { d:'M0 0 L10 5 L0 10 z', fill: col }));
+    defs.appendChild(m);
+  }
+  svg.appendChild(defs);
+
+  // column captions
+  for (const [x, t] of [[IX,'Inputs'], [L1,'Roots'], [L2,'Derived'], [L3,'Derived']]) {
+    svg.appendChild(mk('text', { x, y:26, 'text-anchor':'middle', class:'col-label' })).textContent = t;
+  }
+
+  const edgeLayer = mk('g'); svg.appendChild(edgeLayer);
+  const nodeLayer = mk('g'); svg.appendChild(nodeLayer);
+
+  const path = (a, b) => {
+    const A = byId[a], B = byId[b];
+    if (Math.abs(A.cx - B.cx) < 4) { // same column (refine pair) — bulge left
+      const x = A.cx - NW/2, y1 = A.cy, y2 = B.cy, c = x - 70;
+      return `M${x} ${y1} C ${c} ${y1}, ${c} ${y2}, ${x} ${y2}`;
+    }
+    const x1 = A.cx + NW/2, x2 = B.cx - NW/2, mx = (x1 + x2) / 2;
+    return `M${x1} ${A.cy} C ${mx} ${A.cy}, ${mx} ${B.cy}, ${x2} ${B.cy}`;
+  };
+
+  const edgeEls = edges.map(e => {
+    const p = mk('path', { d: path(e.from, e.to), class:`edge ${e.kind}` });
+    if (e.kind === 'combo') p.setAttribute('marker-end', 'url(#aC)');
+    if (e.kind === 'refine') { p.setAttribute('marker-end', 'url(#aR)'); if (e.bi) p.setAttribute('marker-start', 'url(#aR)'); }
+    edgeLayer.appendChild(p);
+    return { ...e, el: p };
+  });
+
+  const nodeEls = {};
+  for (const n of nodes) {
+    const g = mk('g', { class:`node ${n.kind}${n.kind==='param' ? ' param '+n.rk : ''}`, tabindex:'0', role:'button',
+                        'aria-label': `${n.label}${n.p?', '+n.p:''}` , transform:`translate(${n.cx - NW/2} ${n.cy - NH/2})` });
+    g.appendChild(mk('rect', { class:'box', x:0, y:0, width:NW, height:NH, rx:11 }));
+    if (n.kind === 'param') g.appendChild(mk('rect', { class:'accent', x:0, y:0, width:5, height:NH, rx:2.5 }));
+    if (n.p) { const t = mk('text', { class:'p', x:NW-12, y:17, 'text-anchor':'end' }); t.textContent = n.p; g.appendChild(t); }
+    const lbl = mk('text', { class:'lbl', x:16, y:24 }); lbl.textContent = n.label; g.appendChild(lbl);
+    const sl = mk('text', { class:'slbl', x:16, y:41 }); sl.textContent = n.sub; g.appendChild(sl);
+    nodeLayer.appendChild(g);
+    nodeEls[n.id] = g;
+    const on = () => focus(n.id), off = () => { if (!selected) clear(); };
+    g.addEventListener('mouseenter', on);
+    g.addEventListener('mouseleave', off);
+    g.addEventListener('focus', on);
+    g.addEventListener('click', () => { selected = (selected === n.id) ? null : n.id; selected ? focus(n.id) : clear(); });
+    g.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); g.click(); } });
+  }
+
+  let selected = null;
+  const kindsOn = { base:false, refine:true, combo:true }; // base fits hidden by default
+
+  function applyVisibility() {
+    for (const e of edgeEls) e.el.style.display = kindsOn[e.kind] ? '' : 'none';
+  }
+
+  function neighbours(id) {
+    const ns = new Set([id]); const es = new Set();
+    edgeEls.forEach((e, i) => {
+      if (!kindsOn[e.kind]) return;
+      if (e.from === id || e.to === id) { es.add(i); ns.add(e.from); ns.add(e.to); }
+    });
+    return { ns, es };
+  }
+
+  function focus(id) {
+    const { ns, es } = neighbours(id);
+    edgeEls.forEach((e, i) => { e.el.classList.toggle('hot', es.has(i)); e.el.classList.toggle('dim', kindsOn[e.kind] && !es.has(i)); });
+    for (const nid in nodeEls) {
+      nodeEls[nid].classList.toggle('hot', ns.has(nid) && nid !== id);
+      nodeEls[nid].classList.toggle('sel', nid === id);
+      nodeEls[nid].classList.toggle('dim', !ns.has(nid));
+    }
+    renderPanel(id);
+  }
+
+  function clear() {
+    selected = null;
+    edgeEls.forEach(e => e.el.classList.remove('hot', 'dim'));
+    for (const nid in nodeEls) nodeEls[nid].classList.remove('hot', 'dim', 'sel');
+    document.getElementById('panel').innerHTML = defaultPanel;
+  }
+
+  const relTag = { refine:'Refine', combo:'Combination', root:'X1–X3 only' };
+  const LABELS = new Set(nodes.map(n => n.label));
+  function fmt(n) {
+    if (!n.formula) return '<div class="formula">from X1, X2, X3</div>';
+    const html = n.formula.map(seg => LABELS.has(seg.trim())
+      ? `<strong>${seg}</strong>`
+      : seg.replace(/([=×·+])/g, '<span class="op">$1</span>')).join('');
+    return `<div class="formula">${html}</div>`;
+  }
+
+  function renderPanel(id) {
+    const n = byId[id];
+    const p = document.getElementById('panel');
+    if (n.kind === 'input') {
+      p.innerHTML = `<h2>Input</h2><p class="pl">${n.label}</p>
+        <p class="pnum">empirical input</p>
+        <p class="hint" style="margin-top:12px">One of the three measured inputs. Every one of the twelve parameters has its own fit on ${'X1, X2, X3'}; toggle <strong>X1–X3 fit</strong> in the legend to trace them.</p>`;
+      return;
+    }
+    const drivers = edgeEls.filter(e => e.kind !== 'base' && e.to === id && kindsOn[e.kind]).map(e => byId[e.from].label);
+    const feeds = edgeEls.filter(e => e.kind !== 'base' && e.from === id && kindsOn[e.kind]).map(e => byId[e.to].label);
+    p.innerHTML = `<h2>Parameter</h2>
+      <p class="pl">${n.label} <span class="pnum">${n.p}</span></p>
+      <p class="pnum">${n.sub}</p>
+      <div style="margin-top:12px"><span class="rel-tag ${n.rk}">${relTag[n.rk]}</span></div>
+      ${fmt(n)}
+      <dl class="kv">
+        <dt>X1–X3 fit</dt><dd>${n.form}</dd>
+        <dt>CV error</dt><dd>${n.cv}%</dd>
+        <dt>Confidence</dt><dd><span class="pill ${n.conf}">${n.conf}</span></dd>
+        ${drivers.length ? `<dt>Driven by</dt><dd>${drivers.join(', ')}</dd>` : ''}
+        ${feeds.length ? `<dt>Feeds</dt><dd>${feeds.join(', ')}</dd>` : ''}
+      </dl>`;
+  }
+
+  const defaultPanel = document.getElementById('panel').innerHTML;
+
+  // legend toggles
+  document.querySelectorAll('.lg').forEach(el => {
+    const k = el.dataset.kind;
+    el.classList.toggle('off', !kindsOn[k]);
+    const flip = () => { kindsOn[k] = !kindsOn[k]; el.classList.toggle('off', !kindsOn[k]); applyVisibility(); selected ? focus(selected) : clear(); };
+    el.addEventListener('click', flip);
+    el.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); flip(); } });
+  });
+  document.getElementById('reset').addEventListener('click', clear);
+
+  applyVisibility();
+})();
+</script>

@@ -5,7 +5,16 @@ import { useEffect, useRef } from 'react';
  * (same treatment as the conversion pipeline log). While the run is live the
  * view auto-scrolls to the tail, unless the user has scrolled up to read back.
  */
-export function RunLog({ text, live }: { text: string; live: boolean }) {
+export function RunLog({
+  text,
+  live,
+  ariaLabel = 'Solver output log',
+}: {
+  text: string;
+  live: boolean;
+  /** Accessible name of the log region (defaults to the solver's). */
+  ariaLabel?: string;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   // Whether the view is pinned to the bottom (auto-follow) vs. scrolled up.
   const pinned = useRef(true);
@@ -36,7 +45,7 @@ export function RunLog({ text, live }: { text: string; live: boolean }) {
         onScroll={handleScroll}
         tabIndex={0}
         role="log"
-        aria-label="Solver output log"
+        aria-label={ariaLabel}
         className="max-h-72 overflow-auto overscroll-contain rounded-md border border-border bg-surface px-3 py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
       >
         {text ? (

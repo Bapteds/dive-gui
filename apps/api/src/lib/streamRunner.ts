@@ -70,13 +70,30 @@ export const realStreamRunner: StreamRunner = (spec) => {
   let timer: NodeJS.Timeout | undefined;
   let timedOut = false;
   let settled = false;
+  let logStreamFailed = false;
+
+  // A failure WRITING the log (disk full, EIO, permissions) must never crash the
+  // API. Without this listener the stream's 'error' is unhandled and takes the
+  // whole Node process down mid-run, disconnecting every user and leaving the run
+  // stuck 'running' (C3). On error: stop feeding the dead stream but let the
+  // child run to its natural exit (its 'close' still finishes the run); draining
+  // the pipes keeps the solver from blocking on a full stdout buffer.
+  out.on('error', (err: NodeJS.ErrnoException) => {
+    logStreamFailed = true;
+    console.error(`[streamRunner] log write failed for ${spec.logFile}: ${err.message}`);
+    child?.stdout.unpipe(out);
+    child?.stderr.unpipe(out);
+    child?.stdout.resume();
+    child?.stderr.resume();
+  });
 
   const onExit = new Promise<StreamExit>((resolve) => {
     const finish = (result: StreamExit): void => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      out.end();
+      // Don't end() a stream that already errored (it may be destroyed).
+      if (!logStreamFailed) out.end();
       resolve(result);
     };
 

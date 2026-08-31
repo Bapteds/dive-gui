@@ -16,3 +16,17 @@ h5py>=3.0
 pyvista>=0.43
 trimesh>=4.0
 numpy>=1.24
+
+# buildChamber.py (Chamber Creation: CadQuery solid -> named patches -> GLB).
+# Runs under CHAMBER_PYTHON_BIN, which should be a SEPARATE interpreter/venv from
+# the pyvista one above (cadquery pulls in OCP/OpenCascade; keep the wheel sets
+# apart). Needs trimesh + numpy (already floored above) plus:
+cadquery>=2.4
+# Guide-vane builds carve the distributor (hub-core, shroud-casing, vane prisms) out of
+# the fluid with a mesh boolean: manifold3d is trimesh's in-process boolean engine (a
+# self-contained wheel, no system libs), networkx backs trimesh's mesh repair/split, and
+# shapely backs trimesh's extrude_polygon (used to build the watertight vane prisms from
+# their airfoil footprints). All three are self-contained wheels (shapely bundles GEOS).
+manifold3d>=2.3
+networkx>=3.0
+shapely>=2.0

@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { DEFAULT_SNAPPY_CONFIG } from '@dive/shared';
 import { runSnappyPipeline } from '../src/lib/snappyPipeline';
 import { setCommandRunner, type CommandResult, type CommandRunner } from '../src/lib/commandRunner';
+import { logicalCommand } from './helpers';
 
 const BOUNDS = { min: [0, 0, 0] as [number, number, number], max: [10, 10, 10] as [number, number, number] };
 
@@ -28,8 +29,9 @@ describe('runSnappyPipeline', () => {
     const commands: string[] = [];
     const runner: CommandRunner = async (spec) => {
       // The tools run via `bash -c … exec "$@"` only when OPENFOAM_BASHRC is set;
-      // on a bare dev box the binary is the command directly.
-      commands.push(spec.command);
+      // on a bare dev box the binary is the command directly. logicalCommand sees
+      // through the wrapper so the assertion holds in either configuration.
+      commands.push(logicalCommand(spec).command);
       return ok(spec);
     };
     setCommandRunner(runner);
@@ -50,7 +52,7 @@ describe('runSnappyPipeline', () => {
     const caseDir = await tempCase();
     const commands: string[] = [];
     const runner: CommandRunner = async (spec) => {
-      commands.push(spec.command);
+      commands.push(logicalCommand(spec).command);
       return ok(spec);
     };
     setCommandRunner(runner);
@@ -104,7 +106,7 @@ describe('runSnappyPipeline', () => {
   it('short-circuits the remaining steps when blockMesh fails', async () => {
     const caseDir = await tempCase();
     const runner: CommandRunner = async (spec) => {
-      if (spec.command === 'blockMesh') {
+      if (logicalCommand(spec).command === 'blockMesh') {
         return { command: spec.command, args: spec.args, exitCode: 1, stdout: '', stderr: 'boom', durationMs: 1, timedOut: false };
       }
       return ok(spec);

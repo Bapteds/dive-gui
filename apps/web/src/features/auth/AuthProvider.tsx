@@ -1,4 +1,5 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import * as authApi from '@/lib/api/auth';
 import { setLogoutHandler } from '@/lib/api/client';
 import type { User } from '@/lib/api/types';
@@ -16,6 +17,7 @@ import { AuthContext, type AuthStatus } from './auth-context';
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [status, setStatus] = useState<AuthStatus>('loading');
+  const queryClient = useQueryClient();
 
   // Guard against setting state after unmount (StrictMode double-invoke / async).
   const mountedRef = useRef(true);
@@ -42,8 +44,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(null);
         setStatus('unauthenticated');
       }
+      // Wipe every cached query (dashboard, user list, project lists, meshes).
+      // Without this the next user on a shared workstation sees the previous
+      // user's data until each query's staleTime elapses (C4).
+      queryClient.clear();
     }
-  }, []);
+  }, [queryClient]);
 
   // Replace the cached session user after a self-service profile/password
   // update (the /account page calls this with the fresh user from the server).
@@ -60,9 +66,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(null);
         setStatus('unauthenticated');
       }
+      // Same reason as explicit logout: drop all cached data so a re-login
+      // (possibly as a different user) never surfaces the old session's cache.
+      queryClient.clear();
     });
     return () => setLogoutHandler(null);
-  }, []);
+  }, [queryClient]);
 
   // Bootstrap the session once on mount.
   useEffect(() => {

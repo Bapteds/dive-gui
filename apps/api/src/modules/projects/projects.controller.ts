@@ -9,9 +9,14 @@ import {
   getProject,
   listProjects,
   removeCollaborator,
+  renameProject,
   type Viewer,
 } from './projects.service';
-import type { AddCollaboratorInput, CreateProjectInput } from './projects.schemas';
+import type {
+  AddCollaboratorInput,
+  CreateProjectInput,
+  RenameProjectInput,
+} from './projects.schemas';
 
 /** GET /projects — list the projects visible to the current user. */
 export async function listProjectsController(req: Request, res: Response): Promise<void> {
@@ -28,6 +33,13 @@ export async function createProjectController(req: Request, res: Response): Prom
 /** GET /projects/:id — fetch a single visible project. */
 export async function getProjectController(req: Request, res: Response): Promise<void> {
   const project = await getProject(requireViewer(req), req.params.id);
+  res.status(200).json({ project });
+}
+
+/** PATCH /projects/:id — rename a project (owner or super-admin). */
+export async function renameProjectController(req: Request, res: Response): Promise<void> {
+  const { title } = req.body as RenameProjectInput;
+  const project = await renameProject(requireViewer(req), req.params.id, title);
   res.status(200).json({ project });
 }
 

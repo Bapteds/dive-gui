@@ -104,11 +104,15 @@ export async function writeNormalizedAt(
   return [...new Set(written)].sort((a, b) => a.localeCompare(b));
 }
 
-/** Extract a .zip archive into a root. @throws INVALID_ARCHIVE on a bad/empty zip. */
-export function extractArchiveAt(
+/**
+ * Extract a .zip archive into a root. @throws INVALID_ARCHIVE on a bad/empty zip,
+ * ARCHIVE_TOO_LARGE when it decompresses past `maxUncompressedBytes` (H9).
+ */
+export async function extractArchiveAt(
   root: string,
   archive: Buffer,
   normalize: PathNormalizer,
+  maxUncompressedBytes = env.MAX_ARCHIVE_UNCOMPRESSED_MB * 1024 * 1024,
 ): Promise<string[]> {
   let zip: AdmZip;
   try {
@@ -119,6 +123,20 @@ export function extractArchiveAt(
   const fileEntries = zip.getEntries().filter((entry) => !entry.isDirectory);
   if (fileEntries.length === 0) {
     throw new AppError(400, 'INVALID_ARCHIVE', 'The archive contains no files');
+  }
+  // Reject a zip bomb BEFORE inflating: sum the declared uncompressed sizes (the
+  // central-directory `size`, which adm-zip also uses to allocate on getData, so
+  // it is a reliable upper bound) and bail if the total exceeds the cap (H9).
+  let uncompressed = 0;
+  for (const entry of fileEntries) {
+    uncompressed += entry.header.size;
+    if (uncompressed > maxUncompressedBytes) {
+      throw new AppError(
+        413,
+        'ARCHIVE_TOO_LARGE',
+        `The archive decompresses to more than ${Math.floor(maxUncompressedBytes / (1024 * 1024))} MB`,
+      );
+    }
   }
   return writeNormalizedAt(
     root,

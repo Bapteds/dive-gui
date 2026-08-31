@@ -5,7 +5,8 @@
 // "0.orig") must not interleave. A raw string sort breaks this because '/' sorts
 // after '.', so this guards comparePaths against that regression.
 import { describe, expect, it } from 'vitest';
-import { comparePaths } from '../src/lib/fileTreeStorage';
+import AdmZip from 'adm-zip';
+import { comparePaths, extractArchiveAt } from '../src/lib/fileTreeStorage';
 
 describe('comparePaths', () => {
   it('orders a directory and its children before a prefix-sibling (0 vs 0.orig)', () => {
@@ -27,5 +28,31 @@ describe('comparePaths', () => {
     expect(comparePaths('0', '0/U')).toBeLessThan(0);
     expect(comparePaths('0/U', '0.orig')).toBeLessThan(0);
     expect(comparePaths('0.orig', '0/U')).toBeGreaterThan(0);
+  });
+});
+
+describe('extractArchiveAt decompression cap (H9)', () => {
+  it('rejects a zip that decompresses past the cap, before writing anything', async () => {
+    const zip = new AdmZip();
+    zip.addFile('big.bin', Buffer.alloc(1000)); // 1000 uncompressed bytes
+    const archive = zip.toBuffer();
+    const identity = (paths: string[]) => paths;
+
+    // The check runs before any write, so the (nonexistent) root is never touched.
+    await expect(
+      extractArchiveAt('/nonexistent-root-should-not-be-written', archive, identity, 100),
+    ).rejects.toMatchObject({ status: 413, code: 'ARCHIVE_TOO_LARGE' });
+  });
+
+  it('extracts normally when under the cap', async () => {
+    const zip = new AdmZip();
+    zip.addFile('constant/small', Buffer.from('hello'));
+    const written = await extractArchiveAt(
+      './test-storage/h9-ok',
+      zip.toBuffer(),
+      (paths) => paths,
+      1024 * 1024,
+    );
+    expect(written).toContain('constant/small');
   });
 });

@@ -1829,6 +1829,36 @@ export function parseBoundaryPatchDetails(content: string): BoundaryPatchDetail[
   return result;
 }
 
+/**
+ * The names of the cellZones declared in a `constant/polyMesh/cellZones` file, in
+ * file order. Each zone is a named `{ … }` block carrying `type cellZone;`; the
+ * `FoamFile` header block is skipped. Mirrors parseBoundaryPatchDetails' block
+ * scan (same matchBrace walk). Returns [] for an absent/empty file or one with no
+ * zones. Used to surface the zones splitMeshRegions creates on a merge so one can
+ * be picked as the rotor cellZone for the turbine MRF template (renderMrfProperties).
+ */
+export function parseCellZoneNames(content: string): string[] {
+  const cleaned = content.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const blockStart = /([A-Za-z_][A-Za-z0-9_-]*)\s*\{/g;
+  let match: RegExpExecArray | null;
+  while ((match = blockStart.exec(cleaned)) !== null) {
+    const name = match[1];
+    if (name === 'FoamFile' || seen.has(name)) continue;
+    const open = cleaned.indexOf('{', match.index);
+    const close = matchBrace(cleaned, open);
+    if (close < 0) continue;
+    const block = cleaned.slice(open, close + 1);
+    if (/\btype\s+cellZone\s*;/.test(block)) {
+      names.push(name);
+      seen.add(name);
+    }
+    blockStart.lastIndex = close;
+  }
+  return names;
+}
+
 /** Render a fresh boundaryField block covering exactly `patches` for `fieldName`,
  * with the model-aware wall function on any `wall` patch (see fieldBcBody). */
 function renderBoundaryFieldFor(
@@ -2006,6 +2036,17 @@ function renamePatchHeader(content: string, from: string, to: string): string {
  * so a whole-file header rename is safe.
  */
 export function renameBoundaryPatch(content: string, from: string, to: string): string {
+  return renamePatchHeader(content, from, to);
+}
+
+/**
+ * Rename a cellZone in a `constant/polyMesh/cellZones` file. Like the boundary
+ * file, the only `name { … }` blocks there are the zone entries (plus the
+ * `FoamFile` header), so the same header-only rename is safe — it targets the
+ * `from { … }` block header and never a token inside a zone body. Used to give the
+ * zones splitMeshRegions creates readable, part-based names.
+ */
+export function renameCellZone(content: string, from: string, to: string): string {
   return renamePatchHeader(content, from, to);
 }
 

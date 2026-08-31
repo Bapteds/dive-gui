@@ -14,6 +14,11 @@ import {
   syncBoundaries,
   verifyCase,
 } from '@/lib/api/projects';
+import {
+  meshEdgesQueryKey,
+  meshGeometryQueryKey,
+  meshManifestQueryKey,
+} from '@/features/visualize/useMesh';
 import type {
   CaseEntry,
   CaseFileContent,
@@ -80,6 +85,18 @@ export function useResetCase(projectId: string) {
     mutationFn: () => resetCase(projectId),
     onSuccess: (entries) => {
       queryClient.setQueryData(caseFilesQueryKey(projectId), entries);
+      queryClient.removeQueries({ queryKey: [...caseFilesQueryKey(projectId), 'content'] });
+      // The case (and its mesh) is gone. Drop the case render (manifest/GLB/edges,
+      // 5-min TTL) and clear the library/plan/assembly, or Visualize/Assembly keep
+      // showing the pre-reset mesh (H6). The render keys come from the leaf module
+      // useMesh; the library/assembly/plan keys are inlined to avoid a useMeshes
+      // <-> useCaseFiles import cycle (useMeshes imports caseFilesQueryKey).
+      queryClient.removeQueries({ queryKey: meshManifestQueryKey(projectId) });
+      queryClient.removeQueries({ queryKey: meshGeometryQueryKey(projectId) });
+      queryClient.removeQueries({ queryKey: meshEdgesQueryKey(projectId) });
+      void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'meshes'] });
+      void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'assembly'] });
+      void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'mergePlan'] });
     },
   });
 }

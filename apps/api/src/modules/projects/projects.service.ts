@@ -11,6 +11,7 @@ import type { Role } from '../../lib/role';
 import { AppError } from '../../lib/AppError';
 import { prisma } from '../../lib/prisma';
 import { removeProjectStorage } from '../../lib/caseStorage';
+import { stopProjectRuns } from './runs.service';
 import type { CreateProjectInput } from './projects.schemas';
 
 /** Who is acting, used for visibility + management checks. */
@@ -133,12 +134,33 @@ export async function createProject(
   return toPublicProject(project);
 }
 
+/** Rename a project's title. Owner or super-admin only. */
+export async function renameProject(
+  viewer: Viewer,
+  id: string,
+  title: string,
+): Promise<PublicProject> {
+  const project = await findVisibleOrThrow(viewer, id);
+  if (!canManage(viewer, project)) {
+    throw new AppError(403, 'FORBIDDEN', 'Only the project owner can rename this project');
+  }
+  const updated = await prisma.project.update({
+    where: { id },
+    data: { title: title.trim() },
+    include: projectInclude,
+  });
+  return toPublicProject(updated);
+}
+
 /** Delete a project. Owner or super-admin only. */
 export async function deleteProject(viewer: Viewer, id: string): Promise<void> {
   const project = await findVisibleOrThrow(viewer, id);
   if (!canManage(viewer, project)) {
     throw new AppError(403, 'FORBIDDEN', 'Only the project owner can delete this project');
   }
+  // Stop any live solver first, or the ghost mpirun keeps burning cores for
+  // hours after the run rows and case are gone (M3). Best-effort; never blocks.
+  await stopProjectRuns(id).catch(() => undefined);
   await prisma.project.delete({ where: { id } });
   // Best-effort cleanup of the on-disk case files; never fail the delete on it.
   await removeProjectStorage(id).catch(() => undefined);

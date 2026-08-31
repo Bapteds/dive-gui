@@ -257,6 +257,51 @@ describe('GET /projects/:id/export (+ download)', () => {
     expect(res.body.slice(0, 2).toString()).toBe('PK');
   });
 
+  it('feeds the transient merge the timestep series in NUMERIC order with sidecar times (C1)', async () => {
+    // 12 frames so lexicographic order (out_10, out_11 before out_2) diverges
+    // from numeric order. The merge pairs files with times POSITIONALLY, so the
+    // order the backend passes them in decides which field renders at which time.
+    const N = 12;
+    let mergeArgs: string[] | null = null;
+    setCommandRunner(async (spec) => {
+      if (spec.command === 'checkMesh') return ok(spec, 'polyhedra: 0\n');
+      if (spec.args.some((a) => a.includes('FoamToCgns'))) {
+        const out = spec.args.find((a) => a.endsWith('out.cgns'));
+        if (out) {
+          const dir = path.dirname(out);
+          for (let i = 0; i < N; i++) await fs.writeFile(path.join(dir, `out_${i}.cgns`), `frame-${i}`);
+          // Sidecar the real FoamToCgns.py writes: index -> real time.
+          const times = Array.from({ length: N }, (_, i) => (i * 0.5).toString());
+          await fs.writeFile(`${out}.times`, times.join(','));
+        }
+        return ok(spec, `OK: ${N} files`);
+      }
+      if (spec.args.some((a) => a.includes('CgnsMergeTime'))) {
+        mergeArgs = spec.args;
+        const out = spec.args.find((a) => a.endsWith('out.cgns'));
+        if (out) await fs.writeFile(out, 'fake-transient-cgns');
+        return ok(spec, `OK: transient CGNS written (${N} time steps)`);
+      }
+      if (spec.args.some((a) => a.includes('CgnsInspect'))) return ok(spec, JSON.stringify(CGNS_REPORT));
+      return ok(spec, '');
+    });
+
+    const { id, auth } = await makeProject('export-c1-order@dive-turbinen.test');
+    await writeSolvedCase(id);
+    await request(app).post(`/api/v1/projects/${id}/export`).set('Authorization', auth);
+
+    expect(mergeArgs).not.toBeNull();
+    // CgnsMergeTime.py args: [script, out.cgns, "t0,...", in_0, in_1, ...].
+    const args = mergeArgs as unknown as string[];
+    const seriesOrder = args
+      .filter((a) => /out_\d+\.cgns$/.test(a))
+      .map((a) => Number(/out_(\d+)\.cgns$/.exec(a)![1]));
+    expect(seriesOrder).toEqual(Array.from({ length: N }, (_, i) => i)); // 0,1,2,...,11 (not 0,1,10,11,2,...)
+
+    const times = args.find((a) => a.includes(',') && !a.includes('.cgns'))!.split(',').map(Number);
+    expect(times).toEqual(Array.from({ length: N }, (_, i) => i * 0.5)); // index-aligned, from the sidecar
+  });
+
   it('returns 404 downloading an artifact that has not been produced', async () => {
     const { id, auth } = await makeProject('export-dl-missing@dive-turbinen.test');
     const res = await request(app)

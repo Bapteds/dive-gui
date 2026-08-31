@@ -19,6 +19,11 @@ const TIME_RE = /^\s*Time\s*=\s*([0-9.eE+-]+)\s*$/;
 // prefix). The value stops at the first whitespace OR comma so the trailing
 // ", Final residual = ..." is never swept into the captured number.
 const FIELD_RE = /Solving for (\w+),\s+Initial residual\s*=\s*([^\s,]+)/;
+// A residual only ever reads as "nan" / "inf" (any case, optionally signed, and
+// even nested in a vector token like "(nan nan nan)") when the solution has
+// actually blown up. This is the ONLY divergence signal from a residual value —
+// a numeric token we merely fail to parse (see below) is NOT divergence.
+const NONFINITE_RESIDUAL_RE = /nan|inf/i;
 /** The steady-solver convergence banner. */
 const CONVERGED_RE = /solution converged in \d+ iterations/i;
 /** A hard solver error / floating-point crash in the log. */
@@ -70,13 +75,22 @@ export function parseResiduals(log: string): ParsedResiduals {
 
     const fieldMatch = FIELD_RE.exec(line);
     if (fieldMatch && current) {
-      const value = Number(fieldMatch[2]);
-      if (!Number.isFinite(value)) {
-        // nan / inf — the run has diverged. Don't record a non-finite point.
+      const raw = fieldMatch[2];
+      if (NONFINITE_RESIDUAL_RE.test(raw)) {
+        // nan / inf — the run has genuinely diverged. Don't record the point.
         diverged = true;
         continue;
       }
-      current.values[fieldMatch[1]] = value;
+      // Strip a leading "(" so a vector residual like "(0.012 0.008 0.005)"
+      // (some fields on ESI OpenFOAM print U this way) still yields a finite
+      // component to chart instead of a NaN.
+      const value = Number(raw.replace(/^\(/, ''));
+      // A token we can't parse (an unexpected format) is NOT divergence: simply
+      // skip it. Flagging it as diverged is what made a run that merely reached
+      // its controlDict iteration cap get reported as "diverged".
+      if (Number.isFinite(value)) {
+        current.values[fieldMatch[1]] = value;
+      }
     }
   }
   flush();

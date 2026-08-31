@@ -18,7 +18,7 @@
 // pinned to the meshing root. Mirrors meshStorage.ts (the per-project analogue).
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { MeshingConfig, MeshingEngine, MeshingRun, StlFile } from '@dive/shared';
+import type { MeshingConfig, MeshingEngine, MeshingRun, MeshingRunState, StlFile } from '@dive/shared';
 import { FMS_EXTENSION, MESHING_ENGINES, STL_EXTENSION } from '@dive/shared';
 import {
   assertSafeId,
@@ -115,6 +115,45 @@ export async function createSession(name: string, engine: MeshingEngine): Promis
   const id = await uniqueSessionId(name);
   const meta: MeshingMeta = { id, name: name.trim(), engine, createdAt: new Date().toISOString() };
   await writeMeta(meta);
+  return meta;
+}
+
+/**
+ * Rename a session's DISPLAY name only; the id and on-disk directory stay stable
+ * (renaming the dir would break every stored path + reference). Returns the
+ * updated metadata, or null when the session is absent.
+ */
+export async function renameSession(sessionId: string, name: string): Promise<MeshingMeta | null> {
+  const meta = await readMeta(sessionId);
+  if (!meta) return null;
+  const updated: MeshingMeta = { ...meta, name: name.trim() };
+  await writeMeta(updated);
+  return updated;
+}
+
+/**
+ * Copy a session's reusable setup into a NEW session: its engine (meta) + the
+ * autosaved config.json + every file under constant/triSurface/. Deliberately
+ * omits run output (run.json, constant/polyMesh, system/, .viz) — the copy is
+ * meant to be re-meshed with fresh geometry. `name` defaults to "<source> (copy)".
+ * @throws when the source session has no readable metadata.
+ */
+export async function copySessionSetup(sourceId: string, name?: string): Promise<MeshingMeta> {
+  const source = await readMeta(sourceId);
+  if (!source) {
+    throw new Error(`Meshing session "${sourceId}" not found.`);
+  }
+  const meta = await createSession(name ?? `${source.name} (copy)`, source.engine);
+  // Copy the input surfaces (if any) verbatim.
+  const srcTri = triSurfaceDir(sourceId);
+  try {
+    await fs.cp(srcTri, triSurfaceDir(meta.id), { recursive: true });
+  } catch {
+    // No triSurface dir on the source (never had a surface) — nothing to copy.
+  }
+  // Copy the autosaved config (round-trips through the validated type).
+  const config = await readConfig(sourceId);
+  if (config) await writeConfig(meta.id, config);
   return meta;
 }
 
@@ -261,6 +300,105 @@ export async function readRun(sessionId: string): Promise<MeshingRun | null> {
   } catch {
     return null;
   }
+}
+
+// --- Live run: streamed log + lifecycle status --------------------------------
+//
+// A run is a background job: its stdout+stderr stream to mesh.log (tailed live by
+// the client) and its lifecycle state is a status.json sidecar. Both live at the
+// session root, deliberately NOT under triSurface/ or system/, so copySessionSetup
+// (which copies only the reusable setup) never carries a stale log/status into a
+// fresh session, and cleanPriorMeshArtifacts (mesh output only) never touches them.
+
+/** Absolute path to the session's streamed mesher log. */
+export function meshLogAbsolute(sessionId: string): string {
+  return path.join(sessionDirAbsolute(sessionId), 'mesh.log');
+}
+
+/** Reset the log to empty at the start of a fresh run (creating the session dir). */
+export async function truncateMeshLog(sessionId: string): Promise<void> {
+  const file = meshLogAbsolute(sessionId);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, '', 'utf8');
+}
+
+/** Append a chunk to the session's mesher log (creating it if needed). */
+export async function appendMeshLog(sessionId: string, chunk: string): Promise<void> {
+  const file = meshLogAbsolute(sessionId);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.appendFile(file, chunk, 'utf8');
+}
+
+/**
+ * Read at most the last `maxBytes` of the mesher log, plus its total size on disk.
+ * Bounds memory on the per-poll hot path (the log can grow large), exactly like the
+ * solver's readRunLog. Returns empty/0 when no log exists yet.
+ */
+export async function readMeshLog(
+  sessionId: string,
+  maxBytes: number,
+): Promise<{ content: string; size: number }> {
+  const file = meshLogAbsolute(sessionId);
+  try {
+    const { size } = await fs.stat(file);
+    const start = size > maxBytes ? size - maxBytes : 0;
+    const length = size - start;
+    if (length <= 0) return { content: '', size };
+    const handle = await fs.open(file, 'r');
+    try {
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, start);
+      return { content: buffer.toString('utf8'), size };
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return { content: '', size: 0 };
+  }
+}
+
+/**
+ * Persist the session's run lifecycle state (status.json). Written to a temp file
+ * and renamed into place: the log endpoint polls this file while the run finalizer
+ * rewrites it, and a plain writeFile (truncate-then-write) would let a concurrent
+ * read see an empty/partial file and mislabel a live run as 'idle'.
+ */
+export async function writeMeshStatus(sessionId: string, state: MeshingRunState): Promise<void> {
+  const file = path.join(sessionDirAbsolute(sessionId), 'status.json');
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(state), 'utf8');
+  await fs.rename(tmp, file);
+}
+
+/**
+ * Read the session's run lifecycle state, or null when no run has ever started.
+ * A concurrent atomic replace by writeMeshStatus can still surface as a transient
+ * ENOENT or partial read on non-POSIX filesystems (notably WSL's /mnt/c), so a
+ * failed read is retried briefly before concluding there is no state — otherwise
+ * a poll could mislabel a live run as 'idle'.
+ */
+export async function readMeshStatus(sessionId: string): Promise<MeshingRunState | null> {
+  const file = path.join(sessionDirAbsolute(sessionId), 'status.json');
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return JSON.parse(await fs.readFile(file, 'utf8')) as MeshingRunState;
+    } catch {
+      if (attempt >= 4) return null;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+}
+
+/** Session ids whose persisted status is still 'running' (for boot reconciliation). */
+export async function listRunningSessionIds(): Promise<string[]> {
+  const metas = await listSessions();
+  const running: string[] = [];
+  for (const meta of metas) {
+    const state = await readMeshStatus(meta.id);
+    if (state?.status === 'running') running.push(meta.id);
+  }
+  return running;
 }
 
 /**

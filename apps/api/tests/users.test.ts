@@ -10,6 +10,8 @@ import {
   resetDatabase,
 } from './helpers';
 import { prisma } from '../src/lib/prisma';
+import { promises as fs } from 'node:fs';
+import { writeCaseFile, projectDirAbsolute } from '../src/lib/caseStorage';
 
 beforeEach(async () => {
   await resetDatabase();
@@ -17,6 +19,7 @@ beforeEach(async () => {
 
 afterAll(async () => {
   await prisma.$disconnect();
+  await fs.rm('./test-storage', { recursive: true, force: true });
 });
 
 describe('authorization', () => {
@@ -232,6 +235,25 @@ describe('DELETE /api/v1/users/:id', () => {
     expect(res.status).toBe(204);
     const stillThere = await prisma.user.findUnique({ where: { id: user.id } });
     expect(stillThere).toBeNull();
+  });
+
+  it("purges the deleted user's owned project storage, not just the DB rows (C2)", async () => {
+    const admin = await createProtectedAdmin();
+    const user = await createTestUser({ email: 'owner-gone@dive-turbinen.test' });
+    const project = await prisma.project.create({ data: { title: 'Case', ownerId: user.id } });
+    // Give the project on-disk case storage (what the cascade would orphan).
+    await writeCaseFile(project.id, 'system/controlDict', 'application simpleFoam;\n');
+    const dir = projectDirAbsolute(project.id);
+    await expect(fs.stat(dir)).resolves.toBeDefined();
+
+    const res = await request(app)
+      .delete(`/api/v1/users/${user.id}`)
+      .set('Authorization', authHeader(admin));
+
+    expect(res.status).toBe(204);
+    // The project row is gone (cascade) AND its storage is removed (the C2 fix).
+    expect(await prisma.project.findUnique({ where: { id: project.id } })).toBeNull();
+    await expect(fs.stat(dir)).rejects.toThrow();
   });
 
   it('refuses to delete the protected super-admin with 409 PROTECTED_ACCOUNT', async () => {

@@ -6,21 +6,33 @@ import type { Request, Response } from 'express';
 import { AppError } from '../../lib/AppError';
 import {
   addStlFiles,
+  copyMeshingSession,
   createMeshingSession,
   downloadSessionZip,
   getMeshingSession,
   getResultEdges,
   getResultGeometry,
+  getMeshingLog,
   getResultManifest,
+  importChamberIntoMeshing,
   listMeshingSessions,
   readStlBytes,
   removeMeshingSession,
   removeStlFile,
-  runMeshing,
+  renameMeshingSession,
   saveMeshingConfig,
+  startMeshingRun,
+  stopMeshingRun,
   type StlUpload,
 } from './meshing.service';
-import type { CreateSessionInput, MeshingConfigInput, StlNameQuery } from './meshing.schemas';
+import type {
+  CopySessionInput,
+  CreateSessionInput,
+  FromChamberInput,
+  MeshingConfigInput,
+  RenameSessionInput,
+  StlNameQuery,
+} from './meshing.schemas';
 
 /** GET /meshing — list all sessions (summaries). */
 export async function listSessionsController(_req: Request, res: Response): Promise<void> {
@@ -35,9 +47,29 @@ export async function createSessionController(req: Request, res: Response): Prom
   res.status(201).json({ session });
 }
 
+/** POST /meshing/copy — duplicate a session's engine + config + surfaces. */
+export async function copySessionController(req: Request, res: Response): Promise<void> {
+  const { sourceId, name } = req.body as CopySessionInput;
+  const session = await copyMeshingSession(sourceId, name);
+  res.status(201).json({ session });
+}
+
+/** POST /meshing/from-chamber — import a chamber build's patches into a session. */
+export async function fromChamberController(req: Request, res: Response): Promise<void> {
+  const session = await importChamberIntoMeshing(req.body as FromChamberInput);
+  res.status(201).json({ session });
+}
+
 /** GET /meshing/:id — one session's detail. */
 export async function getSessionController(req: Request, res: Response): Promise<void> {
   const session = await getMeshingSession(req.params.id);
+  res.status(200).json({ session });
+}
+
+/** PATCH /meshing/:id — rename a session (display name only). */
+export async function renameSessionController(req: Request, res: Response): Promise<void> {
+  const { name } = req.body as RenameSessionInput;
+  const session = await renameMeshingSession(req.params.id, name);
   res.status(200).json({ session });
 }
 
@@ -76,11 +108,23 @@ export async function deleteStlController(req: Request, res: Response): Promise<
   res.status(200).json({ session });
 }
 
-/** POST /meshing/:id/run — run the session's mesher (snappyHexMesh or cfMesh). */
+/** POST /meshing/:id/run — START the session's mesher as a background job. */
 export async function runSnappyController(req: Request, res: Response): Promise<void> {
   const config = req.body as MeshingConfigInput;
-  const { session, result } = await runMeshing(req.params.id, config);
-  res.status(200).json({ session, result });
+  const { session, status } = await startMeshingRun(req.params.id, config);
+  res.status(202).json({ session, status });
+}
+
+/** GET /meshing/:id/run/log — poll the live log + lifecycle status of the run. */
+export async function getRunLogController(req: Request, res: Response): Promise<void> {
+  const log = await getMeshingLog(req.params.id);
+  res.status(200).json({ log });
+}
+
+/** POST /meshing/:id/run/stop — request a stop of the running mesh. */
+export async function stopRunController(req: Request, res: Response): Promise<void> {
+  const { session } = await stopMeshingRun(req.params.id);
+  res.status(200).json({ session });
 }
 
 /** PUT /meshing/:id/config — autosave the edited config (no run). */

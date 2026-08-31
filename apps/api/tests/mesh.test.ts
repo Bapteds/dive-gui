@@ -8,7 +8,14 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
-import { app, authHeader, createProtectedAdmin, createTestUser, resetDatabase } from './helpers';
+import {
+  app,
+  authHeader,
+  createProtectedAdmin,
+  createTestUser,
+  logicalCommand,
+  resetDatabase,
+} from './helpers';
 import { prisma } from '../src/lib/prisma';
 import { setCommandRunner, type CommandResult, type CommandRunner } from '../src/lib/commandRunner';
 import { readCaseFile, writeCaseFile } from '../src/lib/caseStorage';
@@ -525,8 +532,9 @@ const AUTO_BOUNDARY = `FoamFile { class polyBoundaryMesh; object boundary; }
  */
 const autoPatchRunner: CommandRunner = async (spec) => {
   runCount += 1;
-  if (spec.command === 'autoPatch') {
-    const caseDir = spec.args[spec.args.indexOf('-case') + 1];
+  const { command, args } = logicalCommand(spec);
+  if (command === 'autoPatch') {
+    const caseDir = args[args.indexOf('-case') + 1];
     await fs.writeFile(path.join(caseDir, 'constant', 'polyMesh', 'boundary'), AUTO_BOUNDARY);
     return ok(spec, 'Feature angle 45\nWriting patched mesh\nEnd\n');
   }
@@ -582,8 +590,9 @@ describe('POST /projects/:id/mesh/auto-patch', () => {
     let capturedInput = '';
     const collapsingRunner: CommandRunner = async (spec) => {
       runCount += 1;
-      if (spec.command === 'autoPatch') {
-        const caseDir = spec.args[spec.args.indexOf('-case') + 1];
+      const { command, args } = logicalCommand(spec);
+      if (command === 'autoPatch') {
+        const caseDir = args[args.indexOf('-case') + 1];
         const bpath = path.join(caseDir, 'constant', 'polyMesh', 'boundary');
         capturedInput = await fs.readFile(bpath, 'utf8');
         // Mimic autoPatch keeping the collapsed patch (now 0 faces) + new autos.
