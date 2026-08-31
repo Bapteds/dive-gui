@@ -7,6 +7,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import chamberDimensionsImg from './assets/chamber-dimensions.png';
 import type {
   ChamberConfidence,
   ChamberConstraint,
@@ -190,6 +191,26 @@ export function ChamberOutputsTable({
           </TableBody>
         </Table>
       )}
+
+      {/* Dimension legend: the annotated CAD drawings that define every term in
+          the table. Always shown (it is exactly what a first-time user needs
+          before the outputs exist); the white-background drawing sits directly
+          on the card surface. */}
+      <figure className="border-t border-border px-5 py-4">
+        <figcaption className="mb-3">
+          <span className="block text-sm font-medium text-text">Dimension reference</span>
+          <span className="block text-xs text-text-secondary">
+            Plan view (left): B Kammer, B1, BF1 / BF2, LF1 / LF2, LT. Section view (right): H
+            Kammer, LEB, LEOW, HLE, LE Ø.
+          </span>
+        </figcaption>
+        <img
+          src={chamberDimensionsImg}
+          alt="Annotated chamber drawings: a plan view locating B Kammer, B1, BF1, BF2, LF1, LF2 and LT, and a section view locating H Kammer, LEB, LEOW, HLE and LE Ø."
+          loading="lazy"
+          className="h-auto w-full max-w-[1319px]"
+        />
+      </figure>
     </div>
   );
 }

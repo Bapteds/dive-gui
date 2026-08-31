@@ -18,6 +18,18 @@ describe('ChamberOutputsTable', () => {
     expect(screen.getByText(/enter valid inputs/i)).toBeInTheDocument();
   });
 
+  it('shows the dimension-reference drawing in both states', () => {
+    const { unmount } = render(
+      <ChamberOutputsTable outputs={null} constraints={{}} onConstraintChange={() => {}} />,
+    );
+    expect(screen.getByRole('img', { name: /annotated chamber drawings/i })).toBeInTheDocument();
+    unmount();
+
+    render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />);
+    expect(screen.getByRole('img', { name: /annotated chamber drawings/i })).toBeInTheDocument();
+    expect(screen.getByText('Dimension reference')).toBeInTheDocument();
+  });
+
   it('renders a row per output with its label and status', () => {
     render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />);
     expect(screen.getByText('B Kammer')).toBeInTheDocument();

@@ -843,3 +843,6 @@ Demande user : « adjust the margin of the chamber creation tab […] make it mo
 
 #### Ajustement — Chambre : table Parameters en pleine largeur aussi (2026-08-31)
 Demande user : « make the parameters table also be the whole width ». Le wrapper `max-w-content` autour de `ChamberBuildWarnings` + `ChamberOutputsTable` (ajouté par la feature pleine largeur du même jour) est retiré : warnings et table s'étirent désormais comme le reste de la page `/chamber`. Aucun autre changement.
+
+#### Ajout — Chambre : dessin de référence des dimensions sous la table Parameters (2026-08-31)
+Demande user : « add this picture at the bottom as an explanation to the terms in the parameter box » (image collée dans le chat, récupérée depuis le presse-papiers Windows en 1319×511). Asset committé : `apps/web/src/features/chamber/assets/chamber-dimensions.png` (vue en plan : B Kammer, B1, BF1/BF2, LF1/LF2, LT ; vue en coupe : H Kammer, LEB, LEOW, HLE, LE Ø). `ChamberOutputsTable` : `<figure>` « Dimension reference » en pied de carte (bordure haute, légende texte, `alt` détaillé, `loading="lazy"`, largeur fluide plafonnée à la taille native 1319px — jamais d'upscale flou), affichée dans les deux états (table remplie et invite « enter valid inputs »). Test ajouté (rendu de l'image dans les deux états) — 8/8 sur le fichier ; typecheck web OK.
