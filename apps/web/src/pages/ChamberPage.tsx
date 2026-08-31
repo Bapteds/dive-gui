@@ -216,18 +216,13 @@ export function ChamberPage() {
         </div>
       </div>
 
-      {/* The page is full-width (AppShell opts /chamber out of the centered
-          container) so the viewer can stretch; the Parameters table would be
-          unreadably wide at that size, so it keeps the classic content width. */}
-      <div className="flex w-full max-w-content flex-col gap-6">
-        <ChamberBuildWarnings warnings={buildWarnings} />
+      <ChamberBuildWarnings warnings={buildWarnings} />
 
-        <ChamberOutputsTable
-          outputs={outputs}
-          constraints={constraints}
-          onConstraintChange={onConstraintChange}
-        />
-      </div>
+      <ChamberOutputsTable
+        outputs={outputs}
+        constraints={constraints}
+        onConstraintChange={onConstraintChange}
+      />
     </div>
   );
 }
