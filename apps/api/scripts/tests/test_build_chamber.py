@@ -89,8 +89,15 @@ def test_build_writes_viewer_and_cad_exports(build, name):
         assert edges_size == 0, f"{name}: expected an empty edges.bin, got {edges_size} bytes"
     else:
         assert edges_size > 0, f"{name}: edges.bin is empty"
-    assert os.path.getsize(result.export_path("chamber.step")) > 0
     assert os.path.getsize(result.export_path("chamber.stl")) > 0
+    # The STEP is deferred for guide-vane builds (the carve + gate is ~2/3 of
+    # the build): a plain vane build ships neither chamber.step nor
+    # build-meta.json — the API regenerates with --step on first download.
+    if "vanes" in name:
+        assert not os.path.exists(result.export_path("chamber.step")), name
+        assert result.build_meta is None, name
+    else:
+        assert os.path.getsize(result.export_path("chamber.step")) > 0
 
 
 def test_feet_toggle_carves_the_foot_voids(build):
@@ -104,12 +111,14 @@ def test_feet_toggle_carves_the_foot_voids(build):
 
 
 def test_step_export_vane_policy(build):
-    """Every guide-vane build ships editable BREP vanes in the STEP. (Hollow
+    """A --step guide-vane build ships editable BREP vanes in the STEP. (Hollow
     used to fall back vane-less: its OCC boolean self-overlapped at the blunt
     TE corners; the tangent TE rounding fixed the overlap, so both variants now
     pass the round-trip volume gate.)"""
     for name in ("stepped-vanes", "hollow-vanes"):
-        result = build(name)
+        result = build(name, step=True)
+        assert result.exit_code == 0, result.stderr
+        assert os.path.getsize(result.export_path("chamber.step")) > 0, name
         assert result.build_meta == {"stepHasVanes": True}, name
         assert "falls back to the vane-less solid" not in result.stderr, name
 
@@ -309,7 +318,7 @@ def test_mirror_step_flips_handedness_in_place(build, tmp_path):
     import cadquery as cq
     import trimesh
 
-    result = build("stepped-vanes")
+    result = build("stepped-vanes", step=True)
     assert result.build_meta == {"stepHasVanes": True}
     src = result.export_path("chamber.step")
     dst = str(tmp_path / "chamber-mirrored.step")

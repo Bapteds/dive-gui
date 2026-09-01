@@ -276,11 +276,54 @@ export async function getChamberEdges(hash: string): Promise<Buffer | null> {
 }
 
 /**
+ * Generate a build's chamber.step by re-running the builder with --step.
+ * Guide-vane builds defer the STEP (the OCC blade carve + verification gate is
+ * ~2/3 of the build), so the first STEP download pays roughly one build here;
+ * the file is then cached with the build. Non-vane builds write their STEP at
+ * build time and never reach this. The original build's persisted warnings are
+ * not touched.
+ *
+ * @throws 409 CHAMBER_NOT_BUILT when the build itself is absent.
+ * @throws 500 SCRIPT_MISSING / 502 CHAMBER_BUILD_FAILED on tooling failures.
+ */
+async function generateStep(hash: string): Promise<void> {
+  if (!(await chamberGlbExists(hash))) {
+    throw new AppError(409, 'CHAMBER_NOT_BUILT', 'This chamber has not been built yet.');
+  }
+  const script = buildChamberScript();
+  if (!(await pathExists(script))) {
+    throw new AppError(
+      500,
+      'SCRIPT_MISSING',
+      `Chamber builder not found at ${script}. Set BUILD_CHAMBER_SCRIPT to its absolute path.`,
+    );
+  }
+  const paths = chamberPaths(hash);
+  const result = await runCommand({
+    command: env.CHAMBER_PYTHON_BIN,
+    args: [script, paths.params, paths.dir, '--step'],
+    cwd: paths.dir,
+    env: process.env,
+    timeoutMs: env.CHAMBER_BUILD_TIMEOUT_MS,
+  });
+  const stepPath = path.join(paths.exportsDir, CHAMBER_EXPORT_FILES.step);
+  if (
+    result.spawnError ||
+    result.timedOut ||
+    result.exitCode !== 0 ||
+    !(await pathExists(stepPath))
+  ) {
+    throw new AppError(502, 'CHAMBER_BUILD_FAILED', summarizeFailure(result));
+  }
+}
+
+/**
  * Generate the mirrored STEP ("Change rotational direction") for one build by
- * running mirrorStep.py on its chamber.step. Only allowed when the STEP export
- * carries the real guide vanes (stepHasVanes true) — the vane-less fallback and
- * non-vane builds refuse. The script writes atomically (tmp + rename), so a
- * concurrent first click at worst re-runs it harmlessly.
+ * running mirrorStep.py on its chamber.step — generating THAT first when the
+ * build deferred it. Only allowed when the STEP export carries the real guide
+ * vanes (stepHasVanes true) — the vane-less fallback and non-vane builds
+ * refuse. The script writes atomically (tmp + rename), so a concurrent first
+ * click at worst re-runs it harmlessly.
  *
  * @throws 409 CHAMBER_NOT_BUILT when the build/meta does not qualify.
  * @throws 500 SCRIPT_MISSING / 502 CHAMBER_BUILD_FAILED on tooling failures.
@@ -289,7 +332,7 @@ async function generateMirroredStep(hash: string): Promise<void> {
   const paths = chamberPaths(hash);
   const src = path.join(paths.exportsDir, CHAMBER_EXPORT_FILES.step);
   if (!(await pathExists(src))) {
-    throw new AppError(409, 'CHAMBER_NOT_BUILT', 'This chamber has not been built yet.');
+    await generateStep(hash);
   }
   const meta = await readChamberBuildMeta(hash);
   if (meta.stepHasVanes !== true) {
@@ -321,12 +364,17 @@ async function generateMirroredStep(hash: string): Promise<void> {
 }
 
 /**
- * Return one export artifact's bytes. The mirrored STEP is generated on demand
- * at its first download and then served from disk like every other export.
- * @throws 404 when absent (or the mirror-specific 409/502, see above).
+ * Return one export artifact's bytes. The guide-vane STEP and the mirrored
+ * STEP are generated on demand at their first download and then served from
+ * disk like every other export.
+ * @throws 404 when absent (or the generation-specific 409/502, see above).
  */
 export async function getChamberExport(hash: string, kind: ChamberExportKind): Promise<Buffer> {
   let buf = await readChamberExport(hash, kind);
+  if (!buf && kind === 'step') {
+    await generateStep(hash);
+    buf = await readChamberExport(hash, kind);
+  }
   if (!buf && kind === 'stepMirrored') {
     await generateMirroredStep(hash);
     buf = await readChamberExport(hash, kind);

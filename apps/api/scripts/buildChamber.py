@@ -30,7 +30,10 @@ Outputs written under <outDir>:
     manifest.json          bare MeshPatch[]  ({name,type,nFaces,edgeOffset,edgeCount})
     edges.bin              raw little-endian float32 line-segment endpoints
     exports/chamber.stl    the whole solid (single watertight mesh)
-    exports/chamber.step   the whole solid (BREP)
+    exports/chamber.step   the whole solid (BREP). Guide-vane builds write it
+                           only with --step (the carve + gate is ~2/3 of the
+                           build); the API re-runs the builder with the flag
+                           on the first STEP download.
     exports/trisurface.zip inlet/outlet/cylinder_walls/walls.stl + domain.stl
 
 Dependencies (runtime): cadquery, trimesh, numpy. Imported INSIDE main() (after
@@ -1246,11 +1249,17 @@ def write_ascii_solid(fh, name, tri):
 
 
 def main():
-    if len(sys.argv) != 3:
-        sys.stderr.write("usage: python buildChamber.py <paramsJson> <outDir>\n")
+    if len(sys.argv) not in (3, 4) or (len(sys.argv) == 4 and sys.argv[3] != "--step"):
+        sys.stderr.write("usage: python buildChamber.py <paramsJson> <outDir> [--step]\n")
         sys.exit(2)
 
     params_path, out_dir = sys.argv[1], sys.argv[2]
+    # --step: also produce the guide-vane STEP (OCC blade carve + round-trip
+    # gate, ~2/3 of a vane build's wall clock). Without it a guide-vane build
+    # skips chamber.step entirely — the API re-runs the builder with the flag
+    # when the STEP is first downloaded. Non-vane STEPs are effectively free
+    # and are always written, flag or not.
+    force_step = len(sys.argv) == 4
 
     try:
         import numpy as np
@@ -1887,13 +1896,17 @@ def main():
             cq.exporters.export(result, os.path.join(exports_dir, "chamber.stl"),
                                 tolerance=STL_TOLERANCE)
 
-        # STEP. Non-guide-vane builds: the OCC `result` (already the true solid).
-        # Guide-vane builds: try to carve the distributor as OCC BREP so the STEP
-        # carries editable vanes; on ANY failure fall back to the vane-less OCC solid
-        # (a STEP issue must never fail the build). step_has_vanes: True/False for
-        # guide-vane builds (False = vane-less fallback), None = not a vane build.
+        # STEP. Non-guide-vane builds: the OCC `result` (already the true solid),
+        # written unconditionally (it costs ~0.05 s). Guide-vane builds: the carve
+        # + gate below costs ~2/3 of the build, so it only runs with --step (the
+        # on-demand STEP download); a plain vane build ships no chamber.step and
+        # no build-meta.json. With --step: try to carve the distributor as OCC
+        # BREP so the STEP carries editable vanes; on ANY failure fall back to the
+        # vane-less OCC solid (a STEP issue must never fail the build).
+        # step_has_vanes: True/False for guide-vane builds (False = vane-less
+        # fallback), None = not a vane build / vane STEP not generated.
         step_has_vanes = None
-        if guide_vanes:
+        if guide_vanes and force_step:
             step_has_vanes = False
             occ_fluid = None
             airfoil = _load_vane_blade_profile(np)
@@ -1917,7 +1930,7 @@ def main():
                 sys.stderr.write(
                     "WARN: chamber.step falls back to the vane-less solid (no vanes carved)\n")
                 cq.exporters.export(result, os.path.join(exports_dir, "chamber.step"))
-        else:
+        elif not guide_vanes:
             cq.exporters.export(result, os.path.join(exports_dir, "chamber.step"))
 
         # per-build meta: does the STEP carry the guide vanes? (guide-vane builds only;

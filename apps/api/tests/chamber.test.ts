@@ -53,12 +53,18 @@ const warningRunner: CommandRunner = async (spec) => {
   };
 };
 
-/** successRunner + a build-meta.json declaring the STEP vane state, exactly as
- * buildChamber.py writes it for guide-vane builds. */
-function metaRunner(stepHasVanes: boolean): CommandRunner {
+/** Fake VANE builder mirroring the real deferred-STEP policy: a plain build
+ * writes NO chamber.step and NO build-meta.json; a --step run writes both
+ * (stepHasVanes as given, i.e. whether the vane carve succeeded). */
+function vaneRunner(stepHasVanes: boolean): CommandRunner {
   return async (spec) => {
     const result = await successRunner(spec);
-    await fs.writeFile(path.join(spec.args[2], 'build-meta.json'), JSON.stringify({ stepHasVanes }));
+    const outDir = spec.args[2];
+    if (spec.args[3] === '--step') {
+      await fs.writeFile(path.join(outDir, 'build-meta.json'), JSON.stringify({ stepHasVanes }));
+    } else {
+      await fs.rm(path.join(outDir, 'exports', 'chamber.step'), { force: true });
+    }
     return result;
   };
 }
@@ -177,7 +183,7 @@ describe('Chamber Creation', () => {
   describe('mirrored STEP (Change rotational direction)', () => {
     const VANES = { ...BUILD, guideVanes: true };
 
-    it('reports stepHasVanes from the build meta, null without one, and on cache hits', async () => {
+    it('defers the vane STEP: null stepHasVanes at build, meta persisted after generation', async () => {
       const auth = authHeader(await createTestUser());
       setCommandRunner(successRunner);
       const plain = await request(app)
@@ -187,15 +193,24 @@ describe('Chamber Creation', () => {
         .expect(200);
       expect(plain.body.stepHasVanes).toBeNull();
 
-      setCommandRunner(metaRunner(true));
+      // A fresh vane build ships no STEP and no meta: stepHasVanes is unknown.
+      setCommandRunner(vaneRunner(true));
       const vanes = await request(app)
         .post('/api/v1/chamber/build')
         .set('Authorization', auth)
         .send(VANES)
         .expect(200);
-      expect(vanes.body.stepHasVanes).toBe(true);
+      expect(vanes.body.stepHasVanes).toBeNull();
 
-      // A cache hit (failing runner proves no re-run) reports the persisted meta.
+      // Downloading the STEP re-runs the builder with --step and serves it.
+      const step = await request(app)
+        .get(`/api/v1/chamber/${vanes.body.hash}/export/step`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(step.headers['content-disposition']).toContain('chamber.step');
+
+      // Now the meta exists: a cache hit (failing runner proves no re-run)
+      // reports stepHasVanes true.
       setCommandRunner(notFoundRunner);
       const cached = await request(app)
         .post('/api/v1/chamber/build')
@@ -206,14 +221,51 @@ describe('Chamber Creation', () => {
       expect(cached.body.stepHasVanes).toBe(true);
     });
 
-    it('generates the mirrored STEP on first download, then serves the cached file', async () => {
+    it('generates the vane STEP once with --step, then serves the cached file', async () => {
       const auth = authHeader(await createTestUser());
+      let stepRuns = 0;
+      setCommandRunner(
+        withMirrorRunner(async (spec) => {
+          if (spec.args[3] === '--step') stepRuns += 1;
+          return vaneRunner(true)(spec);
+        }, mirrorSuccessRunner),
+      );
+      const built = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      expect(stepRuns).toBe(0);
+
+      await request(app)
+        .get(`/api/v1/chamber/${built.body.hash}/export/step`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(stepRuns).toBe(1);
+
+      // Second download is served from disk — no new builder run.
+      await request(app)
+        .get(`/api/v1/chamber/${built.body.hash}/export/step`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(stepRuns).toBe(1);
+    });
+
+    it('one click on the mirrored STEP generates the STEP first, then mirrors, then caches', async () => {
+      const auth = authHeader(await createTestUser());
+      let stepRuns = 0;
       let mirrorRuns = 0;
       setCommandRunner(
-        withMirrorRunner(metaRunner(true), async (spec) => {
-          mirrorRuns += 1;
-          return mirrorSuccessRunner(spec);
-        }),
+        withMirrorRunner(
+          async (spec) => {
+            if (spec.args[3] === '--step') stepRuns += 1;
+            return vaneRunner(true)(spec);
+          },
+          async (spec) => {
+            mirrorRuns += 1;
+            return mirrorSuccessRunner(spec);
+          },
+        ),
       );
       const built = await request(app)
         .post('/api/v1/chamber/build')
@@ -227,31 +279,39 @@ describe('Chamber Creation', () => {
         .expect(200);
       expect(first.headers['content-type']).toContain('application/step');
       expect(first.headers['content-disposition']).toContain('chamber-mirrored.step');
+      expect(stepRuns).toBe(1);
       expect(mirrorRuns).toBe(1);
 
-      // Second download is served from disk — the mirrorer does not run again.
+      // Second download is served from disk — no tool runs again.
       await request(app)
         .get(`/api/v1/chamber/${built.body.hash}/export/stepMirrored`)
         .set('Authorization', auth)
         .expect(200);
+      expect(stepRuns).toBe(1);
       expect(mirrorRuns).toBe(1);
     });
 
     it('refuses the mirrored STEP for a vane-less fallback or a non-vane build', async () => {
       const auth = authHeader(await createTestUser());
-      setCommandRunner(withMirrorRunner(metaRunner(false), mirrorSuccessRunner));
+      // The vane carve falls back: the generated STEP downloads fine, but the
+      // mirror is refused (meta stepHasVanes false).
+      setCommandRunner(withMirrorRunner(vaneRunner(false), mirrorSuccessRunner));
       const fallback = await request(app)
         .post('/api/v1/chamber/build')
         .set('Authorization', auth)
         .send(VANES)
         .expect(200);
-      expect(fallback.body.stepHasVanes).toBe(false);
       const refused = await request(app)
         .get(`/api/v1/chamber/${fallback.body.hash}/export/stepMirrored`)
         .set('Authorization', auth)
         .expect(409);
       expect(refused.body.error.message).toContain('carries the guide vanes');
+      await request(app)
+        .get(`/api/v1/chamber/${fallback.body.hash}/export/step`)
+        .set('Authorization', auth)
+        .expect(200);
 
+      // Non-vane build: STEP exists from build time, mirror refused (no meta).
       setCommandRunner(withMirrorRunner(successRunner, mirrorSuccessRunner));
       const plain = await request(app)
         .post('/api/v1/chamber/build')
@@ -267,7 +327,7 @@ describe('Chamber Creation', () => {
     it('fails cleanly when the mirrorer errors, and recovers on the next attempt', async () => {
       const auth = authHeader(await createTestUser());
       setCommandRunner(
-        withMirrorRunner(metaRunner(true), async (spec) => ({
+        withMirrorRunner(vaneRunner(true), async (spec) => ({
           command: spec.command,
           args: spec.args,
           exitCode: 1,
@@ -289,7 +349,7 @@ describe('Chamber Creation', () => {
       expect(failed.body.error.message).toContain('KO: no solids');
 
       // The failure left no half-written file: a later attempt regenerates.
-      setCommandRunner(withMirrorRunner(metaRunner(true), mirrorSuccessRunner));
+      setCommandRunner(withMirrorRunner(vaneRunner(true), mirrorSuccessRunner));
       await request(app)
         .get(`/api/v1/chamber/${built.body.hash}/export/stepMirrored`)
         .set('Authorization', auth)

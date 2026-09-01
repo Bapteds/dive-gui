@@ -62,18 +62,18 @@ describe('ChamberExportButtons', () => {
     expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 
-  it('keeps STEP a plain download for a vane-less fallback STEP', async () => {
+  it('keeps STEP a plain download when the mirror option is not offered', async () => {
     vi.mocked(getChamberExport).mockResolvedValue(new Blob(['ISO-10303-21;']));
-    render(<ChamberExportButtons hash={HASH} stepHasVanes={false} />);
+    render(<ChamberExportButtons hash={HASH} offerMirror={false} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'STEP' }));
     await waitFor(() => expect(getChamberExport).toHaveBeenCalledWith(HASH, 'step'));
     expect(screen.queryByRole('menuitem')).toBeNull();
   });
 
-  it('offers "Change rotational direction" when the STEP carries the vanes', async () => {
+  it('offers "Change rotational direction" for a guide-vane build', async () => {
     vi.mocked(getChamberExport).mockResolvedValue(new Blob(['ISO-10303-21;']));
-    render(<ChamberExportButtons hash={HASH} stepHasVanes={true} />);
+    render(<ChamberExportButtons hash={HASH} offerMirror />);
 
     await userEvent.click(screen.getByRole('button', { name: 'STEP' }));
     await userEvent.click(
@@ -85,7 +85,7 @@ describe('ChamberExportButtons', () => {
 
   it('still downloads the plain STEP from the vane-STEP menu', async () => {
     vi.mocked(getChamberExport).mockResolvedValue(new Blob(['ISO-10303-21;']));
-    render(<ChamberExportButtons hash={HASH} stepHasVanes={true} />);
+    render(<ChamberExportButtons hash={HASH} offerMirror />);
 
     await userEvent.click(screen.getByRole('button', { name: 'STEP' }));
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Download STEP' }));

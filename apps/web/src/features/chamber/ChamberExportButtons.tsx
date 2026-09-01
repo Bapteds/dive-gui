@@ -18,11 +18,12 @@ import { getChamberExport, type ChamberExportKind } from '@/lib/api/chamber';
  * client) and triggers a transient object-URL download. Disabled until a build
  * exists.
  *
- * When the STEP export carries the real guide vanes (stepHasVanes true), the
- * STEP button becomes a menu with the plain download plus "Change rotational
- * direction" — the same build mirrored on the z-y plane, generated server-side
- * on its first download (the button spins for the ~10-30 s it takes) and cached
- * with the build after.
+ * For guide-vane builds (offerMirror) the STEP button becomes a menu with the
+ * plain download plus "Change rotational direction" — the same build mirrored
+ * on the z-y plane. Vane builds DEFER the STEP export (the blade carve is ~2/3
+ * of the build), so the first STEP download of a build regenerates it
+ * server-side (~a build's worth of waiting, announced by an info toast; cached
+ * after, and the mirrored variant reuses it).
  */
 
 const EXPORTS: { kind: ChamberExportKind; label: string; filename: string }[] = [
@@ -33,17 +34,22 @@ const EXPORTS: { kind: ChamberExportKind; label: string; filename: string }[] = 
 
 export function ChamberExportButtons({
   hash,
-  stepHasVanes = null,
+  offerMirror = false,
 }: {
   hash: string | null;
-  /** From the build response: true unlocks the mirrored-STEP option. */
-  stepHasVanes?: boolean | null;
+  /** Guide-vane build whose STEP is not a known vane-less fallback: shows the
+   * STEP menu (plain + "Change rotational direction"), both generated on
+   * demand at first download. */
+  offerMirror?: boolean;
 }) {
   const [busy, setBusy] = useState<ChamberExportKind | null>(null);
 
   async function download(kind: ChamberExportKind, filename: string) {
     if (!hash) return;
     setBusy(kind);
+    if (offerMirror && (kind === 'step' || kind === 'stepMirrored')) {
+      toast.info('Preparing the STEP export — the first download of a build can take a minute.');
+    }
     try {
       const blob = await getChamberExport(hash, kind);
       const url = URL.createObjectURL(blob);
@@ -64,7 +70,7 @@ export function ChamberExportButtons({
   return (
     <div className="flex flex-wrap items-center gap-2">
       {EXPORTS.map((e) =>
-        e.kind === 'step' && stepHasVanes === true ? (
+        e.kind === 'step' && offerMirror ? (
           <DropdownMenu key={e.kind}>
             <DropdownMenuTrigger asChild>
               <Button
