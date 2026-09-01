@@ -114,7 +114,10 @@ function resolveGeometryParams(
   outputs: ChamberOutput[],
 ): Record<string, number | string | boolean> {
   const widthMm = outputFinal(outputs, 'width');
-  const lengthMm = input.lengthOverride ?? 2 * widthMm; // default: length = 2 x width
+  // Default: length = 2 x width — a true identity, so it inherits width's grid
+  // snap (an empirical width is already on the 50 mm grid) or propagates a
+  // user-driven width verbatim. A lengthOverride is the user's number as-is.
+  const lengthMm = input.lengthOverride ?? 2 * widthMm;
   const variant = input.variant ?? 'stepped';
 
   const params: Record<string, number | string | boolean> = { length: lengthMm * MM_TO_M, variant };

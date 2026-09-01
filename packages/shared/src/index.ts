@@ -2238,6 +2238,14 @@ export interface ChamberRelation {
   terms?: readonly { key: ChamberOutputKey; coeff: number }[];
   /** 'combination': additive constant (default 0). */
   constant?: number;
+  /**
+   * 'combination' only: the relation is a fitted formula, not a true identity
+   * (e.g. LE = 255.16 + 3.4954 × HLE) — its result stays an empirical estimate,
+   * so it is snapped to the CHAMBER_GRID_MM grid and never inherits a partner's
+   * user-driven flag. Identities (= LF1, = LEB + LEOW, …) leave this unset and
+   * propagate a user-driven partner's value verbatim.
+   */
+  empirical?: boolean;
 }
 
 /**
@@ -2317,7 +2325,7 @@ export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
     coeffs: { a: 221.4522145, b: 1.498949106, c: -9.02505593, d: 14.40321366 },
     relation: { kind: 'combination', defaultOn: true, label: '= f(HLE)',
       description: 'LE = 255.16 + 3.4954 × HLE.',
-      constant: 255.16, terms: [{ key: 'hMiddle', coeff: 3.4954 }] } },
+      constant: 255.16, terms: [{ key: 'hMiddle', coeff: 3.4954 }], empirical: true } },
   // P10: hMiddle. No relation.
   { key: 'hMiddle', label: 'HLE', form: 'linear', cvError: 5.8, confidence: 'High',
     coeffs: { a: 17.17464869, b: 0.435873881, c: -6.126007422, d: 2.320487817 } },
@@ -2356,6 +2364,14 @@ export const CHAMBER_RELATIONS: readonly ChamberRelationInfo[] = CHAMBER_OUTPUT_
   description: s.relation!.description,
   defaultOn: s.relation!.defaultOn,
 }));
+
+/** Manufacturing grid (mm): empirically found dimensions snap to multiples of this. */
+export const CHAMBER_GRID_MM = 50;
+
+/** Snap an empirical estimate (mm) to the nearest manufacturing-grid multiple. */
+export function snapToChamberGrid(valueMm: number): number {
+  return Math.round(valueMm / CHAMBER_GRID_MM) * CHAMBER_GRID_MM;
+}
 
 /** An optional per-output override: pin an Exact value, or clamp to Min / Max. */
 export interface ChamberConstraint {
@@ -2557,7 +2573,10 @@ export interface ChamberOutput {
   form: ChamberForm;
   /** Raw regression value (mm). */
   model: number;
-  /** Value after the Min / Max / Exact override (mm) — what the builder uses. */
+  /**
+   * Value the builder uses (mm): the model snapped to the CHAMBER_GRID_MM grid
+   * (unless user-driven, see `userDriven`), then Min / Max / Exact applied.
+   */
   final: number;
   status: ChamberStatus;
   /** Present when status is 'from relation': the relation label, e.g. '= LEB + LEOW'. */
@@ -2569,6 +2588,13 @@ export interface ChamberOutput {
    * partner had a measured Exact value and the relation was on).
    */
   refined: boolean;
+  /**
+   * True when the FINAL is the user's own number rather than a snapped estimate:
+   * a direct Exact, a bitten Min/Max, or a true-identity relation with a
+   * user-driven partner (whose value propagates verbatim). When false the final
+   * sits on the CHAMBER_GRID_MM grid.
+   */
+  userDriven: boolean;
   /**
    * True when this output cannot influence the built geometry with the current
    * settings. Only LEOW (hLast) is ever flagged: the builder never consumes it
@@ -2624,7 +2650,10 @@ function resolveChamberFinal(
 
 /**
  * Compute the twelve outputs for a set of inputs: the raw model value and the
- * FINAL after the optional Min / Max / Exact override, with a Status. This is
+ * FINAL after grid-snapping and the optional Min / Max / Exact override, with a
+ * Status. Empirical estimates (fits, refine fits, and fitted-formula relations)
+ * snap to the nearest CHAMBER_GRID_MM; user-entered values — an Exact, a bitten
+ * Min/Max, or an identity chain fed by one — pass through verbatim. This is
  * the one place the model lives; the Python builder receives the resolved FINAL
  * values and does no model math.
  */
@@ -2643,9 +2672,20 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
     baseStatus: ChamberStatus,
     refined: boolean,
     relationLabel?: string,
+    inheritsUserDriven = false,
   ) => {
     const con = constraints?.[spec.key] ?? {};
-    const { final, status } = resolveChamberFinal(model, con, baseStatus);
+    // An empirical estimate snaps to the manufacturing grid; a true identity
+    // driven by a user-entered partner propagates that value verbatim. The
+    // user's Min/Max then clamp the snapped value (a bitten clamp yields the
+    // user's own number again).
+    const snapped = inheritsUserDriven ? model : snapToChamberGrid(model);
+    const { final, status } = resolveChamberFinal(snapped, con, baseStatus);
+    const userDriven =
+      inheritsUserDriven ||
+      status === 'set exact' ||
+      status === 'capped at max' ||
+      status === 'raised to min';
     byKey.set(spec.key, {
       key: spec.key,
       label: spec.label,
@@ -2657,6 +2697,7 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
       cvError: spec.cvError,
       confidence: spec.confidence,
       refined,
+      userDriven,
     });
   };
 
@@ -2691,7 +2732,10 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
       if (!rel.terms!.every((t) => byKey.has(t.key))) continue;
       const model =
         (rel.constant ?? 0) + rel.terms!.reduce((sum, t) => sum + t.coeff * byKey.get(t.key)!.final, 0);
-      setOutput(spec, model, 'from relation', false, rel.label);
+      // A true identity over a user-driven partner keeps that value verbatim;
+      // a fitted formula (rel.empirical, e.g. LE = f(HLE)) always re-snaps.
+      const inherits = !rel.empirical && rel.terms!.some((t) => byKey.get(t.key)!.userDriven);
+      setOutput(spec, model, 'from relation', false, rel.label, inherits);
       progressed = true;
     }
   }
