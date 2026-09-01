@@ -86,6 +86,11 @@ describe('ChamberOutputsTable', () => {
     expect(screen.queryByText('no effect')).not.toBeInTheDocument();
   });
 
+  it('explains the 50 mm grid in the header hint', () => {
+    render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />);
+    expect(screen.getByText(/snap to the 50 mm grid/)).toBeInTheDocument();
+  });
+
   it('flags a non-positive final as not buildable, live', () => {
     // Legal inputs whose own H Kammer fit is negative with relations off.
     const outputs = computeChamberOutputs({ x1: 700, x2: 1.8, x3: 23, relationsMaster: false });

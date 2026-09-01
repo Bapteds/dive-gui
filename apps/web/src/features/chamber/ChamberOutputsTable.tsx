@@ -108,7 +108,9 @@ export function ChamberOutputsTable({
     <div className="overflow-hidden rounded-md border border-border bg-surface shadow-sm">
       <div className="flex items-center justify-between border-b border-border px-5 py-3">
         <h2 className="text-lg font-semibold text-text">Parameters</h2>
-        <span className="text-xs text-text-secondary">values in mm</span>
+        <span className="text-xs text-text-secondary">
+          values in mm · empirical values snap to the 50 mm grid
+        </span>
       </div>
       {outputs === null ? (
         <p className="px-5 py-8 text-center text-sm text-text-secondary">
@@ -123,7 +125,12 @@ export function ChamberOutputsTable({
               <TableHead>Min</TableHead>
               <TableHead>Max</TableHead>
               <TableHead>Exact</TableHead>
-              <TableHead className="text-right">Final</TableHead>
+              <TableHead
+                className="text-right"
+                title="Model estimates are rounded to the nearest 50 mm. Your Exact values and bitten Min/Max pass through unrounded, and identities (= LF1, = LEB + LEOW, …) propagate them verbatim."
+              >
+                Final
+              </TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Confidence</TableHead>
             </TableRow>

@@ -251,6 +251,23 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
     );
   }
 
+  // An inverted range is a contradiction, not an input: building on the
+  // silently-ignored model value hid the mistake (and it survived into saves).
+  const inverted = outputs.filter((o) => o.status === '! min>max');
+  if (inverted.length) {
+    const list = inverted
+      .map((o) => {
+        const con = input.constraints?.[o.key];
+        return `${o.label}: Min ${con?.min ?? '?'} > Max ${con?.max ?? '?'}`;
+      })
+      .join(', ');
+    throw new AppError(
+      422,
+      'VALIDATION_ERROR',
+      `Cannot build: inverted constraint range on ${list}. Fix or clear those Min/Max values.`,
+    );
+  }
+
   const params = resolveGeometryParams(input, outputs);
   const hash = chamberHash(params);
 
@@ -370,6 +387,17 @@ async function generateStep(hash: string): Promise<void> {
     !(await pathExists(stepPath))
   ) {
     throw new AppError(502, 'CHAMBER_BUILD_FAILED', summarizeFailure(result));
+  }
+
+  // The --step run can surface NEW warnings the original build could not know
+  // (above all "chamber.step falls back to the vane-less solid"). Merge them
+  // into the persisted list — deduped, since the re-run repeats the original
+  // build's warnings too — so cache hits keep reporting the full story.
+  const runWarnings = extractBuilderWarnings(result.stderr, result.stdout);
+  const existing = await readChamberWarnings(hash);
+  const fresh = runWarnings.filter((w) => !existing.includes(w));
+  if (fresh.length) {
+    await writeChamberWarnings(hash, [...existing, ...fresh]);
   }
 }
 

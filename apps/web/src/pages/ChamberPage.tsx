@@ -10,8 +10,9 @@ import {
   CHAMBER_D_MIDDLE_OVER_LAST,
   computeChamberOutputs,
 } from '@dive/shared';
-import type { ChamberConstraint, ChamberOutput, ChamberOutputKey } from '@/lib/api/types';
+import type { ChamberConstraint, ChamberInput, ChamberOutput, ChamberOutputKey } from '@/lib/api/types';
 import { ApiError } from '@/lib/api/client';
+import { buildChamber as buildChamberRequest, type ChamberExportKind } from '@/lib/api/chamber';
 import { toast } from '@/components/ui/sonner';
 import { PageHeader } from '@/components/common/PageHeader';
 import { ChamberInputsForm, type ChamberAutoDims } from '@/features/chamber/ChamberInputsForm';
@@ -65,6 +66,10 @@ export function ChamberPage() {
   // not already KNOWN to be the vane-less fallback. Vane builds defer the STEP
   // export, so stepHasVanes is usually null until the first STEP download.
   const [offerMirror, setOfferMirror] = useState(false);
+  // The exact body of the LAST successful build: powers the "inputs changed
+  // since this build" note and the silent post-download refresh (a re-POST of
+  // this body is a guaranteed cache hit on the same hash).
+  const [lastBuildInput, setLastBuildInput] = useState<ChamberInput | null>(null);
   // Geometry clamp warnings from the LAST build (kept in step with `hash`).
   const [buildWarnings, setBuildWarnings] = useState<string[]>([]);
   // Why the LAST Generate produced nothing (refused build or invalid inputs).
@@ -153,29 +158,44 @@ export function ChamberPage() {
 
   const onGenerate = handleSubmit(
     (v) => {
-      build.mutate(
-        { ...v, constraints },
-        {
-          onSuccess: (res) => {
-            setHash(res.hash);
-            setOfferMirror(Boolean(v.guideVanes) && res.stepHasVanes !== false);
-            setBuildErrors([]);
-            setBuildWarnings(res.warnings ?? []);
-            if (res.warnings?.length) {
-              toast.warning('Chamber generated with warnings — see the notes below the preview.');
-            } else {
-              toast.success('Chamber generated.');
-            }
-          },
-          onError: (err) => {
-            const message =
-              err instanceof ApiError ? err.message : 'Could not generate the chamber.';
-            // Both places: the persistent notices panel and the top-right toast.
-            setBuildErrors([message]);
-            toast.error(message);
-          },
+      // An inverted Min>Max is a contradiction the server refuses anyway —
+      // surface it here without a round trip (the table cell shows which row).
+      const inverted = (outputs ?? []).filter((o) => o.status === '! min>max');
+      if (inverted.length) {
+        const messages = inverted.map((o) => {
+          const con = constraints[o.key];
+          return `${o.label}: Min ${con?.min ?? '?'} > Max ${con?.max ?? '?'} — fix or clear those values.`;
+        });
+        setBuildWarnings([]);
+        setBuildErrors(messages);
+        toast.error('Inverted Min/Max range — see the notes below the preview.');
+        return;
+      }
+      const body = { ...v, constraints };
+      build.mutate(body, {
+        onSuccess: (res) => {
+          setHash(res.hash);
+          setOfferMirror(Boolean(v.guideVanes) && res.stepHasVanes !== false);
+          setLastBuildInput(body);
+          setBuildErrors([]);
+          setBuildWarnings(res.warnings ?? []);
+          if (res.warnings?.length) {
+            toast.warning('Chamber generated with warnings — see the notes below the preview.');
+          } else {
+            toast.success('Chamber generated.');
+          }
         },
-      );
+        onError: (err) => {
+          const message =
+            err instanceof ApiError ? err.message : 'Could not generate the chamber.';
+          // Both places: the persistent notices panel and the top-right toast.
+          // The previous build's warnings would sit confusingly under the new
+          // red errors — clear them (nothing new was built).
+          setBuildWarnings([]);
+          setBuildErrors([message]);
+          toast.error(message);
+        },
+      });
     },
     (fieldErrors) => {
       // Invalid submit: keep the inline field errors, and mirror a readable
@@ -188,10 +208,37 @@ export function ChamberPage() {
           return `${label}: ${detail}`;
         })
         .filter(Boolean);
+      setBuildWarnings([]);
       setBuildErrors(messages.length ? messages : ['Fix the highlighted inputs.']);
       toast.error('Invalid inputs — see the notes below the preview.');
     },
   );
+
+  // After an on-demand STEP/mirror generation, silently re-POST the built body
+  // (a pure cache hit): new builder warnings (e.g. the vane-less STEP fallback)
+  // reach the panel, and a discovered fallback collapses the STEP menu.
+  const onExportDownloaded = (kind: ChamberExportKind) => {
+    if (!lastBuildInput || (kind !== 'step' && kind !== 'stepMirrored')) return;
+    void buildChamberRequest(lastBuildInput)
+      .then((res) => {
+        setOfferMirror(Boolean(lastBuildInput.guideVanes) && res.stepHasVanes !== false);
+        const fresh = (res.warnings ?? []).filter((w) => !buildWarnings.includes(w));
+        setBuildWarnings(res.warnings ?? []);
+        if (fresh.length) {
+          toast.warning('New build notes — see below the preview.');
+        }
+      })
+      .catch(() => {
+        // The download itself succeeded; a failed refresh changes nothing.
+      });
+  };
+
+  // The preview/exports always show the LAST BUILT geometry; flag when the
+  // form or constraints have drifted from it since Generate.
+  const isStale =
+    hash !== null &&
+    lastBuildInput !== null &&
+    JSON.stringify({ ...values, constraints }) !== JSON.stringify(lastBuildInput);
 
   return (
     <div className="flex flex-col gap-6">
@@ -204,6 +251,13 @@ export function ChamberPage() {
             onLoad={(save) => {
               reset(chamberInputToFormValues(save.snapshot));
               setConstraints(save.snapshot.constraints ?? {});
+              // The loaded save is a DIFFERENT configuration: everything tied
+              // to the previous build (viewer, exports, notices) is stale now.
+              setHash(null);
+              setOfferMirror(false);
+              setLastBuildInput(null);
+              setBuildWarnings([]);
+              setBuildErrors([]);
             }}
           />
         }
@@ -230,7 +284,17 @@ export function ChamberPage() {
             <p className="mb-4 mt-1 text-sm text-text-secondary">
               Download the built chamber for meshing or CAD.
             </p>
-            <ChamberExportButtons hash={hash} offerMirror={offerMirror} />
+            {isStale && (
+              <p className="mb-3 rounded-sm border border-accent/40 bg-accent-tint px-3 py-2 text-xs text-text" role="status">
+                Inputs changed since this build — the preview and downloads
+                still show the previous geometry. Generate to refresh.
+              </p>
+            )}
+            <ChamberExportButtons
+              hash={hash}
+              offerMirror={offerMirror}
+              onDownloaded={onExportDownloaded}
+            />
             <div className="mt-4 border-t border-border pt-4">
               <Button
                 type="button"

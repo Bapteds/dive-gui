@@ -62,6 +62,22 @@ describe('ChamberExportButtons', () => {
     expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 
+  it('reports a successful download up via onDownloaded, but never a failed one', async () => {
+    const onDownloaded = vi.fn();
+    vi.mocked(getChamberExport).mockResolvedValue(new Blob(['solid chamber']));
+    const { unmount } = render(<ChamberExportButtons hash={HASH} onDownloaded={onDownloaded} />);
+    fireEvent.click(screen.getByRole('button', { name: 'STL' }));
+    await waitFor(() => expect(onDownloaded).toHaveBeenCalledWith('stl'));
+    unmount();
+
+    onDownloaded.mockClear();
+    vi.mocked(getChamberExport).mockRejectedValue(new Error('gone'));
+    render(<ChamberExportButtons hash={HASH} onDownloaded={onDownloaded} />);
+    fireEvent.click(screen.getByRole('button', { name: 'STL' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'STL' })).toBeEnabled());
+    expect(onDownloaded).not.toHaveBeenCalled();
+  });
+
   it('keeps STEP a plain download when the mirror option is not offered', async () => {
     vi.mocked(getChamberExport).mockResolvedValue(new Blob(['ISO-10303-21;']));
     render(<ChamberExportButtons hash={HASH} offerMirror={false} />);

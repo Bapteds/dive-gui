@@ -35,12 +35,16 @@ const EXPORTS: { kind: ChamberExportKind; label: string; filename: string }[] = 
 export function ChamberExportButtons({
   hash,
   offerMirror = false,
+  onDownloaded,
 }: {
   hash: string | null;
   /** Guide-vane build whose STEP is not a known vane-less fallback: shows the
    * STEP menu (plain + "Change rotational direction"), both generated on
    * demand at first download. */
   offerMirror?: boolean;
+  /** Fired after a SUCCESSFUL download — the page uses it to refresh the
+   * build's warnings/meta after an on-demand STEP generation. */
+  onDownloaded?: (kind: ChamberExportKind) => void;
 }) {
   const [busy, setBusy] = useState<ChamberExportKind | null>(null);
 
@@ -60,6 +64,7 @@ export function ChamberExportButtons({
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(url);
+      onDownloaded?.(kind);
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Could not download the export.');
     } finally {

@@ -291,6 +291,38 @@ describe('Chamber Creation', () => {
       expect(mirrorRuns).toBe(1);
     });
 
+    it('merges NEW warnings from the on-demand --step run into the persisted list', async () => {
+      const auth = authHeader(await createTestUser());
+      const FALLBACK = 'chamber.step falls back to the vane-less solid (no vanes carved)';
+      setCommandRunner(
+        withMirrorRunner(async (spec) => {
+          const result = await vaneRunner(false)(spec);
+          // Only the --step re-run discovers the fallback and warns about it.
+          return spec.args[3] === '--step' ? { ...result, stderr: `WARN: ${FALLBACK}\n` } : result;
+        }, mirrorSuccessRunner),
+      );
+      const built = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      expect(built.body.warnings).toEqual([]);
+
+      await request(app)
+        .get(`/api/v1/chamber/${built.body.hash}/export/step`)
+        .set('Authorization', auth)
+        .expect(200);
+
+      // A cache hit now reports the merged warning, exactly once.
+      setCommandRunner(notFoundRunner);
+      const cached = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      expect(cached.body.warnings).toEqual([FALLBACK]);
+    });
+
     it('refuses the mirrored STEP for a vane-less fallback or a non-vane build', async () => {
       const auth = authHeader(await createTestUser());
       // The vane carve falls back: the generated STEP downloads fine, but the
@@ -455,6 +487,18 @@ describe('Chamber Creation', () => {
       .expect(422);
     expect(res.body.error.message).toContain('H Kammer');
     expect(res.body.error.message).toContain('must be positive');
+  });
+
+  it('refuses an inverted Min>Max constraint range, before any builder run', async () => {
+    setCommandRunner(notFoundRunner);
+    const auth = authHeader(await createTestUser());
+    const res = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, constraints: { width: { min: 5000, max: 4000 } } })
+      .expect(422);
+    expect(res.body.error.message).toContain('B Kammer');
+    expect(res.body.error.message).toContain('Min 5000 > Max 4000');
   });
 
   it('rejects non-positive and absurdly large dimensions at the schema', async () => {
