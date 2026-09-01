@@ -46,6 +46,15 @@ def _zip_names(result):
         return sorted(zf.namelist())
 
 
+def _tmp_leftovers(out_dir):
+    """Any *.tmp files left under the build dir (artifacts are written to tmp
+    names and atomically renamed; a clean run must leave none behind)."""
+    leftovers = []
+    for root, _dirs, files in os.walk(out_dir):
+        leftovers += [os.path.join(root, f) for f in files if f.endswith(".tmp")]
+    return leftovers
+
+
 @pytest.mark.parametrize("name", list(GOLDEN))
 def test_build_succeeds_watertight_with_expected_patches(build, name):
     result = build(name)
@@ -98,6 +107,9 @@ def test_build_writes_viewer_and_cad_exports(build, name):
         assert result.build_meta is None, name
     else:
         assert os.path.getsize(result.export_path("chamber.step")) > 0
+    # Atomic-write discipline: a successful build promotes every artifact and
+    # leaves no tmp files behind (the GLB is renamed last as the cache marker).
+    assert _tmp_leftovers(result.out_dir) == [], name
 
 
 def test_feet_toggle_carves_the_foot_voids(build):
@@ -121,6 +133,7 @@ def test_step_export_vane_policy(build):
         assert os.path.getsize(result.export_path("chamber.step")) > 0, name
         assert result.build_meta == {"stepHasVanes": True}, name
         assert "falls back to the vane-less solid" not in result.stderr, name
+        assert _tmp_leftovers(result.out_dir) == [], name
 
 
 def test_hollow_overflow_is_refused(build):

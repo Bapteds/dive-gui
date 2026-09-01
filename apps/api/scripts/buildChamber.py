@@ -1872,29 +1872,47 @@ def main():
         exports_dir = os.path.join(out_dir, "exports")
         os.makedirs(exports_dir, exist_ok=True)
 
-        # GLB
-        scene.export(os.path.join(out_dir, "chamber.glb"), file_type="glb")
+        # Every artifact is written to "<final>.tmp" and os.replace()d onto its
+        # final name, so a concurrent reader (the API serves this directory
+        # while a --step re-run rewrites it) always sees a complete old or
+        # complete new file — never a truncation — and a killed run leaves only
+        # ignorable .tmp leftovers that the next run overwrites. chamber.glb is
+        # the API's cache-completeness marker, so it is exported here but
+        # PROMOTED LAST (just before OK:), after every other artifact landed:
+        # a build that dies anywhere in between leaves no GLB and the next
+        # identical request simply rebuilds.
+        def _tmp(path):
+            return path + ".tmp"
+
+        glb_path = os.path.join(out_dir, "chamber.glb")
+        scene.export(_tmp(glb_path), file_type="glb")
 
         # edges.bin (best-effort; viewer falls back to client feature edges)
         try:
             all_edges = (np.concatenate(edge_chunks) if edge_chunks
                          else np.zeros((0, 3), dtype=np.float32))
-            with open(os.path.join(out_dir, "edges.bin"), "wb") as fh:
+            edges_path = os.path.join(out_dir, "edges.bin")
+            with open(_tmp(edges_path), "wb") as fh:
                 fh.write(all_edges.astype("<f4").tobytes())
+            os.replace(_tmp(edges_path), edges_path)
         except Exception as edge_err:  # noqa: BLE001
             sys.stderr.write("WARN: could not write edges.bin: %s\n" % edge_err)
 
         # manifest
-        with open(os.path.join(out_dir, "manifest.json"), "w") as fh:
+        manifest_path = os.path.join(out_dir, "manifest.json")
+        with open(_tmp(manifest_path), "w") as fh:
             json.dump(manifest, fh)
+        os.replace(_tmp(manifest_path), manifest_path)
 
         # exports: whole solid STL + STEP. For guide-vane builds the STL is the true
         # boolean fluid F (core + casing removed).
+        stl_path = os.path.join(exports_dir, "chamber.stl")
         if guide_vanes:
-            fluid_F.export(os.path.join(exports_dir, "chamber.stl"))
+            fluid_F.export(_tmp(stl_path), file_type="stl")
         else:
-            cq.exporters.export(result, os.path.join(exports_dir, "chamber.stl"),
+            cq.exporters.export(result, _tmp(stl_path), exportType="STL",
                                 tolerance=STL_TOLERANCE)
+        os.replace(_tmp(stl_path), stl_path)
 
         # STEP. Non-guide-vane builds: the OCC `result` (already the true solid),
         # written unconditionally (it costs ~0.05 s). Guide-vane builds: the carve
@@ -1906,6 +1924,7 @@ def main():
         # step_has_vanes: True/False for guide-vane builds (False = vane-less
         # fallback), None = not a vane build / vane STEP not generated.
         step_has_vanes = None
+        step_path = os.path.join(exports_dir, "chamber.step")
         if guide_vanes and force_step:
             step_has_vanes = False
             occ_fluid = None
@@ -1924,24 +1943,28 @@ def main():
                 except Exception as _step_exc:  # noqa: BLE001
                     sys.stderr.write("WARN: OCC vane STEP reconstruction failed: %s\n" % _step_exc)
             if occ_fluid is not None:
-                cq.exporters.export(occ_fluid, os.path.join(exports_dir, "chamber.step"))
+                cq.exporters.export(occ_fluid, _tmp(step_path), exportType="STEP")
                 step_has_vanes = True
             else:
                 sys.stderr.write(
                     "WARN: chamber.step falls back to the vane-less solid (no vanes carved)\n")
-                cq.exporters.export(result, os.path.join(exports_dir, "chamber.step"))
+                cq.exporters.export(result, _tmp(step_path), exportType="STEP")
+            os.replace(_tmp(step_path), step_path)
         elif not guide_vanes:
-            cq.exporters.export(result, os.path.join(exports_dir, "chamber.step"))
+            cq.exporters.export(result, _tmp(step_path), exportType="STEP")
+            os.replace(_tmp(step_path), step_path)
 
         # per-build meta: does the STEP carry the guide vanes? (guide-vane builds only;
         # non-vane builds write no meta file -> the API reports stepHasVanes = null).
         if step_has_vanes is not None:
-            with open(os.path.join(out_dir, "build-meta.json"), "w") as fh:
+            meta_path = os.path.join(out_dir, "build-meta.json")
+            with open(_tmp(meta_path), "w") as fh:
                 json.dump({"stepHasVanes": bool(step_has_vanes)}, fh)
+            os.replace(_tmp(meta_path), meta_path)
 
         # exports: OpenFOAM triSurface zip (per-patch STL + combined domain.stl)
-        with zipfile.ZipFile(os.path.join(exports_dir, "trisurface.zip"), "w",
-                             zipfile.ZIP_DEFLATED) as zf:
+        zip_path = os.path.join(exports_dir, "trisurface.zip")
+        with zipfile.ZipFile(_tmp(zip_path), "w", zipfile.ZIP_DEFLATED) as zf:
             combined = io.StringIO()
             for name in emit_order:
                 tri = patch_meshes.get(name)
@@ -1952,9 +1975,12 @@ def main():
                 zf.writestr("%s.stl" % name, buf.getvalue())
                 combined.write(buf.getvalue())
             zf.writestr("domain.stl", combined.getvalue())
+        os.replace(_tmp(zip_path), zip_path)
 
-        sys.stdout.write("OK: %d patches -> %s\n"
-                         % (len(manifest), os.path.join(out_dir, "chamber.glb")))
+        # Promote the GLB last: its presence marks the build directory complete.
+        os.replace(_tmp(glb_path), glb_path)
+
+        sys.stdout.write("OK: %d patches -> %s\n" % (len(manifest), glb_path))
         sys.exit(0)
 
     except SystemExit:

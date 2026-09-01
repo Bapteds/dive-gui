@@ -357,6 +357,92 @@ describe('Chamber Creation', () => {
     });
   });
 
+  // The per-hash lock: concurrent work on one build directory must collapse
+  // into a single tool run (the second caller re-checks the disk and takes the
+  // cache path). The fakes hold the lock across the overlap via a short delay.
+  describe('per-hash build lock', () => {
+    const VANES = { ...BUILD, guideVanes: true };
+    const delay = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+    it('collapses two concurrent identical builds into one builder run', async () => {
+      const auth = authHeader(await createTestUser());
+      let runs = 0;
+      setCommandRunner(async (spec) => {
+        runs += 1;
+        await delay();
+        return successRunner(spec);
+      });
+      const [a, b] = await Promise.all([
+        request(app).post('/api/v1/chamber/build').set('Authorization', auth).send(BUILD),
+        request(app).post('/api/v1/chamber/build').set('Authorization', auth).send(BUILD),
+      ]);
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      expect(a.body.hash).toBe(b.body.hash);
+      expect(runs).toBe(1);
+    });
+
+    it('collapses two concurrent first STEP downloads into one --step run', async () => {
+      const auth = authHeader(await createTestUser());
+      let stepRuns = 0;
+      setCommandRunner(
+        withMirrorRunner(async (spec) => {
+          if (spec.args[3] === '--step') {
+            stepRuns += 1;
+            await delay();
+          }
+          return vaneRunner(true)(spec);
+        }, mirrorSuccessRunner),
+      );
+      const built = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      const url = `/api/v1/chamber/${built.body.hash}/export/step`;
+      const [a, b] = await Promise.all([
+        request(app).get(url).set('Authorization', auth),
+        request(app).get(url).set('Authorization', auth),
+      ]);
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      expect(stepRuns).toBe(1);
+    });
+
+    it('collapses two concurrent mirrored-STEP downloads into one generation chain', async () => {
+      const auth = authHeader(await createTestUser());
+      let stepRuns = 0;
+      let mirrorRuns = 0;
+      setCommandRunner(
+        withMirrorRunner(
+          async (spec) => {
+            if (spec.args[3] === '--step') stepRuns += 1;
+            return vaneRunner(true)(spec);
+          },
+          async (spec) => {
+            mirrorRuns += 1;
+            await delay();
+            return mirrorSuccessRunner(spec);
+          },
+        ),
+      );
+      const built = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      const url = `/api/v1/chamber/${built.body.hash}/export/stepMirrored`;
+      const [a, b] = await Promise.all([
+        request(app).get(url).set('Authorization', auth),
+        request(app).get(url).set('Authorization', auth),
+      ]);
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      expect(stepRuns).toBe(1);
+      expect(mirrorRuns).toBe(1);
+    });
+  });
+
   it('applies a Min/Max/Exact constraint to the returned outputs', async () => {
     setCommandRunner(successRunner);
     const auth = authHeader(await createTestUser());

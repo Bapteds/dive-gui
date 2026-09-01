@@ -45,6 +45,32 @@ import {
 /** Sheet/model values are millimetres; the builder works in metres. */
 const MM_TO_M = 1 / 1000;
 
+/** In-flight work per build hash (promise-chain mutex); see withChamberLock. */
+const chamberLocks = new Map<string, Promise<void>>();
+
+/**
+ * Serialize builder/mirrorer work per build hash: a build, a --step re-run,
+ * and a mirror generation share one on-disk directory, so they must never run
+ * concurrently for the same hash. Queued callers re-check the disk state when
+ * they get the lock, so a doubled click costs one tool run and the second
+ * caller takes the cache path. In-process only (like the rest of the app's
+ * state); reads stay lock-free — safe because the builder writes every
+ * artifact atomically (tmp + rename, GLB promoted last).
+ */
+async function withChamberLock<T>(hash: string, fn: () => Promise<T>): Promise<T> {
+  const prev = chamberLocks.get(hash) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  chamberLocks.set(hash, tail);
+  void tail.then(() => {
+    if (chamberLocks.get(hash) === tail) chamberLocks.delete(hash);
+  });
+  return run;
+}
+
 /** The result of a build request: the cache key + the twelve computed outputs
  * + any geometry clamp warnings the builder emitted (persisted per build)
  * + whether the STEP export carries the real guide vanes (null = not a
@@ -203,53 +229,58 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
   const params = resolveGeometryParams(input, outputs);
   const hash = chamberHash(params);
 
-  // A cached build reports the warnings + STEP meta persisted at build time.
-  if (await chamberGlbExists(hash)) {
+  // The cache check runs INSIDE the per-hash lock: a second identical build
+  // arriving while the first is running waits, then takes the cache path —
+  // two builders can never write the same directory concurrently.
+  return withChamberLock(hash, async () => {
+    // A cached build reports the warnings + STEP meta persisted at build time.
+    if (await chamberGlbExists(hash)) {
+      return {
+        hash,
+        outputs,
+        warnings: await readChamberWarnings(hash),
+        stepHasVanes: (await readChamberBuildMeta(hash)).stepHasVanes,
+      };
+    }
+
+    const script = buildChamberScript();
+    if (!(await pathExists(script))) {
+      throw new AppError(
+        500,
+        'SCRIPT_MISSING',
+        `Chamber builder not found at ${script}. Set BUILD_CHAMBER_SCRIPT to its absolute path.`,
+      );
+    }
+    const paths = chamberPaths(hash);
+    await writeChamberParams(hash, params);
+
+    const result = await runCommand({
+      command: env.CHAMBER_PYTHON_BIN,
+      args: [script, paths.params, paths.dir],
+      cwd: paths.dir,
+      env: process.env,
+      timeoutMs: env.CHAMBER_BUILD_TIMEOUT_MS,
+    });
+    if (
+      result.spawnError ||
+      result.timedOut ||
+      result.exitCode !== 0 ||
+      !(await pathExists(paths.glb))
+    ) {
+      throw new AppError(502, 'CHAMBER_BUILD_FAILED', summarizeFailure(result));
+    }
+
+    // Surface the builder's clamp/fallback warnings and persist them alongside
+    // the build so cache hits keep reporting them.
+    const warnings = extractBuilderWarnings(result.stderr, result.stdout);
+    await writeChamberWarnings(hash, warnings);
     return {
       hash,
       outputs,
-      warnings: await readChamberWarnings(hash),
+      warnings,
       stepHasVanes: (await readChamberBuildMeta(hash)).stepHasVanes,
     };
-  }
-
-  const script = buildChamberScript();
-  if (!(await pathExists(script))) {
-    throw new AppError(
-      500,
-      'SCRIPT_MISSING',
-      `Chamber builder not found at ${script}. Set BUILD_CHAMBER_SCRIPT to its absolute path.`,
-    );
-  }
-  const paths = chamberPaths(hash);
-  await writeChamberParams(hash, params);
-
-  const result = await runCommand({
-    command: env.CHAMBER_PYTHON_BIN,
-    args: [script, paths.params, paths.dir],
-    cwd: paths.dir,
-    env: process.env,
-    timeoutMs: env.CHAMBER_BUILD_TIMEOUT_MS,
   });
-  if (
-    result.spawnError ||
-    result.timedOut ||
-    result.exitCode !== 0 ||
-    !(await pathExists(paths.glb))
-  ) {
-    throw new AppError(502, 'CHAMBER_BUILD_FAILED', summarizeFailure(result));
-  }
-
-  // Surface the builder's clamp/fallback warnings and persist them alongside
-  // the build so cache hits keep reporting them.
-  const warnings = extractBuilderWarnings(result.stderr, result.stdout);
-  await writeChamberWarnings(hash, warnings);
-  return {
-    hash,
-    outputs,
-    warnings,
-    stepHasVanes: (await readChamberBuildMeta(hash)).stepHasVanes,
-  };
 }
 
 /** Return a build's patch manifest. @throws 409 CHAMBER_NOT_BUILT when absent. */
@@ -322,8 +353,8 @@ async function generateStep(hash: string): Promise<void> {
  * running mirrorStep.py on its chamber.step — generating THAT first when the
  * build deferred it. Only allowed when the STEP export carries the real guide
  * vanes (stepHasVanes true) — the vane-less fallback and non-vane builds
- * refuse. The script writes atomically (tmp + rename), so a concurrent first
- * click at worst re-runs it harmlessly.
+ * refuse. Callers hold the per-hash lock (getChamberExport), so concurrent
+ * clicks serialize; the script's own mkstemp + rename is defense in depth.
  *
  * @throws 409 CHAMBER_NOT_BUILT when the build/meta does not qualify.
  * @throws 500 SCRIPT_MISSING / 502 CHAMBER_BUILD_FAILED on tooling failures.
@@ -371,13 +402,16 @@ async function generateMirroredStep(hash: string): Promise<void> {
  */
 export async function getChamberExport(hash: string, kind: ChamberExportKind): Promise<Buffer> {
   let buf = await readChamberExport(hash, kind);
-  if (!buf && kind === 'step') {
-    await generateStep(hash);
-    buf = await readChamberExport(hash, kind);
-  }
-  if (!buf && kind === 'stepMirrored') {
-    await generateMirroredStep(hash);
-    buf = await readChamberExport(hash, kind);
+  if (!buf && (kind === 'step' || kind === 'stepMirrored')) {
+    buf = await withChamberLock(hash, async () => {
+      // Re-check under the lock: a queued duplicate click finds the file the
+      // first request just generated and skips the tool run entirely.
+      const cached = await readChamberExport(hash, kind);
+      if (cached) return cached;
+      if (kind === 'step') await generateStep(hash);
+      else await generateMirroredStep(hash);
+      return readChamberExport(hash, kind);
+    });
   }
   if (!buf) {
     throw new AppError(404, 'NOT_FOUND', 'That export was not found for this build.');
