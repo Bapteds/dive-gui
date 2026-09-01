@@ -22,12 +22,16 @@ const MANIFEST_NAME = 'manifest.json';
 const EDGES_NAME = 'edges.bin';
 const PARAMS_NAME = 'params.json';
 const WARNINGS_NAME = 'warnings.json';
+const BUILD_META_NAME = 'build-meta.json';
 const EXPORTS_DIRNAME = 'exports';
 
-/** A chamber export artifact kind and its download file. */
+/** A chamber export artifact kind and its download file. stepMirrored is the
+ * z-y-plane-mirrored STEP ("Change rotational direction"), generated on demand
+ * at first download rather than at build time. */
 export const CHAMBER_EXPORT_FILES = {
   stl: 'chamber.stl',
   step: 'chamber.step',
+  stepMirrored: 'chamber-mirrored.step',
   trisurface: 'trisurface.zip',
 } as const;
 export type ChamberExportKind = keyof typeof CHAMBER_EXPORT_FILES;
@@ -116,6 +120,24 @@ export async function readChamberWarnings(hash: string): Promise<string[]> {
     return Array.isArray(parsed) ? parsed.filter((w): w is string => typeof w === 'string') : [];
   } catch {
     return [];
+  }
+}
+
+/** Per-build meta the builder writes (guide-vane builds only today). */
+export interface ChamberBuildMeta {
+  /** Does the STEP export carry the real guide vanes? true = proper vane STEP,
+   * false = vane-less fallback, null = not a guide-vane build (no meta file). */
+  stepHasVanes: boolean | null;
+}
+
+/** Read the builder's per-build meta; every field null when absent/invalid. */
+export async function readChamberBuildMeta(hash: string): Promise<ChamberBuildMeta> {
+  try {
+    const raw = await fs.readFile(path.join(chamberPaths(hash).dir, BUILD_META_NAME), 'utf8');
+    const parsed = JSON.parse(raw) as { stepHasVanes?: unknown };
+    return { stepHasVanes: typeof parsed.stepHasVanes === 'boolean' ? parsed.stepHasVanes : null };
+  } catch {
+    return { stepHasVanes: null };
   }
 }
 

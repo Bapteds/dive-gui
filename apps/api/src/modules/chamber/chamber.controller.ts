@@ -16,14 +16,15 @@ import type { ChamberBuildInput, ChamberExportParam } from './chamber.schemas';
 const EXPORT_META: Record<ChamberExportParam['kind'], { contentType: string; filename: string }> = {
   stl: { contentType: 'application/sla', filename: 'chamber.stl' },
   step: { contentType: 'application/step', filename: 'chamber.step' },
+  stepMirrored: { contentType: 'application/step', filename: 'chamber-mirrored.step' },
   trisurface: { contentType: 'application/zip', filename: 'chamber-trisurface.zip' },
 };
 
 /** POST /chamber/build — compute the 12 outputs and build the geometry. */
 export async function buildChamberController(req: Request, res: Response): Promise<void> {
   const input = req.body as ChamberBuildInput;
-  const { hash, outputs, warnings } = await buildChamber(input);
-  res.status(200).json({ hash, outputs, warnings });
+  const { hash, outputs, warnings, stepHasVanes } = await buildChamber(input);
+  res.status(200).json({ hash, outputs, warnings, stepHasVanes });
 }
 
 /** GET /chamber/:hash/manifest — the patch manifest for a build. */

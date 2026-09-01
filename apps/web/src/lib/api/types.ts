@@ -600,6 +600,10 @@ export interface ChamberBuildResponse {
   hash: string;
   outputs: ChamberOutput[];
   warnings: string[];
+  /** Does the STEP export carry the real guide vanes? true = proper vane STEP
+   * (unlocks "Change rotational direction"), false = vane-less fallback,
+   * null = not a guide-vane build. */
+  stepHasVanes: boolean | null;
 }
 
 /**

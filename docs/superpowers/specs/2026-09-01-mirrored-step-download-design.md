@@ -107,6 +107,16 @@ build response, stored on `ChamberPage` alongside `hash`, reset with it).
   calls the `stepMirrored` API and triggers the object-URL download; API error
   surfaces as a toast.
 
+## Implementation note (discovered while testing)
+
+OCC's analytic mass properties (`BRepGProp`) are unreliable on mirrored
+("indirect") surface parametrizations: on this model the mirrored STEP
+round-trips with a +0.10% phantom `Volume()` while the ACTUAL geometry is
+exact — tessellating the original, the in-memory mirror, and the re-imported
+mirrored STEP yields byte-identical watertight mesh volumes (135.473404 m³ on
+the stepped-vanes fixture). The geometry test therefore compares tessellated
+(trimesh) volume/bounds/centroid, not BRep mass properties.
+
 ## Out of scope
 
 - Mirroring the STL / triSurface exports or the GLB preview (STEP only).

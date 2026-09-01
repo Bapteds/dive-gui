@@ -88,9 +88,10 @@ export const chamberHashParamSchema = z.object({
 });
 export type ChamberHashParam = z.infer<typeof chamberHashParamSchema>;
 
-/** Route params for an export download: a build hash + the artifact kind. */
+/** Route params for an export download: a build hash + the artifact kind.
+ * stepMirrored is the z-y-mirrored STEP, generated on demand at first download. */
 export const chamberExportParamSchema = z.object({
   hash: z.string().trim().min(1, 'A build id is required'),
-  kind: z.enum(['stl', 'step', 'trisurface']),
+  kind: z.enum(['stl', 'step', 'stepMirrored', 'trisurface']),
 });
 export type ChamberExportParam = z.infer<typeof chamberExportParamSchema>;

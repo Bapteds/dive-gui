@@ -16,6 +16,8 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
+import sys
 import zipfile
 
 import pytest
@@ -284,3 +286,76 @@ def test_built_vane_sections_have_a_round_trailing_edge(build):
     assert any(abs(radius - r_exp) < 0.3 * r_exp and res < 1e-4
                for radius, res in fits), \
         f"no rounded trailing edge on the built vane section (fits: {fits})"
+
+
+# --- mirrored STEP ("Change rotational direction") ----------------------------
+# scripts/mirrorStep.py flips a built STEP on the z-y plane while keeping the
+# original bounding box (spec 2026-09-01): the API runs it on demand for
+# guide-vane builds whose STEP carries the real vanes (stepHasVanes true).
+
+MIRROR_SCRIPT = os.path.join(HERE, "..", "mirrorStep.py")
+MIRROR_TIMEOUT_S = 600
+
+
+def test_mirror_step_flips_handedness_in_place(build, tmp_path):
+    """The mirrored STEP has the same solids, volume and bounding box as the
+    original, with the centroid reflected about the box's x-centre — the
+    geometry stays in place, only the rotational direction flips.
+
+    All comparisons run on TESSELLATED meshes (trimesh), not BRepGProp: OCC's
+    analytic mass properties are unreliable on mirrored ("indirect") surface
+    parametrizations (+0.1% phantom volume on this model), while the actual
+    geometry — verified by identical watertight tessellations — is exact."""
+    import cadquery as cq
+    import trimesh
+
+    result = build("stepped-vanes")
+    assert result.build_meta == {"stepHasVanes": True}
+    src = result.export_path("chamber.step")
+    dst = str(tmp_path / "chamber-mirrored.step")
+
+    proc = subprocess.run([sys.executable, MIRROR_SCRIPT, src, dst],
+                          capture_output=True, text=True, timeout=MIRROR_TIMEOUT_S)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip().startswith("OK:"), proc.stdout
+    assert os.path.getsize(dst) > 0
+
+    def _mesh(step_path, stl_name):
+        wp = cq.importers.importStep(step_path)
+        assert len(wp.vals()) == 1, step_path
+        stl = str(tmp_path / stl_name)
+        cq.exporters.export(wp, stl, exportType="STL", tolerance=1e-3)
+        return trimesh.load(stl)
+
+    orig = _mesh(src, "orig.stl")
+    mirr = _mesh(dst, "mirr.stl")
+    assert orig.is_watertight and mirr.is_watertight
+    assert mirr.volume == pytest.approx(orig.volume, rel=1e-3)
+
+    # Same bounding box: the mirror is translated back onto the original spot.
+    (lo_o, hi_o), (lo_m, hi_m) = orig.bounds, mirr.bounds
+    for o, m in zip(list(lo_o) + list(hi_o), list(lo_m) + list(hi_m)):
+        assert m == pytest.approx(o, abs=1e-3)
+
+    # Centroid reflected about the box's x-centre, y/z unchanged. The build is
+    # x-asymmetric (part axis at B1, not centred), so this is a REAL constraint
+    # a no-op copy could not satisfy.
+    x_centre = 0.5 * (lo_o[0] + hi_o[0])
+    cx_o, cy_o, cz_o = orig.center_mass
+    cx_m, cy_m, cz_m = mirr.center_mass
+    assert abs(cx_o - x_centre) > 5e-3
+    assert cx_m == pytest.approx(2.0 * x_centre - cx_o, abs=1e-3)
+    assert cy_m == pytest.approx(cy_o, abs=1e-3)
+    assert cz_m == pytest.approx(cz_o, abs=1e-3)
+
+
+def test_mirror_step_refuses_a_missing_input(tmp_path):
+    """A bad input follows the builder's exit contract (KO:/1) and leaves no
+    output file behind (the atomic tmp+rename never lands)."""
+    dst = tmp_path / "out.step"
+    proc = subprocess.run(
+        [sys.executable, MIRROR_SCRIPT, str(tmp_path / "nope.step"), str(dst)],
+        capture_output=True, text=True, timeout=MIRROR_TIMEOUT_S)
+    assert proc.returncode == 1
+    assert "KO:" in proc.stderr
+    assert not dst.exists()

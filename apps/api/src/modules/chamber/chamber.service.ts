@@ -27,9 +27,11 @@ import { env } from '../../config/env';
 import { AppError } from '../../lib/AppError';
 import { runCommand, type CommandResult } from '../../lib/commandRunner';
 import {
+  CHAMBER_EXPORT_FILES,
   chamberGlbExists,
   chamberHash,
   chamberPaths,
+  readChamberBuildMeta,
   readChamberEdges,
   readChamberExport,
   readChamberGlb,
@@ -44,11 +46,14 @@ import {
 const MM_TO_M = 1 / 1000;
 
 /** The result of a build request: the cache key + the twelve computed outputs
- * + any geometry clamp warnings the builder emitted (persisted per build). */
+ * + any geometry clamp warnings the builder emitted (persisted per build)
+ * + whether the STEP export carries the real guide vanes (null = not a
+ * guide-vane build) — the gate for the mirrored-STEP download option. */
 export interface ChamberBuildResult {
   hash: string;
   outputs: ChamberOutput[];
   warnings: string[];
+  stepHasVanes: boolean | null;
 }
 
 /**
@@ -74,6 +79,13 @@ function buildChamberScript(): string {
   // scripts/ is not compiled, so three levels up from src/modules/chamber (or
   // dist/modules/chamber) reaches apps/api/scripts from source and compiled output.
   return path.resolve(__dirname, '../../../scripts/buildChamber.py');
+}
+
+/** Resolve the STEP mirrorer script (configured path, else the bundled default). */
+function mirrorStepScript(): string {
+  const configured = env.MIRROR_STEP_SCRIPT.trim();
+  if (configured) return configured;
+  return path.resolve(__dirname, '../../../scripts/mirrorStep.py');
 }
 
 /** Does an absolute path exist on disk? */
@@ -191,9 +203,14 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
   const params = resolveGeometryParams(input, outputs);
   const hash = chamberHash(params);
 
-  // A cached build reports the warnings persisted at build time.
+  // A cached build reports the warnings + STEP meta persisted at build time.
   if (await chamberGlbExists(hash)) {
-    return { hash, outputs, warnings: await readChamberWarnings(hash) };
+    return {
+      hash,
+      outputs,
+      warnings: await readChamberWarnings(hash),
+      stepHasVanes: (await readChamberBuildMeta(hash)).stepHasVanes,
+    };
   }
 
   const script = buildChamberScript();
@@ -227,7 +244,12 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
   // the build so cache hits keep reporting them.
   const warnings = extractBuilderWarnings(result.stderr, result.stdout);
   await writeChamberWarnings(hash, warnings);
-  return { hash, outputs, warnings };
+  return {
+    hash,
+    outputs,
+    warnings,
+    stepHasVanes: (await readChamberBuildMeta(hash)).stepHasVanes,
+  };
 }
 
 /** Return a build's patch manifest. @throws 409 CHAMBER_NOT_BUILT when absent. */
@@ -253,9 +275,62 @@ export async function getChamberEdges(hash: string): Promise<Buffer | null> {
   return readChamberEdges(hash);
 }
 
-/** Return one export artifact's bytes. @throws 404 when absent. */
+/**
+ * Generate the mirrored STEP ("Change rotational direction") for one build by
+ * running mirrorStep.py on its chamber.step. Only allowed when the STEP export
+ * carries the real guide vanes (stepHasVanes true) — the vane-less fallback and
+ * non-vane builds refuse. The script writes atomically (tmp + rename), so a
+ * concurrent first click at worst re-runs it harmlessly.
+ *
+ * @throws 409 CHAMBER_NOT_BUILT when the build/meta does not qualify.
+ * @throws 500 SCRIPT_MISSING / 502 CHAMBER_BUILD_FAILED on tooling failures.
+ */
+async function generateMirroredStep(hash: string): Promise<void> {
+  const paths = chamberPaths(hash);
+  const src = path.join(paths.exportsDir, CHAMBER_EXPORT_FILES.step);
+  if (!(await pathExists(src))) {
+    throw new AppError(409, 'CHAMBER_NOT_BUILT', 'This chamber has not been built yet.');
+  }
+  const meta = await readChamberBuildMeta(hash);
+  if (meta.stepHasVanes !== true) {
+    throw new AppError(
+      409,
+      'CHAMBER_NOT_BUILT',
+      'The mirrored STEP is only available when the STEP export carries the guide vanes.',
+    );
+  }
+  const script = mirrorStepScript();
+  if (!(await pathExists(script))) {
+    throw new AppError(
+      500,
+      'SCRIPT_MISSING',
+      `STEP mirrorer not found at ${script}. Set MIRROR_STEP_SCRIPT to its absolute path.`,
+    );
+  }
+  const dst = path.join(paths.exportsDir, CHAMBER_EXPORT_FILES.stepMirrored);
+  const result = await runCommand({
+    command: env.CHAMBER_PYTHON_BIN,
+    args: [script, src, dst],
+    cwd: paths.dir,
+    env: process.env,
+    timeoutMs: env.CHAMBER_BUILD_TIMEOUT_MS,
+  });
+  if (result.spawnError || result.timedOut || result.exitCode !== 0 || !(await pathExists(dst))) {
+    throw new AppError(502, 'CHAMBER_BUILD_FAILED', summarizeFailure(result));
+  }
+}
+
+/**
+ * Return one export artifact's bytes. The mirrored STEP is generated on demand
+ * at its first download and then served from disk like every other export.
+ * @throws 404 when absent (or the mirror-specific 409/502, see above).
+ */
 export async function getChamberExport(hash: string, kind: ChamberExportKind): Promise<Buffer> {
-  const buf = await readChamberExport(hash, kind);
+  let buf = await readChamberExport(hash, kind);
+  if (!buf && kind === 'stepMirrored') {
+    await generateMirroredStep(hash);
+    buf = await readChamberExport(hash, kind);
+  }
   if (!buf) {
     throw new AppError(404, 'NOT_FOUND', 'That export was not found for this build.');
   }

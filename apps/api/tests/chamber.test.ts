@@ -53,6 +53,29 @@ const warningRunner: CommandRunner = async (spec) => {
   };
 };
 
+/** successRunner + a build-meta.json declaring the STEP vane state, exactly as
+ * buildChamber.py writes it for guide-vane builds. */
+function metaRunner(stepHasVanes: boolean): CommandRunner {
+  return async (spec) => {
+    const result = await successRunner(spec);
+    await fs.writeFile(path.join(spec.args[2], 'build-meta.json'), JSON.stringify({ stepHasVanes }));
+    return result;
+  };
+}
+
+/** Route builder invocations to `builder` and mirrorStep.py ones to `mirror`
+ * (the mirrorer is spawned with args = [script, src.step, dst.step]). */
+function withMirrorRunner(builder: CommandRunner, mirror: CommandRunner): CommandRunner {
+  return async (spec) =>
+    spec.args[0]?.endsWith('mirrorStep.py') ? mirror(spec) : builder(spec);
+}
+
+/** Fake mirrorer: writes the destination STEP, then succeeds. */
+const mirrorSuccessRunner: CommandRunner = async (spec) => {
+  await fs.writeFile(spec.args[2], 'ISO-10303-21; mirrored');
+  return ok(spec);
+};
+
 /** Fake builder: the interpreter is missing (ENOENT); nothing is written. */
 const notFoundRunner: CommandRunner = async (spec) => ({
   command: spec.command,
@@ -149,6 +172,129 @@ describe('Chamber Creation', () => {
       .expect(200);
     expect(cached.body.hash).toBe(built.body.hash);
     expect(cached.body.warnings).toEqual(built.body.warnings);
+  });
+
+  describe('mirrored STEP (Change rotational direction)', () => {
+    const VANES = { ...BUILD, guideVanes: true };
+
+    it('reports stepHasVanes from the build meta, null without one, and on cache hits', async () => {
+      const auth = authHeader(await createTestUser());
+      setCommandRunner(successRunner);
+      const plain = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(BUILD)
+        .expect(200);
+      expect(plain.body.stepHasVanes).toBeNull();
+
+      setCommandRunner(metaRunner(true));
+      const vanes = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      expect(vanes.body.stepHasVanes).toBe(true);
+
+      // A cache hit (failing runner proves no re-run) reports the persisted meta.
+      setCommandRunner(notFoundRunner);
+      const cached = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      expect(cached.body.hash).toBe(vanes.body.hash);
+      expect(cached.body.stepHasVanes).toBe(true);
+    });
+
+    it('generates the mirrored STEP on first download, then serves the cached file', async () => {
+      const auth = authHeader(await createTestUser());
+      let mirrorRuns = 0;
+      setCommandRunner(
+        withMirrorRunner(metaRunner(true), async (spec) => {
+          mirrorRuns += 1;
+          return mirrorSuccessRunner(spec);
+        }),
+      );
+      const built = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+
+      const first = await request(app)
+        .get(`/api/v1/chamber/${built.body.hash}/export/stepMirrored`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(first.headers['content-type']).toContain('application/step');
+      expect(first.headers['content-disposition']).toContain('chamber-mirrored.step');
+      expect(mirrorRuns).toBe(1);
+
+      // Second download is served from disk — the mirrorer does not run again.
+      await request(app)
+        .get(`/api/v1/chamber/${built.body.hash}/export/stepMirrored`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(mirrorRuns).toBe(1);
+    });
+
+    it('refuses the mirrored STEP for a vane-less fallback or a non-vane build', async () => {
+      const auth = authHeader(await createTestUser());
+      setCommandRunner(withMirrorRunner(metaRunner(false), mirrorSuccessRunner));
+      const fallback = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      expect(fallback.body.stepHasVanes).toBe(false);
+      const refused = await request(app)
+        .get(`/api/v1/chamber/${fallback.body.hash}/export/stepMirrored`)
+        .set('Authorization', auth)
+        .expect(409);
+      expect(refused.body.error.message).toContain('carries the guide vanes');
+
+      setCommandRunner(withMirrorRunner(successRunner, mirrorSuccessRunner));
+      const plain = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(BUILD)
+        .expect(200);
+      await request(app)
+        .get(`/api/v1/chamber/${plain.body.hash}/export/stepMirrored`)
+        .set('Authorization', auth)
+        .expect(409);
+    });
+
+    it('fails cleanly when the mirrorer errors, and recovers on the next attempt', async () => {
+      const auth = authHeader(await createTestUser());
+      setCommandRunner(
+        withMirrorRunner(metaRunner(true), async (spec) => ({
+          command: spec.command,
+          args: spec.args,
+          exitCode: 1,
+          stdout: '',
+          stderr: 'KO: no solids found in chamber.step',
+          durationMs: 1,
+          timedOut: false,
+        })),
+      );
+      const built = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      const failed = await request(app)
+        .get(`/api/v1/chamber/${built.body.hash}/export/stepMirrored`)
+        .set('Authorization', auth)
+        .expect(502);
+      expect(failed.body.error.message).toContain('KO: no solids');
+
+      // The failure left no half-written file: a later attempt regenerates.
+      setCommandRunner(withMirrorRunner(metaRunner(true), mirrorSuccessRunner));
+      await request(app)
+        .get(`/api/v1/chamber/${built.body.hash}/export/stepMirrored`)
+        .set('Authorization', auth)
+        .expect(200);
+    });
   });
 
   it('applies a Min/Max/Exact constraint to the returned outputs', async () => {

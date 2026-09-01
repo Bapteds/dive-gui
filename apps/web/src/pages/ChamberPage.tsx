@@ -60,6 +60,9 @@ export function ChamberPage() {
     {},
   );
   const [hash, setHash] = useState<string | null>(null);
+  // Whether the LAST build's STEP carries the real guide vanes (kept in step
+  // with `hash`) — true unlocks the "Change rotational direction" download.
+  const [stepHasVanes, setStepHasVanes] = useState<boolean | null>(null);
   // Geometry clamp warnings from the LAST build (kept in step with `hash`).
   const [buildWarnings, setBuildWarnings] = useState<string[]>([]);
   // Why the LAST Generate produced nothing (refused build or invalid inputs).
@@ -153,6 +156,7 @@ export function ChamberPage() {
         {
           onSuccess: (res) => {
             setHash(res.hash);
+            setStepHasVanes(res.stepHasVanes ?? null);
             setBuildErrors([]);
             setBuildWarnings(res.warnings ?? []);
             if (res.warnings?.length) {
@@ -224,7 +228,7 @@ export function ChamberPage() {
             <p className="mb-4 mt-1 text-sm text-text-secondary">
               Download the built chamber for meshing or CAD.
             </p>
-            <ChamberExportButtons hash={hash} />
+            <ChamberExportButtons hash={hash} stepHasVanes={stepHasVanes} />
             <div className="mt-4 border-t border-border pt-4">
               <Button
                 type="button"
