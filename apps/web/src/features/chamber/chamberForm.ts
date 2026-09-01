@@ -115,7 +115,9 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   relations: Object.fromEntries(CHAMBER_RELATIONS.map((rel) => [rel.key, rel.defaultOn])),
   footAngleDeg: 40,
   partScale: 1,
-  guideVanes: false,
+  // On by default: the guide-vane distributor is the configuration the team
+  // builds most. (Saved builds always carry their own explicit value.)
+  guideVanes: true,
   chamferEnabled: true,
   feetEnabled: true,
   vaneAngleDeg: 50,
