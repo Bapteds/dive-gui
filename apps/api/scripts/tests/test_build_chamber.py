@@ -112,13 +112,25 @@ def test_step_export_vane_policy(build):
         assert "falls back to the vane-less solid" not in result.stderr, name
 
 
-def test_hollow_overflow_clamps_to_fit_with_a_warning(build):
-    """The hollow stack is allowed to exceed H Kammer: it is scaled down to fit
-    and the builder says so on stderr (stepped refuses instead, tested below)."""
-    result = build("hollow-vanes")
-    assert result.exit_code == 0
-    assert "exceeds H Kammer" in result.stderr
-    assert "scaled to" in result.stderr
+def test_hollow_overflow_is_refused(build):
+    """A hollow stack taller than H Kammer fails the build (KO) with the exact
+    Part scale that would fit — it is never silently scaled down (spec
+    2026-08-31; the fixture itself now ships partScale 0.7944 so it fits)."""
+    result = build("hollow-vanes", params_override={"partScale": 1})
+    assert result.exit_code == 1
+    assert "KO:" in result.stderr
+    assert "H Kammer only allows" in result.stderr
+    assert "reduce Part scale to <= 0.79" in result.stderr
+
+
+def test_part_wider_than_box_is_refused(build):
+    """A part whose radius does not clear every box wall from its axis fails the
+    build (KO) instead of silently cutting through the side wall."""
+    result = build("stepped", params_override={"dFirst": 8.0})
+    assert result.exit_code == 1
+    assert "KO:" in result.stderr
+    assert "stick out of the box" in result.stderr
+    assert "reduce Part scale / the diameter overrides" in result.stderr
 
 
 def test_stepped_overflow_is_refused(build):

@@ -43,7 +43,7 @@ describe('ChamberBuildWarnings', () => {
 
   it('lists every builder warning in an alert', () => {
     const warnings = [
-      'the hollow stack 3.3984 m exceeds H Kammer 2.7000 m; the internal part is scaled to 0.7945 to fit (its heights are reduced to match)',
+      'outlet outer radius 0.8400 clamped to 0.6666 (X1 too large for this vane/d_last combination)',
       'chamber.step falls back to the vane-less solid (no vanes carved)',
     ];
     render(<ChamberBuildWarnings warnings={warnings} />);

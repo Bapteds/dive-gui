@@ -1354,14 +1354,10 @@ def main():
         #  - stepped: the last cylinder is pinned THROUGH the box top, so only the
         #    shoulder (first+middle) grows with partScale; it must leave room for at
         #    least MIN_LAST_CYL_H of last cylinder.
-        # The two designs behave DIFFERENTLY when it does not fit:
-        #  - STEPPED shoulders normally sit far below the box, so an overflow means
-        #    the entered HLE / Part scale cannot be honored — REFUSE rather than
-        #    silently shrink the whole assembly (which would ignore the heights).
-        #  - HOLLOW is designed so the generator + dome fill and usually EXCEED the
-        #    box; scaling the assembly DOWN to fit is its load-bearing behavior (most
-        #    hollow builds overflow at partScale 1). Keep it, but WARN so a down-
-        #    scaled build is not entirely silent.
+        # BOTH designs REFUSE when it does not fit: silently shrinking would ignore
+        # the heights the user entered. (Hollow used to be scaled down to fit with a
+        # warning; since most hollow configurations overflow at partScale 1, the
+        # refusal names the exact Part scale that WOULD fit so the fix is one edit.)
         if variant == "hollow":
             clamp_basis = unscaled_part_height
             clamp_limit = height
@@ -1370,12 +1366,13 @@ def main():
             clamp_limit = height + 2 * FLOOR_OVERCUT - MIN_LAST_CYL_H
         if clamp_basis > 0 and part_scale * clamp_basis > clamp_limit + 1e-6:
             if variant == "hollow":
-                clamped = clamp_limit / clamp_basis
-                sys.stderr.write(
-                    "WARN: the hollow stack %.4f m exceeds H Kammer %.4f m; the internal "
-                    "part is scaled to %.4f to fit (its heights are reduced to match)\n"
-                    % (part_scale * clamp_basis, clamp_limit, clamped))
-                part_scale = clamped
+                fit_scale = clamp_limit / clamp_basis
+                raise ValueError(
+                    "the hollow stack (first + middle + max(cone, generator + dome)) "
+                    "is %.4f m tall but H Kammer only allows %.4f m. To fit, reduce "
+                    "Part scale to <= %.4f, lower the cone / generator / dome heights "
+                    "or HLE, or increase H Kammer."
+                    % (part_scale * clamp_basis, clamp_limit, fit_scale))
             else:
                 scaled = part_scale * clamp_basis
                 scale_note = "" if abs(part_scale - 1.0) < 1e-9 else (" (scaled x %.4g)" % part_scale)
@@ -1431,6 +1428,25 @@ def main():
                              omit_middle=guide_vanes, h_last_override=last_h_local)
             part_height = h_first + h_middle + last_h_local  # == height + 2*FLOOR_OVERCUT
             rmax = max(d_first, d_middle, d_last) / 2
+
+        # The part must stay INSIDE the box footprint. Its axis sits dist_c1 from
+        # the chamfer-side wall and dist_from_end from the chamfered end, so the
+        # largest internal radius must clear all four walls — without this check an
+        # oversized part (big Part scale, or dFirst/dMiddle overrides) silently cuts
+        # a hole through the box side and the build "succeeds" with open geometry.
+        clearances = [
+            (dist_c1, "chamfer-side wall (B1)"),
+            (width - dist_c1, "far side wall (B Kammer - B1)"),
+            (dist_from_end, "chamfered end (LT)"),
+            (length - dist_from_end, "inlet end (Length - LT)"),
+        ]
+        gap, wall_name = min(clearances, key=lambda c: c[0])
+        if rmax > gap + 1e-6:
+            raise ValueError(
+                "the part is %.4f m wide (radius %.4f m) but its axis sits only "
+                "%.4f m from the %s, so it would stick out of the box. Increase "
+                "B Kammer / Length or move the axis (B1 / LT), or reduce Part "
+                "scale / the diameter overrides." % (2 * rmax, rmax, gap, wall_name))
 
         # Hollow: the stack must fit under the box top. Stepped: the last cylinder
         # is intentionally pinned THROUGH the top, so guard its height is positive
