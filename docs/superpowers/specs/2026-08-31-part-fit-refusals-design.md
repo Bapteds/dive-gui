@@ -53,3 +53,24 @@ fail until the user sets the suggested Part scale (or resizes the heights).
 
 No web/API code changes: the KO text already surfaces in the red notices panel
 and the toast (feature 2026-08-31 "errors in both places").
+
+## Addendum (same day): torque feet + chamfer faces
+
+User follow-up: "it could be that the largest diameter is inside, but the feet
+are outside of the box." The fit check was extended beyond the cylinder radius:
+
+- **Feet**: the exact swung plan of the four legs (mirroring `make_feet` — the
+  hexagon corners bound the whole foot; planks stay inside the leg tips and the
+  cylinder wall) is tested vertex-by-vertex against the box walls, so a leg
+  pointing away from a near wall never refuses a build that actually fits.
+  Refusal: "a torque foot reaches (x, y) m, outside the …" with the levers
+  (B Kammer / Length, B1 / LT, Part scale, or disable the feet).
+- **Chamfer faces**: both the cylinder circle and the foot vertices are also
+  tested against the two corner-cut triangles (`_corner_prism` geometry), since
+  a part can poke through a chamfer face while inside the rectangle.
+- The old advisory `WARN: part radius … breaks a side wall` (X-axis only) is
+  superseded by these refusals and removed.
+
+Test: `test_feet_outside_the_box_are_refused` — cylinders fit (3.19 m radius vs
+3.5 m gaps) but a foot (~4.2 m reach) does not → KO; same box with
+`feetEnabled: false` builds OK.

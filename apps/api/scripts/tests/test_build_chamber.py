@@ -133,6 +133,27 @@ def test_part_wider_than_box_is_refused(build):
     assert "reduce Part scale / the diameter overrides" in result.stderr
 
 
+def test_feet_outside_the_box_are_refused(build):
+    """The torque feet reach further out than the cylinders, so a part whose
+    cylinders fit can still have a foot poking through a wall — that too fails
+    the build (KO), checked on the exact swung foot footprint. Here the box is
+    widened so the cylinders clear every wall (radius 3.19 m vs 3.5 m gaps) but
+    the feet (reaching ~4.2 m) cannot."""
+    result = build("stepped", params_override={
+        "partScale": 2.3, "width": 7.0, "length": 14.0, "height": 4.0,
+        "distFromSideChamfer1": 3.5, "distFromEnd": 7.0,
+    })
+    assert result.exit_code == 1
+    assert "KO:" in result.stderr
+    assert "a torque foot reaches" in result.stderr
+    # Same params with the feet disabled must build fine (the cylinders fit).
+    ok = build("stepped", params_override={
+        "partScale": 2.3, "width": 7.0, "length": 14.0, "height": 4.0,
+        "distFromSideChamfer1": 3.5, "distFromEnd": 7.0, "feetEnabled": False,
+    })
+    assert ok.exit_code == 0, ok.stderr
+
+
 def test_stepped_overflow_is_refused(build):
     """A stepped part that cannot fit H Kammer must fail the build (KO:) with an
     actionable message - never silently shrink the part."""

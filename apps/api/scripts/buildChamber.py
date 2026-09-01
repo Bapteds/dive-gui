@@ -1429,25 +1429,6 @@ def main():
             part_height = h_first + h_middle + last_h_local  # == height + 2*FLOOR_OVERCUT
             rmax = max(d_first, d_middle, d_last) / 2
 
-        # The part must stay INSIDE the box footprint. Its axis sits dist_c1 from
-        # the chamfer-side wall and dist_from_end from the chamfered end, so the
-        # largest internal radius must clear all four walls — without this check an
-        # oversized part (big Part scale, or dFirst/dMiddle overrides) silently cuts
-        # a hole through the box side and the build "succeeds" with open geometry.
-        clearances = [
-            (dist_c1, "chamfer-side wall (B1)"),
-            (width - dist_c1, "far side wall (B Kammer - B1)"),
-            (dist_from_end, "chamfered end (LT)"),
-            (length - dist_from_end, "inlet end (Length - LT)"),
-        ]
-        gap, wall_name = min(clearances, key=lambda c: c[0])
-        if rmax > gap + 1e-6:
-            raise ValueError(
-                "the part is %.4f m wide (radius %.4f m) but its axis sits only "
-                "%.4f m from the %s, so it would stick out of the box. Increase "
-                "B Kammer / Length or move the axis (B1 / LT), or reduce Part "
-                "scale / the diameter overrides." % (2 * rmax, rmax, gap, wall_name))
-
         # Hollow: the stack must fit under the box top. Stepped: the last cylinder
         # is intentionally pinned THROUGH the top, so guard its height is positive
         # instead (the clamp above guarantees the shoulder leaves room).
@@ -1471,10 +1452,100 @@ def main():
         target_y = end_sy * (length / 2 - dist_from_end)
         part = part.translate((target_x, target_y, -height / 2 - FLOOR_OVERCUT))
 
-        if abs(target_x) + rmax > width / 2 + 1e-9:
-            sys.stderr.write(
-                "WARN: part radius %.3f at x=%.3f exceeds box half-width %.3f "
-                "-> pocket breaks a side wall\n" % (rmax, target_x, width / 2))
+        # --- fit check: the part (cylinders + torque feet) must stay INSIDE the
+        # box footprint. The axis sits dist_c1 from the chamfer-side wall and
+        # dist_from_end from the chamfered end. Three ways to poke out, each
+        # REFUSED with the lever that fixes it (an overflow used to cut silently
+        # through the box wall and the build "succeeded" with open geometry):
+        #  1. the largest cylinder radius vs the four straight walls;
+        #  2. the largest cylinder radius vs the two chamfer faces (corner cuts);
+        #  3. any torque-foot corner vs walls or chamfer faces — the feet reach
+        #     further out than the cylinders, so they are checked on the EXACT
+        #     swung footprint (mirroring make_feet's plan), not a bounding
+        #     circle: a leg pointing away from a near wall never refuses a build
+        #     that actually fits.
+        half_w, half_l = width / 2, length / 2
+        clearances = [
+            (dist_c1, "chamfer-side wall (B1)"),
+            (width - dist_c1, "far side wall (B Kammer - B1)"),
+            (dist_from_end, "chamfered end (LT)"),
+            (length - dist_from_end, "inlet end (Length - LT)"),
+        ]
+        gap, wall_name = min(clearances, key=lambda c: c[0])
+        if rmax > gap + 1e-6:
+            raise ValueError(
+                "the part is %.4f m wide (radius %.4f m) but its axis sits only "
+                "%.4f m from the %s, so it would stick out of the box. Increase "
+                "B Kammer / Length or move the axis (B1 / LT), or reduce Part "
+                "scale / the diameter overrides." % (2 * rmax, rmax, gap, wall_name))
+
+        # The two chamfer corner cuts (full-height prisms at the +Y end). Each is
+        # the triangle corner P / wall point A / wall point B; geometry mirrors
+        # _corner_prism exactly.
+        chamfer_tris = []
+        if chamfer_enabled:
+            for _sx, (_len_set, _wid_set), _nm in (
+                    (big_sx, ch_big, "big-corner chamfer face"),
+                    (-big_sx, ch_small, "small-corner chamfer face")):
+                chamfer_tris.append((
+                    (_sx * half_w, end_sy * half_l),
+                    (_sx * (half_w - _wid_set), end_sy * half_l),
+                    (_sx * half_w, end_sy * (half_l - _len_set)),
+                    _nm,
+                ))
+
+        def _seg_dist(px, py, a, b):
+            vx, vy = b[0] - a[0], b[1] - a[1]
+            t = max(0.0, min(1.0, ((px - a[0]) * vx + (py - a[1]) * vy)
+                             / (vx * vx + vy * vy)))
+            return math.hypot(px - (a[0] + t * vx), py - (a[1] + t * vy))
+
+        def _in_tri(px, py, a, b, c):
+            def _cr(o, p, q):
+                return (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0])
+            d1, d2, d3 = _cr(a, b, (px, py)), _cr(b, c, (px, py)), _cr(c, a, (px, py))
+            return not (((d1 < 0) or (d2 < 0) or (d3 < 0))
+                        and ((d1 > 0) or (d2 > 0) or (d3 > 0)))
+
+        for _ta, _tb, _tc, _nm in chamfer_tris:
+            # Circle vs removed corner triangle: the axis is always well inside
+            # the box, so its nearest triangle point lies on an edge.
+            if min(_seg_dist(target_x, target_y, p, q)
+                   for p, q in ((_ta, _tb), (_tb, _tc), (_tc, _ta))) < rmax - 1e-6:
+                raise ValueError(
+                    "the part (radius %.4f m) would stick out through the %s. "
+                    "Reduce that chamfer, move the axis (B1 / LT), or reduce "
+                    "Part scale / the diameter overrides." % (rmax, _nm))
+
+        if feet_enabled:
+            # Exact swung plan of the four legs, mirroring make_feet (the planks
+            # stay inside the leg tips + the cylinder wall, so the leg hexagon
+            # corners bound the whole foot footprint).
+            _hw = FOOT_WIDTH * part_scale / 2
+            _r_in = d_first / 2 + FOOT_CLEARANCE * part_scale + _hw
+            _r_out = _r_in + FOOT_LENGTH * part_scale
+            _tap = FOOT_TAPER * part_scale
+            _chf = FOOT_CHAMFER * part_scale
+            _plan = [(_r_in, 0.0), (_r_in + _tap, _hw), (_r_out - _chf, _hw),
+                     (_r_out, _hw - _chf), (_r_out, -(_hw - _chf)),
+                     (_r_out - _chf, -_hw), (_r_in + _tap, -_hw)]
+            _lean = math.radians(foot_angle - 90.0)
+            _cl, _sl = math.cos(_lean), math.sin(_lean)
+            _swung = [(_r_in + (x - _r_in) * _cl - y * _sl,
+                       (x - _r_in) * _sl + y * _cl) for x, y in _plan]
+            for _ring in FOOT_ANGLES_DEG:
+                _ca, _sa = math.cos(math.radians(_ring)), math.sin(math.radians(_ring))
+                for _x, _y in _swung:
+                    _px = target_x + _x * _ca - _y * _sa
+                    _py = target_y + _x * _sa + _y * _ca
+                    _through = next((_nm for _ta, _tb, _tc, _nm in chamfer_tris
+                                     if _in_tri(_px, _py, _ta, _tb, _tc)), None)
+                    if abs(_px) > half_w + 1e-6 or abs(_py) > half_l + 1e-6 or _through:
+                        raise ValueError(
+                            "a torque foot reaches (%.3f, %.3f) m, outside the %s. "
+                            "Increase B Kammer / Length or move the axis (B1 / LT), "
+                            "reduce Part scale, or disable the feet."
+                            % (_px, _py, _through if _through else "box walls"))
 
         # four torque-foot voids (both variants), centred on the part axis. Each
         # leg runs from the floor up to the BASE of the last/hollow cylinder, with
