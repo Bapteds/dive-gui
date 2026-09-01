@@ -18,16 +18,23 @@ describe('ChamberOutputsTable', () => {
     expect(screen.getByText(/enter valid inputs/i)).toBeInTheDocument();
   });
 
-  it('shows the dimension-reference drawing in both states', () => {
+  it('offers the dimension-reference drawing behind a collapsed toggle', () => {
     const { unmount } = render(
       <ChamberOutputsTable outputs={null} constraints={{}} onConstraintChange={() => {}} />,
     );
-    expect(screen.getByRole('img', { name: /annotated chamber drawings/i })).toBeInTheDocument();
+    // The toggle is there even before outputs exist; the drawing starts hidden.
+    expect(screen.getByRole('button', { name: 'Dimension reference' })).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /annotated chamber drawings/i })).toBeNull();
     unmount();
 
     render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />);
+    const toggle = screen.getByRole('button', { name: 'Dimension reference' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('img', { name: /annotated chamber drawings/i })).toBeInTheDocument();
-    expect(screen.getByText('Dimension reference')).toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(screen.queryByRole('img', { name: /annotated chamber drawings/i })).toBeNull();
   });
 
   it('renders a row per output with its label and status', () => {

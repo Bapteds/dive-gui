@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   Table,
@@ -94,6 +96,7 @@ export function ChamberOutputsTable({
   constraints: Partial<Record<ChamberOutputKey, ChamberConstraint>>;
   onConstraintChange: (key: ChamberOutputKey, field: ConstraintField, value: number | undefined) => void;
 }) {
+  const [legendOpen, setLegendOpen] = useState(false);
   return (
     <div className="overflow-hidden rounded-md border border-border bg-surface shadow-sm">
       <div className="flex items-center justify-between border-b border-border px-5 py-3">
@@ -193,24 +196,38 @@ export function ChamberOutputsTable({
       )}
 
       {/* Dimension legend: the annotated CAD drawings that define every term in
-          the table. Always shown (it is exactly what a first-time user needs
-          before the outputs exist); the white-background drawing sits directly
-          on the card surface. */}
-      <figure className="border-t border-border px-5 py-4">
-        <figcaption className="mb-3">
-          <span className="block text-sm font-medium text-text">Dimension reference</span>
-          <span className="block text-xs text-text-secondary">
-            Plan view (left): B Kammer, B1, BF1 / BF2, LF1 / LF2, LT. Section view (right): H
-            Kammer, LEB, LEOW, HLE, LE Ø.
-          </span>
-        </figcaption>
-        <img
-          src={chamberDimensionsImg}
-          alt="Annotated chamber drawings: a plan view locating B Kammer, B1, BF1, BF2, LF1, LF2 and LT, and a section view locating H Kammer, LEB, LEOW, HLE and LE Ø."
-          loading="lazy"
-          className="h-auto w-full max-w-[1319px]"
-        />
-      </figure>
+          the table. Collapsed by default so the tall drawing does not push the
+          page; the toggle follows the app's disclosure pattern (chevron button
+          with aria-expanded, as in the meshing config forms). */}
+      <div className="border-t border-border">
+        <button
+          type="button"
+          onClick={() => setLegendOpen((v) => !v)}
+          aria-expanded={legendOpen}
+          className="flex w-full items-center gap-1.5 px-5 py-3 text-left text-sm font-medium text-text-secondary transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
+        >
+          {legendOpen ? (
+            <ChevronDown className="size-4" strokeWidth={2} aria-hidden="true" />
+          ) : (
+            <ChevronRight className="size-4" strokeWidth={2} aria-hidden="true" />
+          )}
+          Dimension reference
+        </button>
+        {legendOpen && (
+          <figure className="px-5 pb-4">
+            <figcaption className="mb-3 text-xs text-text-secondary">
+              Plan view (left): B Kammer, B1, BF1 / BF2, LF1 / LF2, LT. Section view (right): H
+              Kammer, LEB, LEOW, HLE, LE Ø.
+            </figcaption>
+            <img
+              src={chamberDimensionsImg}
+              alt="Annotated chamber drawings: a plan view locating B Kammer, B1, BF1, BF2, LF1, LF2 and LT, and a section view locating H Kammer, LEB, LEOW, HLE and LE Ø."
+              loading="lazy"
+              className="h-auto w-full max-w-[1319px]"
+            />
+          </figure>
+        )}
+      </div>
     </div>
   );
 }
