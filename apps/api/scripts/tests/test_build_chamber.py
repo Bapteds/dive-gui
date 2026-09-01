@@ -178,6 +178,46 @@ def test_feet_outside_the_box_are_refused(build):
     assert ok.exit_code == 0, ok.stderr
 
 
+def test_zero_chamfer_setback_is_refused(build):
+    """A zero (or negative) chamfer setback used to make a degenerate zero-area
+    prism deep inside OCC; now it is refused up front with the lever."""
+    result = build("stepped", params_override={"chamferWidth1": 0.0})
+    assert result.exit_code == 1
+    assert "KO:" in result.stderr
+    assert "chamfer 1 (LF1/BF1) setbacks must be > 0" in result.stderr
+
+
+def test_axis_inside_chamfer_corner_is_refused(build):
+    """Chamfers big enough to swallow the part axis evaded every fit check (the
+    circle-vs-triangle test measures edge distance, valid only for an axis
+    OUTSIDE the triangle). B1 1.5 / LT 3.0 inside a 4.0 x 8.0 corner cut
+    (1.5/4 + 3/8 = 0.75 < 1) must refuse, not build inside removed space."""
+    result = build("stepped", params_override={
+        "chamferLength1": 8.0, "chamferWidth1": 4.0,
+        "distFromSideChamfer1": 1.5, "distFromEnd": 3.0,
+    })
+    assert result.exit_code == 1
+    assert "KO:" in result.stderr
+    assert "lies inside" in result.stderr
+    assert "corner cut" in result.stderr
+
+
+def test_vane_distributor_outside_box_is_refused(build):
+    """The guide-vane distributor reaches ~1.25 x the ring radius — further
+    than any cylinder. Cylinders fit here (radius 3.25 m vs 3.5 m gaps) but a
+    dMiddle of 6.5 m puts the blade tips at ~4.07 m: the exact mesh-reach
+    check must refuse instead of carving blade holes through the box wall."""
+    result = build("stepped-vanes", params_override={
+        "dFirst": 6.0, "dMiddle": 6.5, "width": 7.0, "length": 14.0,
+        "height": 4.0, "distFromSideChamfer1": 3.5, "distFromEnd": 7.0,
+        "feetEnabled": False,
+    })
+    assert result.exit_code == 1
+    assert "KO:" in result.stderr
+    assert "guide-vane distributor" in result.stderr
+    assert "Guide vanes" in result.stderr
+
+
 def test_stepped_overflow_is_refused(build):
     """A stepped part that cannot fit H Kammer must fail the build (KO:) with an
     actionable message - never silently shrink the part."""

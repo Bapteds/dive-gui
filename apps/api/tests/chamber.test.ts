@@ -443,6 +443,39 @@ describe('Chamber Creation', () => {
     });
   });
 
+  it('refuses a build whose model finals go non-positive, before any builder run', async () => {
+    // The failing runner proves the refusal happens pre-build (else 502).
+    setCommandRunner(notFoundRunner);
+    const auth = authHeader(await createTestUser());
+    const res = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      // Legal inputs whose own H Kammer fit is ≈ -3442 mm with relations off.
+      .send({ x1: 700, x2: 1.8, x3: 23, relationsMaster: false })
+      .expect(422);
+    expect(res.body.error.message).toContain('H Kammer');
+    expect(res.body.error.message).toContain('must be positive');
+  });
+
+  it('rejects non-positive and absurdly large dimensions at the schema', async () => {
+    const auth = authHeader(await createTestUser());
+    await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, constraints: { width: { exact: -100 } } })
+      .expect(422);
+    await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, constraints: { height: { max: 0 } } })
+      .expect(422);
+    await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, dFirst: 200_000 })
+      .expect(422);
+  });
+
   it('applies a Min/Max/Exact constraint to the returned outputs', async () => {
     setCommandRunner(successRunner);
     const auth = authHeader(await createTestUser());

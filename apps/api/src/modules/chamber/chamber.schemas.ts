@@ -3,15 +3,24 @@
 // geometry dimension (mm); constraints are optional per-output Min/Max/Exact
 // overrides keyed by an output parameter name.
 import { z } from 'zod';
-import { CHAMBER_INPUT_RANGES, CHAMBER_OUTPUT_KEYS, CHAMBER_VARIANTS } from '@dive/shared';
+import {
+  CHAMBER_DIMENSION_MAX_MM,
+  CHAMBER_INPUT_RANGES,
+  CHAMBER_OUTPUT_KEYS,
+  CHAMBER_VARIANTS,
+} from '@dive/shared';
 
 const r = CHAMBER_INPUT_RANGES;
 
-/** One optional per-output override. All fields optional; validated as finite. */
+/** A user-entered dimension (mm): strictly positive, bounded so an absurd
+ * value cannot burn a CPU core for the whole build timeout. */
+const dimensionMm = z.number().positive().max(CHAMBER_DIMENSION_MAX_MM);
+
+/** One optional per-output override. All fields optional; each a dimension. */
 const constraintSchema = z.object({
-  min: z.number().finite().optional(),
-  max: z.number().finite().optional(),
-  exact: z.number().finite().optional(),
+  min: dimensionMm.optional(),
+  max: dimensionMm.optional(),
+  exact: dimensionMm.optional(),
 });
 
 /**
@@ -58,18 +67,18 @@ export const chamberBuildSchema = z
     // Geometry-only. Stepped: a scale that overgrows the box height is refused;
     // hollow: the internal part is scaled down to fit (with a warning).
     partScale: z.number().finite().positive().max(5).default(1),
-    lengthOverride: z.number().finite().positive().optional(),
-    hollowLength: z.number().finite().positive().optional(),
-    wallThickness: z.number().finite().positive().optional(),
+    lengthOverride: dimensionMm.optional(),
+    hollowLength: dimensionMm.optional(),
+    wallThickness: dimensionMm.optional(),
     // Manual overrides for otherwise-derived dimensions (mm). Omitted => the fixed
     // empirical relation is used. dFirst/dMiddle apply to both variants; the three
     // central/dome ones only affect the hollow variant. A different value => a
     // different cached build (they flow into resolveGeometryParams's hash).
-    dFirst: z.number().finite().positive().optional(),
-    dMiddle: z.number().finite().positive().optional(),
-    centralDiameter: z.number().finite().positive().optional(),
-    centralHeight: z.number().finite().positive().optional(),
-    domeHeight: z.number().finite().positive().optional(),
+    dFirst: dimensionMm.optional(),
+    dMiddle: dimensionMm.optional(),
+    centralDiameter: dimensionMm.optional(),
+    centralHeight: dimensionMm.optional(),
+    domeHeight: dimensionMm.optional(),
   })
   .superRefine((v, ctx) => {
     if (v.variant === 'hollow' && v.hollowLength == null) {

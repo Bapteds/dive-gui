@@ -10,6 +10,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import chamberDimensionsImg from './assets/chamber-dimensions.png';
+import { CHAMBER_DIMENSION_MAX_MM } from '@dive/shared';
 import type {
   ChamberConfidence,
   ChamberConstraint,
@@ -68,14 +69,20 @@ function NumCell({
       aria-label={ariaLabel}
       value={value ?? ''}
       placeholder="—"
+      min={0}
+      max={CHAMBER_DIMENSION_MAX_MM}
       onChange={(e) => {
         const raw = e.target.value;
         if (raw === '') {
           onChange(undefined);
           return;
         }
+        // Only a real dimension may become a constraint: strictly positive,
+        // bounded like the API schema. Anything else clears the field (same
+        // as emptying it), so `1e999` or a negative can never reach a build.
         const parsed = Number(raw);
-        onChange(Number.isFinite(parsed) ? parsed : undefined);
+        const valid = Number.isFinite(parsed) && parsed > 0 && parsed <= CHAMBER_DIMENSION_MAX_MM;
+        onChange(valid ? parsed : undefined);
       }}
       className={cn(
         'w-20 rounded-sm border border-border bg-surface px-2 py-1 text-sm tabular-nums text-text',
@@ -171,11 +178,24 @@ export function ChamberOutputsTable({
                       onChange={(v) => onConstraintChange(o.key, 'exact', v)}
                     />
                   </TableCell>
-                  <TableCell className="text-right font-semibold text-text">{mm(o.final)}</TableCell>
+                  <TableCell
+                    className={cn(
+                      'text-right font-semibold',
+                      o.final <= 0 && !o.noEffect ? 'text-danger' : 'text-text',
+                    )}
+                  >
+                    {mm(o.final)}
+                  </TableCell>
                   <TableCell>
-                    <span className={cn('text-xs', STATUS_STYLES[o.status])}>
-                      {o.status === 'from relation' ? o.relationLabel : o.status}
-                    </span>
+                    {o.final <= 0 && !o.noEffect ? (
+                      // A non-positive dimension can never build — the server
+                      // refuses it; flag it live, before Generate.
+                      <span className="text-xs text-danger">! ≤ 0 mm — not buildable</span>
+                    ) : (
+                      <span className={cn('text-xs', STATUS_STYLES[o.status])}>
+                        {o.status === 'from relation' ? o.relationLabel : o.status}
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell>
                     <span

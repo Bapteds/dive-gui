@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CHAMBER_GRID_MM,
   computeChamberOutputs,
+  nonPositiveChamberFinals,
   snapToChamberGrid,
   type ChamberOutput,
 } from '@dive/shared';
@@ -267,6 +268,30 @@ describe('computeChamberOutputs', () => {
       expect(m.get('width')!.refined).toBe(true);
       expect(m.get('width')!.final).toBe(snapToChamberGrid(m.get('width')!.model));
       expect(m.get('width')!.userDriven).toBe(false);
+    });
+  });
+
+  // The fits CAN go non-positive on legal inputs — the API refuses such builds
+  // and the table flags them; noEffect outputs (a disconnected LEOW) never block.
+  describe('nonPositiveChamberFinals', () => {
+    it('flags the negative H Kammer the fits produce at a legal input corner', () => {
+      const outputs = computeChamberOutputs({ x1: 700, x2: 1.8, x3: 23, relationsMaster: false });
+      expect(outputs.find((o) => o.key === 'height')!.final).toBeLessThan(0);
+      expect(nonPositiveChamberFinals(outputs).map((o) => o.key)).toContain('height');
+    });
+
+    it('excludes a non-positive LEOW the build never reads (noEffect)', () => {
+      const outputs = computeChamberOutputs({
+        ...BASE,
+        relationsMaster: false,
+        constraints: { hLast: { exact: -5 } },
+      });
+      expect(outputs.find((o) => o.key === 'hLast')!.noEffect).toBe(true);
+      expect(nonPositiveChamberFinals(outputs)).toEqual([]);
+    });
+
+    it('flags nothing for the mid-range default inputs', () => {
+      expect(nonPositiveChamberFinals(computeChamberOutputs(BASE))).toEqual([]);
     });
   });
 

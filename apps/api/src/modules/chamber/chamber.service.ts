@@ -19,8 +19,10 @@ import {
   CHAMBER_OUTPUT_KEYS,
   CHAMBER_WALL_THICKNESS_MM,
   computeChamberOutputs,
+  nonPositiveChamberFinals,
   type ChamberInput,
   type ChamberOutput,
+  type ChamberOutputKey,
   type MeshManifest,
 } from '@dive/shared';
 import { env } from '../../config/env';
@@ -226,6 +228,29 @@ function resolveGeometryParams(
  */
 export async function buildChamber(input: ChamberInput): Promise<ChamberBuildResult> {
   const outputs = computeChamberOutputs(input);
+
+  // The fits can go non-positive on legal inputs (esp. with relations off) —
+  // refuse before hashing/building instead of handing CadQuery a negative
+  // dimension. Chamfer setbacks are exempt while the chamfer is disabled (the
+  // build does not consume them); LT/B1 always count (they place the axis).
+  const chamferOnly: ChamberOutputKey[] = [
+    'chamferLength1',
+    'chamferWidth1',
+    'chamferLength2',
+    'chamferWidth2',
+  ];
+  const nonPositive = nonPositiveChamberFinals(outputs).filter(
+    (o) => input.chamferEnabled !== false || !chamferOnly.includes(o.key),
+  );
+  if (nonPositive.length) {
+    const list = nonPositive.map((o) => `${o.label} = ${Math.round(o.final)} mm`).join(', ');
+    throw new AppError(
+      422,
+      'VALIDATION_ERROR',
+      `Cannot build: ${list} — every dimension must be positive. Adjust X1/X2/X3, the structural relations, or the Min/Max/Exact constraints.`,
+    );
+  }
+
   const params = resolveGeometryParams(input, outputs);
   const hash = chamberHash(params);
 

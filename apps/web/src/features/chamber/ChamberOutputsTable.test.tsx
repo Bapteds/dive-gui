@@ -86,6 +86,23 @@ describe('ChamberOutputsTable', () => {
     expect(screen.queryByText('no effect')).not.toBeInTheDocument();
   });
 
+  it('flags a non-positive final as not buildable, live', () => {
+    // Legal inputs whose own H Kammer fit is negative with relations off.
+    const outputs = computeChamberOutputs({ x1: 700, x2: 1.8, x3: 23, relationsMaster: false });
+    render(<ChamberOutputsTable outputs={outputs} constraints={{}} onConstraintChange={() => {}} />);
+    expect(screen.getAllByText('! ≤ 0 mm — not buildable').length).toBeGreaterThan(0);
+  });
+
+  it('drops non-positive or absurd constraint input instead of propagating it', () => {
+    const onChange = vi.fn();
+    render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={onChange} />);
+    fireEvent.change(screen.getByLabelText('B Kammer minimum'), { target: { value: '-5' } });
+    expect(onChange).toHaveBeenLastCalledWith('width', 'min', undefined);
+    // Above CHAMBER_DIMENSION_MAX_MM (100 000): dropped like any invalid entry.
+    fireEvent.change(screen.getByLabelText('B Kammer maximum'), { target: { value: '200000' } });
+    expect(onChange).toHaveBeenLastCalledWith('width', 'max', undefined);
+  });
+
   it('clears a constraint when its cell is emptied', () => {
     const onChange = vi.fn();
     render(

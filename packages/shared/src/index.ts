@@ -2368,6 +2368,14 @@ export const CHAMBER_RELATIONS: readonly ChamberRelationInfo[] = CHAMBER_OUTPUT_
 /** Manufacturing grid (mm): empirically found dimensions snap to multiples of this. */
 export const CHAMBER_GRID_MM = 50;
 
+/**
+ * Upper bound (mm) for any user-entered chamber dimension — constraints and
+ * geometry overrides. 100 m is far above any real chamber but stops absurd
+ * values from burning a CPU core for the full build timeout. Enforced by the
+ * API schema, the web form schema, and the constraint cells.
+ */
+export const CHAMBER_DIMENSION_MAX_MM = 100_000;
+
 /** Snap an empirical estimate (mm) to the nearest manufacturing-grid multiple. */
 export function snapToChamberGrid(valueMm: number): number {
   return Math.round(valueMm / CHAMBER_GRID_MM) * CHAMBER_GRID_MM;
@@ -2749,6 +2757,18 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
   if (!heightReadsLeow) byKey.get('hLast')!.noEffect = true;
 
   return CHAMBER_OUTPUT_KEYS.map((k) => byKey.get(k)!);
+}
+
+/**
+ * The outputs whose FINAL makes the build physically impossible: non-positive
+ * dimensions. `noEffect` outputs are excluded — a LEOW the build never reads
+ * must not block it. The fits CAN go non-positive on legal X1/X2/X3 (e.g.
+ * H Kammer's own linear fit at x1=700, x2=1.8, x3=23 with the relations
+ * master off), so the API refuses these before building and the Parameters
+ * table flags them live.
+ */
+export function nonPositiveChamberFinals(outputs: ChamberOutput[]): ChamberOutput[] {
+  return outputs.filter((o) => o.final <= 0 && !o.noEffect);
 }
 
 /**

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  CHAMBER_DIMENSION_MAX_MM,
   CHAMBER_INPUT_RANGES,
   CHAMBER_RELATIONS,
   CHAMBER_VARIANTS,
@@ -56,7 +57,13 @@ export interface ChamberFormValues {
   domeHeight?: number;
 }
 
-const optionalPositive = z.number({ invalid_type_error: 'Enter a number' }).positive().optional();
+// A user-entered dimension (mm): strictly positive and bounded, mirroring the
+// API schema (CHAMBER_DIMENSION_MAX_MM) so the server never sees an absurdity.
+const optionalPositive = z
+  .number({ invalid_type_error: 'Enter a number' })
+  .positive('Must be greater than 0')
+  .max(CHAMBER_DIMENSION_MAX_MM, `Max ${CHAMBER_DIMENSION_MAX_MM.toLocaleString('en-US')} mm`)
+  .optional();
 
 /** Range-validated schema; hollowLength is required for the hollow variant. */
 export const chamberFormSchema = z

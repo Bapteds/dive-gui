@@ -1321,6 +1321,25 @@ def main():
             raise ValueError(
                 "distFromSideChamfer1 %.4f must be between 0 and width %.4f"
                 % (dist_c1, width))
+        if not 0 < dist_from_end < length:
+            raise ValueError(
+                "distFromEnd %.4f must be between 0 and length %.4f"
+                % (dist_from_end, length))
+        if chamfer_enabled:
+            # The corner cuts eat (length-wise, width-wise) into the box; a
+            # non-positive setback makes a degenerate zero-area prism (cryptic
+            # OCC failure), one beyond the box is geometric nonsense.
+            for _cnm, (_cl, _cw) in (("chamfer 1 (LF1/BF1)", ch_big),
+                                     ("chamfer 2 (LF2/BF2)", ch_small)):
+                if _cl <= 0 or _cw <= 0:
+                    raise ValueError(
+                        "%s setbacks must be > 0 (got length %.4f, width %.4f); "
+                        "disable the chamfer instead of zeroing it" % (_cnm, _cl, _cw))
+                if _cl >= length or _cw >= width:
+                    raise ValueError(
+                        "%s (length %.4f, width %.4f) must be smaller than the "
+                        "box (Length %.4f, B Kammer %.4f)"
+                        % (_cnm, _cl, _cw, length, width))
         if not 0.0 <= foot_angle <= 180.0:
             raise ValueError(
                 "footAngleDeg %.3f must be between 0 and 180 "
@@ -1481,12 +1500,6 @@ def main():
             (length - dist_from_end, "inlet end (Length - LT)"),
         ]
         gap, wall_name = min(clearances, key=lambda c: c[0])
-        if rmax > gap + 1e-6:
-            raise ValueError(
-                "the part is %.4f m wide (radius %.4f m) but its axis sits only "
-                "%.4f m from the %s, so it would stick out of the box. Increase "
-                "B Kammer / Length or move the axis (B1 / LT), or reduce Part "
-                "scale / the diameter overrides." % (2 * rmax, rmax, gap, wall_name))
 
         # The two chamfer corner cuts (full-height prisms at the +Y end). Each is
         # the triangle corner P / wall point A / wall point B; geometry mirrors
@@ -1516,15 +1529,35 @@ def main():
             return not (((d1 < 0) or (d2 < 0) or (d3 < 0))
                         and ((d1 > 0) or (d2 > 0) or (d3 > 0)))
 
+        # The axis itself must not sit inside a removed corner: the radial
+        # check below measures distance to the triangle EDGES, which is only a
+        # containment test while the centre is outside the triangle.
         for _ta, _tb, _tc, _nm in chamfer_tris:
-            # Circle vs removed corner triangle: the axis is always well inside
-            # the box, so its nearest triangle point lies on an edge.
-            if min(_seg_dist(target_x, target_y, p, q)
-                   for p, q in ((_ta, _tb), (_tb, _tc), (_tc, _ta))) < rmax - 1e-6:
+            if _in_tri(target_x, target_y, _ta, _tb, _tc):
                 raise ValueError(
-                    "the part (radius %.4f m) would stick out through the %s. "
-                    "Reduce that chamfer, move the axis (B1 / LT), or reduce "
-                    "Part scale / the diameter overrides." % (rmax, _nm))
+                    "the part axis (positioned by B1 / LT) lies inside the %s "
+                    "corner cut. Move the axis (B1 / LT) or reduce that "
+                    "chamfer." % _nm)
+
+        def _refuse_radial(r_check, what, levers):
+            """Refuse when a circle of radius r_check about the part axis pokes
+            through a straight wall or a chamfer corner face."""
+            if r_check > gap + 1e-6:
+                raise ValueError(
+                    "%s reaches %.4f m from the axis but the axis sits only "
+                    "%.4f m from the %s, so it would stick out of the box. %s"
+                    % (what, r_check, gap, wall_name, levers))
+            for _ta, _tb, _tc, _nm in chamfer_tris:
+                if min(_seg_dist(target_x, target_y, p, q)
+                       for p, q in ((_ta, _tb), (_tb, _tc), (_tc, _ta))) < r_check - 1e-6:
+                    raise ValueError(
+                        "%s would stick out through the %s. %s" % (what, _nm, levers))
+
+        _refuse_radial(
+            rmax,
+            "the part is %.4f m wide (radius %.4f m): it" % (2 * rmax, rmax),
+            "Increase B Kammer / Length or move the axis (B1 / LT), or reduce "
+            "Part scale / the diameter overrides.")
 
         if feet_enabled:
             # Exact swung plan of the four legs, mirroring make_feet (the planks
@@ -1631,6 +1664,24 @@ def main():
                 outlet_outer_d=num_opt("outletOuterD"), outlet_ratio=num_opt("outletRatio"))
             vane_outlet_ri = vane_patches["outlet_ri"]
             vane_outlet_ro = vane_patches["outlet_ro"]
+
+            # The distributor reaches FURTHER than the cylinder radii the fit
+            # check above used: the blade tips sit at ~1.25 x the ring radius
+            # and the shroud is wider still. Re-run the wall/chamfer refusals
+            # with the EXACT max radial reach of the built meshes (covers the
+            # vane-angle swing and any dMiddle override, no asset ratio baked
+            # in) — otherwise an oversized ring carves blade holes through the
+            # box wall on a "successful" build.
+            _dist_r = max(
+                float(np.hypot(m.vertices[:, 0] - target_x,
+                               m.vertices[:, 1] - target_y).max())
+                for m in (vane_patches["guide_vanes"], vane_patches["hub"],
+                          vane_patches["shroud"]))
+            _refuse_radial(
+                _dist_r,
+                "the guide-vane distributor (blades + shroud)",
+                "Increase B Kammer / Length or move the axis (B1 / LT), or "
+                "reduce Part scale / the Guide vanes Ø (dMiddle).")
             # The hub and shroud are the FULL true surfaces and continue straight down
             # from their natural passage bottom as mesh DUCTS (open cylinders at the
             # hub-inner rim vane_outlet_ri and the shroud-outer rim vane_outlet_ro). The
