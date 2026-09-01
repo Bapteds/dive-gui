@@ -62,6 +62,10 @@ export function ChamberPage() {
   const [hash, setHash] = useState<string | null>(null);
   // Geometry clamp warnings from the LAST build (kept in step with `hash`).
   const [buildWarnings, setBuildWarnings] = useState<string[]>([]);
+  // Why the LAST Generate produced nothing (refused build or invalid inputs).
+  // Shown in the notices panel before the Parameters table AND as a toast, so
+  // every error/warning surfaces in both places.
+  const [buildErrors, setBuildErrors] = useState<string[]>([]);
   const [sendOpen, setSendOpen] = useState(false);
   const build = useBuildChamber();
 
@@ -123,25 +127,65 @@ export function ChamberPage() {
   // while the form is invalid, which disables saving an unbuildable state).
   const saveSnapshot = isValid ? { ...values, constraints } : null;
 
-  const onGenerate = handleSubmit((v) => {
-    build.mutate(
-      { ...v, constraints },
-      {
-        onSuccess: (res) => {
-          setHash(res.hash);
-          setBuildWarnings(res.warnings ?? []);
-          if (res.warnings?.length) {
-            toast.warning('Chamber generated with warnings — see the notes below the preview.');
-          } else {
-            toast.success('Chamber generated.');
-          }
+  // Field labels for the invalid-submit summary, mirroring the Inputs form.
+  const FIELD_LABELS: Partial<Record<keyof ChamberFormValues, string>> = {
+    x1: 'X1',
+    x2: 'X2',
+    x3: 'X3',
+    lengthOverride: 'Length',
+    footAngleDeg: 'Foot angle',
+    partScale: 'Part scale',
+    vaneAngleDeg: 'Vane angle',
+    outletRatio: 'Outlet ratio',
+    dFirst: 'Runner case Ø',
+    dMiddle: 'Guide vanes Ø',
+    hollowLength: 'Cone length',
+    wallThickness: 'Wall thickness',
+    centralDiameter: 'Generator Ø',
+    centralHeight: 'Generator height',
+    domeHeight: 'Dome height',
+  };
+
+  const onGenerate = handleSubmit(
+    (v) => {
+      build.mutate(
+        { ...v, constraints },
+        {
+          onSuccess: (res) => {
+            setHash(res.hash);
+            setBuildErrors([]);
+            setBuildWarnings(res.warnings ?? []);
+            if (res.warnings?.length) {
+              toast.warning('Chamber generated with warnings — see the notes below the preview.');
+            } else {
+              toast.success('Chamber generated.');
+            }
+          },
+          onError: (err) => {
+            const message =
+              err instanceof ApiError ? err.message : 'Could not generate the chamber.';
+            // Both places: the persistent notices panel and the top-right toast.
+            setBuildErrors([message]);
+            toast.error(message);
+          },
         },
-        onError: (err) => {
-          toast.error(err instanceof ApiError ? err.message : 'Could not generate the chamber.');
-        },
-      },
-    );
-  });
+      );
+    },
+    (fieldErrors) => {
+      // Invalid submit: keep the inline field errors, and mirror a readable
+      // summary into the notices panel + a toast so nothing stays only in the
+      // form column.
+      const messages = Object.entries(fieldErrors)
+        .map(([key, err]) => {
+          const label = FIELD_LABELS[key as keyof ChamberFormValues] ?? key;
+          const detail = err && 'message' in err && err.message ? String(err.message) : 'Invalid value';
+          return `${label}: ${detail}`;
+        })
+        .filter(Boolean);
+      setBuildErrors(messages.length ? messages : ['Fix the highlighted inputs.']);
+      toast.error('Invalid inputs — see the notes below the preview.');
+    },
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -216,7 +260,7 @@ export function ChamberPage() {
         </div>
       </div>
 
-      <ChamberBuildWarnings warnings={buildWarnings} />
+      <ChamberBuildWarnings warnings={buildWarnings} errors={buildErrors} />
 
       <ChamberOutputsTable
         outputs={outputs}
