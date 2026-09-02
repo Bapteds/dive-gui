@@ -750,6 +750,54 @@ describe('Chamber Creation', () => {
     expect(steppedX4.body.hash).toBe(stepped.body.hash);
   });
 
+  it('keys the hollow build on Simplify Generator and drops the hidden heights from the key', async () => {
+    setCommandRunner(successRunner);
+    const auth = authHeader(await createTestUser());
+    const hollow = { ...BUILD, variant: 'hollow', hollowLength: 2000 };
+
+    const domed = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(hollow)
+      .expect(200);
+    const simplified = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...hollow, simplifyGenerator: true })
+      .expect(200);
+    // The flag reshapes the geometry => a different cache key.
+    expect(simplified.body.hash).not.toBe(domed.body.hash);
+
+    // Hidden heights are ignored while the flag is on => the SAME cache key.
+    const simplifiedHeights = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...hollow, simplifyGenerator: true, centralHeight: 1200, domeHeight: 250 })
+      .expect(200);
+    expect(simplifiedHeights.body.hash).toBe(simplified.body.hash);
+
+    // With the flag off a height override still re-keys (existing behavior).
+    const domedHeights = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...hollow, centralHeight: 1200 })
+      .expect(200);
+    expect(domedHeights.body.hash).not.toBe(domed.body.hash);
+
+    // Stepped builds have no generator: the flag must not enter the cache key.
+    const stepped = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(BUILD)
+      .expect(200);
+    const steppedFlag = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, simplifyGenerator: true })
+      .expect(200);
+    expect(steppedFlag.body.hash).toBe(stepped.body.hash);
+  });
+
   it('resolves blank generator dims from the shared Gen Dim model', async () => {
     setCommandRunner(successRunner);
     const auth = authHeader(await createTestUser());

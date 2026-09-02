@@ -2637,6 +2637,13 @@ export interface ChamberInput {
    * 79.609 + 0.21315·Ø(resolved). Hollow variant only. Geometry-only.
    */
   domeHeight?: number;
+  /**
+   * Simplify Generator: the central cylinder becomes a strict cylinder pinned
+   * THROUGH the box top (the stepped variant's mechanism) and no dome is
+   * built — centralHeight/domeHeight are ignored while this is on. Hollow
+   * variant only. Geometry-only. Default false.
+   */
+  simplifyGenerator?: boolean;
 }
 
 /** Longest allowed saved-chamber-build name (trimmed). */

@@ -72,6 +72,10 @@ export const chamberBuildSchema = z
     // Omitted => 0.9 · 9.81 · X2 · X3. Hollow-only consumer; never forwarded to
     // the builder, so it cannot change a cache key by itself.
     x4: z.number().finite().positive().max(CHAMBER_X4_MAX).optional(),
+    // Simplify Generator (hollow only): pin the central cylinder through the
+    // box top (stepped-style) with no dome; centralHeight/domeHeight are
+    // ignored while on. A different flag => a different cached build.
+    simplifyGenerator: z.boolean().default(false),
     lengthOverride: dimensionMm.optional(),
     hollowLength: dimensionMm.optional(),
     wallThickness: dimensionMm.optional(),

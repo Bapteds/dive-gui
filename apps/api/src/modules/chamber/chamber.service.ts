@@ -215,8 +215,14 @@ function resolveGeometryParams(
     params.wallThickness = wallMm * MM_TO_M;
     params.hollowLength = (input.hollowLength ?? 0) * MM_TO_M;
     params.centralDiameter = gen.resolved.centralDiameter * MM_TO_M;
-    params.centralHeight = gen.resolved.centralHeight * MM_TO_M;
-    params.domeHeight = gen.resolved.domeHeight * MM_TO_M;
+    // Simplify Generator: the BUILDER pins the central cylinder through the
+    // box top (stepped-style, no dome) — the heights are OMITTED so hidden
+    // overrides cannot re-key the cache; the flag itself is part of the key.
+    params.simplifyGenerator = input.simplifyGenerator ?? false;
+    if (!params.simplifyGenerator) {
+      params.centralHeight = gen.resolved.centralHeight * MM_TO_M;
+      params.domeHeight = gen.resolved.domeHeight * MM_TO_M;
+    }
   }
   return params;
 }

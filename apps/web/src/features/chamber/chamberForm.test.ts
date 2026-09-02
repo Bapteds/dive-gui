@@ -134,6 +134,21 @@ describe('x4 (generator model steering input)', () => {
   });
 });
 
+describe('simplifyGenerator (generator pinned to the chamber top)', () => {
+  it('ships off by default and accepts both states', () => {
+    expect(CHAMBER_FORM_DEFAULTS.simplifyGenerator).toBe(false);
+    expect(parse({ ...CHAMBER_FORM_DEFAULTS, simplifyGenerator: true }).success).toBe(true);
+  });
+
+  it('round-trips through a saved snapshot and defaults to false on old saves', () => {
+    const base = { x1: 1450, x2: 7, x3: 10 } as ChamberInput;
+    expect(chamberInputToFormValues({ ...base, simplifyGenerator: true }).simplifyGenerator).toBe(
+      true,
+    );
+    expect(chamberInputToFormValues(base).simplifyGenerator).toBe(false);
+  });
+});
+
 describe('computeChamberAutoDims', () => {
   const V = { ...CHAMBER_FORM_DEFAULTS, x1: 1450, x2: 7, x3: 10 };
 

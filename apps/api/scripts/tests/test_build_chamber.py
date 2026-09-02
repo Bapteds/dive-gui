@@ -147,6 +147,53 @@ def test_hollow_overflow_is_refused(build):
     assert "reduce Part scale to <= 0.79" in result.stderr
 
 
+def _section_loop_count(stl, z):
+    """Closed loops of the solid's horizontal cross-section at height z (m)."""
+    section = stl.section(plane_origin=(0.0, 0.0, z), plane_normal=(0.0, 0.0, 1.0))
+    assert section is not None, f"no cross-section at z={z}"
+    return len(section.discrete)
+
+
+def test_simplify_generator_pierces_the_box_top_without_a_dome(build):
+    """Simplify Generator: the central cylinder is pinned THROUGH the box top
+    (stepped-style) and no dome is built. Proof by cross-section just below the
+    top face: the flag-on solid shows TWO loops (box outline + generator bore),
+    while the flag-off solid at the same partScale shows ONE (solid ceiling —
+    the domed stack ends well below the top at this scale)."""
+    # partScale 0.7: the domed stack (3.398 m unscaled) stays under H Kammer
+    # (2.38 < 2.7) so the flag-off ceiling is solid; the cone stack obviously
+    # fits too, so the flag-on build succeeds without touching the fixture.
+    z_top_slice = 2.7 / 2 - 0.001  # box spans -height/2..+height/2
+    simplified = build("hollow-vanes",
+                       params_override={"partScale": 0.7, "simplifyGenerator": True})
+    assert simplified.exit_code == 0, simplified.stderr
+    domed = build("hollow-vanes", params_override={"partScale": 0.7})
+    assert domed.exit_code == 0, domed.stderr
+
+    stl_simplified = simplified.load_stl()
+    assert stl_simplified.is_watertight
+    assert _section_loop_count(stl_simplified, z_top_slice) == 2
+    assert _section_loop_count(domed.load_stl(), z_top_slice) == 1
+
+    # Same patch contract as every hollow vane build.
+    assert tuple(p["name"] for p in simplified.manifest) == VANE_PATCHES
+    assert _tmp_leftovers(simplified.out_dir) == []
+
+
+def test_simplify_generator_overflow_names_the_cone_stack(build):
+    """With Simplify Generator the fit check considers only first+middle+cone
+    (the generator fits by construction) — an overgrown cone is refused with
+    cone-stack wording, not the generator+dome message."""
+    result = build("hollow-vanes", params_override={
+        "partScale": 1, "simplifyGenerator": True, "hollowLength": 2.0,
+    })
+    assert result.exit_code == 1
+    assert "KO:" in result.stderr
+    assert "hollow cone stack" in result.stderr
+    assert "H Kammer only allows" in result.stderr
+    assert "generator + dome" not in result.stderr
+
+
 def test_part_wider_than_box_is_refused(build):
     """A part whose radius does not clear every box wall from its axis fails the
     build (KO) instead of silently cutting through the side wall."""

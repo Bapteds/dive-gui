@@ -47,6 +47,7 @@ function Harness({
       onSubmit={handleSubmit(onValid)}
       isBuilding={false}
       variant={variant ?? values.variant}
+      simplifyGenerator={values.simplifyGenerator}
       autoLengthMm={8889}
       autoDims={AUTO_DIMS}
       relationsMaster={relationsMaster}
@@ -155,6 +156,45 @@ describe('ChamberInputsForm', () => {
     expect(
       screen.getByText('Blank = auto ≈ 618 kW (0.9 · 9.81 · Head · Q_max)'),
     ).toBeInTheDocument();
+  });
+
+  it('Simplify generator toggles in the hollow section and hides the height/dome fields', () => {
+    const { rerender } = render(<Harness onValid={() => {}} />);
+    // Stepped: no Simplify generator checkbox at all.
+    expect(screen.queryByLabelText(/Simplify generator/)).not.toBeInTheDocument();
+
+    rerender(<Harness onValid={() => {}} variant="hollow" defaults={{ variant: 'hollow' }} />);
+    expect(screen.getByLabelText(/Simplify generator/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Generator height (mm)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Dome height (mm)')).toBeInTheDocument();
+
+    // Flag on: the two meaningless fields disappear; Ø and Power stay.
+    rerender(
+      <Harness
+        onValid={() => {}}
+        variant="hollow"
+        defaults={{ variant: 'hollow', simplifyGenerator: true }}
+      />,
+    );
+    expect(screen.queryByLabelText('Generator height (mm)')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Dome height (mm)')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Generator Ø (mm)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Power (kW)')).toBeInTheDocument();
+  });
+
+  it('submits the Simplify generator flag with the form values', async () => {
+    // A fresh mount (not a rerender): useForm reads defaultValues once.
+    const onValid = vi.fn();
+    render(
+      <Harness
+        onValid={onValid}
+        variant="hollow"
+        defaults={{ variant: 'hollow', simplifyGenerator: true }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
+    await waitFor(() => expect(onValid).toHaveBeenCalledTimes(1));
+    expect((onValid.mock.calls[0][0] as ChamberFormValues).simplifyGenerator).toBe(true);
   });
 
   it('submits a typed Power (x4) as a number and a blank one as undefined (auto)', async () => {

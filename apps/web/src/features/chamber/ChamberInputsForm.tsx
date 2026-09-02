@@ -43,6 +43,7 @@ export function ChamberInputsForm({
   onSubmit,
   isBuilding,
   variant,
+  simplifyGenerator,
   autoLengthMm,
   autoDims,
   relationsMaster,
@@ -54,6 +55,8 @@ export function ChamberInputsForm({
   onSubmit: FormEventHandler<HTMLFormElement>;
   isBuilding: boolean;
   variant: ChamberVariant;
+  /** Current Simplify Generator state (hides the height/dome fields when on). */
+  simplifyGenerator: boolean;
   autoLengthMm: number | null;
   /** Auto (empirical) placeholders for the five manual dimension overrides. */
   autoDims: ChamberAutoDims;
@@ -302,6 +305,23 @@ export function ChamberInputsForm({
       </div>
 
       {variant === 'hollow' && (
+        <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-bg p-3">
+          <input
+            type="checkbox"
+            {...register('simplifyGenerator')}
+            className="mt-0.5 size-4 shrink-0 cursor-pointer rounded-sm border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40"
+          />
+          <span className="text-sm">
+            <span className="font-medium text-text">Simplify generator</span>
+            <span className="mt-0.5 block text-text-secondary">
+              Extend the generator as a straight cylinder through the chamber top — no dome
+              (like the closed design&apos;s last cylinder).
+            </span>
+          </span>
+        </label>
+      )}
+
+      {variant === 'hollow' && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field
             label="Cone length (mm)"
@@ -353,30 +373,34 @@ export function ChamberInputsForm({
               {...register('centralDiameter', { setValueAs: numOrUndef })}
             />
           </Field>
-          <Field
-            label="Generator height (mm)"
-            error={errors.centralHeight?.message}
-            helperText={autoHint(autoDims.centralHeight)}
-          >
-            <Input
-              type="number"
-              step="any"
-              placeholder="auto"
-              {...register('centralHeight', { setValueAs: numOrUndef })}
-            />
-          </Field>
-          <Field
-            label="Dome height (mm)"
-            error={errors.domeHeight?.message}
-            helperText={autoHint(autoDims.domeHeight)}
-          >
-            <Input
-              type="number"
-              step="any"
-              placeholder="auto"
-              {...register('domeHeight', { setValueAs: numOrUndef })}
-            />
-          </Field>
+          {!simplifyGenerator && (
+            <Field
+              label="Generator height (mm)"
+              error={errors.centralHeight?.message}
+              helperText={autoHint(autoDims.centralHeight)}
+            >
+              <Input
+                type="number"
+                step="any"
+                placeholder="auto"
+                {...register('centralHeight', { setValueAs: numOrUndef })}
+              />
+            </Field>
+          )}
+          {!simplifyGenerator && (
+            <Field
+              label="Dome height (mm)"
+              error={errors.domeHeight?.message}
+              helperText={autoHint(autoDims.domeHeight)}
+            >
+              <Input
+                type="number"
+                step="any"
+                placeholder="auto"
+                {...register('domeHeight', { setValueAs: numOrUndef })}
+              />
+            </Field>
+          )}
         </div>
       )}
 

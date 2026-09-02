@@ -256,6 +256,7 @@ export function ChamberPage() {
             onSubmit={onGenerate}
             isBuilding={build.isPending}
             variant={values.variant}
+            simplifyGenerator={values.simplifyGenerator}
             autoLengthMm={autoLengthMm}
             autoDims={autoDims}
             relationsMaster={values.relationsMaster}

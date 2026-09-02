@@ -53,6 +53,8 @@ export interface ChamberFormValues {
   dFirst?: number;
   /** Guide vanes / middle cylinder Ø (mm); blank => auto from D_last. Both variants. */
   dMiddle?: number;
+  /** Simplify Generator: strict cylinder pinned through the chamber top, no dome. Hollow only. */
+  simplifyGenerator: boolean;
   /** X4 (≈ power) steering the generator model; blank => 0.9 · 9.81 · X2 · X3. Hollow only. */
   x4?: number;
   /** Generator (central cylinder) Ø (mm); blank => Gen Dim catalog Ø for the suggested frame. Hollow only. */
@@ -104,6 +106,7 @@ export const chamberFormSchema = z
     wallThickness: optionalPositive,
     dFirst: optionalPositive,
     dMiddle: optionalPositive,
+    simplifyGenerator: z.boolean(),
     x4: z
       .number({ invalid_type_error: 'Enter a number' })
       .positive('Must be greater than 0')
@@ -145,6 +148,7 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   wallThickness: CHAMBER_WALL_THICKNESS_MM,
   dFirst: undefined,
   dMiddle: undefined,
+  simplifyGenerator: false,
   x4: undefined,
   centralDiameter: undefined,
   centralHeight: undefined,
@@ -179,6 +183,7 @@ export function chamberInputToFormValues(input: ChamberInput): ChamberFormValues
     wallThickness: input.wallThickness,
     dFirst: input.dFirst,
     dMiddle: input.dMiddle,
+    simplifyGenerator: input.simplifyGenerator ?? CHAMBER_FORM_DEFAULTS.simplifyGenerator,
     x4: input.x4,
     centralDiameter: input.centralDiameter,
     centralHeight: input.centralHeight,

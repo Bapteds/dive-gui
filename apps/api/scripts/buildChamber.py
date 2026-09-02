@@ -192,7 +192,9 @@ def make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
       * the LAST cylinder as an open-top hollow shell (outer d_last, wall
         thickness `wall`) of height `hollow_len`,
       * a central cylinder (dia c_dia, height c_h) rising coaxially from the top
-        of the middle cylinder, capped by an oval dome of height dome_h.
+        of the middle cylinder, capped by an oval dome of height dome_h —
+        dome_h None skips the dome (Simplify Generator: the caller pins the
+        cylinder through the box top instead, stepped-style).
     The whole union is later SUBTRACTED from the block, so every surface here is
     carved out (walls included). With omit_middle the MIDDLE cylinder is left out
     (the guide-vane band is open fluid); the cup/central/dome still start at
@@ -222,9 +224,11 @@ def make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
         .circle(c_dia / 2)
         .extrude(c_h)
     )
+    out = part.union(tube).union(central)
+    if dome_h is None:
+        return out
     dome = make_dome(cq, c_dia / 2, dome_h, z_mid_top + c_h)
-
-    return part.union(tube).union(central).union(dome)
+    return out.union(dome)
 
 
 def make_feet(cq, cx, cy, z0, z_top, r_cyl, d_first, foot_angle_deg=FOOT_ANGLE_DEG,
@@ -1296,6 +1300,10 @@ def main():
         guide_vanes = bool(P.get("guideVanes", False))
         chamfer_enabled = bool(P.get("chamferEnabled", True))
         feet_enabled = bool(P.get("feetEnabled", True))
+        # Simplify Generator (hollow only): the central cylinder is pinned
+        # THROUGH the box top (stepped-style) and no dome is built; the API
+        # omits centralHeight/domeHeight in this mode, so they are never read.
+        simplify_generator = bool(P.get("simplifyGenerator", False))
         # Absolute guide-vane open angle (deg). The asset is baked at
         # VANE_BASE_ANGLE_DEG (50); each blade swings about its own spindle by
         # (vane_angle - VANE_BASE_ANGLE_DEG) to reach the requested angle. Range is
@@ -1359,15 +1367,25 @@ def main():
             wall = num("wallThickness")
             hollow_len = num("hollowLength")
             c_dia = num("centralDiameter")
-            c_h = num("centralHeight")
-            dome_h = num("domeHeight")
+            if simplify_generator:
+                c_h = None
+                dome_h = None
+            else:
+                c_h = num("centralHeight")
+                dome_h = num("domeHeight")
             if not 0 < wall < d_last / 2:
                 raise ValueError("wallThickness must be in (0, dLast/2)")
-            if min(hollow_len, c_dia, c_h, dome_h) <= 0:
+            if simplify_generator:
+                if min(hollow_len, c_dia) <= 0:
+                    raise ValueError("hollow params (length/central dia) must be > 0")
+            elif min(hollow_len, c_dia, c_h, dome_h) <= 0:
                 raise ValueError("hollow params (length/central dia+height/dome) must be > 0")
             if hollow_len <= wall:
                 raise ValueError("hollowLength must exceed the wall thickness (open-top cup)")
-            unscaled_part_height = h_first + h_middle + max(hollow_len, c_h + dome_h)
+            # With Simplify Generator the central cylinder is pinned to the box
+            # top (it always fits); only the cone stack can overflow.
+            unscaled_part_height = h_first + h_middle + (
+                hollow_len if simplify_generator else max(hollow_len, c_h + dome_h))
         else:
             h_last = num("hLast")
             if h_last <= 0:
@@ -1395,6 +1413,13 @@ def main():
         if clamp_basis > 0 and part_scale * clamp_basis > clamp_limit + 1e-6:
             if variant == "hollow":
                 fit_scale = clamp_limit / clamp_basis
+                if simplify_generator:
+                    raise ValueError(
+                        "the hollow cone stack (first + middle + cone) is %.4f m "
+                        "tall but H Kammer only allows %.4f m. To fit, reduce Part "
+                        "scale to <= %.4f, lower the cone height or HLE, or "
+                        "increase H Kammer."
+                        % (part_scale * clamp_basis, clamp_limit, fit_scale))
                 raise ValueError(
                     "the hollow stack (first + middle + max(cone, generator + dome)) "
                     "is %.4f m tall but H Kammer only allows %.4f m. To fit, reduce "
@@ -1432,8 +1457,16 @@ def main():
             wall *= part_scale
             hollow_len *= part_scale
             c_dia *= part_scale
-            c_h *= part_scale
-            dome_h *= part_scale
+            if simplify_generator:
+                # Pin the generator's top a hair above the box top so box.cut
+                # opens it through the top at ANY partScale (the stepped last
+                # cylinder's mechanism). The part is later translated by
+                # z_floor = -height/2 - FLOOR_OVERCUT, so a local top of
+                # (height + 2*FLOOR_OVERCUT) lands at +height/2 + FLOOR_OVERCUT.
+                c_h = (height + 2 * FLOOR_OVERCUT) - (h_first + h_middle)
+            else:
+                c_h *= part_scale
+                dome_h *= part_scale
             if c_dia > d_last - 2 * wall:
                 sys.stderr.write(
                     "WARN: central diameter %.3f exceeds the hollow bore %.3f\n"
@@ -1441,7 +1474,8 @@ def main():
             part = make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
                                     wall, hollow_len, c_dia, c_h, dome_h,
                                     omit_middle=guide_vanes)
-            part_height = h_first + h_middle + max(hollow_len, c_h + dome_h)
+            part_height = h_first + h_middle + max(
+                hollow_len, c_h + (0.0 if dome_h is None else dome_h))
             rmax = max(d_first, d_middle, d_last) / 2
         else:
             h_last *= part_scale  # scaled model value (kept for reference/logging)
@@ -1457,11 +1491,17 @@ def main():
             part_height = h_first + h_middle + last_h_local  # == height + 2*FLOOR_OVERCUT
             rmax = max(d_first, d_middle, d_last) / 2
 
-        # Hollow: the stack must fit under the box top. Stepped: the last cylinder
-        # is intentionally pinned THROUGH the top, so guard its height is positive
-        # instead (the clamp above guarantees the shoulder leaves room).
+        # Hollow: the stack must fit under the box top — except with Simplify
+        # Generator, whose central cylinder is intentionally pinned THROUGH the
+        # top (stepped-style), so guard its height is positive instead. Stepped:
+        # same positive-height guard on the pinned last cylinder.
         if variant == "hollow":
-            if part_height > height + 1e-6:
+            if simplify_generator:
+                if c_h <= 0:
+                    raise ValueError(
+                        "generator height %.4f <= 0 (shoulder above the box top)"
+                        % c_h)
+            elif part_height > height + 1e-6:
                 raise ValueError(
                     "part height %.4f exceeds box height %.4f" % (part_height, height))
         else:
