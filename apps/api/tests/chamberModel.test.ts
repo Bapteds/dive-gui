@@ -4,7 +4,9 @@
 // Exact clamp + Status behave like the calculator.
 import { describe, expect, it } from 'vitest';
 import {
+  CHAMBER_GENERATOR_FRAME_DIAMETERS_MM,
   CHAMBER_GRID_MM,
+  computeChamberGeneratorDims,
   computeChamberOutputs,
   nonPositiveChamberFinals,
   snapToChamberGrid,
@@ -334,5 +336,68 @@ describe('computeChamberOutputs', () => {
         if (key !== 'hLast') expect(output.noEffect).toBeFalsy();
       }
     });
+  });
+});
+
+describe('computeChamberGeneratorDims', () => {
+  const GEN = { x1: 1450, x2: 7, x3: 10 };
+
+  it('matches the workbook at X1=1450, X2=7, X3=10', () => {
+    const g = computeChamberGeneratorDims(GEN);
+    expect(g.x4Auto).toBeCloseTo(618.03, 2); // 0.9 * 9.81 * 7 * 10
+    expect(g.x4Used).toBeCloseTo(618.03, 2);
+    expect(g.frame).toBe(62);
+    expect(g.lengthCode).toBe(100); // round5(99.7722)
+    expect(g.auto.centralDiameter).toBe(1242);
+    expect(g.auto.centralHeight).toBeCloseTo(1264.47, 2); // 71.258 + 0.45856*1242 + 6.2368*100
+    expect(g.auto.domeHeight).toBeCloseTo(344.34, 2); // 79.609 + 0.21315*1242
+    expect(g.resolved).toEqual(g.auto); // nothing overridden
+  });
+
+  it.each([
+    ['X4 > 1560 -> 115', { x1: 1450, x2: 14.9, x3: 23 }, 115], // x4Auto ~ 3025.7
+    ['X4 <= 175 and X1 <= 940 -> 26', { x1: 800, x2: 1.8, x3: 1 }, 26], // x4Auto ~ 15.9
+    ['X4 <= 175 and X1 > 940 -> 46', { x1: 1450, x2: 1.8, x3: 1 }, 46],
+    // The fn is pure (no range check): x1=650 exercises the 48 branch even
+    // though the app's x1 floor (700) never reaches it.
+    ['mid X4 and X1 <= 683 -> 48', { x1: 650, x2: 7, x3: 10 }, 48],
+    ['mid X4 and X1 > 683 -> 62', { x1: 700, x2: 7, x3: 10 }, 62],
+  ] as const)('picks the frame: %s', (_label, input, frame) => {
+    const g = computeChamberGeneratorDims(input);
+    expect(g.frame).toBe(frame);
+    expect(g.auto.centralDiameter).toBe(CHAMBER_GENERATOR_FRAME_DIAMETERS_MM[frame]);
+  });
+
+  it('a manual x4 overrides the computed one and re-picks the frame', () => {
+    const g = computeChamberGeneratorDims({ ...GEN, x4: 2000 });
+    expect(g.x4Used).toBe(2000);
+    expect(g.x4Auto).toBeCloseTo(618.03, 2); // still reported (the blank-field hint)
+    expect(g.frame).toBe(115);
+    expect(g.auto.centralDiameter).toBe(2225);
+  });
+
+  it('rounds the length code to the nearest 5 BEFORE clamping to 30..215', () => {
+    // Raw L = 132.21 - 0.8294*62 - 0.0825*700 + 13.861*23 = 341.84 -> 340 -> 215.
+    expect(computeChamberGeneratorDims({ x1: 700, x2: 1.8, x3: 23 }).lengthCode).toBe(215);
+    // x4 2000 -> frame 115; raw L = 132.21 - 95.381 - 199.65 + 13.861 = -148.96 -> -150 -> 30.
+    expect(computeChamberGeneratorDims({ x1: 2420, x2: 7, x3: 1, x4: 2000 }).lengthCode).toBe(30);
+  });
+
+  it('cascades an overridden diameter into the height/dome autos', () => {
+    const g = computeChamberGeneratorDims({ ...GEN, centralDiameter: 1272 });
+    expect(g.resolved.centralDiameter).toBe(1272);
+    expect(g.auto.centralDiameter).toBe(1242); // hint = what a BLANK box would get
+    expect(g.auto.centralHeight).toBeCloseTo(1278.23, 2); // 71.258 + 0.45856*1272 + 6.2368*100
+    expect(g.auto.domeHeight).toBeCloseTo(350.74, 2); // 79.609 + 0.21315*1272
+    expect(g.resolved.centralHeight).toBe(g.auto.centralHeight);
+    expect(g.resolved.domeHeight).toBe(g.auto.domeHeight);
+  });
+
+  it('a height override wins verbatim and does NOT move the dome', () => {
+    const g = computeChamberGeneratorDims({ ...GEN, centralHeight: 1500 });
+    expect(g.resolved.centralHeight).toBe(1500);
+    expect(g.auto.centralHeight).toBeCloseTo(1264.47, 2);
+    expect(g.auto.domeHeight).toBeCloseTo(344.34, 2); // dome follows the Ø only
+    expect(g.resolved.domeHeight).toBe(g.auto.domeHeight);
   });
 });

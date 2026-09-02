@@ -2418,6 +2418,102 @@ export const CHAMBER_CENTRAL_HEIGHT_OVER_DIAMETER = 1.33;
 /** Dome height = this × the central cylinder height (hollow variant). */
 export const CHAMBER_DOME_HEIGHT_OVER_CENTRAL_HEIGHT = 0.2;
 
+// ---------------------------------------------------------------------------
+// Generator dimensions (Gen Dim v3): the hollow variant's central cylinder +
+// dome, fitted on historical builds (source: documents/Gen Dim v3 Only
+// Calculator (standalone).xlsx). Chain: X1,X2,X3 -> X4 -> frame R (range
+// rules) ; R,X1,X3 -> length code L ; R -> Ø (catalog) ; Ø,L -> height ;
+// Ø -> dome. All LOO cross-validated: R rules ~70-77% correct, L typically
+// within 1-2 catalog steps, height R² 0.93, dome R² 0.71.
+// ---------------------------------------------------------------------------
+
+/**
+ * Catalog generator diameter (mm) per frame code — exactly one Ø per frame.
+ * Only 26/46/48/62/115 are reachable through the range rules; the rare frames
+ * (36/38/45/77) are listed for completeness. (R=62 also shipped with 1272 and
+ * R=48 with 1026 historically — typing that Ø re-bases height/dome the same.)
+ */
+export const CHAMBER_GENERATOR_FRAME_DIAMETERS_MM: Readonly<Record<number, number>> = {
+  26: 572,
+  36: 745,
+  38: 753,
+  45: 976,
+  46: 933,
+  48: 986,
+  62: 1242,
+  77: 1545,
+  115: 2225,
+};
+
+/** Validation ceiling for a manual X4 (auto X4 tops out ≈ 3 026 on legal X2/X3;
+ * anything above 1 560 already maps to the largest frame). */
+export const CHAMBER_X4_MAX = 100_000;
+
+/** The Gen Dim v3 evaluation: hint values (`auto`) and build values (`resolved`). */
+export interface ChamberGeneratorDims {
+  /** 0.9 · 9.81 · X2 · X3 — the blank-X4-field hint. */
+  x4Auto: number;
+  /** The manual x4 when given, else x4Auto — what the frame rules consumed. */
+  x4Used: number;
+  /** Suggested frame code (26/46/48/62/115 via the range rules). */
+  frame: number;
+  /** Catalog length code L (rounded to 5, clamped 30..215). */
+  lengthCode: number;
+  /**
+   * What a BLANK box would get, given the OTHER boxes' current state: the
+   * height/dome autos use the RESOLVED Ø (a typed Ø cascades), while the Ø
+   * auto is always the catalog value. These are the web form's hints.
+   */
+  auto: { centralDiameter: number; centralHeight: number; domeHeight: number };
+  /** override ?? auto — the values the build consumes (mm). */
+  resolved: { centralDiameter: number; centralHeight: number; domeHeight: number };
+}
+
+/**
+ * Evaluate the Gen Dim v3 empirical generator model (hollow variant). Pure and
+ * range-agnostic: callers validate x1/x2/x3 themselves. A typed centralDiameter
+ * re-bases the height/dome autos (its cascade); a typed centralHeight does NOT
+ * move the dome (the dome follows the Ø only); x4 steers the frame suggestion.
+ */
+export function computeChamberGeneratorDims(input: {
+  x1: number;
+  x2: number;
+  x3: number;
+  x4?: number;
+  centralDiameter?: number;
+  centralHeight?: number;
+  domeHeight?: number;
+}): ChamberGeneratorDims {
+  const { x1, x3 } = input;
+  const x4Auto = 0.9 * 9.81 * input.x2 * input.x3;
+  const x4Used = input.x4 ?? x4Auto;
+  const frame =
+    x4Used > 1560 ? 115 : x4Used <= 175 ? (x1 <= 940 ? 26 : 46) : x1 <= 683 ? 48 : 62;
+  // Round to the catalog step of 5 FIRST, then clamp to the catalog span.
+  const lengthCode = Math.max(
+    30,
+    Math.min(215, Math.round((132.21 - 0.8294 * frame - 0.0825 * x1 + 13.861 * x3) / 5) * 5),
+  );
+  const centralDiameterAuto = CHAMBER_GENERATOR_FRAME_DIAMETERS_MM[frame];
+  const centralDiameter = input.centralDiameter ?? centralDiameterAuto;
+  const centralHeightAuto = 71.258 + 0.45856 * centralDiameter + 6.2368 * lengthCode;
+  const centralHeight = input.centralHeight ?? centralHeightAuto;
+  const domeHeightAuto = 79.609 + 0.21315 * centralDiameter;
+  const domeHeight = input.domeHeight ?? domeHeightAuto;
+  return {
+    x4Auto,
+    x4Used,
+    frame,
+    lengthCode,
+    auto: {
+      centralDiameter: centralDiameterAuto,
+      centralHeight: centralHeightAuto,
+      domeHeight: domeHeightAuto,
+    },
+    resolved: { centralDiameter, centralHeight, domeHeight },
+  };
+}
+
 /**
  * The chamber build request: the three empirical inputs, optional per-output
  * Min / Max / Exact overrides, the cylinder design variant, and geometry inputs
@@ -2427,6 +2523,14 @@ export interface ChamberInput {
   x1: number;
   x2: number;
   x3: number;
+  /**
+   * Optional X4 (≈ power) steering the Gen Dim generator model. Omitted =>
+   * 0.9 · 9.81 · X2 · X3. Feeds the frame suggestion behind the auto generator
+   * Ø / height / dome; a typed dimension still wins verbatim. Hollow variant
+   * only (accepted but unused otherwise — it never reaches the builder, so it
+   * cannot change a cache key by itself). Geometry-only.
+   */
+  x4?: number;
   constraints?: Partial<Record<ChamberOutputKey, ChamberConstraint>>;
   /**
    * Master switch for ALL structural relations (a hard override). When false,
