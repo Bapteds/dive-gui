@@ -1,10 +1,14 @@
 import { z } from 'zod';
 import {
+  CHAMBER_D_FIRST_OVER_LAST,
+  CHAMBER_D_MIDDLE_OVER_LAST,
   CHAMBER_DIMENSION_MAX_MM,
   CHAMBER_INPUT_RANGES,
   CHAMBER_RELATIONS,
   CHAMBER_VARIANTS,
   CHAMBER_WALL_THICKNESS_MM,
+  CHAMBER_X4_MAX,
+  computeChamberGeneratorDims,
 } from '@dive/shared';
 import type { ChamberInput, ChamberVariant } from '@dive/shared';
 
@@ -49,11 +53,13 @@ export interface ChamberFormValues {
   dFirst?: number;
   /** Guide vanes / middle cylinder Ø (mm); blank => auto from D_last. Both variants. */
   dMiddle?: number;
-  /** Generator (central cylinder) Ø (mm); blank => auto from X1. Hollow variant only. */
+  /** X4 (≈ power) steering the generator model; blank => 0.9 · 9.81 · X2 · X3. Hollow only. */
+  x4?: number;
+  /** Generator (central cylinder) Ø (mm); blank => Gen Dim catalog Ø for the suggested frame. Hollow only. */
   centralDiameter?: number;
-  /** Generator (central cylinder) height (mm); blank => auto from its diameter. Hollow only. */
+  /** Generator (central cylinder) height (mm); blank => Gen Dim fit from the resolved Ø + length code. Hollow only. */
   centralHeight?: number;
-  /** Dome height (mm); blank => auto from the central height. Hollow variant only. */
+  /** Dome height (mm); blank => Gen Dim fit from the resolved Ø. Hollow variant only. */
   domeHeight?: number;
 }
 
@@ -98,6 +104,11 @@ export const chamberFormSchema = z
     wallThickness: optionalPositive,
     dFirst: optionalPositive,
     dMiddle: optionalPositive,
+    x4: z
+      .number({ invalid_type_error: 'Enter a number' })
+      .positive('Must be greater than 0')
+      .max(CHAMBER_X4_MAX, `Max ${CHAMBER_X4_MAX.toLocaleString('en-US')}`)
+      .optional(),
     centralDiameter: optionalPositive,
     centralHeight: optionalPositive,
     domeHeight: optionalPositive,
@@ -134,6 +145,7 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   wallThickness: CHAMBER_WALL_THICKNESS_MM,
   dFirst: undefined,
   dMiddle: undefined,
+  x4: undefined,
   centralDiameter: undefined,
   centralHeight: undefined,
   domeHeight: undefined,
@@ -167,8 +179,62 @@ export function chamberInputToFormValues(input: ChamberInput): ChamberFormValues
     wallThickness: input.wallThickness,
     dFirst: input.dFirst,
     dMiddle: input.dMiddle,
+    x4: input.x4,
     centralDiameter: input.centralDiameter,
     centralHeight: input.centralHeight,
     domeHeight: input.domeHeight,
+  };
+}
+
+/** The auto (empirical) values shown as placeholders on the blank override fields. */
+export interface ChamberAutoDims {
+  /** Runner case (first cylinder) Ø, mm. */
+  dFirst: number | null;
+  /** Guide vanes / middle cylinder Ø, mm. */
+  dMiddle: number | null;
+  /** X4 (≈ power): 0.9 · 9.81 · X2 · X3 (generator model steering input). */
+  x4: number | null;
+  /** Generator (central cylinder) Ø, mm (hollow variant). */
+  centralDiameter: number | null;
+  /** Generator (central cylinder) height, mm (hollow variant). */
+  centralHeight: number | null;
+  /** Dome height, mm (hollow variant). */
+  domeHeight: number | null;
+}
+
+const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+/**
+ * The "Blank = auto ≈ N" hints: the dLast-driven Ø ratios plus the Gen Dim v3
+ * generator dims — computed WITH the current overrides, so a typed Generator Ø
+ * re-bases the height/dome hints exactly like the API build will (the shared
+ * function is the single source of truth for both).
+ */
+export function computeChamberAutoDims(
+  values: Pick<
+    ChamberFormValues,
+    'x1' | 'x2' | 'x3' | 'x4' | 'centralDiameter' | 'centralHeight' | 'domeHeight'
+  >,
+  dLastFinal: number | null,
+): ChamberAutoDims {
+  const gen =
+    finite(values.x1) && finite(values.x2) && finite(values.x3)
+      ? computeChamberGeneratorDims({
+          x1: values.x1,
+          x2: values.x2,
+          x3: values.x3,
+          x4: values.x4,
+          centralDiameter: values.centralDiameter,
+          centralHeight: values.centralHeight,
+          domeHeight: values.domeHeight,
+        })
+      : null;
+  return {
+    dFirst: dLastFinal != null ? CHAMBER_D_FIRST_OVER_LAST * dLastFinal : null,
+    dMiddle: dLastFinal != null ? CHAMBER_D_MIDDLE_OVER_LAST * dLastFinal : null,
+    x4: gen?.x4Auto ?? null,
+    centralDiameter: gen?.auto.centralDiameter ?? null,
+    centralHeight: gen?.auto.centralHeight ?? null,
+    domeHeight: gen?.auto.domeHeight ?? null,
   };
 }

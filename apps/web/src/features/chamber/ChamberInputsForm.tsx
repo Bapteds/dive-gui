@@ -14,34 +14,23 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import type { ChamberFormValues } from './chamberForm';
+import type { ChamberAutoDims, ChamberFormValues } from './chamberForm';
+
+export type { ChamberAutoDims } from './chamberForm';
 
 /**
  * ChamberInputsForm - the three empirical inputs (X1/X2/X3), the cylinder design
  * variant, the box length (blank = 2 x width), and - for the hollow variant - the
- * hollow cup's length and wall thickness. Presentational: the parent owns the
- * react-hook-form instance (so the outputs table can live-compute from the same
- * values) and passes register + errors + the current variant + the auto length in.
+ * hollow cup's length and wall thickness, plus X4 steering the generator autos
+ * (Gen Dim v3). Presentational: the parent owns the react-hook-form instance (so
+ * the outputs table can live-compute from the same values) and passes register +
+ * errors + the current variant + the auto length in.
  */
 
 const r = CHAMBER_INPUT_RANGES;
 
 /** Map a blank field to undefined (so an optional number stays optional). */
 const numOrUndef = (v: unknown) => (v === '' || v == null ? undefined : Number(v));
-
-/** The auto (empirical) values shown as placeholders on the blank override fields. */
-export interface ChamberAutoDims {
-  /** Runner case (first cylinder) Ø, mm. */
-  dFirst: number | null;
-  /** Guide vanes / middle cylinder Ø, mm. */
-  dMiddle: number | null;
-  /** Generator (central cylinder) Ø, mm (hollow variant). */
-  centralDiameter: number | null;
-  /** Generator (central cylinder) height, mm (hollow variant). */
-  centralHeight: number | null;
-  /** Dome height, mm (hollow variant). */
-  domeHeight: number | null;
-}
 
 /** Helper text for an override field: "Blank = auto ≈ N mm" (or a bare fallback). */
 function autoHint(mm: number | null): string {
@@ -322,6 +311,22 @@ export function ChamberInputsForm({
               type="number"
               step="any"
               {...register('wallThickness', { setValueAs: numOrUndef })}
+            />
+          </Field>
+          <Field
+            label="X4"
+            error={errors.x4?.message}
+            helperText={
+              autoDims.x4 != null
+                ? `Blank = auto ≈ ${Math.round(autoDims.x4)} (0.9 · 9.81 · X2 · X3)`
+                : 'Blank = auto (0.9 · 9.81 · X2 · X3)'
+            }
+          >
+            <Input
+              type="number"
+              step="any"
+              placeholder="auto"
+              {...register('x4', { setValueAs: numOrUndef })}
             />
           </Field>
           <Field

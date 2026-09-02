@@ -18,6 +18,7 @@ import { CHAMBER_FORM_DEFAULTS, chamberFormSchema, type ChamberFormValues } from
 const AUTO_DIMS: ChamberAutoDims = {
   dFirst: 2777.6,
   dMiddle: 1937.1,
+  x4: 618.03,
   centralDiameter: 1087.5,
   centralHeight: 1446.4,
   domeHeight: 289.3,
@@ -143,5 +144,29 @@ describe('ChamberInputsForm', () => {
     expect(
       screen.getByRole('button', { name: new RegExp(`\\(0/${CHAMBER_RELATIONS.length} on\\)`) }),
     ).toBeDisabled();
+  });
+
+  it('shows the X4 field with its formula hint in the hollow variant only', () => {
+    const { rerender } = render(<Harness onValid={() => {}} />);
+    expect(screen.queryByLabelText('X4')).not.toBeInTheDocument();
+
+    rerender(<Harness onValid={() => {}} variant="hollow" defaults={{ variant: 'hollow' }} />);
+    expect(screen.getByLabelText('X4')).toBeInTheDocument();
+    expect(
+      screen.getByText('Blank = auto ≈ 618 (0.9 · 9.81 · X2 · X3)'),
+    ).toBeInTheDocument();
+  });
+
+  it('submits a typed X4 as a number and a blank X4 as undefined (auto)', async () => {
+    const onValid = vi.fn();
+    render(<Harness onValid={onValid} variant="hollow" defaults={{ variant: 'hollow' }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
+    await waitFor(() => expect(onValid).toHaveBeenCalledTimes(1));
+    expect((onValid.mock.calls[0][0] as ChamberFormValues).x4).toBeUndefined();
+
+    fireEvent.change(screen.getByLabelText('X4'), { target: { value: '2000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
+    await waitFor(() => expect(onValid).toHaveBeenCalledTimes(2));
+    expect((onValid.mock.calls[1][0] as ChamberFormValues).x4).toBe(2000);
   });
 });

@@ -4,6 +4,7 @@ import {
   CHAMBER_FORM_DEFAULTS,
   chamberFormSchema,
   chamberInputToFormValues,
+  computeChamberAutoDims,
   type ChamberFormValues,
 } from './chamberForm';
 
@@ -109,5 +110,61 @@ describe('chamberInputToFormValues', () => {
     for (const [key, on] of Object.entries(CHAMBER_FORM_DEFAULTS.relations)) {
       if (key !== 'height') expect(loaded.relations[key]).toBe(on);
     }
+  });
+});
+
+describe('x4 (generator model steering input)', () => {
+  it('accepts a blank and a positive x4', () => {
+    expect(parse({ ...CHAMBER_FORM_DEFAULTS, x4: undefined }).success).toBe(true);
+    expect(parse({ ...CHAMBER_FORM_DEFAULTS, x4: 618 }).success).toBe(true);
+  });
+
+  it.each([
+    ['x4 of 0', { x4: 0 }],
+    ['a negative x4', { x4: -5 }],
+    ['x4 above the cap', { x4: 100_001 }],
+  ] as const)('rejects %s', (_label, patch) => {
+    expect(parse({ ...CHAMBER_FORM_DEFAULTS, ...patch }).success).toBe(false);
+  });
+
+  it('round-trips through a saved snapshot and defaults to blank on old saves', () => {
+    const base = { x1: 1450, x2: 7, x3: 10 } as ChamberInput;
+    expect(chamberInputToFormValues({ ...base, x4: 618 }).x4).toBe(618);
+    expect(chamberInputToFormValues(base).x4).toBeUndefined();
+  });
+});
+
+describe('computeChamberAutoDims', () => {
+  const V = { ...CHAMBER_FORM_DEFAULTS, x1: 1450, x2: 7, x3: 10 };
+
+  it('derives the generator hints from the Gen Dim model', () => {
+    const dims = computeChamberAutoDims(V, 2400);
+    expect(dims.dFirst).toBeCloseTo(1.14703 * 2400, 5);
+    expect(dims.dMiddle).toBeCloseTo(0.8 * 2400, 5);
+    expect(dims.x4).toBeCloseTo(618.03, 2);
+    expect(dims.centralDiameter).toBe(1242);
+    expect(dims.centralHeight).toBeCloseTo(1264.47, 2);
+    expect(dims.domeHeight).toBeCloseTo(344.34, 2);
+  });
+
+  it('cascades a typed Generator Ø into the height/dome hints', () => {
+    const dims = computeChamberAutoDims({ ...V, centralDiameter: 1272 }, null);
+    expect(dims.centralDiameter).toBe(1242); // hint = what a blank Ø would get
+    expect(dims.centralHeight).toBeCloseTo(1278.23, 2);
+    expect(dims.domeHeight).toBeCloseTo(350.74, 2);
+    expect(dims.dFirst).toBeNull(); // no dLast -> no ratio hints
+  });
+
+  it('a typed x4 re-picks the frame for the hints', () => {
+    expect(computeChamberAutoDims({ ...V, x4: 2000 }, null).centralDiameter).toBe(2225);
+  });
+
+  it('returns null generator hints while X1–X3 are not finite', () => {
+    const dims = computeChamberAutoDims({ ...V, x1: Number.NaN }, 2400);
+    expect(dims.x4).toBeNull();
+    expect(dims.centralDiameter).toBeNull();
+    expect(dims.centralHeight).toBeNull();
+    expect(dims.domeHeight).toBeNull();
+    expect(dims.dFirst).toBeCloseTo(1.14703 * 2400, 5); // dLast ratios don't need X1–X3
   });
 });

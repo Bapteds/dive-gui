@@ -2,14 +2,7 @@ import { Suspense, lazy, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader2, Send } from 'lucide-react';
-import {
-  CHAMBER_CENTRAL_DIAMETER_OVER_X1,
-  CHAMBER_CENTRAL_HEIGHT_OVER_DIAMETER,
-  CHAMBER_DOME_HEIGHT_OVER_CENTRAL_HEIGHT,
-  CHAMBER_D_FIRST_OVER_LAST,
-  CHAMBER_D_MIDDLE_OVER_LAST,
-  computeChamberOutputs,
-} from '@dive/shared';
+import { computeChamberOutputs } from '@dive/shared';
 import type { ChamberConstraint, ChamberInput, ChamberOutput, ChamberOutputKey } from '@/lib/api/types';
 import { ApiError } from '@/lib/api/client';
 import { buildChamber as buildChamberRequest, type ChamberExportKind } from '@/lib/api/chamber';
@@ -20,6 +13,7 @@ import {
   CHAMBER_FORM_DEFAULTS,
   chamberFormSchema,
   chamberInputToFormValues,
+  computeChamberAutoDims,
   type ChamberFormValues,
 } from '@/features/chamber/chamberForm';
 import { ChamberSavesMenu } from '@/features/chamber/ChamberSavesMenu';
@@ -94,22 +88,12 @@ export function ChamberPage() {
   const widthFinal = outputs?.find((o) => o.key === 'width')?.final ?? null;
   const autoLengthMm = widthFinal != null ? 2 * widthFinal : null;
 
-  // Auto (empirical) placeholders for the five manual dimension overrides — the same
-  // fixed ratios the API falls back to, shown as "auto ≈ N mm" hints on blank fields.
+  // Auto (empirical) placeholders for the manual dimension overrides + X4 —
+  // the same shared model the API resolves with, computed from the CURRENT
+  // form values so typed upstream overrides cascade into the hints exactly
+  // like the build (a typed Generator Ø re-bases the height/dome hints).
   const dLastFinal = outputs?.find((o) => o.key === 'dLast')?.final ?? null;
-  const x1Value = typeof values.x1 === 'number' && Number.isFinite(values.x1) ? values.x1 : null;
-  const centralDiameterAuto =
-    x1Value != null ? CHAMBER_CENTRAL_DIAMETER_OVER_X1 * x1Value : null;
-  const centralHeightAuto =
-    centralDiameterAuto != null ? CHAMBER_CENTRAL_HEIGHT_OVER_DIAMETER * centralDiameterAuto : null;
-  const autoDims: ChamberAutoDims = {
-    dFirst: dLastFinal != null ? CHAMBER_D_FIRST_OVER_LAST * dLastFinal : null,
-    dMiddle: dLastFinal != null ? CHAMBER_D_MIDDLE_OVER_LAST * dLastFinal : null,
-    centralDiameter: centralDiameterAuto,
-    centralHeight: centralHeightAuto,
-    domeHeight:
-      centralHeightAuto != null ? CHAMBER_DOME_HEIGHT_OVER_CENTRAL_HEIGHT * centralHeightAuto : null,
-  };
+  const autoDims: ChamberAutoDims = computeChamberAutoDims(values, dLastFinal);
 
   const onConstraintChange = (
     key: ChamberOutputKey,
@@ -142,6 +126,7 @@ export function ChamberPage() {
     x1: 'X1',
     x2: 'X2',
     x3: 'X3',
+    x4: 'X4',
     lengthOverride: 'Length',
     footAngleDeg: 'Foot angle',
     partScale: 'Part scale',
