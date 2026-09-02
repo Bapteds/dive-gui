@@ -2392,8 +2392,9 @@ export interface ChamberConstraint {
  * The cylinder-stack design options:
  *  - 'stepped': three solid coaxial cylinders (first/middle/last) - the default.
  *  - 'hollow' : first/middle solid, the LAST cylinder an open-top hollow shell
- *    (walls carved out) of a hand-set length, plus a central cylinder (Ø 0.75*X1,
- *    height 0.75*P12) rising from the middle with an oval dome (20% of its height).
+ *    (walls carved out) of a hand-set length, plus a central generator cylinder
+ *    (dims from the Gen Dim v3 model — see computeChamberGeneratorDims) rising
+ *    from the middle with an oval dome on top.
  */
 export const CHAMBER_VARIANTS = ['stepped', 'hollow'] as const;
 export type ChamberVariant = (typeof CHAMBER_VARIANTS)[number];
@@ -2401,22 +2402,17 @@ export type ChamberVariant = (typeof CHAMBER_VARIANTS)[number];
 /** Default wall thickness (mm) of the hollow last cylinder in the 'hollow' variant. */
 export const CHAMBER_WALL_THICKNESS_MM = 50;
 
-// Fixed geometry ratios that derive secondary dimensions from the model outputs.
-// Single source of truth for the derivation used when a manual override is absent:
-// consumed by the API (resolveGeometryParams) and mirrored as the placeholder
-// "auto" hints in the web form. The Python builder keeps its own copies of the two
-// diameter ratios (it cannot import TS) — keep the values here in sync with it.
+// Fixed geometry ratios that derive the two secondary DIAMETERS from the model
+// outputs when a manual override is absent: consumed by the API
+// (resolveGeometryParams) and mirrored as the placeholder "auto" hints in the
+// web form. The Python builder keeps its own copies (it cannot import TS) —
+// keep the values here in sync with it. The hollow generator/dome dims are NOT
+// ratios any more — they come from computeChamberGeneratorDims below.
 
 /** Runner-case (first cylinder) Ø = this × D_last (from the original Part.stl). */
 export const CHAMBER_D_FIRST_OVER_LAST = 1.14703;
 /** Guide-vanes / middle-cylinder Ø = this × D_last (both variants). */
 export const CHAMBER_D_MIDDLE_OVER_LAST = 0.8;
-/** Generator (central cylinder) Ø = this × X1 (hollow variant). */
-export const CHAMBER_CENTRAL_DIAMETER_OVER_X1 = 0.75;
-/** Generator (central cylinder) height = this × its own diameter (hollow variant). */
-export const CHAMBER_CENTRAL_HEIGHT_OVER_DIAMETER = 1.33;
-/** Dome height = this × the central cylinder height (hollow variant). */
-export const CHAMBER_DOME_HEIGHT_OVER_CENTRAL_HEIGHT = 0.2;
 
 // ---------------------------------------------------------------------------
 // Generator dimensions (Gen Dim v3): the hollow variant's central cylinder +
@@ -2626,19 +2622,19 @@ export interface ChamberInput {
   dMiddle?: number;
   /**
    * Manual override for the GENERATOR (central cylinder) diameter, in mm. Omitted =>
-   * CHAMBER_CENTRAL_DIAMETER_OVER_X1 × X1. Hollow variant only. Geometry-only.
+   * the Gen Dim catalog Ø for the suggested frame (computeChamberGeneratorDims).
+   * A typed value re-bases the height/dome autos. Hollow variant only. Geometry-only.
    */
   centralDiameter?: number;
   /**
    * Manual override for the GENERATOR (central cylinder) height, in mm. Omitted =>
-   * CHAMBER_CENTRAL_HEIGHT_OVER_DIAMETER × the (resolved) central diameter. Hollow
-   * variant only. Geometry-only.
+   * the Gen Dim fit 71.258 + 0.45856·Ø(resolved) + 6.2368·L. Hollow variant only.
+   * Geometry-only.
    */
   centralHeight?: number;
   /**
-   * Manual override for the DOME height, in mm. Omitted =>
-   * CHAMBER_DOME_HEIGHT_OVER_CENTRAL_HEIGHT × the (resolved) central height. Hollow
-   * variant only. Geometry-only.
+   * Manual override for the DOME height, in mm. Omitted => the Gen Dim fit
+   * 79.609 + 0.21315·Ø(resolved). Hollow variant only. Geometry-only.
    */
   domeHeight?: number;
 }
