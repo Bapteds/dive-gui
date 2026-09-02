@@ -124,10 +124,10 @@ describe('ChamberInputsForm', () => {
     expect(onValid).not.toHaveBeenCalled();
   });
 
-  it('blocks an out-of-range X1 and shows its range error', async () => {
+  it('blocks an out-of-range Runner Ø (X1) and shows its range error', async () => {
     const onValid = vi.fn();
     render(<Harness onValid={onValid} />);
-    fireEvent.change(screen.getByLabelText('X1'), { target: { value: '-2' } });
+    fireEvent.change(screen.getByLabelText('Runner Ø (mm)'), { target: { value: '-2' } });
     fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
     expect(onValid).not.toHaveBeenCalled();
@@ -146,25 +146,25 @@ describe('ChamberInputsForm', () => {
     ).toBeDisabled();
   });
 
-  it('shows the X4 field with its formula hint in the hollow variant only', () => {
+  it('shows the Power (X4) field with its formula hint in the hollow variant only', () => {
     const { rerender } = render(<Harness onValid={() => {}} />);
-    expect(screen.queryByLabelText('X4')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Power (kW)')).not.toBeInTheDocument();
 
     rerender(<Harness onValid={() => {}} variant="hollow" defaults={{ variant: 'hollow' }} />);
-    expect(screen.getByLabelText('X4')).toBeInTheDocument();
+    expect(screen.getByLabelText('Power (kW)')).toBeInTheDocument();
     expect(
-      screen.getByText('Blank = auto ≈ 618 (0.9 · 9.81 · X2 · X3)'),
+      screen.getByText('Blank = auto ≈ 618 kW (0.9 · 9.81 · Head · Q_max)'),
     ).toBeInTheDocument();
   });
 
-  it('submits a typed X4 as a number and a blank X4 as undefined (auto)', async () => {
+  it('submits a typed Power (x4) as a number and a blank one as undefined (auto)', async () => {
     const onValid = vi.fn();
     render(<Harness onValid={onValid} variant="hollow" defaults={{ variant: 'hollow' }} />);
     fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
     await waitFor(() => expect(onValid).toHaveBeenCalledTimes(1));
     expect((onValid.mock.calls[0][0] as ChamberFormValues).x4).toBeUndefined();
 
-    fireEvent.change(screen.getByLabelText('X4'), { target: { value: '2000' } });
+    fireEvent.change(screen.getByLabelText('Power (kW)'), { target: { value: '2000' } });
     fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
     await waitFor(() => expect(onValid).toHaveBeenCalledTimes(2));
     expect((onValid.mock.calls[1][0] as ChamberFormValues).x4).toBe(2000);

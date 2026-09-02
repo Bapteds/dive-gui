@@ -123,10 +123,10 @@ export function ChamberPage() {
 
   // Field labels for the invalid-submit summary, mirroring the Inputs form.
   const FIELD_LABELS: Partial<Record<keyof ChamberFormValues, string>> = {
-    x1: 'X1',
-    x2: 'X2',
-    x3: 'X3',
-    x4: 'X4',
+    x1: 'Runner Ø (mm)',
+    x2: 'Head (m)',
+    x3: 'Q_max (m³/s)',
+    x4: 'Power (kW)',
     lengthOverride: 'Length',
     footAngleDeg: 'Foot angle',
     partScale: 'Part scale',

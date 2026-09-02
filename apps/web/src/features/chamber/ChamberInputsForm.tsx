@@ -98,7 +98,7 @@ export function ChamberInputsForm({
             <span className="font-medium text-text">Structural relations</span>
             <span className="mt-0.5 block text-text-secondary">
               Link parameters to each other (e.g. LT = LF1 + LF2, LEB = 2 × HLE). Uncheck to
-              make every parameter depend on X1–X3 only.
+              make every parameter depend on Runner Ø / Head / Q_max only.
             </span>
           </span>
         </label>
@@ -189,13 +189,25 @@ export function ChamberInputsForm({
       </label>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="X1" error={errors.x1?.message} helperText={`Valid ${r.x1.min}–${r.x1.max}`}>
+        <Field
+          label="Runner Ø (mm)"
+          error={errors.x1?.message}
+          helperText={`Valid ${r.x1.min}–${r.x1.max}`}
+        >
           <Input type="number" step="any" {...register('x1', { valueAsNumber: true })} />
         </Field>
-        <Field label="X2" error={errors.x2?.message} helperText={`Valid ${r.x2.min}–${r.x2.max}`}>
+        <Field
+          label="Head (m)"
+          error={errors.x2?.message}
+          helperText={`Valid ${r.x2.min}–${r.x2.max}`}
+        >
           <Input type="number" step="any" {...register('x2', { valueAsNumber: true })} />
         </Field>
-        <Field label="X3" error={errors.x3?.message} helperText={`Valid ${r.x3.min}–${r.x3.max}`}>
+        <Field
+          label="Q_max (m³/s)"
+          error={errors.x3?.message}
+          helperText={`Valid ${r.x3.min}–${r.x3.max}`}
+        >
           <Input type="number" step="any" {...register('x3', { valueAsNumber: true })} />
         </Field>
         <Field
@@ -314,12 +326,12 @@ export function ChamberInputsForm({
             />
           </Field>
           <Field
-            label="X4"
+            label="Power (kW)"
             error={errors.x4?.message}
             helperText={
               autoDims.x4 != null
-                ? `Blank = auto ≈ ${Math.round(autoDims.x4)} (0.9 · 9.81 · X2 · X3)`
-                : 'Blank = auto (0.9 · 9.81 · X2 · X3)'
+                ? `Blank = auto ≈ ${Math.round(autoDims.x4)} kW (0.9 · 9.81 · Head · Q_max)`
+                : 'Blank = auto (0.9 · 9.81 · Head · Q_max)'
             }
           >
             <Input

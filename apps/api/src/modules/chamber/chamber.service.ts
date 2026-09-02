@@ -250,7 +250,7 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
     throw new AppError(
       422,
       'VALIDATION_ERROR',
-      `Cannot build: ${list} — every dimension must be positive. Adjust X1/X2/X3, the structural relations, or the Min/Max/Exact constraints.`,
+      `Cannot build: ${list} — every dimension must be positive. Adjust Runner Ø / Head / Q_max, the structural relations, or the Min/Max/Exact constraints.`,
     );
   }
 

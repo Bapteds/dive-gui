@@ -18,7 +18,7 @@ describe('ChamberBuildWarnings', () => {
   it('lists build errors in a red alert block', () => {
     const errors = [
       'the cylinder shoulder (first + middle height, i.e. 2 x HLE) is 4.2 m tall but H Kammer only allows 2.7 m.',
-      'X1: Enter a number',
+      'Runner Ø (mm): Enter a number',
     ];
     render(<ChamberBuildWarnings warnings={[]} errors={errors} />);
     const alert = screen.getByRole('alert');
