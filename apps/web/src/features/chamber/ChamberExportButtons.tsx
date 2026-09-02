@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ChevronDown, Download, FlipHorizontal2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -47,11 +47,24 @@ export function ChamberExportButtons({
   onDownloaded?: (kind: ChamberExportKind) => void;
 }) {
   const [busy, setBusy] = useState<ChamberExportKind | null>(null);
+  // Kinds already downloaded for the CURRENT hash: a repeat is served from the
+  // build cache, so the "can take a minute" heads-up would be noise.
+  const downloadedRef = useRef<{ hash: string | null; kinds: Set<ChamberExportKind> }>({
+    hash: null,
+    kinds: new Set(),
+  });
 
   async function download(kind: ChamberExportKind, filename: string) {
     if (!hash) return;
+    if (downloadedRef.current.hash !== hash) {
+      downloadedRef.current = { hash, kinds: new Set() };
+    }
     setBusy(kind);
-    if (offerMirror && (kind === 'step' || kind === 'stepMirrored')) {
+    if (
+      offerMirror &&
+      (kind === 'step' || kind === 'stepMirrored') &&
+      !downloadedRef.current.kinds.has(kind)
+    ) {
       toast.info('Preparing the STEP export — the first download of a build can take a minute.');
     }
     try {
@@ -64,6 +77,7 @@ export function ChamberExportButtons({
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(url);
+      downloadedRef.current.kinds.add(kind);
       onDownloaded?.(kind);
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Could not download the export.');

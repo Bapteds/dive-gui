@@ -149,6 +149,8 @@ describe('Chamber Creation', () => {
       .set('Authorization', auth)
       .expect(200);
     expect(stl.headers['content-type']).toContain('application/sla');
+    // Hash-addressed artifacts are immutable: long-lived private caching.
+    expect(stl.headers['cache-control']).toContain('immutable');
     // A clean build reports no warnings (empty list, not undefined).
     expect(built.body.warnings).toEqual([]);
   });

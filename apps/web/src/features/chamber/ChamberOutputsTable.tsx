@@ -30,18 +30,20 @@ import type {
 /** Which override field a cell edits. */
 type ConstraintField = keyof ChamberConstraint;
 
+// Small (12px) text: the orange must be accent-strong — accent/accent-hover
+// sit below AA 4.5:1 at this size on white and on the tint.
 const CONF_STYLES: Record<ChamberConfidence, string> = {
   Good: 'bg-success-tint text-success',
   High: 'bg-success-tint text-success',
   Moderate: 'bg-bg text-text-secondary border border-border',
-  Low: 'bg-accent-tint text-accent-hover',
+  Low: 'bg-accent-tint text-accent-strong',
 };
 
 const STATUS_STYLES: Record<ChamberStatus, string> = {
   'within range': 'text-text-secondary',
   'set exact': 'text-primary',
-  'capped at max': 'text-accent-hover',
-  'raised to min': 'text-accent-hover',
+  'capped at max': 'text-accent-strong',
+  'raised to min': 'text-accent-strong',
   '! min>max': 'text-danger',
   'from relation': 'text-primary',
 };
@@ -151,6 +153,9 @@ export function ChamberOutputsTable({
                           className="inline-block rounded-sm bg-primary-tint px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary"
                         >
                           refined
+                          <span className="sr-only">
+                            : refined from its partner&apos;s known Exact value (interdependency)
+                          </span>
                         </span>
                       )}
                       {o.noEffect && (
@@ -159,6 +164,11 @@ export function ChamberOutputsTable({
                           className="inline-block rounded-sm border border-border bg-bg px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-secondary"
                         >
                           no effect
+                          <span className="sr-only">
+                            : not used by the build — H Kammer no longer reads LEOW (it is set
+                            Exact, or the H = LEB + LEOW relation is off), and the geometry never
+                            consumes LEOW directly
+                          </span>
                         </span>
                       )}
                     </span>
@@ -205,14 +215,16 @@ export function ChamberOutputsTable({
                     )}
                   </TableCell>
                   <TableCell>
+                    {/* The CV error is shown, not hidden in a tooltip — title
+                        attributes never reach keyboard/touch/screen-reader users. */}
                     <span
-                      title={`Cross-validation error ${o.cvError}%`}
+                      title={`Leave-one-out cross-validation error: ${o.cvError}%`}
                       className={cn(
-                        'inline-block rounded-sm px-2 py-0.5 text-xs font-medium',
+                        'inline-block whitespace-nowrap rounded-sm px-2 py-0.5 text-xs font-medium',
                         CONF_STYLES[o.confidence],
                       )}
                     >
-                      {o.confidence}
+                      {o.confidence} · {o.cvError}%
                     </span>
                   </TableCell>
                 </TableRow>

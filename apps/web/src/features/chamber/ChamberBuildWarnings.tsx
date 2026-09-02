@@ -43,7 +43,8 @@ export function ChamberBuildWarnings({
       )}
       {warnings.length > 0 && (
         <div className="rounded-md border border-accent/40 bg-accent-tint p-4 shadow-sm">
-          <p className="flex items-center gap-2 text-sm font-semibold text-accent-hover">
+          {/* accent-strong: the lighter oranges miss AA 4.5:1 at this size on the tint. */}
+          <p className="flex items-center gap-2 text-sm font-semibold text-accent-strong">
             <AlertTriangle className="size-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />
             Build warnings
           </p>

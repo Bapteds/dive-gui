@@ -23,6 +23,12 @@ function isUniqueViolation(err: unknown): boolean {
   return err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
 }
 
+/** Detect Prisma's record-not-found (P2025): the row vanished between the
+ * manage-check and the write (two admins cleaning up concurrently). */
+function isMissingRecord(err: unknown): boolean {
+  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025';
+}
+
 function toPublicSave(save: SaveWithOwner): ChamberSaveSummary {
   return {
     id: save.id,
@@ -106,12 +112,16 @@ export async function updateChamberSave(
     if (isUniqueViolation(err)) {
       throw new AppError(409, 'NAME_TAKEN', `A saved build named "${input.name}" already exists`);
     }
+    if (isMissingRecord(err)) {
+      throw new AppError(404, 'NOT_FOUND', 'Saved build not found');
+    }
     throw err;
   }
 }
 
-/** Delete a save (author or super-admin only). */
+/** Delete a save (author or super-admin only). deleteMany never throws for a
+ * row that vanished concurrently — an already-deleted save is simply done. */
 export async function deleteChamberSave(viewer: Viewer, id: string): Promise<void> {
   await findManageableOrThrow(viewer, id);
-  await prisma.chamberSave.delete({ where: { id } });
+  await prisma.chamberSave.deleteMany({ where: { id } });
 }

@@ -86,6 +86,12 @@ describe('ChamberOutputsTable', () => {
     expect(screen.queryByText('no effect')).not.toBeInTheDocument();
   });
 
+  it('shows the cross-validation error visibly in the confidence pill', () => {
+    render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />);
+    // LEOW's Low pill carries its 38.9% CV error as text, not only as a title.
+    expect(screen.getByText(/Low · 38\.9%/)).toBeInTheDocument();
+  });
+
   it('explains the 50 mm grid in the header hint', () => {
     render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />);
     expect(screen.getByText(/snap to the 50 mm grid/)).toBeInTheDocument();

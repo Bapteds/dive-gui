@@ -60,5 +60,8 @@ export async function getChamberExportController(req: Request, res: Response): P
   const meta = EXPORT_META[kind];
   res.setHeader('Content-Type', meta.contentType);
   res.setHeader('Content-Disposition', `attachment; filename="${meta.filename}"`);
+  // Hash-addressed artifacts never change once served (the on-demand STEP /
+  // mirrored STEP are generated before this line and immutable after).
+  res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
   res.status(200).send(buf);
 }

@@ -13,8 +13,12 @@ import userEvent from '@testing-library/user-event';
 vi.mock('@/lib/api/chamber', () => ({
   getChamberExport: vi.fn(),
 }));
+vi.mock('@/components/ui/sonner', () => ({
+  toast: { info: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn() },
+}));
 
 import { getChamberExport } from '@/lib/api/chamber';
+import { toast } from '@/components/ui/sonner';
 import { ChamberExportButtons } from './ChamberExportButtons';
 
 const HASH = 'cafe0123deadbeef';
@@ -106,5 +110,20 @@ describe('ChamberExportButtons', () => {
     await userEvent.click(screen.getByRole('button', { name: 'STEP' }));
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Download STEP' }));
     await waitFor(() => expect(getChamberExport).toHaveBeenCalledWith(HASH, 'step'));
+  });
+
+  it('warns about the generation wait once per build, not on re-downloads', async () => {
+    vi.mocked(getChamberExport).mockResolvedValue(new Blob(['ISO-10303-21;']));
+    render(<ChamberExportButtons hash={HASH} offerMirror />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'STEP' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Download STEP' }));
+    await waitFor(() => expect(getChamberExport).toHaveBeenCalledTimes(1));
+
+    // Second download of the same kind: served from the build cache — no toast.
+    await userEvent.click(screen.getByRole('button', { name: 'STEP' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Download STEP' }));
+    await waitFor(() => expect(getChamberExport).toHaveBeenCalledTimes(2));
+    expect(toast.info).toHaveBeenCalledTimes(1);
   });
 });
