@@ -8,6 +8,7 @@ import {
   CHAMBER_INPUT_RANGES,
   CHAMBER_OUTPUT_KEYS,
   CHAMBER_VARIANTS,
+  CHAMBER_X4_MAX,
 } from '@dive/shared';
 
 const r = CHAMBER_INPUT_RANGES;
@@ -67,6 +68,10 @@ export const chamberBuildSchema = z
     // Geometry-only. Stepped: a scale that overgrows the box height is refused;
     // hollow: the internal part is scaled down to fit (with a warning).
     partScale: z.number().finite().positive().max(5).default(1),
+    // Optional X4 (≈ power) steering the hollow generator model (Gen Dim v3).
+    // Omitted => 0.9 · 9.81 · X2 · X3. Hollow-only consumer; never forwarded to
+    // the builder, so it cannot change a cache key by itself.
+    x4: z.number().finite().positive().max(CHAMBER_X4_MAX).optional(),
     lengthOverride: dimensionMm.optional(),
     hollowLength: dimensionMm.optional(),
     wallThickness: dimensionMm.optional(),

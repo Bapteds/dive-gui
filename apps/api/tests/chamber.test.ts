@@ -8,6 +8,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { computeChamberGeneratorDims } from '@dive/shared';
 import { app, authHeader, createTestUser, resetDatabase } from './helpers';
 import { setCommandRunner, type CommandResult, type CommandRunner } from '../src/lib/commandRunner';
 import { storageRoot } from '../src/lib/fileTreeStorage';
@@ -714,6 +715,74 @@ describe('Chamber Creation', () => {
     // The generator/dome overrides reshape the hollow geometry => a different key.
     expect(overridden.body.hash).not.toBe(auto.body.hash);
     expect(overridden.body.outputs).toEqual(auto.body.outputs);
+  });
+
+  it('keys the hollow build on x4 (a new frame) but ignores x4 on stepped', async () => {
+    setCommandRunner(successRunner);
+    const auth = authHeader(await createTestUser());
+    const hollow = { ...BUILD, variant: 'hollow', hollowLength: 2000 };
+
+    const auto = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(hollow)
+      .expect(200);
+    // BUILD's auto X4 ~ 554 -> frame 62; x4 2000 -> frame 115 -> new generator dims.
+    const powered = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...hollow, x4: 2000 })
+      .expect(200);
+    expect(powered.body.hash).not.toBe(auto.body.hash);
+    expect(powered.body.outputs).toEqual(auto.body.outputs);
+
+    // Stepped builds have no generator: x4 must not enter the cache key.
+    const stepped = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(BUILD)
+      .expect(200);
+    const steppedX4 = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, x4: 2000 })
+      .expect(200);
+    expect(steppedX4.body.hash).toBe(stepped.body.hash);
+  });
+
+  it('resolves blank generator dims from the shared Gen Dim model', async () => {
+    setCommandRunner(successRunner);
+    const auth = authHeader(await createTestUser());
+    const hollow = { ...BUILD, variant: 'hollow', hollowLength: 2000 };
+
+    const auto = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(hollow)
+      .expect(200);
+    // Sending the model's own resolved values EXPLICITLY must land on the same
+    // cache key — proof the API resolves blanks through the shared function.
+    const gen = computeChamberGeneratorDims({ x1: BUILD.x1, x2: BUILD.x2, x3: BUILD.x3 });
+    const explicit = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({
+        ...hollow,
+        centralDiameter: gen.resolved.centralDiameter,
+        centralHeight: gen.resolved.centralHeight,
+        domeHeight: gen.resolved.domeHeight,
+      })
+      .expect(200);
+    expect(explicit.body.hash).toBe(auto.body.hash);
+  });
+
+  it.each([0, -5, 100_001])('rejects x4 = %s', async (x4) => {
+    const auth = authHeader(await createTestUser());
+    await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, variant: 'hollow', hollowLength: 2000, x4 })
+      .expect(422);
   });
 
   it('rejects an outlet ratio outside 0.35-0.50', async () => {

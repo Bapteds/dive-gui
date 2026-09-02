@@ -13,11 +13,9 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
-  CHAMBER_CENTRAL_DIAMETER_OVER_X1,
-  CHAMBER_CENTRAL_HEIGHT_OVER_DIAMETER,
-  CHAMBER_DOME_HEIGHT_OVER_CENTRAL_HEIGHT,
   CHAMBER_OUTPUT_KEYS,
   CHAMBER_WALL_THICKNESS_MM,
+  computeChamberGeneratorDims,
   computeChamberOutputs,
   nonPositiveChamberFinals,
   type ChamberInput,
@@ -200,20 +198,25 @@ function resolveGeometryParams(
 
   if (variant === 'hollow') {
     const wallMm = input.wallThickness ?? CHAMBER_WALL_THICKNESS_MM;
-    // Generator (central cylinder) + dome dims: each falls back to its fixed ratio
-    // when no manual override is given, and the chain uses the RESOLVED value above
-    // it (override or default) — so overriding only the diameter still auto-derives
-    // a matching height, and only the height still auto-derives a matching dome.
-    const centralDiameterMm = input.centralDiameter ?? CHAMBER_CENTRAL_DIAMETER_OVER_X1 * input.x1;
-    const centralHeightMm =
-      input.centralHeight ?? CHAMBER_CENTRAL_HEIGHT_OVER_DIAMETER * centralDiameterMm;
-    const domeHeightMm =
-      input.domeHeight ?? CHAMBER_DOME_HEIGHT_OVER_CENTRAL_HEIGHT * centralHeightMm;
+    // Generator (central cylinder) + dome dims from the empirical Gen Dim v3
+    // model (X4 -> frame -> catalog Ø; Ø+L -> height; Ø -> dome). A manual
+    // override wins verbatim, and an overridden Ø re-bases the height/dome
+    // autos (the model's cascade). Only the RESOLVED mm values go to the
+    // builder params (hence into the cache key) — x4 itself never does.
+    const gen = computeChamberGeneratorDims({
+      x1: input.x1,
+      x2: input.x2,
+      x3: input.x3,
+      x4: input.x4,
+      centralDiameter: input.centralDiameter,
+      centralHeight: input.centralHeight,
+      domeHeight: input.domeHeight,
+    });
     params.wallThickness = wallMm * MM_TO_M;
     params.hollowLength = (input.hollowLength ?? 0) * MM_TO_M;
-    params.centralDiameter = centralDiameterMm * MM_TO_M;
-    params.centralHeight = centralHeightMm * MM_TO_M;
-    params.domeHeight = domeHeightMm * MM_TO_M;
+    params.centralDiameter = gen.resolved.centralDiameter * MM_TO_M;
+    params.centralHeight = gen.resolved.centralHeight * MM_TO_M;
+    params.domeHeight = gen.resolved.domeHeight * MM_TO_M;
   }
   return params;
 }
