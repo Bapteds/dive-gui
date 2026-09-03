@@ -155,6 +155,31 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   domeHeight: undefined,
 };
 
+/** Recursively sort object keys so serialization ignores property order. */
+function sortKeysDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeysDeep);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value as Record<string, unknown>)
+        .sort()
+        .map((key) => [key, sortKeysDeep((value as Record<string, unknown>)[key])]),
+    );
+  }
+  return value;
+}
+
+/**
+ * Canonical comparison key for a build body ({ ...form values, constraints }).
+ * Key-order-insensitive: the live form (watch(), keys in registration order)
+ * and the last built body (handleSubmit's zod parse output, keys in schema
+ * order) hold the same data in different property orders, so a plain
+ * JSON.stringify comparison would flag every build as stale immediately.
+ * Blank overrides (undefined) and omitted keys serialize identically.
+ */
+export function chamberBodyKey(body: object): string {
+  return JSON.stringify(sortKeysDeep(body));
+}
+
 /**
  * Map a saved build snapshot (the `POST /chamber/build` body) back onto the
  * form. Snapshot fields with server-side defaults fall back to the same values

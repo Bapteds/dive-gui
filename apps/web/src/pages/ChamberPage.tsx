@@ -11,6 +11,7 @@ import { PageHeader } from '@/components/common/PageHeader';
 import { ChamberInputsForm, type ChamberAutoDims } from '@/features/chamber/ChamberInputsForm';
 import {
   CHAMBER_FORM_DEFAULTS,
+  chamberBodyKey,
   chamberFormSchema,
   chamberInputToFormValues,
   computeChamberAutoDims,
@@ -219,11 +220,13 @@ export function ChamberPage() {
   };
 
   // The preview/exports always show the LAST BUILT geometry; flag when the
-  // form or constraints have drifted from it since Generate.
+  // form or constraints have drifted from it since Generate. Compared via
+  // chamberBodyKey: the two objects hold their keys in different orders
+  // (watch() registration order vs zod parse output in schema order).
   const isStale =
     hash !== null &&
     lastBuildInput !== null &&
-    JSON.stringify({ ...values, constraints }) !== JSON.stringify(lastBuildInput);
+    chamberBodyKey({ ...values, constraints }) !== chamberBodyKey(lastBuildInput);
 
   return (
     <div className="flex flex-col gap-6">

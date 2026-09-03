@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ChamberInput } from '@dive/shared';
 import {
   CHAMBER_FORM_DEFAULTS,
+  chamberBodyKey,
   chamberFormSchema,
   chamberInputToFormValues,
   computeChamberAutoDims,
@@ -146,6 +147,44 @@ describe('simplifyGenerator (generator pinned to the chamber top)', () => {
       true,
     );
     expect(chamberInputToFormValues(base).simplifyGenerator).toBe(false);
+  });
+});
+
+describe('chamberBodyKey (stale-build comparison)', () => {
+  // ChamberPage flags "Inputs changed since this build" by comparing the live
+  // form (watch(): key order = defaults/registration order) against the last
+  // built body (handleSubmit: zod parse output, key order = schema order).
+  // The comparison must therefore ignore key order, or the banner sticks on
+  // forever right after a successful Generate (the bug this guards against).
+  const constraints = { width: { max: 3000 } };
+
+  it('matches raw watch() values against their zod parse output', () => {
+    const parsed = chamberFormSchema.parse(CHAMBER_FORM_DEFAULTS);
+    expect(chamberBodyKey({ ...parsed, constraints })).toBe(
+      chamberBodyKey({ ...CHAMBER_FORM_DEFAULTS, constraints }),
+    );
+  });
+
+  it('treats a blank override (undefined) the same as an omitted key', () => {
+    const { x4: _x4, ...withoutX4 } = CHAMBER_FORM_DEFAULTS;
+    expect(chamberBodyKey({ ...CHAMBER_FORM_DEFAULTS, x4: undefined, constraints })).toBe(
+      chamberBodyKey({ ...withoutX4, constraints }),
+    );
+  });
+
+  it('still detects real drift in a value, a nested relation, or a constraint', () => {
+    const base = chamberBodyKey({ ...CHAMBER_FORM_DEFAULTS, constraints });
+    expect(chamberBodyKey({ ...CHAMBER_FORM_DEFAULTS, x1: 1500, constraints })).not.toBe(base);
+    expect(
+      chamberBodyKey({
+        ...CHAMBER_FORM_DEFAULTS,
+        relations: { ...CHAMBER_FORM_DEFAULTS.relations, height: false },
+        constraints,
+      }),
+    ).not.toBe(base);
+    expect(
+      chamberBodyKey({ ...CHAMBER_FORM_DEFAULTS, constraints: { width: { max: 2999 } } }),
+    ).not.toBe(base);
   });
 });
 
