@@ -1,15 +1,14 @@
-# Handover — Chamber Creation: exports, fit refusals, 50 mm grid, review hardening
+# Handover — Chamber: Gen Dim v3 generator dims, Simplify Generator, physical names
 
-> Branch: `feat/chamber-ui-feedback`. Latest work is **committed AND pushed** (`158dc25`),
-> **27 commits ahead of `main`**.
-> This branch's earlier PR (#2, "surface builder warnings in the UI + LEOW no-effect badge")
-> was **merged 2026-08-31**; everything below landed on the same branch AFTER that merge, so the
-> next integration step is a **fresh PR**: `gh` is now authenticated on this machine
-> (`hristovdimitrov222`), so `gh pr create --base main` works — or use
-> https://github.com/Bapteds/dive-gui/compare/main...feat/chamber-ui-feedback?expand=1
-> Supersedes the 2026-08-13 handover (guide-vane STEP export) — key parts of it are now WRONG;
-> see §2. The full per-feature French changelog is at the bottom of `PLAN.md`; each feature has a
-> spec under `docs/superpowers/specs/` (eight new ones dated 2026-08-31…2026-09-01).
+> Branch: `feat/chamber-ui-feedback`, tip `5b7d147`, **committed AND pushed**, **42 commits
+> ahead of `main`**.
+> **PR #3 is OPEN**: https://github.com/Bapteds/dive-gui/pull/3 — it covers EVERYTHING on the
+> branch since PR #2 was merged (2026-08-31), including this session. Next integration step is
+> review/merge of that PR; keep pushing to the branch and the PR follows.
+> Supersedes the previous handover (state at `158dc25`); its §0 toolchain section is carried
+> over below — the rest of it is history now summarised in §3 of PLAN.md's changelog.
+> Every feature has a French changelog entry at the bottom of `PLAN.md` and a spec under
+> `docs/superpowers/specs/` (five new ones dated 2026-09-02).
 
 ---
 
@@ -17,22 +16,21 @@
 
 The toolchain lives in **WSL**, outside this folder:
 
-- `npm`/`node` are **WSL-only** — Git Bash / PowerShell on Windows fail with "npx: command not found".
+- `npm`/`node` are **WSL-only** — Git Bash / PowerShell on Windows fail with "npx: command not
+  found". Windows python DOES exist (3.12, has openpyxl) but has NO cadquery.
 - CadQuery Python is a **WSL venv**: `/home/hristo/cadquery-env/bin/python`
   (the API reads it via `CHAMBER_PYTHON_BIN`; the mesh viewer uses `MESH_PYTHON_BIN` →
-  `/home/hristo/mesh-viz-env`, a separate venv with pyvista/trimesh).
+  `/home/hristo/mesh-viz-env`).
 - Invoke via `wsl bash -lc "cd /mnt/c/Users/Hristo.Dimitrov/Desktop/dive-gui/... && ..."`.
-  WSL prints harmless `Failed to translate 'H:\bin'` lines on every call — ignore them.
-- `gh` CLI is installed **and authenticated** (keyring, account `hristovdimitrov222`).
+  Harmless `Failed to translate 'H:\bin'` lines print on every call — ignore them.
+  Complex inline python through PowerShell→WSL gets mangled — write a script file instead.
+- `gh` CLI is installed and authenticated (account `hristovdimitrov222`). gh commands hang if
+  a stray command consumes stdin — append `< /dev/null` when scripting.
 
 ```bash
-# REAL geometry test suite (CadQuery in WSL; ~6 min, builds fixtures once per session)
+# REAL geometry suite (CadQuery in WSL; 24 tests, ~7.5 min, fixtures built once per session)
 wsl bash -lc 'cd /mnt/c/Users/Hristo.Dimitrov/Desktop/dive-gui/apps/api/scripts && \
   /home/hristo/cadquery-env/bin/python -m pytest tests/test_build_chamber.py -q'
-
-# Build ONE chamber by hand (params JSON -> outDir; add --step for the vane STEP)
-wsl bash -lc 'cd /mnt/c/Users/Hristo.Dimitrov/Desktop/dive-gui/apps/api/scripts && \
-  CHAMBER_DEBUG_DUMP=1 /home/hristo/cadquery-env/bin/python buildChamber.py <params.json> <outDir> [--step]'
 
 # Chamber TS gates (FAKE builder — never runs CadQuery)
 wsl bash -lc 'cd /mnt/c/Users/Hristo.Dimitrov/Desktop/dive-gui/apps/api && \
@@ -46,123 +44,97 @@ wsl bash -lc 'cd /mnt/c/Users/Hristo.Dimitrov/Desktop/dive-gui && npm run build:
 ```
 
 - After **any** `buildChamber.py` change, **purge the build cache**
-  (`rm -rf apps/api/storage/chamber/*`): builds are hashed on params, not code. This matters MORE
-  now — a deferred vane STEP (`--step` re-run, see §3) executes the CURRENT script inside an OLD
-  build's directory (known, accepted; flagged in the review as a possible future cache-key change).
-- The 50 mm grid snapping (§4) changed every param hash once: pre-existing cached builds simply
-  rebuilt on first use. The old handover's "reference hashes" are gone — don't look for them.
-- `CHAMBER_DEBUG_DUMP=1` dumps `core.stl`, `casing.stl`, `F.stl`, `meta.json`… into
-  `<outDir>/_debug/` — the main geometry diagnostic. `CHAMBER_STEP_DEBUG=1` logs the vane-STEP gate.
-- **Full API vitest on WSL is slow (~8 min) and `conversion.test.ts` / `meshes.test.ts` fail on
-  THIS box for pre-existing environment reasons (OpenFOAM tooling), unrelated to chamber** —
-  verified by stash-and-rerun. Run targeted suites.
-- **Scratch discipline**: one-off scripts go in the session scratchpad or `_diag_*` names; stage
-  explicit file lists. (Recent commits used `git add -A` on a clean tree after review — prefer
-  explicit paths when the tree has scratch.)
-- PowerShell 5.1 gotcha: a here-string commit message containing **double quotes** gets mangled
-  into pathspecs (`error: pathspec 'take' …`) and the commit silently doesn't happen while a
-  bundled `git push` still runs — keep quotes out of commit messages and check `git log` after.
+  (`rm -rf apps/api/storage/chamber/*`): builds are hashed on params, not code. Done twice this
+  session (Simplify Generator; warning-text sweep).
+- `CHAMBER_DEBUG_DUMP=1` dumps `core.stl`, `casing.stl`, `meta.json`… into `<outDir>/_debug/`.
+- Full API vitest is slow and `conversion.test.ts` / `meshes.test.ts` fail on THIS box for
+  pre-existing environment reasons (OpenFOAM tooling) — run targeted suites.
+- PowerShell 5.1 mangles double quotes in commit messages → commit via Git Bash (Bash tool)
+  or keep quotes out; check `git log` after.
 
----
+## 1. State in one paragraph
 
-## 1. State of the branch in one paragraph
+Chamber Creation's generator dimensions are now EMPIRICAL: blank hollow-variant boxes
+(Generator Ø / height / dome) come from the **Gen Dim v3 model** (workbook committed at
+`documents/Gen Dim v3 Only Calculator (standalone).xlsx` — the source of record) via one shared
+function used by both the API build and the web hints; a new optional **Power (kW)** input (x4)
+steers the frame suggestion, and a typed Ø re-bases the height/dome autos. A new **Simplify
+Generator** toggle pins the generator as a strict cylinder THROUGH the chamber top with no dome
+(the closed design's mechanism). The four inputs display as **Runner Ø (mm) / Head (m) /
+Q_max (m³/s) / Power (kW)** and the design menu reads just "Closed generator" / "With cone" —
+all display-only (internal keys `x1..x4`, `variant: 'stepped'|'hollow'`, saves and cache are
+untouched).
 
-Chamber Creation now: computes the twelve parameters with **empirical values snapped to a 50 mm
-grid** (user-entered values pass through verbatim, identities propagate them); refuses impossible
-builds up front (negative/zero dims, inverted Min>Max, part/feet/distributor poking out of the box,
-axis inside a chamfer corner, hollow stack overflow — all with actionable messages in a red panel +
-toast); builds ~3× faster for guide-vane configs because the expensive vane STEP is **generated on
-demand at first download**, with a "Change rotational direction" menu item that serves a
-**z-y-mirrored STEP** (also on demand); has **team-shared named saves** (load/save/rename/
-duplicate/delete); and the build cache is **crash-safe and race-free** (atomic artifact writes, GLB
-promoted last as the completion marker, per-hash in-process lock).
+## 2. Features landed this session (specs in docs/superpowers/specs/, all dated 2026-09-02)
 
-## 2. Corrections to the OLD handover (2026-08-13) — read if you knew the old state
+1. **Gen Dim v3 generator dimensions** (`…-generator-dimensions-design.md` + an
+   implementation plan under docs/superpowers/plans/). `computeChamberGeneratorDims` in
+   `packages/shared` returns `auto` (hints, own override ignored / upstream kept) and
+   `resolved` (build values): X4used = x4 ?? 0.9·9.81·X2·X3 → frame R (range rules, ~70–77%)
+   → L = clamp30..215(round5(132.21 − 0.8294R − 0.0825X1 + 13.861X3)); Ø = catalog[R]
+   {26:572, 36:745, 38:753, 45:976, 46:933, 48:986, 62:1242, 77:1545, 115:2225};
+   height = 71.258 + 0.45856·Ø(resolved) + 6.2368·L; dome = 79.609 + 0.21315·Ø(resolved).
+   The old 0.75·X1 / 1.33·Ø / 0.2·h ratio constants are DELETED. x4 is validated
+   (0, 100 000] and never forwarded to the builder — the cache re-keys via resolved values,
+   so pre-existing entries self-invalidated. Old saves load as auto (no migration).
+2. **Physical input names** (`…-physical-input-names-design.md`). Display labels only, six
+   spots incl. the API 422 text ("Adjust Runner Ø / Head / Q_max…") and the X4 hint
+   "Blank = auto ≈ N kW (0.9 · 9.81 · Head · Q_max)".
+3. **Simplify Generator** (`…-simplify-generator-design.md`). `simplifyGenerator` flag
+   (default false, hollow only): builder pins the central cylinder through the box top
+   (+2·FLOOR_OVERCUT, stepped-style, `make_part_hollow` takes `dome_h=None`), overflow check
+   considers only first+middle+cone with its own "hollow cone stack" refusal wording; the API
+   OMITS centralHeight/domeHeight from builder params while on (hidden overrides can't re-key
+   the cache) and never writes the flag for stepped; the web checkbox hides the two height
+   fields (form state kept — unchecking restores).
+4. **Vocabulary sweep + correction** (`…-chamber-vocabulary-design.md`, see its Addendum).
+   Menu options are exactly "Closed generator" / "With cone" (field label "Design");
+   "chamber" replaces "box"; parts are named runner case / middle cylinder / cone / generator.
+   **CORRECTION (user): "outlet" is the FLOW outlet, NOT the middle cylinder** — the dMiddle
+   field stays "Guide vanes Ø (mm)". Also swept the last user-visible X refs: the two builder
+   WARNINGs now say "Runner Ø too large …" (print strings only; fixtures aligned).
 
-- **"Hollow guide-vane STEP falls back vane-less" is FIXED.** The tangent trailing-edge rounding
-  (`VANE_TE_ROUND_*`, spec 2026-08-31-vane-te-rounding) removed the self-overlapping OCC boolean at
-  the blunt TE corners; **both variants now pass the round-trip volume gate** and ship editable
-  BREP vanes (`test_step_export_vane_policy` asserts it). The old §4 fuzzy-boolean/overcut ideas
-  are moot.
-- **"stepHasVanes is written but not consumed" is obsolete.** It is now wired end-to-end:
-  `readChamberBuildMeta` (chamberStorage) → `ChamberBuildResult.stepHasVanes` (service/controller)
-  → web `ChamberBuildResponse` → gates the STEP menu (`offerMirror`).
-- **The vane STEP is no longer produced at build time** — see §3. A plain vane build writes NO
-  `chamber.step` and NO `build-meta.json`; `--step` produces both.
-- Still true from the old handover: STL patch normals point outward (flip raised, deprioritized,
-  **still not done**); `bakeVaneBladeProfile.py` + the committed airfoil asset are unchanged.
+## 3. Open threads (user has NOT decided — do not implement unasked)
 
-## 3. Feature summary (details: PLAN.md changelog + specs, newest last)
+- **Hub shoulder monotonicity**: analysed at the user's request. The warning at
+  `buildChamber.py:633` fires only when P1 > P2 (fold ≈ Runner Ø 2179 mm at ratio 0.45,
+  ≈ 1961 mm at 0.50 — verified numerically); the rim→P1 segment always leans 0.25 mm inward
+  (asset-inherent, deliberately unflagged), and near the crossover the shoulder is vertical
+  with no message. It is a WARNING, never a refusal. OFFERED but not requested: an
+  early-warning margin (warn when P2 − P1 < some fraction of the baseline 97 mm spacing)
+  and/or promoting to a refusal. The outlet clamp (0.97·R_anchor) can freeze the rims before
+  the fold — config-dependent.
+- **Builder texts still using old vocabulary**: "stick out of the box", "the cylinder
+  shoulder…" etc. — offered as a separate sweep (means geometry-test string updates); user
+  has not asked.
+- **In-browser visual pass**: Simplify Generator geometry is proven by tests (cross-section
+  loop counts) but nobody has eyeballed the 3D preview; dev server is user-managed.
+- From the previous session, still open: STL patch normals flip (deprioritized), saves
+  owner-cascade product decision, multi-instance build lock.
 
-1. **Vane TE tangent rounding** — shapely `buffer(-r).buffer(+r)` on the 2D blade loops
-   (r = 0.00585 × PCA chord); meshes AND STEP both benefit; builds got FASTER (~93-105 s → 77-79 s
-   at the time). Spec `2026-08-31-vane-te-rounding-design.md`.
-2. **Full-width chamber page + team-shared saved builds** (`ChamberSave` Prisma model, unique name,
-   author-or-super-admin mutations, load/save/rename/duplicate/delete menu in the page header) +
-   collapsible dimension-reference drawing under the Parameters table + every error/warning in BOTH
-   the notices panel and a toast. Spec `2026-08-31-chamber-fullwidth-and-saved-builds-design.md`.
-3. **Deferred + mirrored STEP** — measured: the vane carve+gate is 23-28 s ≈ 2/3 of a vane build.
-   `buildChamber.py --step` produces the vane STEP + `build-meta.json`; the API generates it on the
-   first `GET /export/step` (per-hash lock, then cached); `mirrorStep.py` mirrors it on the z-y
-   plane for `GET /export/stepMirrored` ("Change rotational direction", vane builds only, 409 for
-   the fallback). OCC gotcha discovered: **BRepGProp reports +0.1% phantom volume on mirrored
-   (indirect) parametrizations** — the geometry is exact (identical watertight tessellations), so
-   the geometry test compares tessellated volume/bounds/centroid, never BREP mass properties.
-   Specs `2026-09-01-mirrored-step-download-design.md`, `2026-09-01-deferred-vane-step-design.md`.
-4. **50 mm grid** — `computeChamberOutputs` snaps empirical estimates (fits, refine fits, and
-   dLast's `= f(HLE)` formula, which is `empirical: true`) to `CHAMBER_GRID_MM` BEFORE the clamp;
-   user-driven values (Exact, bitten Min/Max) pass verbatim and true identities propagate them
-   unrounded (`ChamberOutput.userDriven`). Auto Length inherits. OPEN question the user never
-   answered: a sum with ONE user term (Exact LEB + estimated LEOW) propagates unsnapped — accepted
-   for now. Spec `2026-09-01-empirical-50mm-rounding-design.md`.
-5. **Guide vanes default ON** in the form (web default only; API default stays false; saves store
-   explicit values).
-6. **Review + 4 hardening batches** (a 3-agent review, findings verified; batches have specs):
-   - **Cache integrity** (`…-chamber-cache-integrity-design.md`): every builder artifact written
-     tmp+rename with **chamber.glb promoted LAST** (its presence = build complete → a killed build
-     leaves no GLB and self-heals by rebuilding); `withChamberLock` per-hash promise-chain mutex
-     around build/step/mirror (state re-checked under the lock); mkstemp in mirrorStep.py.
-     **The lock is in-process only** — multi-instance deployments would need more.
-   - **Input floors + distributor fit** (`…-chamber-input-floors-design.md`): fits CAN go negative
-     on legal inputs (H Kammer ≈ −3442 mm at x1=700/x2=1.8/x3=23, relations off) → 422 pre-build +
-     live "! ≤ 0 mm" flag in the table; all dimensions bounded to (0, `CHAMBER_DIMENSION_MAX_MM`
-     = 100 000] at API schema + form + constraint cells; builder guards (distFromEnd range, chamfer
-     setbacks, axis-inside-corner); the radial fit check re-runs with the EXACT distributor mesh
-     reach (blade tips ≈ 1.25 × ring radius — a big dMiddle used to carve through the wall).
-   - **UX consistency** (`…-chamber-ux-consistency-design.md`): `--step` warnings merged deduped
-     into warnings.json + silent cache-hit re-POST after STEP downloads refreshes panel/menu;
-     loading a save clears ALL last-build state; failed Generate clears stale warnings; amber
-     "inputs changed since this build" note in the Export card; grid explained in the table header;
-     Min>Max refuses (422 + client-side pre-check).
-   - **Minor polish** (`…-chamber-minor-polish-design.md`): saves P2025 → 404 / deleteMany;
-     `--color-accent-strong: #8f4f00` token for small orange text (AA on white 6.4:1, on tint
-     5.5:1) swapped into statuses/Low pill/warnings heading; CV error visible in the pill;
-     sr-only badge explanations; STEP toast once per build+kind; `Cache-Control: immutable` on
-     exports. **Deliberately declined**: 409→404 for unknown hashes, disk eviction, builder-version
-     cache key, and the saves owner-cascade (Project/Template cascade identically — a product
-     decision, not a chamber bug).
+## 4. Verification state (2026-09-03, at `5b7d147`)
 
-## 4. Verification state (2026-09-02)
+- Geometry suite: **24/24** (~7.5 min; includes the 2 new Simplify Generator tests — piercing
+  proven by cross-section loop counts, cone-stack refusal wording).
+- API: chamber **36**, chamberModel **43**, chamberSaves **8** — all green. Web chamber:
+  **79/79**. Typecheck API+web clean. Build cache purged after the last builder edit.
+- Working tree CLEAN; everything pushed.
 
-- Geometry suite: **22/22** (~6 min; includes TE rounding, mirror-in-place, deferred-STEP policy,
-  all refusal paths, no-tmp-leftovers).
-- API: chamber 30, chamberModel 33, chamberSaves 8 — all green; concurrency tests prove the
-  per-hash lock (2 parallel builds/downloads → 1 tool run).
-- Web chamber suite: **64/64**; typecheck API+web clean.
-- NOT verified on this box: `conversion.test.ts` / `meshes.test.ts` (pre-existing WSL environment
-  failures, unrelated — see §0); in-browser/responsive pass of the full-width layout (dev server is
-  user-managed).
+## 5. Conventions & gotchas for the next agent
 
-## 5. Repo conventions (unchanged unless noted)
-
-- `CLAUDE.md` frontend skill sequence applies to **UI (JSX/CSS) only**, not the Python builder.
-  NOTE: those skills are not installed in recent sessions — the rules were applied manually
-  (tokens only, AA, one orange CTA per zone).
-- Log every code change as a **French** note at the bottom of `PLAN.md` (house rule from CLAUDE.md).
-- Superpowers workflow: brainstorm → spec in `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`
-  (committed before implementing) → implement test-first.
-- Commits end with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`. On THIS branch the
-  user asked for continuous commit+push per feature — keep doing that here, but don't carry the
-  habit to other branches unasked.
-- No secrets in commits: `apps/api/.env` (CHAMBER_PYTHON_BIN / MESH_PYTHON_BIN / OPENFOAM_BASHRC,
-  and now optionally `MIRROR_STEP_SCRIPT`) is gitignored.
+- **Vocabulary rules** (user-approved; also in auto-memory
+  `chamber-vocabulary-outlet-is-flow-outlet.md`): display renames are LABEL-ONLY — internal
+  keys, the `variant` enum, saves snapshots and cache keys never change. Never call the middle
+  cylinder "outlet".
+- House workflow: brainstorm (one question at a time) → spec committed BEFORE implementing →
+  test-first. French note at the bottom of `PLAN.md` for every code change. Continuous
+  commit+push per feature ON THIS BRANCH (don't carry to other branches unasked).
+- Commits end with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`; PR bodies end
+  with the Claude Code attribution line.
+- `CLAUDE.md` frontend skill sequence applies to UI (JSX/CSS) only; those skills are not
+  installed here — apply the rules manually (tokens only, AA contrast, one orange CTA per
+  zone). New chamber UI this session reused existing primitives — zero new styles.
+- The Gen Dim workbook in `documents/` is the model's source of record — if its formulas
+  change again, `computeChamberGeneratorDims` + the parity tests in
+  `apps/api/tests/chamberModel.test.ts` (and `chamberForm.test.ts` hints) must move with it.
+- No secrets in commits: `apps/api/.env` is gitignored.
