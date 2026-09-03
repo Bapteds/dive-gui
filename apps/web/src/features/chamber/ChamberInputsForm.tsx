@@ -156,7 +156,7 @@ export function ChamberInputsForm({
         <span className="text-sm">
           <span className="font-medium text-text">Guide vanes</span>
           <span className="mt-0.5 block text-text-secondary">
-            Replace the outlet with a ring of guide vanes (both designs).
+            Replace the middle cylinder with a ring of guide vanes (both designs).
           </span>
         </span>
       </label>
@@ -243,7 +243,7 @@ export function ChamberInputsForm({
         <Field
           label="Part scale (×)"
           error={errors.partScale?.message}
-          helperText="Scales runner case, outlet, cone & generator, feet & vanes together; chamber & axis stay fixed. Closed generator: overgrowing the chamber is refused; with cone: scaled down to fit"
+          helperText="Scales runner case, middle cylinder, cone & generator, feet & vanes together; chamber & axis stay fixed. Closed generator: overgrowing the chamber is refused; with cone: scaled down to fit"
         >
           <Input
             type="number"
@@ -291,7 +291,7 @@ export function ChamberInputsForm({
           />
         </Field>
         <Field
-          label="Outlet Ø (mm)"
+          label="Guide vanes Ø (mm)"
           error={errors.dMiddle?.message}
           helperText={`${autoHint(autoDims.dMiddle)} · sets the vane ring in guide-vane builds`}
         >

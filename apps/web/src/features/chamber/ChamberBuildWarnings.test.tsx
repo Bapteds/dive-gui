@@ -43,7 +43,7 @@ describe('ChamberBuildWarnings', () => {
 
   it('lists every builder warning in an alert', () => {
     const warnings = [
-      'outlet outer radius 0.8400 clamped to 0.6666 (X1 too large for this vane/d_last combination)',
+      'outlet outer radius 0.8400 clamped to 0.6666 (Runner Ø too large for this vane/d_last combination)',
       'chamber.step falls back to the vane-less solid (no vanes carved)',
     ];
     render(<ChamberBuildWarnings warnings={warnings} />);

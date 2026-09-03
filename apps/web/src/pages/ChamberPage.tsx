@@ -133,7 +133,7 @@ export function ChamberPage() {
     vaneAngleDeg: 'Vane angle',
     outletRatio: 'Outlet ratio',
     dFirst: 'Runner case Ø',
-    dMiddle: 'Outlet Ø',
+    dMiddle: 'Guide vanes Ø',
     hollowLength: 'Cone length',
     wallThickness: 'Wall thickness',
     centralDiameter: 'Generator Ø',

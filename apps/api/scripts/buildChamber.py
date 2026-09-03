@@ -561,7 +561,7 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
         ro_target = outlet_outer_d / 2.0
         if ro_target >= VANE_OUTLET_SAFE_MARGIN * R_anchor:
             print("WARNING: outlet outer radius %.4f clamped to %.4f "
-                  "(X1 too large for this vane/d_last combination)"
+                  "(Runner Ø too large for this vane/d_last combination)"
                   % (ro_target, VANE_OUTLET_SAFE_MARGIN * R_anchor))
             ro_target = VANE_OUTLET_SAFE_MARGIN * R_anchor
         ri_target = max(outlet_ratio * ro_target, 1e-3)
@@ -631,8 +631,8 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
         # The real invalid case is the shoulder folding (P1 overtaking P2 at high X1).
         # rim vs P1 is an inherent ~0.25 mm lean (P1_0 sits just inside R_hub0), not a fold.
         if not (r_p1 <= r_p2 <= r_p3):
-            print("WARNING: hub shoulder non-monotonic (X1 too large for the point "
-                  "spacing): rim=%.4f P1=%.4f P2=%.4f P3=%.4f"
+            print("WARNING: hub shoulder non-monotonic (Runner Ø too large for the "
+                  "point spacing): rim=%.4f P1=%.4f P2=%.4f P3=%.4f"
                   % (r_rim, r_p1, r_p2, r_p3))
         hub_profile = np.array([
             [r_rim, _z(0.05288)],                       # outlet inner rim (passage bottom)

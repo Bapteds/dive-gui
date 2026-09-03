@@ -48,7 +48,7 @@ const warningRunner: CommandRunner = async (spec) => {
   return {
     ...result,
     stdout:
-      'WARNING: outlet outer radius 0.8400 clamped to 0.6666 (X1 too large for this vane/d_last combination)\nOK: 7 patches\n',
+      'WARNING: outlet outer radius 0.8400 clamped to 0.6666 (Runner Ø too large for this vane/d_last combination)\nOK: 7 patches\n',
     stderr:
       'WARN: the hollow stack 3.3984 m exceeds H Kammer 2.7000 m; the internal part is scaled to 0.7945 to fit (its heights are reduced to match)\n',
   };
@@ -168,7 +168,7 @@ describe('Chamber Creation', () => {
     // Prefixes are stripped; stderr WARNs come first, then stdout WARNINGs.
     expect(built.body.warnings).toEqual([
       'the hollow stack 3.3984 m exceeds H Kammer 2.7000 m; the internal part is scaled to 0.7945 to fit (its heights are reduced to match)',
-      'outlet outer radius 0.8400 clamped to 0.6666 (X1 too large for this vane/d_last combination)',
+      'outlet outer radius 0.8400 clamped to 0.6666 (Runner Ø too large for this vane/d_last combination)',
     ]);
 
     // The same build again is a cache hit (a failing runner proves the builder is

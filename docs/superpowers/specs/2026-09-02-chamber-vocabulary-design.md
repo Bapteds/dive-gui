@@ -53,3 +53,23 @@ The design menu options lose their explanations ("Closed generator" and
 
 No existing test pins any changed string (verified by grep); the web chamber
 suite + typecheck re-run green. Shared changes → rebuild shared first.
+
+## Addendum (2026-09-02, user correction)
+
+"Outlet" is NOT the middle cylinder — it is the flow outlet (in the no-vane
+build it sits further downstream; in vane builds the guide vanes take the
+middle region). Reverted from the first pass: the dMiddle field label stays
+**"Guide vanes Ø (mm)"** (+ its FIELD_LABELS entry), the guide-vanes toggle
+description says "middle cylinder" again, the Part scale helper enumerates
+"runner case, middle cylinder, cone & generator", and the two shared relation
+descriptions return to their original height wording. Kept from the first
+pass: menu options, "Design" label, chamber-for-box, Closed generator.
+
+Additionally the builder's two user-visible WARNING texts drop the last X
+references (previous sweeps had left them): "(X1 too large for this
+vane/d_last combination)" → "(Runner Ø too large …)" and "hub shoulder
+non-monotonic (X1 too large for the point spacing)" → "(Runner Ø too large
+for the point spacing)". Geometry unchanged (print strings only — py_compile
++ the simplify geometry tests re-run as smoke; cache purged per house rule);
+the fake-runner fixtures in chamber.test.ts / ChamberBuildWarnings.test.tsx
+updated to match.
