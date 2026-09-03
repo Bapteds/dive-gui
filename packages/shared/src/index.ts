@@ -2285,7 +2285,7 @@ export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
   { key: 'height', label: 'H Kammer', form: 'linear', cvError: 28.6, confidence: 'Moderate',
     coeffs: { a: -2655.561158, b: 3.469850592, c: 500.9913764, d: -178.9974433 },
     relation: { kind: 'combination', defaultOn: true, label: '= LEB + LEOW',
-      description: 'H Kammer = LEB + LEOW (middle+first plus last cylinder height).',
+      description: 'H Kammer = LEB + LEOW (runner case + outlet heights plus the height above them).',
       terms: [{ key: 'hMiddlePlusFirst', coeff: 1 }, { key: 'hLast', coeff: 1 }] } },
   // P3: distFromSideChamfer1. Refines from a measured B Kammer (P1).
   { key: 'distFromSideChamfer1', label: 'B1', form: 'linear', cvError: 32.0, confidence: 'Low',
@@ -2333,7 +2333,7 @@ export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
   { key: 'hMiddlePlusFirst', label: 'LEB', form: 'power', cvError: 24.9, confidence: 'Moderate',
     coeffs: { k: 0.0000000238913334, e1: 3.631996617, e2: 0.647878341, e3: -1.281050007 },
     relation: { kind: 'combination', defaultOn: true, label: '= 2 × HLE',
-      description: 'LEB = 2 × HLE (middle+first height is twice the middle height).',
+      description: 'LEB = 2 × HLE (runner case + outlet height is twice the outlet height).',
       terms: [{ key: 'hMiddle', coeff: 2 }] } },
   // P12: hLast. No relation.
   { key: 'hLast', label: 'LEOW', form: 'linear', cvError: 38.9, confidence: 'Low',

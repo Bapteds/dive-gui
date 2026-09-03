@@ -83,10 +83,10 @@ export function ChamberInputsForm({
         </p>
       </div>
 
-      <Field label="Cylinder design">
+      <Field label="Design">
         <NativeSelect {...register('variant')}>
-          <option value="stepped">Closed generator — three solid cylinders</option>
-          <option value="hollow">With cone — open-top cone</option>
+          <option value="stepped">Closed generator</option>
+          <option value="hollow">With cone</option>
         </NativeSelect>
       </Field>
 
@@ -156,7 +156,7 @@ export function ChamberInputsForm({
         <span className="text-sm">
           <span className="font-medium text-text">Guide vanes</span>
           <span className="mt-0.5 block text-text-secondary">
-            Replace the middle cylinder with a ring of guide vanes (both designs).
+            Replace the outlet with a ring of guide vanes (both designs).
           </span>
         </span>
       </label>
@@ -170,8 +170,8 @@ export function ChamberInputsForm({
         <span className="text-sm">
           <span className="font-medium text-text">Chamfer</span>
           <span className="mt-0.5 block text-text-secondary">
-            Cut the two corners at the inlet end. Turn off for a square-ended box - the rest of
-            the geometry (cylinders, feet, outputs table) is unaffected.
+            Cut the two corners at the inlet end. Turn off for a square-ended chamber - the rest
+            of the geometry (internals, feet, outputs table) is unaffected.
           </span>
         </span>
       </label>
@@ -185,8 +185,8 @@ export function ChamberInputsForm({
         <span className="text-sm">
           <span className="font-medium text-text">Feet</span>
           <span className="mt-0.5 block text-text-secondary">
-            Cut the four torque-foot voids (legs and their planks). Turn off to keep the box
-            solid where the feet would be - the cylinders and outputs table are unaffected.
+            Cut the four torque-foot voids (legs and their planks). Turn off to keep the chamber
+            solid where the feet would be - the internals and outputs table are unaffected.
           </span>
         </span>
       </label>
@@ -243,7 +243,7 @@ export function ChamberInputsForm({
         <Field
           label="Part scale (×)"
           error={errors.partScale?.message}
-          helperText="Scales all cylinders, feet & vanes together; box & axis stay fixed. Stepped: overgrowing the box is refused; cone: scaled down to fit"
+          helperText="Scales runner case, outlet, cone & generator, feet & vanes together; chamber & axis stay fixed. Closed generator: overgrowing the chamber is refused; with cone: scaled down to fit"
         >
           <Input
             type="number"
@@ -291,7 +291,7 @@ export function ChamberInputsForm({
           />
         </Field>
         <Field
-          label="Guide vanes Ø (mm)"
+          label="Outlet Ø (mm)"
           error={errors.dMiddle?.message}
           helperText={`${autoHint(autoDims.dMiddle)} · sets the vane ring in guide-vane builds`}
         >
@@ -315,7 +315,7 @@ export function ChamberInputsForm({
             <span className="font-medium text-text">Simplify generator</span>
             <span className="mt-0.5 block text-text-secondary">
               Extend the generator as a straight cylinder through the chamber top — no dome
-              (like the closed design&apos;s last cylinder).
+              (as in the Closed generator design).
             </span>
           </span>
         </label>
