@@ -91,6 +91,12 @@ VANE_OUTLET_SAFE_MARGIN = 0.97   # outlet outer radius clamp: stay this fraction
                                  # the vane's own inner working radius (R_anchor in
                                  # make_vane_patches) so the blade always has shroud/hub
                                  # material to seat on and never overhangs the hole.
+VANE_SKIN_TOL = 1e-3             # XY distance (m) within which a wetted face centroid
+                                 # counts as ON a blade wall (_blade_skin_mask). Skin
+                                 # centroids sit exactly on the outline (the prisms are
+                                 # vertical); the nearest junction faces (hub roof /
+                                 # shroud floor rings around each airfoil hole) sit a
+                                 # half face-width away, >= ~1.5 mm.
 
 # --- parametric hub/shroud baseline (spec 2026-08-10) ------------------------
 # Hub meridional interior points (asset space = absolute metres), measured from
@@ -1029,6 +1035,34 @@ def _round_blade_te(np, loop):
         return loop
 
 
+def _blade_skin_mask(np, pts_xy, outlines, tol):
+    """True for the XY points lying within `tol` of any blade outline. The
+    blade prisms are STRICT vertical extrusions of these rings, so a wetted
+    face lies on a blade wall iff its centroid's XY distance to a ring is ~0 —
+    an exact test, unlike the nearest-centroid vote, which is biased at the
+    blade/hub/shroud junctions by whichever source happens to be sampled more
+    densely there (both bias directions were observed on real builds)."""
+    pts = np.asarray(pts_xy, dtype=float)
+    mask = np.zeros(len(pts), dtype=bool)
+    for ring in outlines:
+        a = np.asarray(ring, dtype=float)
+        b = np.roll(a, -1, axis=0)
+        ab = b - a
+        ab2 = np.maximum((ab ** 2).sum(axis=1), 1e-18)
+        lo, hi = a.min(axis=0) - 2 * tol, a.max(axis=0) + 2 * tol
+        cand = np.where(~mask
+                        & (pts[:, 0] >= lo[0]) & (pts[:, 0] <= hi[0])
+                        & (pts[:, 1] >= lo[1]) & (pts[:, 1] <= hi[1]))[0]
+        # Chunked point-to-segment distances: (chunk, segments, 2) stays small.
+        for s in range(0, len(cand), 4096):
+            ci = cand[s:s + 4096]
+            ap = pts[ci][:, None, :] - a[None, :, :]
+            t = np.clip((ap * ab[None]).sum(-1) / ab2[None], 0.0, 1.0)
+            d2 = ((ap - t[..., None] * ab[None]) ** 2).sum(-1).min(axis=1)
+            mask[ci[d2 <= tol * tol]] = True
+    return mask
+
+
 def _vane_prisms(np, trimesh, blades_mesh, cx, cy, z0, z1):
     """Turn the (prismatic) guide-vane blades into watertight vertical PRISM solids that
     span z0..z1 — below the shroud floor up to the hub roof. Each blade's airfoil
@@ -1037,9 +1071,17 @@ def _vane_prisms(np, trimesh, blades_mesh, cx, cy, z0, z1):
     casing, these prisms PIERCE the hub and shroud, so the boolean cuts a real airfoil
     hole in each surface with the vane skin connected to it (no vane surface left inside
     the non-wetted solids). Extruding straight and letting the boolean cut at the shroud
-    floor / hub roof also makes the blade ends conform to those curved surfaces exactly."""
+    floor / hub roof also makes the blade ends conform to those curved surfaces exactly.
+
+    Returns (prisms, outlines): the prism solids for the boolean, plus each
+    prism's exact XY footprint ring — the input to _blade_skin_mask, which
+    assigns the wetted blade skin to the guide_vanes patch analytically (the
+    nearest-centroid vote is NOT used for the blades: the prisms' full-height
+    side quads put every centroid on two horizontal rows, which lost half the
+    skin to the hub roof; a densified source overshot the other way and stole
+    shroud-floor rings around the blade roots)."""
     from shapely.geometry import Polygon
-    prisms = []
+    prisms, outlines = [], []
     for blade in blades_mesh.split(only_watertight=False):
         bz = np.asarray(blade.vertices, dtype=float)[:, 2]
         zc = 0.5 * (float(bz.min()) + float(bz.max()))
@@ -1055,7 +1097,8 @@ def _vane_prisms(np, trimesh, blades_mesh, cx, cy, z0, z1):
         pr = trimesh.creation.extrude_polygon(poly, height=z1 - z0)
         pr.apply_translation([0.0, 0.0, z0])
         prisms.append(pr)
-    return prisms
+        outlines.append(np.asarray(poly.exterior.coords, dtype=float)[:-1])
+    return prisms, outlines
 
 
 def _shroud_casing_solid(np, trimesh, shroud_mesh, cx, cy, d_last, nb=200, nfine=160):
@@ -1792,9 +1835,10 @@ def main():
             # inside the casing (absorbed by the union) and the portion above the roof
             # inside the OCC upper cylinder (no fluid there), so only the passage span
             # shows as a vane.
-            _prisms = _vane_prisms(np, trimesh, vane_patches["guide_vanes"],
-                                   target_x, target_y, z_duct_bottom,
-                                   z_mid_top + 2.0 * FLOOR_OVERCUT)
+            _prisms, _blade_outlines = _vane_prisms(np, trimesh,
+                                                    vane_patches["guide_vanes"],
+                                                    target_x, target_y, z_duct_bottom,
+                                                    z_mid_top + 2.0 * FLOOR_OVERCUT)
             _solid = trimesh.boolean.union([_core, _casing] + _prisms, engine="manifold")
             _fd, _tmp_stl = tempfile.mkstemp(suffix=".stl")
             os.close(_fd)
@@ -1820,9 +1864,13 @@ def main():
             fluid_F = trimesh.boolean.difference([_result_mesh, _solid],
                                                  engine="manifold")
             # Classification sources: the OCC box/part patches (inlet, walls,
-            # cylinder_walls), the distributor meshes (hub, shroud, outlet) and the vane
-            # prisms (guide_vanes). F's boundary coincides with these, so nearest-centroid
-            # gives a clean re-split.
+            # cylinder_walls) and the distributor meshes (hub, shroud, outlet). F's
+            # boundary coincides with these, so nearest-centroid gives a clean
+            # re-split. The BLADES are deliberately NOT a source: they are assigned
+            # exactly afterwards (_blade_skin_mask) — any mesh source for them is
+            # sampled either sparser or denser than hub/shroud at the junctions,
+            # and the vote then leaks skin onto the hub roof (sparser) or steals
+            # shroud-floor rings around the blade roots (denser). Both happened.
             _sources = []
             for _nm in ("inlet", "walls", "cylinder_walls"):
                 _sm = patch_trimesh(trimesh, np, patches.get(_nm, []))
@@ -1847,7 +1895,6 @@ def main():
             _sources.append(("hub", vane_patches["hub"]))
             _sources.append(("shroud", vane_patches["shroud"]))
             _sources.append(("outlet", vane_patches["outlet"]))
-            _sources.append(("guide_vanes", trimesh.util.concatenate(_prisms)))
             _names, _who = _label_by_nearest_source(np, fluid_F, _sources)
             # The box pocket floor and the outlet annulus are coincident at z_box_floor,
             # so nearest-source ties a few floor faces the wrong way. The outlet is
@@ -1886,6 +1933,20 @@ def main():
             _wall = (np.abs(_fnz) < 0.5) & (_fc[:, 2] < z_mid_base)
             _who[_wall & (np.abs(_fr - vane_outlet_ri) < 0.03)] = _hi
             _who[_wall & (np.abs(_fr - vane_outlet_ro) < 0.03)] = _si
+            # The BLADE SKIN, assigned exactly (last, so no other override can
+            # touch it): the prisms are strict vertical extrusions, so a wetted
+            # face lies on a blade wall iff its centroid sits on a blade outline
+            # in XY (within VANE_SKIN_TOL) AND the face is not horizontal — the
+            # boolean fans thin hub-roof/shroud-floor slivers along each airfoil
+            # hole rim whose centroids also fall inside the tolerance; those are
+            # horizontal (the walls never are), so |nz| separates them exactly.
+            # There is no other fluid at blade XY anywhere along z (casing below
+            # the floor, hub core / upper cylinder above the roof), so no z
+            # guard is needed.
+            _names.append("guide_vanes")
+            _skin = (_blade_skin_mask(np, _fc[:, :2], _blade_outlines, VANE_SKIN_TOL)
+                     & (np.abs(_fnz) < 0.5))
+            _who[_skin] = len(_names) - 1
             final_patches = {}
             for _li, _nm in enumerate(_names):
                 _idx = np.where(_who == _li)[0]

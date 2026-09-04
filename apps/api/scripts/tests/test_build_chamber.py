@@ -37,6 +37,9 @@ GOLDEN = {
     "stepped-feet-off": (131.545008, STEPPED_PATCHES),
     "stepped-vanes": (135.469749, VANE_PATCHES),
     "hollow-vanes": (153.090155, VANE_PATCHES),
+    # Real cached build (feet off, dFirst/dMiddle overrides, partScale 1) whose
+    # passage proportions reproduced the blade-skin/hub classification tie.
+    "hollow-vanes-overrides": (167.700993, VANE_PATCHES),
 }
 WALL_TYPES = {"cylinder_walls", "walls", "hub", "shroud", "guide_vanes"}
 
@@ -395,6 +398,62 @@ def test_built_vane_sections_have_a_round_trailing_edge(build):
     assert any(abs(radius - r_exp) < 0.3 * r_exp and res < 1e-4
                for radius, res in fits), \
         f"no rounded trailing edge on the built vane section (fits: {fits})"
+
+
+# --- vane-skin patch integrity ------------------------------------------------
+# The wetted blade skin must classify to guide_vanes, never leak into hub or
+# shroud. Regression guard: the vane classification source (the extruded
+# prisms) had full-height side faces, so ALL its centroids sat on two
+# horizontal rows; the upper triangle of every blade-skin quad then sat ~h/3
+# from the nearest vane sample while the (uncut) hub roof was directly above —
+# a near-tie the nearest-source vote lost ~90% of the time, speckling the
+# blades across guide_vanes/hub (4407 leaked faces on a real cached build,
+# reproduced by hollow-vanes-overrides).
+
+
+@pytest.mark.parametrize("name", ["stepped-vanes", "hollow-vanes", "hollow-vanes-overrides"])
+def test_vane_skin_stays_on_the_guide_vanes_patch(build, name):
+    import numpy as np
+    import trimesh
+
+    result = build(name)
+    assert result.exit_code == 0, f"builder failed:\n{result.stderr}"
+
+    def patch(pname):
+        with zipfile.ZipFile(result.export_path("trisurface.zip")) as zf:
+            return trimesh.load(io.BytesIO(zf.read(f"{pname}.stl")), file_type="stl")
+
+    # Part axis from the outlet annulus (a flat ring centred on it).
+    axis = patch("outlet").vertices.mean(axis=0)
+
+    def azimuthal(mesh):
+        """|n_theta| per face: ~0 on a surface of revolution, large on blades."""
+        fc = mesh.vertices[mesh.faces].mean(axis=1)
+        n = mesh.face_normals
+        dx, dy = fc[:, 0] - axis[0], fc[:, 1] - axis[1]
+        r = np.maximum(np.hypot(dx, dy), 1e-9)
+        return np.abs((n[:, 0] * -dy + n[:, 1] * dx) / r)
+
+    # Hub and shroud are surfaces of revolution: every face normal is
+    # meridional up to facet noise. The blade skin is the only strongly
+    # azimuthal surface in the band; none of it may land on hub/shroud.
+    for pname in ("hub", "shroud"):
+        nth = azimuthal(patch(pname))
+        leaked = int((nth > 0.35).sum())
+        assert leaked == 0, f"{name}: {leaked} blade-like faces classified as {pname}"
+
+    # Reverse direction: the blades are strict VERTICAL prisms, so the vane
+    # patch may contain (almost) no horizontal faces — a horizontal face there
+    # is a stolen piece of the shroud floor / hub roof. (Regression guard: a
+    # denser vane source once out-sampled the revolved sources at the junctions
+    # and pulled a speckled ring of floor faces around every blade root onto
+    # guide_vanes — 3794 faces on a real cached build.)
+    gv = patch("guide_vanes")
+    horiz = float((np.abs(gv.face_normals[:, 2]) > 0.7).mean())
+    assert horiz < 0.01, f"{name}: {horiz:.1%} horizontal faces in guide_vanes"
+
+    # Sanity for the metric itself: the blades ARE strongly azimuthal.
+    assert (azimuthal(gv) > 0.35).mean() > 0.5
 
 
 # --- mirrored STEP ("Change rotational direction") ----------------------------
