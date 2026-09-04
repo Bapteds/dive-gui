@@ -121,7 +121,7 @@ function CanvasArea({
       <StageMessage
         icon={<Box className="size-6 text-primary" strokeWidth={1.5} aria-hidden="true" />}
         title="No chamber yet"
-        body="Enter X1, X2, X3 and a length, then Generate to see the 3D chamber here."
+        body="Enter Runner Ø, Head and Q_max plus a length, then Generate to see the 3D chamber here."
       />
     );
   }

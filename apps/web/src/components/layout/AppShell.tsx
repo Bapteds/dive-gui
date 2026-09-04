@@ -30,11 +30,16 @@ export function AppShell() {
   // The Home dashboard is a fixed, non-scrolling grid from `lg` up (it flows and
   // scrolls on a phone, where it cannot fit); its panels scroll internally.
   const isDashboard = pathname === '/';
+  // Chamber Creation is full width (the 3D preview earns the room) but keeps the
+  // normal page flow/scrolling; its Parameters table caps itself to max-w-content.
+  const isChamber = pathname === '/chamber';
   const contentClass = isEditor
     ? 'flex h-[calc(100dvh_-_4rem)] flex-col overflow-hidden px-4 py-4 sm:px-6 sm:py-6'
     : isProjectDetail || isDashboard
       ? 'w-full px-4 py-6 sm:px-6 lg:flex lg:h-[calc(100dvh_-_4rem)] lg:flex-col lg:overflow-hidden lg:px-8 lg:py-6'
-      : 'mx-auto w-full max-w-content px-4 py-6 sm:px-6 sm:py-8 lg:px-8';
+      : isChamber
+        ? 'w-full px-4 py-6 sm:px-6 sm:py-8 lg:px-8'
+        : 'mx-auto w-full max-w-content px-4 py-6 sm:px-6 sm:py-8 lg:px-8';
 
   return (
     <div className="flex min-h-[100dvh] flex-col bg-bg">

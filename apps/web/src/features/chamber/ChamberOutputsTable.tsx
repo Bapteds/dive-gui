@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   Table,
@@ -7,6 +9,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import chamberDimensionsImg from './assets/chamber-dimensions.png';
+import { CHAMBER_DIMENSION_MAX_MM } from '@dive/shared';
 import type {
   ChamberConfidence,
   ChamberConstraint,
@@ -26,18 +30,20 @@ import type {
 /** Which override field a cell edits. */
 type ConstraintField = keyof ChamberConstraint;
 
+// Small (12px) text: the orange must be accent-strong — accent/accent-hover
+// sit below AA 4.5:1 at this size on white and on the tint.
 const CONF_STYLES: Record<ChamberConfidence, string> = {
   Good: 'bg-success-tint text-success',
   High: 'bg-success-tint text-success',
   Moderate: 'bg-bg text-text-secondary border border-border',
-  Low: 'bg-accent-tint text-accent-hover',
+  Low: 'bg-accent-tint text-accent-strong',
 };
 
 const STATUS_STYLES: Record<ChamberStatus, string> = {
   'within range': 'text-text-secondary',
   'set exact': 'text-primary',
-  'capped at max': 'text-accent-hover',
-  'raised to min': 'text-accent-hover',
+  'capped at max': 'text-accent-strong',
+  'raised to min': 'text-accent-strong',
   '! min>max': 'text-danger',
   'from relation': 'text-primary',
 };
@@ -65,14 +71,20 @@ function NumCell({
       aria-label={ariaLabel}
       value={value ?? ''}
       placeholder="—"
+      min={0}
+      max={CHAMBER_DIMENSION_MAX_MM}
       onChange={(e) => {
         const raw = e.target.value;
         if (raw === '') {
           onChange(undefined);
           return;
         }
+        // Only a real dimension may become a constraint: strictly positive,
+        // bounded like the API schema. Anything else clears the field (same
+        // as emptying it), so `1e999` or a negative can never reach a build.
         const parsed = Number(raw);
-        onChange(Number.isFinite(parsed) ? parsed : undefined);
+        const valid = Number.isFinite(parsed) && parsed > 0 && parsed <= CHAMBER_DIMENSION_MAX_MM;
+        onChange(valid ? parsed : undefined);
       }}
       className={cn(
         'w-20 rounded-sm border border-border bg-surface px-2 py-1 text-sm tabular-nums text-text',
@@ -93,11 +105,14 @@ export function ChamberOutputsTable({
   constraints: Partial<Record<ChamberOutputKey, ChamberConstraint>>;
   onConstraintChange: (key: ChamberOutputKey, field: ConstraintField, value: number | undefined) => void;
 }) {
+  const [legendOpen, setLegendOpen] = useState(false);
   return (
     <div className="overflow-hidden rounded-md border border-border bg-surface shadow-sm">
       <div className="flex items-center justify-between border-b border-border px-5 py-3">
         <h2 className="text-lg font-semibold text-text">Parameters</h2>
-        <span className="text-xs text-text-secondary">values in mm</span>
+        <span className="text-xs text-text-secondary">
+          values in mm · empirical values snap to the 50 mm grid
+        </span>
       </div>
       {outputs === null ? (
         <p className="px-5 py-8 text-center text-sm text-text-secondary">
@@ -112,7 +127,12 @@ export function ChamberOutputsTable({
               <TableHead>Min</TableHead>
               <TableHead>Max</TableHead>
               <TableHead>Exact</TableHead>
-              <TableHead className="text-right">Final</TableHead>
+              <TableHead
+                className="text-right"
+                title="Model estimates are rounded to the nearest 50 mm. Your Exact values and bitten Min/Max pass through unrounded, and identities (= LF1, = LEB + LEOW, …) propagate them verbatim."
+              >
+                Final
+              </TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Confidence</TableHead>
             </TableRow>
@@ -133,6 +153,9 @@ export function ChamberOutputsTable({
                           className="inline-block rounded-sm bg-primary-tint px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary"
                         >
                           refined
+                          <span className="sr-only">
+                            : refined from its partner&apos;s known Exact value (interdependency)
+                          </span>
                         </span>
                       )}
                       {o.noEffect && (
@@ -141,6 +164,11 @@ export function ChamberOutputsTable({
                           className="inline-block rounded-sm border border-border bg-bg px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-secondary"
                         >
                           no effect
+                          <span className="sr-only">
+                            : not used by the build — H Kammer no longer reads LEOW (it is set
+                            Exact, or the H = LEB + LEOW relation is off), and the geometry never
+                            consumes LEOW directly
+                          </span>
                         </span>
                       )}
                     </span>
@@ -167,21 +195,36 @@ export function ChamberOutputsTable({
                       onChange={(v) => onConstraintChange(o.key, 'exact', v)}
                     />
                   </TableCell>
-                  <TableCell className="text-right font-semibold text-text">{mm(o.final)}</TableCell>
-                  <TableCell>
-                    <span className={cn('text-xs', STATUS_STYLES[o.status])}>
-                      {o.status === 'from relation' ? o.relationLabel : o.status}
-                    </span>
+                  <TableCell
+                    className={cn(
+                      'text-right font-semibold',
+                      o.final <= 0 && !o.noEffect ? 'text-danger' : 'text-text',
+                    )}
+                  >
+                    {mm(o.final)}
                   </TableCell>
                   <TableCell>
+                    {o.final <= 0 && !o.noEffect ? (
+                      // A non-positive dimension can never build — the server
+                      // refuses it; flag it live, before Generate.
+                      <span className="text-xs text-danger">! ≤ 0 mm — not buildable</span>
+                    ) : (
+                      <span className={cn('text-xs', STATUS_STYLES[o.status])}>
+                        {o.status === 'from relation' ? o.relationLabel : o.status}
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {/* The CV error is shown, not hidden in a tooltip — title
+                        attributes never reach keyboard/touch/screen-reader users. */}
                     <span
-                      title={`Cross-validation error ${o.cvError}%`}
+                      title={`Leave-one-out cross-validation error: ${o.cvError}%`}
                       className={cn(
-                        'inline-block rounded-sm px-2 py-0.5 text-xs font-medium',
+                        'inline-block whitespace-nowrap rounded-sm px-2 py-0.5 text-xs font-medium',
                         CONF_STYLES[o.confidence],
                       )}
                     >
-                      {o.confidence}
+                      {o.confidence} · {o.cvError}%
                     </span>
                   </TableCell>
                 </TableRow>
@@ -190,6 +233,40 @@ export function ChamberOutputsTable({
           </TableBody>
         </Table>
       )}
+
+      {/* Dimension legend: the annotated CAD drawings that define every term in
+          the table. Collapsed by default so the tall drawing does not push the
+          page; the toggle follows the app's disclosure pattern (chevron button
+          with aria-expanded, as in the meshing config forms). */}
+      <div className="border-t border-border">
+        <button
+          type="button"
+          onClick={() => setLegendOpen((v) => !v)}
+          aria-expanded={legendOpen}
+          className="flex w-full items-center gap-1.5 px-5 py-3 text-left text-sm font-medium text-text-secondary transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
+        >
+          {legendOpen ? (
+            <ChevronDown className="size-4" strokeWidth={2} aria-hidden="true" />
+          ) : (
+            <ChevronRight className="size-4" strokeWidth={2} aria-hidden="true" />
+          )}
+          Dimension reference
+        </button>
+        {legendOpen && (
+          <figure className="px-5 pb-4">
+            <figcaption className="mb-3 text-xs text-text-secondary">
+              Plan view (left): B Kammer, B1, BF1 / BF2, LF1 / LF2, LT. Section view (right): H
+              Kammer, LEB, LEOW, HLE, LE Ø.
+            </figcaption>
+            <img
+              src={chamberDimensionsImg}
+              alt="Annotated chamber drawings: a plan view locating B Kammer, B1, BF1, BF2, LF1, LF2 and LT, and a section view locating H Kammer, LEB, LEOW, HLE and LE Ø."
+              loading="lazy"
+              className="h-auto w-full max-w-[1319px]"
+            />
+          </figure>
+        )}
+      </div>
     </div>
   );
 }

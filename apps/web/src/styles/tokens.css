@@ -21,6 +21,7 @@
   --color-accent: #ee7f00; /* orange accent: badges, highlights, non-CTA accent uses */
   --color-accent-hover: #cc6e00; /* hover / pressed for the orange accent */
   --color-accent-tint: #fff3e6; /* orange wash: attention surfaces (used sparingly) */
+  --color-accent-strong: #8f4f00; /* dark orange for SMALL text: AA 4.5:1 on white (6.4) and on the tint (5.5) — accent/accent-hover are reserved for large/bold text and hover states */
 
   /* ---- Accessible CTA fill (darker brand-orange derivative) ---- */
   --color-cta: #a85f00; /* primary CTA fill: white-bold label = ~4.9:1, AA normal text */

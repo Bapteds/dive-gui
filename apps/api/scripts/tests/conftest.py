@@ -80,10 +80,14 @@ class BuildResult:
         return trimesh.load(self.export_path("chamber.stl"))
 
 
-def run_builder(params_path: str, out_dir: str, name: str) -> BuildResult:
-    """Run buildChamber.py exactly as the API does: python <script> <params> <out>."""
+def run_builder(params_path: str, out_dir: str, name: str, step: bool = False) -> BuildResult:
+    """Run buildChamber.py exactly as the API does: python <script> <params> <out>
+    (plus --step, the on-demand guide-vane STEP mode)."""
+    argv = [sys.executable, SCRIPT, params_path, out_dir]
+    if step:
+        argv.append("--step")
     proc = subprocess.run(
-        [sys.executable, SCRIPT, params_path, out_dir],
+        argv,
         capture_output=True,
         text=True,
         timeout=BUILD_TIMEOUT_S,
@@ -102,8 +106,10 @@ def build(tmp_path_factory):
     """Build a named params fixture (params/<name>.json) once per session."""
     cache: dict[str, BuildResult] = {}
 
-    def _build(name: str, params_override: dict | None = None) -> BuildResult:
-        key = name if params_override is None else f"{name}:{json.dumps(params_override, sort_keys=True)}"
+    def _build(name: str, params_override: dict | None = None, step: bool = False) -> BuildResult:
+        key = f"{name}:step={step}"
+        if params_override is not None:
+            key += f":{json.dumps(params_override, sort_keys=True)}"
         if key in cache:
             return cache[key]
         params_path = os.path.join(PARAMS_DIR, f"{name}.json")
@@ -115,7 +121,7 @@ def build(tmp_path_factory):
             params_path = os.path.join(out_dir, "params.json")
             with open(params_path, "w") as fh:
                 json.dump(params, fh)
-        cache[key] = run_builder(params_path, out_dir, name)
+        cache[key] = run_builder(params_path, out_dir, name, step=step)
         return cache[key]
 
     return _build

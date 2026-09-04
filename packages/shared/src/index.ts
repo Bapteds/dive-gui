@@ -2238,6 +2238,14 @@ export interface ChamberRelation {
   terms?: readonly { key: ChamberOutputKey; coeff: number }[];
   /** 'combination': additive constant (default 0). */
   constant?: number;
+  /**
+   * 'combination' only: the relation is a fitted formula, not a true identity
+   * (e.g. LE = 255.16 + 3.4954 × HLE) — its result stays an empirical estimate,
+   * so it is snapped to the CHAMBER_GRID_MM grid and never inherits a partner's
+   * user-driven flag. Identities (= LF1, = LEB + LEOW, …) leave this unset and
+   * propagate a user-driven partner's value verbatim.
+   */
+  empirical?: boolean;
 }
 
 /**
@@ -2317,7 +2325,7 @@ export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
     coeffs: { a: 221.4522145, b: 1.498949106, c: -9.02505593, d: 14.40321366 },
     relation: { kind: 'combination', defaultOn: true, label: '= f(HLE)',
       description: 'LE = 255.16 + 3.4954 × HLE.',
-      constant: 255.16, terms: [{ key: 'hMiddle', coeff: 3.4954 }] } },
+      constant: 255.16, terms: [{ key: 'hMiddle', coeff: 3.4954 }], empirical: true } },
   // P10: hMiddle. No relation.
   { key: 'hMiddle', label: 'HLE', form: 'linear', cvError: 5.8, confidence: 'High',
     coeffs: { a: 17.17464869, b: 0.435873881, c: -6.126007422, d: 2.320487817 } },
@@ -2357,6 +2365,22 @@ export const CHAMBER_RELATIONS: readonly ChamberRelationInfo[] = CHAMBER_OUTPUT_
   defaultOn: s.relation!.defaultOn,
 }));
 
+/** Manufacturing grid (mm): empirically found dimensions snap to multiples of this. */
+export const CHAMBER_GRID_MM = 50;
+
+/**
+ * Upper bound (mm) for any user-entered chamber dimension — constraints and
+ * geometry overrides. 100 m is far above any real chamber but stops absurd
+ * values from burning a CPU core for the full build timeout. Enforced by the
+ * API schema, the web form schema, and the constraint cells.
+ */
+export const CHAMBER_DIMENSION_MAX_MM = 100_000;
+
+/** Snap an empirical estimate (mm) to the nearest manufacturing-grid multiple. */
+export function snapToChamberGrid(valueMm: number): number {
+  return Math.round(valueMm / CHAMBER_GRID_MM) * CHAMBER_GRID_MM;
+}
+
 /** An optional per-output override: pin an Exact value, or clamp to Min / Max. */
 export interface ChamberConstraint {
   min?: number;
@@ -2368,8 +2392,9 @@ export interface ChamberConstraint {
  * The cylinder-stack design options:
  *  - 'stepped': three solid coaxial cylinders (first/middle/last) - the default.
  *  - 'hollow' : first/middle solid, the LAST cylinder an open-top hollow shell
- *    (walls carved out) of a hand-set length, plus a central cylinder (Ø 0.75*X1,
- *    height 0.75*P12) rising from the middle with an oval dome (20% of its height).
+ *    (walls carved out) of a hand-set length, plus a central generator cylinder
+ *    (dims from the Gen Dim v3 model — see computeChamberGeneratorDims) rising
+ *    from the middle with an oval dome on top.
  */
 export const CHAMBER_VARIANTS = ['stepped', 'hollow'] as const;
 export type ChamberVariant = (typeof CHAMBER_VARIANTS)[number];
@@ -2377,22 +2402,113 @@ export type ChamberVariant = (typeof CHAMBER_VARIANTS)[number];
 /** Default wall thickness (mm) of the hollow last cylinder in the 'hollow' variant. */
 export const CHAMBER_WALL_THICKNESS_MM = 50;
 
-// Fixed geometry ratios that derive secondary dimensions from the model outputs.
-// Single source of truth for the derivation used when a manual override is absent:
-// consumed by the API (resolveGeometryParams) and mirrored as the placeholder
-// "auto" hints in the web form. The Python builder keeps its own copies of the two
-// diameter ratios (it cannot import TS) — keep the values here in sync with it.
+// Fixed geometry ratios that derive the two secondary DIAMETERS from the model
+// outputs when a manual override is absent: consumed by the API
+// (resolveGeometryParams) and mirrored as the placeholder "auto" hints in the
+// web form. The Python builder keeps its own copies (it cannot import TS) —
+// keep the values here in sync with it. The hollow generator/dome dims are NOT
+// ratios any more — they come from computeChamberGeneratorDims below.
 
 /** Runner-case (first cylinder) Ø = this × D_last (from the original Part.stl). */
 export const CHAMBER_D_FIRST_OVER_LAST = 1.14703;
 /** Guide-vanes / middle-cylinder Ø = this × D_last (both variants). */
 export const CHAMBER_D_MIDDLE_OVER_LAST = 0.8;
-/** Generator (central cylinder) Ø = this × X1 (hollow variant). */
-export const CHAMBER_CENTRAL_DIAMETER_OVER_X1 = 0.75;
-/** Generator (central cylinder) height = this × its own diameter (hollow variant). */
-export const CHAMBER_CENTRAL_HEIGHT_OVER_DIAMETER = 1.33;
-/** Dome height = this × the central cylinder height (hollow variant). */
-export const CHAMBER_DOME_HEIGHT_OVER_CENTRAL_HEIGHT = 0.2;
+
+// ---------------------------------------------------------------------------
+// Generator dimensions (Gen Dim v3): the hollow variant's central cylinder +
+// dome, fitted on historical builds (source: documents/Gen Dim v3 Only
+// Calculator (standalone).xlsx). Chain: X1,X2,X3 -> X4 -> frame R (range
+// rules) ; R,X1,X3 -> length code L ; R -> Ø (catalog) ; Ø,L -> height ;
+// Ø -> dome. All LOO cross-validated: R rules ~70-77% correct, L typically
+// within 1-2 catalog steps, height R² 0.93, dome R² 0.71.
+// ---------------------------------------------------------------------------
+
+/**
+ * Catalog generator diameter (mm) per frame code — exactly one Ø per frame.
+ * Only 26/46/48/62/115 are reachable through the range rules; the rare frames
+ * (36/38/45/77) are listed for completeness. (R=62 also shipped with 1272 and
+ * R=48 with 1026 historically — typing that Ø re-bases height/dome the same.)
+ */
+export const CHAMBER_GENERATOR_FRAME_DIAMETERS_MM: Readonly<Record<number, number>> = {
+  26: 572,
+  36: 745,
+  38: 753,
+  45: 976,
+  46: 933,
+  48: 986,
+  62: 1242,
+  77: 1545,
+  115: 2225,
+};
+
+/** Validation ceiling for a manual X4 (auto X4 tops out ≈ 3 026 on legal X2/X3;
+ * anything above 1 560 already maps to the largest frame). */
+export const CHAMBER_X4_MAX = 100_000;
+
+/** The Gen Dim v3 evaluation: hint values (`auto`) and build values (`resolved`). */
+export interface ChamberGeneratorDims {
+  /** 0.9 · 9.81 · X2 · X3 — the blank-X4-field hint. */
+  x4Auto: number;
+  /** The manual x4 when given, else x4Auto — what the frame rules consumed. */
+  x4Used: number;
+  /** Suggested frame code (26/46/48/62/115 via the range rules). */
+  frame: number;
+  /** Catalog length code L (rounded to 5, clamped 30..215). */
+  lengthCode: number;
+  /**
+   * What a BLANK box would get, given the OTHER boxes' current state: the
+   * height/dome autos use the RESOLVED Ø (a typed Ø cascades), while the Ø
+   * auto is always the catalog value. These are the web form's hints.
+   */
+  auto: { centralDiameter: number; centralHeight: number; domeHeight: number };
+  /** override ?? auto — the values the build consumes (mm). */
+  resolved: { centralDiameter: number; centralHeight: number; domeHeight: number };
+}
+
+/**
+ * Evaluate the Gen Dim v3 empirical generator model (hollow variant). Pure and
+ * range-agnostic: callers validate x1/x2/x3 themselves. A typed centralDiameter
+ * re-bases the height/dome autos (its cascade); a typed centralHeight does NOT
+ * move the dome (the dome follows the Ø only); x4 steers the frame suggestion.
+ */
+export function computeChamberGeneratorDims(input: {
+  x1: number;
+  x2: number;
+  x3: number;
+  x4?: number;
+  centralDiameter?: number;
+  centralHeight?: number;
+  domeHeight?: number;
+}): ChamberGeneratorDims {
+  const { x1, x3 } = input;
+  const x4Auto = 0.9 * 9.81 * input.x2 * input.x3;
+  const x4Used = input.x4 ?? x4Auto;
+  const frame =
+    x4Used > 1560 ? 115 : x4Used <= 175 ? (x1 <= 940 ? 26 : 46) : x1 <= 683 ? 48 : 62;
+  // Round to the catalog step of 5 FIRST, then clamp to the catalog span.
+  const lengthCode = Math.max(
+    30,
+    Math.min(215, Math.round((132.21 - 0.8294 * frame - 0.0825 * x1 + 13.861 * x3) / 5) * 5),
+  );
+  const centralDiameterAuto = CHAMBER_GENERATOR_FRAME_DIAMETERS_MM[frame];
+  const centralDiameter = input.centralDiameter ?? centralDiameterAuto;
+  const centralHeightAuto = 71.258 + 0.45856 * centralDiameter + 6.2368 * lengthCode;
+  const centralHeight = input.centralHeight ?? centralHeightAuto;
+  const domeHeightAuto = 79.609 + 0.21315 * centralDiameter;
+  const domeHeight = input.domeHeight ?? domeHeightAuto;
+  return {
+    x4Auto,
+    x4Used,
+    frame,
+    lengthCode,
+    auto: {
+      centralDiameter: centralDiameterAuto,
+      centralHeight: centralHeightAuto,
+      domeHeight: domeHeightAuto,
+    },
+    resolved: { centralDiameter, centralHeight, domeHeight },
+  };
+}
 
 /**
  * The chamber build request: the three empirical inputs, optional per-output
@@ -2403,6 +2519,14 @@ export interface ChamberInput {
   x1: number;
   x2: number;
   x3: number;
+  /**
+   * Optional X4 (≈ power) steering the Gen Dim generator model. Omitted =>
+   * 0.9 · 9.81 · X2 · X3. Feeds the frame suggestion behind the auto generator
+   * Ø / height / dome; a typed dimension still wins verbatim. Hollow variant
+   * only (accepted but unused otherwise — it never reaches the builder, so it
+   * cannot change a cache key by itself). Geometry-only.
+   */
+  x4?: number;
   constraints?: Partial<Record<ChamberOutputKey, ChamberConstraint>>;
   /**
    * Master switch for ALL structural relations (a hard override). When false,
@@ -2498,21 +2622,52 @@ export interface ChamberInput {
   dMiddle?: number;
   /**
    * Manual override for the GENERATOR (central cylinder) diameter, in mm. Omitted =>
-   * CHAMBER_CENTRAL_DIAMETER_OVER_X1 × X1. Hollow variant only. Geometry-only.
+   * the Gen Dim catalog Ø for the suggested frame (computeChamberGeneratorDims).
+   * A typed value re-bases the height/dome autos. Hollow variant only. Geometry-only.
    */
   centralDiameter?: number;
   /**
    * Manual override for the GENERATOR (central cylinder) height, in mm. Omitted =>
-   * CHAMBER_CENTRAL_HEIGHT_OVER_DIAMETER × the (resolved) central diameter. Hollow
-   * variant only. Geometry-only.
+   * the Gen Dim fit 71.258 + 0.45856·Ø(resolved) + 6.2368·L. Hollow variant only.
+   * Geometry-only.
    */
   centralHeight?: number;
   /**
-   * Manual override for the DOME height, in mm. Omitted =>
-   * CHAMBER_DOME_HEIGHT_OVER_CENTRAL_HEIGHT × the (resolved) central height. Hollow
-   * variant only. Geometry-only.
+   * Manual override for the DOME height, in mm. Omitted => the Gen Dim fit
+   * 79.609 + 0.21315·Ø(resolved). Hollow variant only. Geometry-only.
    */
   domeHeight?: number;
+  /**
+   * Simplify Generator: the central cylinder becomes a strict cylinder pinned
+   * THROUGH the box top (the stepped variant's mechanism) and no dome is
+   * built — centralHeight/domeHeight are ignored while this is on. Hollow
+   * variant only. Geometry-only. Default false.
+   */
+  simplifyGenerator?: boolean;
+}
+
+/** Longest allowed saved-chamber-build name (trimmed). */
+export const CHAMBER_SAVE_NAME_MAX = 80;
+
+/** Attribution shown on a saved chamber build (its author). */
+export interface ChamberSaveOwner {
+  id: string;
+  fullName: string;
+}
+
+/**
+ * A named, team-shared saved chamber build: the exact `POST /chamber/build`
+ * body (`ChamberInput`) under a unique name. Everyone can list and load every
+ * save; only the author (or a super-admin) may overwrite, rename, or delete
+ * one. Saving is always optional — building never requires a save.
+ */
+export interface ChamberSaveSummary {
+  id: string;
+  name: string;
+  snapshot: ChamberInput;
+  owner: ChamberSaveOwner;
+  createdAt: string;
+  updatedAt: string;
 }
 
 /** What the FINAL clamp did to a model value, mirroring the calculator. A value
@@ -2533,7 +2688,10 @@ export interface ChamberOutput {
   form: ChamberForm;
   /** Raw regression value (mm). */
   model: number;
-  /** Value after the Min / Max / Exact override (mm) — what the builder uses. */
+  /**
+   * Value the builder uses (mm): the model snapped to the CHAMBER_GRID_MM grid
+   * (unless user-driven, see `userDriven`), then Min / Max / Exact applied.
+   */
   final: number;
   status: ChamberStatus;
   /** Present when status is 'from relation': the relation label, e.g. '= LEB + LEOW'. */
@@ -2545,6 +2703,13 @@ export interface ChamberOutput {
    * partner had a measured Exact value and the relation was on).
    */
   refined: boolean;
+  /**
+   * True when the FINAL is the user's own number rather than a snapped estimate:
+   * a direct Exact, a bitten Min/Max, or a true-identity relation with a
+   * user-driven partner (whose value propagates verbatim). When false the final
+   * sits on the CHAMBER_GRID_MM grid.
+   */
+  userDriven: boolean;
   /**
    * True when this output cannot influence the built geometry with the current
    * settings. Only LEOW (hLast) is ever flagged: the builder never consumes it
@@ -2600,7 +2765,10 @@ function resolveChamberFinal(
 
 /**
  * Compute the twelve outputs for a set of inputs: the raw model value and the
- * FINAL after the optional Min / Max / Exact override, with a Status. This is
+ * FINAL after grid-snapping and the optional Min / Max / Exact override, with a
+ * Status. Empirical estimates (fits, refine fits, and fitted-formula relations)
+ * snap to the nearest CHAMBER_GRID_MM; user-entered values — an Exact, a bitten
+ * Min/Max, or an identity chain fed by one — pass through verbatim. This is
  * the one place the model lives; the Python builder receives the resolved FINAL
  * values and does no model math.
  */
@@ -2619,9 +2787,20 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
     baseStatus: ChamberStatus,
     refined: boolean,
     relationLabel?: string,
+    inheritsUserDriven = false,
   ) => {
     const con = constraints?.[spec.key] ?? {};
-    const { final, status } = resolveChamberFinal(model, con, baseStatus);
+    // An empirical estimate snaps to the manufacturing grid; a true identity
+    // driven by a user-entered partner propagates that value verbatim. The
+    // user's Min/Max then clamp the snapped value (a bitten clamp yields the
+    // user's own number again).
+    const snapped = inheritsUserDriven ? model : snapToChamberGrid(model);
+    const { final, status } = resolveChamberFinal(snapped, con, baseStatus);
+    const userDriven =
+      inheritsUserDriven ||
+      status === 'set exact' ||
+      status === 'capped at max' ||
+      status === 'raised to min';
     byKey.set(spec.key, {
       key: spec.key,
       label: spec.label,
@@ -2633,6 +2812,7 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
       cvError: spec.cvError,
       confidence: spec.confidence,
       refined,
+      userDriven,
     });
   };
 
@@ -2667,7 +2847,10 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
       if (!rel.terms!.every((t) => byKey.has(t.key))) continue;
       const model =
         (rel.constant ?? 0) + rel.terms!.reduce((sum, t) => sum + t.coeff * byKey.get(t.key)!.final, 0);
-      setOutput(spec, model, 'from relation', false, rel.label);
+      // A true identity over a user-driven partner keeps that value verbatim;
+      // a fitted formula (rel.empirical, e.g. LE = f(HLE)) always re-snaps.
+      const inherits = !rel.empirical && rel.terms!.some((t) => byKey.get(t.key)!.userDriven);
+      setOutput(spec, model, 'from relation', false, rel.label, inherits);
       progressed = true;
     }
   }
@@ -2681,6 +2864,18 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
   if (!heightReadsLeow) byKey.get('hLast')!.noEffect = true;
 
   return CHAMBER_OUTPUT_KEYS.map((k) => byKey.get(k)!);
+}
+
+/**
+ * The outputs whose FINAL makes the build physically impossible: non-positive
+ * dimensions. `noEffect` outputs are excluded — a LEOW the build never reads
+ * must not block it. The fits CAN go non-positive on legal X1/X2/X3 (e.g.
+ * H Kammer's own linear fit at x1=700, x2=1.8, x3=23 with the relations
+ * master off), so the API refuses these before building and the Parameters
+ * table flags them live.
+ */
+export function nonPositiveChamberFinals(outputs: ChamberOutput[]): ChamberOutput[] {
+  return outputs.filter((o) => o.final <= 0 && !o.noEffect);
 }
 
 /**

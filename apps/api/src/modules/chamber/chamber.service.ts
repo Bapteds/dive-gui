@@ -13,23 +13,25 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
-  CHAMBER_CENTRAL_DIAMETER_OVER_X1,
-  CHAMBER_CENTRAL_HEIGHT_OVER_DIAMETER,
-  CHAMBER_DOME_HEIGHT_OVER_CENTRAL_HEIGHT,
   CHAMBER_OUTPUT_KEYS,
   CHAMBER_WALL_THICKNESS_MM,
+  computeChamberGeneratorDims,
   computeChamberOutputs,
+  nonPositiveChamberFinals,
   type ChamberInput,
   type ChamberOutput,
+  type ChamberOutputKey,
   type MeshManifest,
 } from '@dive/shared';
 import { env } from '../../config/env';
 import { AppError } from '../../lib/AppError';
 import { runCommand, type CommandResult } from '../../lib/commandRunner';
 import {
+  CHAMBER_EXPORT_FILES,
   chamberGlbExists,
   chamberHash,
   chamberPaths,
+  readChamberBuildMeta,
   readChamberEdges,
   readChamberExport,
   readChamberGlb,
@@ -43,12 +45,41 @@ import {
 /** Sheet/model values are millimetres; the builder works in metres. */
 const MM_TO_M = 1 / 1000;
 
+/** In-flight work per build hash (promise-chain mutex); see withChamberLock. */
+const chamberLocks = new Map<string, Promise<void>>();
+
+/**
+ * Serialize builder/mirrorer work per build hash: a build, a --step re-run,
+ * and a mirror generation share one on-disk directory, so they must never run
+ * concurrently for the same hash. Queued callers re-check the disk state when
+ * they get the lock, so a doubled click costs one tool run and the second
+ * caller takes the cache path. In-process only (like the rest of the app's
+ * state); reads stay lock-free — safe because the builder writes every
+ * artifact atomically (tmp + rename, GLB promoted last).
+ */
+async function withChamberLock<T>(hash: string, fn: () => Promise<T>): Promise<T> {
+  const prev = chamberLocks.get(hash) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  chamberLocks.set(hash, tail);
+  void tail.then(() => {
+    if (chamberLocks.get(hash) === tail) chamberLocks.delete(hash);
+  });
+  return run;
+}
+
 /** The result of a build request: the cache key + the twelve computed outputs
- * + any geometry clamp warnings the builder emitted (persisted per build). */
+ * + any geometry clamp warnings the builder emitted (persisted per build)
+ * + whether the STEP export carries the real guide vanes (null = not a
+ * guide-vane build) — the gate for the mirrored-STEP download option. */
 export interface ChamberBuildResult {
   hash: string;
   outputs: ChamberOutput[];
   warnings: string[];
+  stepHasVanes: boolean | null;
 }
 
 /**
@@ -74,6 +105,13 @@ function buildChamberScript(): string {
   // scripts/ is not compiled, so three levels up from src/modules/chamber (or
   // dist/modules/chamber) reaches apps/api/scripts from source and compiled output.
   return path.resolve(__dirname, '../../../scripts/buildChamber.py');
+}
+
+/** Resolve the STEP mirrorer script (configured path, else the bundled default). */
+function mirrorStepScript(): string {
+  const configured = env.MIRROR_STEP_SCRIPT.trim();
+  if (configured) return configured;
+  return path.resolve(__dirname, '../../../scripts/mirrorStep.py');
 }
 
 /** Does an absolute path exist on disk? */
@@ -114,7 +152,10 @@ function resolveGeometryParams(
   outputs: ChamberOutput[],
 ): Record<string, number | string | boolean> {
   const widthMm = outputFinal(outputs, 'width');
-  const lengthMm = input.lengthOverride ?? 2 * widthMm; // default: length = 2 x width
+  // Default: length = 2 x width — a true identity, so it inherits width's grid
+  // snap (an empirical width is already on the 50 mm grid) or propagates a
+  // user-driven width verbatim. A lengthOverride is the user's number as-is.
+  const lengthMm = input.lengthOverride ?? 2 * widthMm;
   const variant = input.variant ?? 'stepped';
 
   const params: Record<string, number | string | boolean> = { length: lengthMm * MM_TO_M, variant };
@@ -157,20 +198,31 @@ function resolveGeometryParams(
 
   if (variant === 'hollow') {
     const wallMm = input.wallThickness ?? CHAMBER_WALL_THICKNESS_MM;
-    // Generator (central cylinder) + dome dims: each falls back to its fixed ratio
-    // when no manual override is given, and the chain uses the RESOLVED value above
-    // it (override or default) — so overriding only the diameter still auto-derives
-    // a matching height, and only the height still auto-derives a matching dome.
-    const centralDiameterMm = input.centralDiameter ?? CHAMBER_CENTRAL_DIAMETER_OVER_X1 * input.x1;
-    const centralHeightMm =
-      input.centralHeight ?? CHAMBER_CENTRAL_HEIGHT_OVER_DIAMETER * centralDiameterMm;
-    const domeHeightMm =
-      input.domeHeight ?? CHAMBER_DOME_HEIGHT_OVER_CENTRAL_HEIGHT * centralHeightMm;
+    // Generator (central cylinder) + dome dims from the empirical Gen Dim v3
+    // model (X4 -> frame -> catalog Ø; Ø+L -> height; Ø -> dome). A manual
+    // override wins verbatim, and an overridden Ø re-bases the height/dome
+    // autos (the model's cascade). Only the RESOLVED mm values go to the
+    // builder params (hence into the cache key) — x4 itself never does.
+    const gen = computeChamberGeneratorDims({
+      x1: input.x1,
+      x2: input.x2,
+      x3: input.x3,
+      x4: input.x4,
+      centralDiameter: input.centralDiameter,
+      centralHeight: input.centralHeight,
+      domeHeight: input.domeHeight,
+    });
     params.wallThickness = wallMm * MM_TO_M;
     params.hollowLength = (input.hollowLength ?? 0) * MM_TO_M;
-    params.centralDiameter = centralDiameterMm * MM_TO_M;
-    params.centralHeight = centralHeightMm * MM_TO_M;
-    params.domeHeight = domeHeightMm * MM_TO_M;
+    params.centralDiameter = gen.resolved.centralDiameter * MM_TO_M;
+    // Simplify Generator: the BUILDER pins the central cylinder through the
+    // box top (stepped-style, no dome) — the heights are OMITTED so hidden
+    // overrides cannot re-key the cache; the flag itself is part of the key.
+    params.simplifyGenerator = input.simplifyGenerator ?? false;
+    if (!params.simplifyGenerator) {
+      params.centralHeight = gen.resolved.centralHeight * MM_TO_M;
+      params.domeHeight = gen.resolved.domeHeight * MM_TO_M;
+    }
   }
   return params;
 }
@@ -185,46 +237,101 @@ function resolveGeometryParams(
  */
 export async function buildChamber(input: ChamberInput): Promise<ChamberBuildResult> {
   const outputs = computeChamberOutputs(input);
+
+  // The fits can go non-positive on legal inputs (esp. with relations off) —
+  // refuse before hashing/building instead of handing CadQuery a negative
+  // dimension. Chamfer setbacks are exempt while the chamfer is disabled (the
+  // build does not consume them); LT/B1 always count (they place the axis).
+  const chamferOnly: ChamberOutputKey[] = [
+    'chamferLength1',
+    'chamferWidth1',
+    'chamferLength2',
+    'chamferWidth2',
+  ];
+  const nonPositive = nonPositiveChamberFinals(outputs).filter(
+    (o) => input.chamferEnabled !== false || !chamferOnly.includes(o.key),
+  );
+  if (nonPositive.length) {
+    const list = nonPositive.map((o) => `${o.label} = ${Math.round(o.final)} mm`).join(', ');
+    throw new AppError(
+      422,
+      'VALIDATION_ERROR',
+      `Cannot build: ${list} — every dimension must be positive. Adjust Runner Ø / Head / Q_max, the structural relations, or the Min/Max/Exact constraints.`,
+    );
+  }
+
+  // An inverted range is a contradiction, not an input: building on the
+  // silently-ignored model value hid the mistake (and it survived into saves).
+  const inverted = outputs.filter((o) => o.status === '! min>max');
+  if (inverted.length) {
+    const list = inverted
+      .map((o) => {
+        const con = input.constraints?.[o.key];
+        return `${o.label}: Min ${con?.min ?? '?'} > Max ${con?.max ?? '?'}`;
+      })
+      .join(', ');
+    throw new AppError(
+      422,
+      'VALIDATION_ERROR',
+      `Cannot build: inverted constraint range on ${list}. Fix or clear those Min/Max values.`,
+    );
+  }
+
   const params = resolveGeometryParams(input, outputs);
   const hash = chamberHash(params);
 
-  // A cached build reports the warnings persisted at build time.
-  if (await chamberGlbExists(hash)) {
-    return { hash, outputs, warnings: await readChamberWarnings(hash) };
-  }
+  // The cache check runs INSIDE the per-hash lock: a second identical build
+  // arriving while the first is running waits, then takes the cache path —
+  // two builders can never write the same directory concurrently.
+  return withChamberLock(hash, async () => {
+    // A cached build reports the warnings + STEP meta persisted at build time.
+    if (await chamberGlbExists(hash)) {
+      return {
+        hash,
+        outputs,
+        warnings: await readChamberWarnings(hash),
+        stepHasVanes: (await readChamberBuildMeta(hash)).stepHasVanes,
+      };
+    }
 
-  const script = buildChamberScript();
-  if (!(await pathExists(script))) {
-    throw new AppError(
-      500,
-      'SCRIPT_MISSING',
-      `Chamber builder not found at ${script}. Set BUILD_CHAMBER_SCRIPT to its absolute path.`,
-    );
-  }
-  const paths = chamberPaths(hash);
-  await writeChamberParams(hash, params);
+    const script = buildChamberScript();
+    if (!(await pathExists(script))) {
+      throw new AppError(
+        500,
+        'SCRIPT_MISSING',
+        `Chamber builder not found at ${script}. Set BUILD_CHAMBER_SCRIPT to its absolute path.`,
+      );
+    }
+    const paths = chamberPaths(hash);
+    await writeChamberParams(hash, params);
 
-  const result = await runCommand({
-    command: env.CHAMBER_PYTHON_BIN,
-    args: [script, paths.params, paths.dir],
-    cwd: paths.dir,
-    env: process.env,
-    timeoutMs: env.CHAMBER_BUILD_TIMEOUT_MS,
+    const result = await runCommand({
+      command: env.CHAMBER_PYTHON_BIN,
+      args: [script, paths.params, paths.dir],
+      cwd: paths.dir,
+      env: process.env,
+      timeoutMs: env.CHAMBER_BUILD_TIMEOUT_MS,
+    });
+    if (
+      result.spawnError ||
+      result.timedOut ||
+      result.exitCode !== 0 ||
+      !(await pathExists(paths.glb))
+    ) {
+      throw new AppError(502, 'CHAMBER_BUILD_FAILED', summarizeFailure(result));
+    }
+
+    // Surface the builder's clamp/fallback warnings and persist them alongside
+    // the build so cache hits keep reporting them.
+    const warnings = extractBuilderWarnings(result.stderr, result.stdout);
+    await writeChamberWarnings(hash, warnings);
+    return {
+      hash,
+      outputs,
+      warnings,
+      stepHasVanes: (await readChamberBuildMeta(hash)).stepHasVanes,
+    };
   });
-  if (
-    result.spawnError ||
-    result.timedOut ||
-    result.exitCode !== 0 ||
-    !(await pathExists(paths.glb))
-  ) {
-    throw new AppError(502, 'CHAMBER_BUILD_FAILED', summarizeFailure(result));
-  }
-
-  // Surface the builder's clamp/fallback warnings and persist them alongside
-  // the build so cache hits keep reporting them.
-  const warnings = extractBuilderWarnings(result.stderr, result.stdout);
-  await writeChamberWarnings(hash, warnings);
-  return { hash, outputs, warnings };
 }
 
 /** Return a build's patch manifest. @throws 409 CHAMBER_NOT_BUILT when absent. */
@@ -250,9 +357,124 @@ export async function getChamberEdges(hash: string): Promise<Buffer | null> {
   return readChamberEdges(hash);
 }
 
-/** Return one export artifact's bytes. @throws 404 when absent. */
+/**
+ * Generate a build's chamber.step by re-running the builder with --step.
+ * Guide-vane builds defer the STEP (the OCC blade carve + verification gate is
+ * ~2/3 of the build), so the first STEP download pays roughly one build here;
+ * the file is then cached with the build. Non-vane builds write their STEP at
+ * build time and never reach this. The original build's persisted warnings are
+ * not touched.
+ *
+ * @throws 409 CHAMBER_NOT_BUILT when the build itself is absent.
+ * @throws 500 SCRIPT_MISSING / 502 CHAMBER_BUILD_FAILED on tooling failures.
+ */
+async function generateStep(hash: string): Promise<void> {
+  if (!(await chamberGlbExists(hash))) {
+    throw new AppError(409, 'CHAMBER_NOT_BUILT', 'This chamber has not been built yet.');
+  }
+  const script = buildChamberScript();
+  if (!(await pathExists(script))) {
+    throw new AppError(
+      500,
+      'SCRIPT_MISSING',
+      `Chamber builder not found at ${script}. Set BUILD_CHAMBER_SCRIPT to its absolute path.`,
+    );
+  }
+  const paths = chamberPaths(hash);
+  const result = await runCommand({
+    command: env.CHAMBER_PYTHON_BIN,
+    args: [script, paths.params, paths.dir, '--step'],
+    cwd: paths.dir,
+    env: process.env,
+    timeoutMs: env.CHAMBER_BUILD_TIMEOUT_MS,
+  });
+  const stepPath = path.join(paths.exportsDir, CHAMBER_EXPORT_FILES.step);
+  if (
+    result.spawnError ||
+    result.timedOut ||
+    result.exitCode !== 0 ||
+    !(await pathExists(stepPath))
+  ) {
+    throw new AppError(502, 'CHAMBER_BUILD_FAILED', summarizeFailure(result));
+  }
+
+  // The --step run can surface NEW warnings the original build could not know
+  // (above all "chamber.step falls back to the vane-less solid"). Merge them
+  // into the persisted list — deduped, since the re-run repeats the original
+  // build's warnings too — so cache hits keep reporting the full story.
+  const runWarnings = extractBuilderWarnings(result.stderr, result.stdout);
+  const existing = await readChamberWarnings(hash);
+  const fresh = runWarnings.filter((w) => !existing.includes(w));
+  if (fresh.length) {
+    await writeChamberWarnings(hash, [...existing, ...fresh]);
+  }
+}
+
+/**
+ * Generate the mirrored STEP ("Change rotational direction") for one build by
+ * running mirrorStep.py on its chamber.step — generating THAT first when the
+ * build deferred it. Only allowed when the STEP export carries the real guide
+ * vanes (stepHasVanes true) — the vane-less fallback and non-vane builds
+ * refuse. Callers hold the per-hash lock (getChamberExport), so concurrent
+ * clicks serialize; the script's own mkstemp + rename is defense in depth.
+ *
+ * @throws 409 CHAMBER_NOT_BUILT when the build/meta does not qualify.
+ * @throws 500 SCRIPT_MISSING / 502 CHAMBER_BUILD_FAILED on tooling failures.
+ */
+async function generateMirroredStep(hash: string): Promise<void> {
+  const paths = chamberPaths(hash);
+  const src = path.join(paths.exportsDir, CHAMBER_EXPORT_FILES.step);
+  if (!(await pathExists(src))) {
+    await generateStep(hash);
+  }
+  const meta = await readChamberBuildMeta(hash);
+  if (meta.stepHasVanes !== true) {
+    throw new AppError(
+      409,
+      'CHAMBER_NOT_BUILT',
+      'The mirrored STEP is only available when the STEP export carries the guide vanes.',
+    );
+  }
+  const script = mirrorStepScript();
+  if (!(await pathExists(script))) {
+    throw new AppError(
+      500,
+      'SCRIPT_MISSING',
+      `STEP mirrorer not found at ${script}. Set MIRROR_STEP_SCRIPT to its absolute path.`,
+    );
+  }
+  const dst = path.join(paths.exportsDir, CHAMBER_EXPORT_FILES.stepMirrored);
+  const result = await runCommand({
+    command: env.CHAMBER_PYTHON_BIN,
+    args: [script, src, dst],
+    cwd: paths.dir,
+    env: process.env,
+    timeoutMs: env.CHAMBER_BUILD_TIMEOUT_MS,
+  });
+  if (result.spawnError || result.timedOut || result.exitCode !== 0 || !(await pathExists(dst))) {
+    throw new AppError(502, 'CHAMBER_BUILD_FAILED', summarizeFailure(result));
+  }
+}
+
+/**
+ * Return one export artifact's bytes. The guide-vane STEP and the mirrored
+ * STEP are generated on demand at their first download and then served from
+ * disk like every other export.
+ * @throws 404 when absent (or the generation-specific 409/502, see above).
+ */
 export async function getChamberExport(hash: string, kind: ChamberExportKind): Promise<Buffer> {
-  const buf = await readChamberExport(hash, kind);
+  let buf = await readChamberExport(hash, kind);
+  if (!buf && (kind === 'step' || kind === 'stepMirrored')) {
+    buf = await withChamberLock(hash, async () => {
+      // Re-check under the lock: a queued duplicate click finds the file the
+      // first request just generated and skips the tool run entirely.
+      const cached = await readChamberExport(hash, kind);
+      if (cached) return cached;
+      if (kind === 'step') await generateStep(hash);
+      else await generateMirroredStep(hash);
+      return readChamberExport(hash, kind);
+    });
+  }
   if (!buf) {
     throw new AppError(404, 'NOT_FOUND', 'That export was not found for this build.');
   }
