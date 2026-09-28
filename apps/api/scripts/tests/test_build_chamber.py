@@ -167,8 +167,10 @@ def test_simplify_generator_pierces_the_box_top_without_a_dome(build):
     # (2.38 < 2.7) so the flag-off ceiling is solid; the cone stack obviously
     # fits too, so the flag-on build succeeds without touching the fixture.
     z_top_slice = 2.7 / 2 - 0.001  # box spans -height/2..+height/2
+    # centralHeight/domeHeight None: the API omits them in Simplify unless typed.
     simplified = build("hollow-vanes",
-                       params_override={"partScale": 0.7, "simplifyGenerator": True})
+                       params_override={"partScale": 0.7, "simplifyGenerator": True,
+                                        "centralHeight": None, "domeHeight": None})
     assert simplified.exit_code == 0, simplified.stderr
     domed = build("hollow-vanes", params_override={"partScale": 0.7})
     assert domed.exit_code == 0, domed.stderr
@@ -189,12 +191,60 @@ def test_simplify_generator_overflow_names_the_cone_stack(build):
     cone-stack wording, not the generator+dome message."""
     result = build("hollow-vanes", params_override={
         "partScale": 1, "simplifyGenerator": True, "hollowLength": 2.0,
+        "centralHeight": None, "domeHeight": None,
     })
     assert result.exit_code == 1
     assert "KO:" in result.stderr
     assert "hollow cone stack" in result.stderr
     assert "H Kammer only allows" in result.stderr
     assert "generator + dome" not in result.stderr
+
+
+def test_closed_generator_height_closes_the_last_cylinder(build):
+    """A typed generator height (Closed generator) turns the last cylinder into
+    a flat-topped cylinder under the box top: the slice just below the top is
+    one loop (solid ceiling) instead of two (box + generator bore), and the
+    fluid gains the volume above the generator."""
+    z_top_slice = 3.9536807404765995 / 2 - 0.001
+    pinned = build("stepped")
+    closed = build("stepped", params_override={"centralHeight": 1.5})
+    assert closed.exit_code == 0, closed.stderr
+    stl = closed.load_stl()
+    assert stl.is_watertight
+    assert _section_loop_count(pinned.load_stl(), z_top_slice) == 2
+    assert _section_loop_count(stl, z_top_slice) == 1
+    assert stl.volume > pinned.load_stl().volume
+    assert tuple(p["name"] for p in closed.manifest) == STEPPED_PATCHES
+
+
+def test_closed_generator_reaching_the_top_is_pinned(build):
+    """A generator height that reaches the box top builds exactly like a blank
+    one (pinned through the top, no sliver of fluid above it)."""
+    pinned = build("stepped")
+    # H Kammer - LEB of the fixture (its own LEOW): the top lands on the box top.
+    to_top = build("stepped", params_override={"centralHeight": 2.7143476996499993})
+    assert to_top.exit_code == 0, to_top.stderr
+    assert to_top.load_stl().volume == pytest.approx(pinned.load_stl().volume, rel=1e-6)
+
+
+def test_closed_generator_taller_than_the_box_is_refused(build):
+    result = build("stepped", params_override={"centralHeight": 5.0})
+    assert result.exit_code == 1
+    assert "closed generator stack" in result.stderr
+    assert "H Kammer only allows" in result.stderr
+
+
+def test_simplify_generator_with_a_height_is_closed(build):
+    """Simplify Generator + a typed height: no dome, and the generator stops
+    below the box top (solid ceiling) instead of piercing it."""
+    z_top_slice = 2.7 / 2 - 0.001
+    closed = build("hollow-vanes", params_override={
+        "partScale": 0.7, "simplifyGenerator": True, "centralHeight": 1.0,
+        "domeHeight": None})
+    assert closed.exit_code == 0, closed.stderr
+    stl = closed.load_stl()
+    assert stl.is_watertight
+    assert _section_loop_count(stl, z_top_slice) == 1
 
 
 def test_part_wider_than_box_is_refused(build):

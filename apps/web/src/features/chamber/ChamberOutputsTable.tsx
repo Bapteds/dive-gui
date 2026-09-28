@@ -46,6 +46,7 @@ const STATUS_STYLES: Record<ChamberStatus, string> = {
   'raised to min': 'text-accent-strong',
   '! min>max': 'text-danger',
   'from relation': 'text-primary',
+  'raised to fit': 'text-accent-strong',
 };
 
 /** Format a millimetre value for display (1 decimal, tabular). */
@@ -160,14 +161,14 @@ export function ChamberOutputsTable({
                       )}
                       {o.noEffect && (
                         <span
-                          title="Not used by the build: H Kammer no longer reads LEOW (it is set Exact, or the H = LEB + LEOW relation is off), and the geometry itself never consumes LEOW directly."
+                          title="Not used by the build: H Kammer no longer reads LEOW (it is set Exact, raised to fit the parts, or the H = LEB + LEOW relation is off), and the geometry itself never consumes LEOW directly."
                           className="inline-block rounded-sm border border-border bg-bg px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-secondary"
                         >
                           no effect
                           <span className="sr-only">
-                            : not used by the build — H Kammer no longer reads LEOW (it is set
-                            Exact, or the H = LEB + LEOW relation is off), and the geometry never
-                            consumes LEOW directly
+                            : not used by the build. H Kammer no longer reads LEOW (it is set
+                            Exact, raised to fit the parts, or the H = LEB + LEOW relation is off),
+                            and the geometry never consumes LEOW directly
                           </span>
                         </span>
                       )}
@@ -209,7 +210,14 @@ export function ChamberOutputsTable({
                       // refuses it; flag it live, before Generate.
                       <span className="text-xs text-danger">! ≤ 0 mm — not buildable</span>
                     ) : (
-                      <span className={cn('text-xs', STATUS_STYLES[o.status])}>
+                      <span
+                        className={cn('text-xs', STATUS_STYLES[o.status])}
+                        title={
+                          o.status === 'raised to fit'
+                            ? 'Grown to the next 50 mm step that holds the parts (runner case, feet, guide vanes, generator). Set an Exact to keep your own value.'
+                            : undefined
+                        }
+                      >
                         {o.status === 'from relation' ? o.relationLabel : o.status}
                       </span>
                     )}

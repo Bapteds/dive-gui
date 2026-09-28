@@ -213,6 +213,17 @@ describe('computeChamberAutoDims', () => {
     expect(computeChamberAutoDims({ ...V, x4: 2000 }, null).centralDiameter).toBe(2225);
   });
 
+  it('gives the generator height that reaches the chamber top, per unit of Part scale', () => {
+    const top = { heightFinal: 3900, lebFinal: 1200, partScale: 1 };
+    expect(computeChamberAutoDims(V, 2400, top).generatorToTop).toBe(2700);
+    // Scaled part: the typed height is scaled too, so the hint is (H - s.LEB) / s.
+    expect(computeChamberAutoDims(V, 2400, { ...top, partScale: 0.5 }).generatorToTop).toBe(6600);
+    expect(computeChamberAutoDims(V, 2400).generatorToTop).toBeNull();
+    expect(
+      computeChamberAutoDims(V, 2400, { ...top, partScale: Number.NaN }).generatorToTop,
+    ).toBeNull();
+  });
+
   it('returns null generator hints while X1–X3 are not finite', () => {
     const dims = computeChamberAutoDims({ ...V, x1: Number.NaN }, 2400);
     expect(dims.x4).toBeNull();

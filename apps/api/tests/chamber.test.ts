@@ -768,13 +768,20 @@ describe('Chamber Creation', () => {
     // The flag reshapes the geometry => a different cache key.
     expect(simplified.body.hash).not.toBe(domed.body.hash);
 
-    // Hidden heights are ignored while the flag is on => the SAME cache key.
-    const simplifiedHeights = await request(app)
+    // The hidden dome is ignored while the flag is on => the SAME cache key.
+    const simplifiedDome = await request(app)
       .post('/api/v1/chamber/build')
       .set('Authorization', auth)
-      .send({ ...hollow, simplifyGenerator: true, centralHeight: 1200, domeHeight: 250 })
+      .send({ ...hollow, simplifyGenerator: true, domeHeight: 250 })
       .expect(200);
-    expect(simplifiedHeights.body.hash).toBe(simplified.body.hash);
+    expect(simplifiedDome.body.hash).toBe(simplified.body.hash);
+    // A typed generator height closes the simplified generator => a new key.
+    const simplifiedHeight = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...hollow, simplifyGenerator: true, centralHeight: 1200 })
+      .expect(200);
+    expect(simplifiedHeight.body.hash).not.toBe(simplified.body.hash);
 
     // With the flag off a height override still re-keys (existing behavior).
     const domedHeights = await request(app)
@@ -796,6 +803,51 @@ describe('Chamber Creation', () => {
       .send({ ...BUILD, simplifyGenerator: true })
       .expect(200);
     expect(steppedFlag.body.hash).toBe(stepped.body.hash);
+  });
+
+  it('passes a typed Closed generator height to the builder (blank keeps the old key)', async () => {
+    const seen: Record<string, unknown>[] = [];
+    setCommandRunner(async (spec) => {
+      seen.push(JSON.parse(await fs.readFile(spec.args[1], 'utf8')));
+      return successRunner(spec);
+    });
+    const auth = authHeader(await createTestUser());
+
+    const pinned = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(BUILD)
+      .expect(200);
+    expect(seen[0]).not.toHaveProperty('centralHeight');
+
+    const closed = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, centralHeight: 1500 })
+      .expect(200);
+    expect(closed.body.hash).not.toBe(pinned.body.hash);
+    expect(seen[1].centralHeight).toBeCloseTo(1.5, 9);
+  });
+
+  it('builds the chamber grown around its parts and reports the raised outputs', async () => {
+    const seen: Record<string, number>[] = [];
+    setCommandRunner(async (spec) => {
+      seen.push(JSON.parse(await fs.readFile(spec.args[1], 'utf8')));
+      return successRunner(spec);
+    });
+    const auth = authHeader(await createTestUser());
+
+    // Q_max 1: the model's chamber (B Kammer 2900, B1 1550) cannot hold the feet.
+    const res = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, x3: 1 })
+      .expect(200);
+    const width = res.body.outputs.find((o: { key: string }) => o.key === 'width');
+    expect(width).toMatchObject({ final: 3600, status: 'raised to fit' });
+    expect(seen[0].width).toBeCloseTo(3.6, 9);
+    expect(seen[0].distFromSideChamfer1).toBeCloseTo(1.8, 9);
+    expect(seen[0].length).toBeCloseTo(7.2, 9); // auto length = 2 x the raised width
   });
 
   it('resolves blank generator dims from the shared Gen Dim model', async () => {
