@@ -73,7 +73,7 @@ Single source: `CHAMBER_OUTPUT_SPECS` in `packages/shared/src/index.ts` (full-pr
 2. **Pass 1**: outputs without a relation, with the relation off, or with a `refine` relation (which reads the partner's **entered Exact** in `constraints`, not its Final; without a partner Exact, falls back to the base fit, `refined: false`).
 3. **Pass 2**: active `combination` relations, resolved to a fixed point (LEB before H Kammer); they read the partners' **Final**, so an override propagates.
 4. Each value goes through the 50 mm rounding (§3.4) then through Min / Max / Exact (§3.3).
-5. `hLast` (LEOW) gets `noEffect` if the `height` relation is inactive or if `height` has an Exact, AND it is not the generator's model height (it is in Closed generator with a blank Generator height, since 2026-09-28): the builder never reads LEOW directly (the last stepped cylinder is pinned through the ceiling, the With cone variant ignores it).
+5. `hLast` (LEOW) gets `noEffect` if the `height` relation is inactive or if `height` has an Exact: the builder never reads LEOW directly (the last stepped cylinder is pinned through the ceiling, the With cone variant ignores it).
 
 The geometric options (§3.7) **never** influence the 12 outputs. A chamber too small for its parts is **refused** by the builder (§3.8), by design (user decision 2026-09-28).
 
@@ -150,7 +150,6 @@ All of them enter the build hash (unless stated) and never affect the 12 outputs
 - zod schema: X1..X3 out of range, dimensions ≤ 0 or > 100,000, `x4` outside ]0, 100,000], `footAngleDeg` outside [0, 180], `vaneAngleDeg` outside [45, 55], `outletRatio` outside [0.35, 0.50], `partScale` outside ]0, 5], With cone without `hollowLength`;
 - Final ≤ 0 (`nonPositiveChamberFinals`, except `noEffect`; the 4 chamfers LF1/BF1/LF2/BF2 are exempt if `chamferEnabled === false`, LT and B1 always count): message starting with "Cannot build: H Kammer = … mm", which lists each offending dimension and the levers (Runner Ø / Head / Q_max, relations, constraints);
 - Min > Max (§3.3).
-- **H Kammer lower than LEB + the generator height** (since 2026-09-28, `chamberGeneratorHeightRefusal`): Closed generator and With cone + Simplify generator only (the generator runs through the top there, so the builder would accept any H Kammer above the shoulder). Generator height = the typed one, else the model's: LEOW (Closed generator) or the Gen Dim v3 height (Simplify); scaled by Part scale. Message "Cannot build: H Kammer = … mm cannot hold the generator: LEB … + generator height … (model LEOW | Gen Dim model | typed) = … mm". Side effect: in Closed generator, Part scale > 1 is now refused unless H Kammer is raised.
 
 **Builder refusals** (`ValueError`/`RuntimeError` ⇒ `KO:` + exit code 1 ⇒ API 502 `CHAMBER_BUILD_FAILED` with the tail of stderr, shown as is in "Build errors"):
 - base dimensions ≤ 0, `hFirst = LEB − HLE ≤ 0`, B1 outside ]0, width[, LT outside ]0, length[;
