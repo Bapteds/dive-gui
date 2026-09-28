@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
  *
  * A static border-colored block with a slow shimmer sweep on top. Under
  * `prefers-reduced-motion: reduce` the sweep is hidden and the block stays
- * static (DESIGN.md section 6). Skeletons should mirror the final layout shape
+ * static (brain/design/design-system.md section 6). Skeletons should mirror the final layout shape
  * rather than using a centered spinner.
  */
 export type SkeletonProps = React.HTMLAttributes<HTMLDivElement>;

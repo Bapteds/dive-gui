@@ -4,7 +4,7 @@ import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /**
- * Dialog - modal dialog on Radix Dialog (DESIGN.md section 6).
+ * Dialog - modal dialog on Radix Dialog (brain/design/design-system.md section 6).
  *
  * Centered surface with md radius and the large dialog shadow; a tinted scrim
  * fades in; content scales 0.98 -> 1 with a fade. Esc and scrim click close,

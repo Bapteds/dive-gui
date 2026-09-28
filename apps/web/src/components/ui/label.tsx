@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 /**
  * Label - form label built on Radix Label.
  *
- * 14px / 500 weight, sits above its control (DESIGN.md section 6). The disabled
+ * 14px / 500 weight, sits above its control (brain/design/design-system.md section 6). The disabled
  * styling responds to a disabled peer control via `group`/`peer` data attrs.
  */
 const Label = forwardRef<

@@ -8,7 +8,7 @@ import { Input, type InputProps } from './input';
  *
  * Wraps Input and adds a trailing icon button that toggles the input type.
  * The toggle exposes `aria-pressed` and an `aria-label` so screen readers can
- * announce its state (DESIGN.md section 6). The button is not a tab stop trap:
+ * announce its state (brain/design/design-system.md section 6). The button is not a tab stop trap:
  * it sits after the input in DOM order and is keyboard operable.
  */
 export type PasswordInputProps = Omit<InputProps, 'type'>;

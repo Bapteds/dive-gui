@@ -5,7 +5,7 @@ import { useAuth } from '@/features/auth/AuthProvider';
 import { visibleNavItems } from './nav';
 
 /**
- * Sidebar - fixed left navigation (240px) for desktop (DESIGN.md section 5).
+ * Sidebar - fixed left navigation (240px) for desktop (brain/design/design-system.md section 5).
  *
  * Vertical nav with icon + label. The active item gets a primary-tint
  * background, primary text/icon, a 6px primary diamond marker at the left edge,

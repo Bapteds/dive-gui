@@ -8,7 +8,7 @@ import { Label } from './label';
  *
  * Composes a labelled form control with accessible wiring: the label's `htmlFor`
  * targets the control, helper/error text is linked via `aria-describedby`, and
- * the error is announced with `role="alert"` (DESIGN.md section 6). Children read
+ * the error is announced with `role="alert"` (brain/design/design-system.md section 6). Children read
  * the generated ids and invalid state from context via `useFieldControl`.
  */
 interface FieldContextValue {

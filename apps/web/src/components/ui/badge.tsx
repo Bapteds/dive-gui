@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 /**
  * Badge - compact status / role label.
  *
- * 12px / 500 weight, sm radius, 4x8 padding (DESIGN.md section 6). Variants:
+ * 12px / 500 weight, sm radius, 4x8 padding (brain/design/design-system.md section 6). Variants:
  *  - neutral:   page-bg fill, secondary text, hairline border (default / USER role).
  *  - primary:   primary-tint fill + primary text (SUPER_ADMIN role).
  *  - success:   muted success surface + text (status, paired with an icon).

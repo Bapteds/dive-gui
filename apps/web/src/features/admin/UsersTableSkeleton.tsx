@@ -9,7 +9,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 
 /**
- * UsersTableSkeleton - loading placeholder for the roster (DESIGN.md section 6).
+ * UsersTableSkeleton - loading placeholder for the roster (brain/design/design-system.md section 6).
  *
  * Renders the real table chrome (header + container) with shimmer blocks in
  * place of N rows, mirroring the final layout instead of a centered spinner.

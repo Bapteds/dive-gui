@@ -15,7 +15,7 @@ import { DeleteUserDialog } from '@/features/admin/DeleteUserDialog';
 import { DisableUserDialog } from '@/features/admin/DisableUserDialog';
 
 /**
- * AdminPage - account management back office (DESIGN.md section 7.3).
+ * AdminPage - account management back office (brain/design/design-system.md section 7.3).
  *
  * Guarded to super-admins by the router. Orchestrates the roster query and the
  * create / edit / delete dialogs, and renders the four table states: loading

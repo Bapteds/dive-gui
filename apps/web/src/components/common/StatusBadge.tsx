@@ -2,7 +2,7 @@ import { CircleCheck, CircleSlash } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 
 /**
- * StatusBadge - account active / disabled status (DESIGN.md section 6).
+ * StatusBadge - account active / disabled status (brain/design/design-system.md section 6).
  *
  * Pairs an icon with text so the state never relies on color alone:
  *  - active:   muted success surface + "Active".

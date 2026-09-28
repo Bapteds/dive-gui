@@ -3,7 +3,7 @@ import { Diamond } from '@/components/brand/Diamond';
 import type { Role } from '@/lib/api/types';
 
 /**
- * RoleBadge - semantic badge for a user's role (DESIGN.md section 6).
+ * RoleBadge - semantic badge for a user's role (brain/design/design-system.md section 6).
  *
  *  - SUPER_ADMIN: primary-tint badge with a tiny diamond glyph.
  *  - USER:        neutral outline badge.

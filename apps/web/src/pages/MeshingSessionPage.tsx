@@ -143,7 +143,7 @@ export function MeshingSessionPage() {
 
   if (session.isPending) {
     // Skeleton mirroring the loaded layout: back link, header row, then the
-    // surfaces manager + preview panels (DESIGN.md: skeletons, not spinners).
+    // surfaces manager + preview panels (brain/design/design-system.md: skeletons, not spinners).
     return (
       <div className="flex flex-col gap-6" role="status" aria-live="polite">
         <BackLink />

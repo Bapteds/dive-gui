@@ -28,7 +28,7 @@ import { useCreateUser, useUpdateUser } from './useUsers';
 import { userFormSchema } from './schemas';
 
 /**
- * UserFormDialog - unified create / edit account dialog (DESIGN.md section 7.3).
+ * UserFormDialog - unified create / edit account dialog (brain/design/design-system.md section 7.3).
  *
  * Driven by react-hook-form + a zod resolver chosen by `mode`. On create the
  * password is required; on edit it is optional ("leave blank to keep") and the
@@ -148,7 +148,7 @@ export function UserFormDialog({ open, onOpenChange, user }: UserFormDialogProps
     if (first) setFocus(first);
   };
 
-  /** Map a thrown ApiError to the right field error or toast (DESIGN.md section 7.3). */
+  /** Map a thrown ApiError to the right field error or toast (brain/design/design-system.md section 7.3). */
   function handleServerError(error: unknown) {
     if (error instanceof ApiError) {
       switch (error.code) {

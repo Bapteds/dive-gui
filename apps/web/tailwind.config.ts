@@ -80,7 +80,7 @@ const config: Config = {
         sans: 'var(--font-sans)',
       },
       fontSize: {
-        // Fixed product scale: [size, line-height]. See DESIGN.md section 3.
+        // Fixed product scale: [size, line-height]. See brain/design/design-system.md section 3.
         xs: ['0.75rem', { lineHeight: '1rem' }], // 12 / 16
         sm: ['0.875rem', { lineHeight: '1.25rem' }], // 14 / 20
         base: ['1rem', { lineHeight: '1.5rem' }], // 16 / 24
@@ -109,7 +109,7 @@ const config: Config = {
         base: '200ms',
       },
       keyframes: {
-        // Dialog / popover entrance: scale + fade per DESIGN.md.
+        // Dialog / popover entrance: scale + fade per brain/design/design-system.md.
         'overlay-in': {
           from: { opacity: '0' },
           to: { opacity: '1' },

@@ -26,7 +26,7 @@ import { cn } from '@/lib/utils';
 import type { User } from '@/lib/api/types';
 
 /**
- * UsersTable - the account roster table (DESIGN.md sections 6 and 7.3).
+ * UsersTable - the account roster table (brain/design/design-system.md sections 6 and 7.3).
  *
  * Columns: Name, Email, Role, Status, Last login, Created, Actions. Rows
  * separate with hairlines (no zebra), highlight on hover, and use tabular

@@ -1,0 +1,248 @@
+# Codemap: API: Python scripts, assets, geometry tests, fixtures and reference documents
+
+> Scope: `apps/api/scripts/**`, `apps/api/tests/fixtures/**`, `documents/**` · Updated: 2026-09-28
+
+## Overview
+`apps/api/scripts/` groups the "one-shot" Python tools that the Express API launches through `runCommand` (`apps/api/src/lib/commandRunner`): real argv, no shell, one configurable interpreter per dependency family. The folder is not compiled: each TS service resolves the script relative to its own module (`path.resolve(__dirname, '../../../scripts/<name>.py')` or `'../../scripts/...'` from `src/lib`), with a `*_SCRIPT` env variable to override it.
+Four interpreter families coexist and must not share their `site-packages`:
+- `CHAMBER_PYTHON_BIN` (CadQuery + trimesh + manifold3d + shapely + scipy venv): `buildChamber.py`, `mirrorStep.py`;
+- `MESH_PYTHON_BIN` (pyvista, vtk, h5py): `extractPatches.py`, `CgnsInspect.py`, `CgnsMergeTime.py`, `csv_to_boundaryData.py`;
+- `CGNS_PYTHON_BIN` (python3 + `vtk` wheel, never `pvpython`): `CgnsToVtk.py`;
+- `PVBATCH_BIN` (ParaView, under `xvfb-run -a` by default): `FoamToCgns.py`.
+
+Common protocol (inherited from `extractPatches.py`): success = an `OK: ...` line on stdout and exit code 0; failure = a `KO: ...` line on stderr and exit code 1; usage error = usage on stderr and exit code 2. Exceptions to this protocol are flagged file by file. Heavy dependencies are imported INSIDE `main()` after argc validation, so that a usage error stays cheap.
+Main flows: (1) Chamber Creation: `chamber.service.ts` writes a `params.json` in meters then launches `buildChamber.py` (GLB + manifest + edges + exports), then on demand `--step` and `mirrorStep.py`; (2) mesh viewer: `extractPatches.py`; (3) CGNS import/conversion: `CgnsToVtk.py`; (4) CFD-Post export: `FoamToCgns.py` then `CgnsMergeTime.py` then `CgnsInspect.py`; (5) DraftTube inlet profile: `csv_to_boundaryData.py`. The scripts `preprocessVanes.py` and `bakeVaneBladeProfile.py` are offline tools that produced the committed assets; `_test_hub_shroud_math.py` and `_verify_outlet_ratio.py` are manual checks.
+The `pytest` tests in `apps/api/scripts/tests/` run the real OCC kernel (CI: dedicated job, `pip install -r apps/api/scripts/requirements-geometry.txt` then `pytest apps/api/scripts/tests -v`, see `.github/workflows/ci.yml`).
+
+## `apps/api/scripts/assets/guideVanes.json`
+Metadata of the distributor asset (written by `preprocessVanes.py`, read by `_load_vane_meta()` in `buildChamber.py`). Values in meters, asset frame (ring axis at the XY origin, passage bottom at z = 0): `outerDiameter` 2.17003, `pivotRadius` 0.86732 (imposed CAD value), `hubRadius` 0.29548, `height` 0.64565, `bladeBottomZ` 0.09891 (bottom of the blade body at the pivot radius, not the global minimum), `bladeCount` 16, `bladeAngleStepDeg` 22.5, `outletInnerR` 0.29573, `outletOuterR` 0.65500.
+
+## `apps/api/scripts/assets/guideVanes_blade.stl`
+Binary STL (~380 KB): one representative blade, recentered on the ring axis, base opening 50°. Loaded by `make_vane_patches()`; its mid-height section is used as the target by `bakeVaneBladeProfile.py`.
+
+## `apps/api/scripts/assets/guideVanes_blade_profile.json`
+Clean vane profile (160 `airfoil` points [x, y] in meters, asset frame) extracted from the SolidWorks STEP by `bakeVaneBladeProfile.py`. Side fields: `sectionZAsset` 0.79248, `frame`, `provenance` (`GuideVanes50Deg.STEP -> 2D airfoil fit scale=1.00106 maxDevM=0.00155`), `maxDevM` 0.001547, `fitScale` 1.001058. Only `airfoil` is read (`_load_vane_blade_profile()`, which requires an (N, 2) array with N ≥ 8); it feeds the vaned STEP and the trailing-edge rounding tests. **Pitfall**: `sectionZAsset` is actually the section height in the STEP frame (`step_zc`), not the one of the STL asset; no code reads it.
+
+## `apps/api/scripts/assets/guideVanes_outlet.stl`
+Binary STL (~420 KB): the annular outlet face of the passage (hub to shroud, slightly conical), exported separately from CAD and recentered on its own axis. Loaded by `make_vane_patches()` (remapped by `place_throat`), but in `main()` the final outlet is replaced by a synthesized flat annulus (`_flat_annulus`) at the box floor.
+
+## `apps/api/scripts/assets/guideVanes_walls.stl`
+Binary STL (~9.7 MB): the passage wall shell (hub + shroud) at full resolution, without the outlet cap. Loaded by `make_vane_patches()` and split into hub/shroud by `_split_hub_shroud()`; mainly used by the "fallback" path (outlet parameters missing). The `VANE_HUB_P1..P3` points of the analytic path were measured on it (scripts `_diag_rdp.py` / `_diag_shroudcurve.py` cited in a comment, not tracked by git).
+
+## `apps/api/scripts/tests/conftest.py`
+**Covers**: infrastructure of the real geometry suite (no mocks).
+**Technique**: `HAS_GEOMETRY_ENV` tests the import of `cadquery` and `trimesh`; otherwise `pytest_collection_modifyitems` marks everything as skipped with a pointer to `requirements-geometry.txt` (CI is authoritative). `run_builder(params_path, out_dir, name, step=False)` runs `sys.executable buildChamber.py <params> <out> [--step]` exactly like the API, timeout `BUILD_TIMEOUT_S = 600`. `BuildResult` (dataclass) exposes `exit_code`, `stdout`, `stderr`, `out_dir`, and the accessors `manifest`, `build_meta` (None if `build-meta.json` is missing), `export_path(*parts)`, `load_stl()`. The session fixture `build(name, params_override=None, step=False)` loads `params/<name>.json`, merges the override into a temporary `params.json`, and caches by the key `name:step=...:override` (each build costs tens of seconds).
+**Notable cases**: a build is launched only once per session and per combination.
+
+## `apps/api/scripts/tests/params/hollow-vanes-overrides.json`
+Real parameters (`hollow` variant, `guideVanes: true`, `feetEnabled: false`, `partScale` 1, overrides `dFirst` 2.92 / `dMiddle` 2.23126, `outletOuterD` 1.68, `outletRatio` 0.45, `simplifyGenerator: false`). Reproduces the blade-skin / hub vote tie that "speckled" the vanes.
+
+## `apps/api/scripts/tests/params/hollow-vanes.json`
+Vaned `hollow` variant, feet enabled, `partScale` 0.7944 (the maximum that fits in `height` 2.7; at 1 the build is refused), `outletOuterD` 1.68, `outletRatio` 0.45. Basis of the hollow and Simplify Generator refusal tests.
+
+## `apps/api/scripts/tests/params/stepped-feet-off.json`
+Identical to `stepped.json` with `feetEnabled: false` (used for the feet volume delta).
+
+## `apps/api/scripts/tests/params/stepped-vanes.json`
+`stepped` variant with `guideVanes: true`; asymmetric chamfer 2 (`chamferLength2` 0.90435, `chamferWidth2` 0.63466) and `distFromEnd` 2.19593. Also used by the `--step` and mirror tests.
+
+## `apps/api/scripts/tests/params/stepped.json`
+Reference `stepped` configuration (no vanes, feet at 40°, symmetric chamfers 1.29158). Basis of most refusal tests via `params_override`.
+
+## `apps/api/scripts/tests/test_build_chamber.py`
+**Covers**: the guarantees of `buildChamber.py` the API depends on: output contract (last stdout line `OK:`; `KO:` + exit code 1), watertight STL, golden volume (`GOLDEN`, tolerance `VOL_RTOL = 5e-3`), names and order of the manifest patches (`STEPPED_PATCHES`: `inlet, outlet, cylinder_walls, walls`; `VANE_PATCHES`: `inlet, cylinder_walls, walls, hub, shroud, outlet, guide_vanes`), `wall`/`patch` types, contents of `trisurface.zip` (one STL per patch + `domain.stl`), `edges.bin` empty for vaned builds and non-empty otherwise, STEP and `build-meta.json` absent without `--step` for vaned builds, no leftover `*.tmp`.
+**Technique**: `build` fixture from `conftest.py`; module import through `importlib` (`_builder_module()`) to unit-test `_round_blade_te` and `VANE_TE_ROUND_R_FRAC`; in-house geometric fits (`_chord_axis`, `_fit_circle`, `_poly_area`, `_section_loop_count`); `mirrorStep.py` run as a subprocess (`MIRROR_TIMEOUT_S = 600`).
+**Notable cases**:
+- `test_feet_toggle_carves_the_foot_voids`: the feet off / on volume delta equals the golden delta (5 % tolerance).
+- `test_step_export_vane_policy`: `--step` on `stepped-vanes` and `hollow-vanes` yields `{"stepHasVanes": true}` with no fallback message.
+- Refusals locked by message fragments: `H Kammer only allows` + `reduce Part scale to <= 0.79` (hollow at `partScale` 1), `hollow cone stack` (Simplify Generator), `stick out of the box`, `a torque foot reaches`, `chamfer 1 (LF1/BF1) setbacks must be > 0`, `lies inside` + `corner cut`, `guide-vane distributor` + `Guide vanes`, stepped refusal at `partScale` 5.
+- Simplify Generator proven by a cut just below the ceiling: 2 loops (generator passing through) versus 1 (solid ceiling).
+- Trailing-edge rounding: tangent arc of the expected radius, area preserved within 1 %, idempotence, degenerate input returned as is (object identity).
+- `test_vane_skin_stays_on_the_guide_vanes_patch`: no strongly azimuthal face (`> 0.35`) in `hub`/`shroud`, fewer than 1 % horizontal faces in `guide_vanes`.
+- Mirror: same volume and same bounding box, center of mass reflected about the X center; missing input gives `KO:` / 1 with no output file. Comparisons go through tessellated meshes because OCC mass properties are skewed (+0.1 %) on mirrored surfaces.
+
+## `apps/api/scripts/CgnsInspect.py`
+**Role**: reads a CGNS produced by `FoamToCgns.py` / `CgnsMergeTime.py` and prints a JSON validation report. Called by `export.service.ts` (`validate` step) with `MESH_PYTHON_BIN`, args `[script, cgns]`, cwd = the CGNS folder; path overridable by `CGNS_INSPECT_SCRIPT`.
+**Exports**:
+- `main()`. Argv `<in.cgns>` (otherwise usage, exit code 2). Missing file or `vtkmodules` not found: `KO:` / 1. Success: ONE JSON line on stdout (no `OK:` prefix), exit code 0, keys `cellArrays`, `pointArrays`, `nZones`, `nCells`, `nPoints`, `emptyZones`, `velocityMax`.
+- `_velocity_max(leaf)`. Max of |U| over the first 3-component cell array among `_VELOCITY_NAMES = ("U", "Velocity", "Momentum", "UMean")`, otherwise `None`.
+- `_iter_leaves`, `_array_names`. Traversal of composite leaves and array names.
+**Depends on**: `vtk` wheel (`vtkCGNSReader`), not ParaView. **Used by**: `apps/api/src/modules/projects/export.service.ts` (`CgnsReport` interface).
+**Notes**: `velocityMax` is computed only on the first leaf that provides one. A VTK exception during `Update()` is not converted into `KO:`.
+
+## `apps/api/scripts/CgnsMergeTime.py`
+**Role**: merges the per-time-step HDF5 CGNS files (ParaView's `out_<i>.cgns`) into ONE transient CGNS readable by Ansys CFD-Post (`BaseIterativeData` / `ZoneIterativeData` / `FlowSolutionPointers` nodes). Called by `export.service.ts` with `MESH_PYTHON_BIN`, args `[mergeScript, outCgns, timeValues, ...seriesFiles]`, cwd = the export folder; no override variable (`bundledScript('', 'CgnsMergeTime.py')`). On failure, the API falls back to the per-time-step zip.
+**Exports**:
+- `main()`. Argv `<out.cgns> <t0,t1,...> <in_0.cgns> ...`. Copies the first file then, for each zone that has a `FlowSolution_t`, renames the first one to `FlowSolution0` and copies verbatim (h5py) the solution of the following files as `FlowSolution<i>` (matching by zone name, fallback by position). Adds `BaseIterativeData` (+ `TimeValues` as R8), one `ZoneIterativeData` per animated zone, and `SimulationType = TimeAccurate` if missing. If the time list does not match the number of files, uses indices 0..N-1. Output `OK: transient CGNS written (N time steps) -> <out>`.
+- `label_of`, `find_child`, `find_children`, `set_name_attr`, `make_node(parent, name, label, type_code, data, ref)`. CGNS/HDF5 utilities; `make_node` clones the attribute dtypes of a reference node so the encoding is never hard-coded.
+**Depends on**: `numpy` (module-level import), `h5py` (imported in `main`). **Used by**: `export.service.ts` (`EXPORT_ALL_TIMES` option).
+**Notes**: the `h5py` import is checked BEFORE argc, so without h5py even a usage error exits as `KO:` / 1. All zones are animated (fix referenced as "H7": only zone 0 was). `FlowSolutionPointers`: (n_steps, 32) dataset of space-padded names.
+
+## `apps/api/scripts/CgnsToVtk.py`
+**Role**: converts a CGNS (ADF or HDF5) into pure-topology legacy ASCII VTK for `vtkUnstructuredToFoam`. Called by `conversion.service.ts` (project conversion) and `apps/api/src/lib/meshImport.ts` (`.cgns` import) with `CGNS_PYTHON_BIN`, args `[script, cgnsAbs, vtkAbs]`; override `CGNS_TO_VTK_SCRIPT`.
+**Exports**:
+- `main()`. Argv `input.cgns [out.vtk]` (default output: same name as `.vtk`). Usage: exit code 2. All failures: `KO:` / 1 (missing file, non-CGNS header, `vtkmodules` missing, file name not accepted by the reader, VTK errors caught during `UpdateInformation()` or `Update()`, no non-empty block, merged mesh with no cells, VTK not written). Success: `OK: VTK written -> <out>`.
+- `sniff_cgns(path)`. Detects the HDF5 (`_HDF5_MAGIC`) or ADF (`_ADF_MAGIC`) signature in the first 64 bytes.
+- `vtk_versions()`. VTK/ParaView diagnostic string.
+- `iter_leaf_datasets(dobj)`. Leaves of a composite object.
+**Depends on**: `vtk` wheel (`vtkCGNSReader`, `vtkAppendFilter` with `MergePointsOn`, `vtkUnstructuredGridWriter`). **Used by**: `conversion.service.ts`, `meshImport.ts`.
+**Notes**: NEVER run under `pvpython` (two VTKs in the same process: `SetFileName` has no effect, then segfault). An error observer prevents any access to `GetOutput()` of a failed reader (segfault otherwise). All arrays (field, point, cell) are cleared because OpenFOAM rejects the FIELD block. Legacy format pinned to 4.2 (`VTK_LEGACY_READER_VERSION_4_2`) because 5.1 breaks `vtkUnstructuredToFoam`. In vitest tests, a stub replaces this script (see fixtures).
+
+## `apps/api/scripts/FoamToCgns.py`
+**Role**: exports a solved OpenFOAM case to CGNS for CFD-Post (cell-centered data, polyhedra not decomposed). Called by `export.service.ts` (`convert` step) via `xvfb-run -a <PVBATCH_BIN> FoamToCgns.py ...` if `PVBATCH_XVFB=true` (default), otherwise `<PVBATCH_BIN> --force-offscreen-rendering ...`; `PVBATCH_PYTHONPATH` is prepended to PYTHONPATH; override `FOAM_TO_CGNS_SCRIPT`. The API copies the script next to the output for auditing.
+**Exports**:
+- `main()`. Argv `<case.foam> <out.cgns> [time|all] [fields]`. Usage: exit code 2; `.foam` missing, `paraview.simple` missing, no field loaded ("mesh-only CGNS"), exception, or no file produced: `KO:` / 1. Time: a number = that time, `all` = the whole series (`SaveData(..., WriteAllTimeSteps=1, FileNameSuffix="_%d")` producing `<out>_<i>.cgns` + a side file `<out>.times` listing the real times), empty = last time. Success: `OK: CGNS written (N file(s), time=..., fields=...) -> <out>`.
+- `_set_if_present(proxy, names, value)`. Sets the first existing property among names that drift across ParaView versions.
+**Depends on**: `paraview.simple` (`OpenFOAMReader`, `SaveData`, `Delete`). **Used by**: `export.service.ts` (also reads `<out>.cgns.times` via `readSeriesTimes`).
+**Notes**: only enables `reader.CellArrays` if the available list is non-empty (an empty list disables everything). `[diag]` lines on stderr. **Doc/code inconsistencies**: the docstring (and the `export.service.ts` comment) announce an ADF CGNS (`UseHDF5=0`) whereas the code writes HDF5 (`UseHDF5=1`, required by the h5py merge). The 4th argument `fields` is parsed (`want_fields`) but never used: all available fields are written.
+
+## `apps/api/scripts/_test_hub_shroud_math.py`
+Standalone unit test (outside pytest: the `_` prefix prevents its collection) of the pure functions `_hub_point_radii` and `_shroud_fillet_profile` of `buildChamber.py`, imported as the `buildChamber` module (to be run from `apps/api/scripts/`). Checks the base radii (P1 0.29548, P2 0.39274, P3 ≈ 0.61465), the displacement rule at X1 = 1800 (P1 follows dr, P2 dr/2, P3 = 0.9384·R_shroud), then for three R_shroud values the semi-axes 0.160/0.119, monotonicity and the junction at the edge. Prints `OK  :`/`FAIL:` then `ALL PASS`/`SOME FAILED`, exit code 0/1. The docstring cites a hard-coded interpreter (`/home/hristo/cadquery-env/bin/python`).
+
+## `apps/api/scripts/_verify_outlet_ratio.py`
+**Role**: manual check of a vaned build: outlet sizing and preservation of the hub/shroud profiles. Requires a build run with `CHAMBER_DEBUG_DUMP=1` (reads `_debug/meta.json`, `_debug/F.stl`, `_debug/casing.stl`) and `exports/trisurface.zip`. Not called by the API.
+**Exports**: flat script (no `main`). Argv `<out_dir> [<expected_outer_d_m> <expected_ratio>]`. Checks: F watertight and a single component; `ro <= X1/2`; `ri/ro` equal to the expected ratio; analytic invariants (`a/ro = 0.160`, `b/ro = 0.119`, P3 = 0.9384·ro, P1 ≤ P2 ≤ P3) if present; monotonic top contour of the casing; no vertical `cylinder_walls` ring at r ≈ ro below `z_mid_base`; `hub` owns the inner wall of the duct near the floor; no `hub` face above the roof. Exit code 0 if everything passes, 1 otherwise.
+**Depends on**: `numpy`, `trimesh`. **Used by**: developers only.
+
+## `apps/api/scripts/bakeVaneBladeProfile.py`
+**Role**: offline (one-time) tool that extracts the clean NURBS vane profile from the SolidWorks STEP and writes it to `assets/guideVanes_blade_profile.json`, registered onto the mid-height section of `guideVanes_blade.stl`. Not called by the API.
+**Exports**:
+- `main()`. Argv `<stepPath> <bladeStl> <outJson>` (otherwise usage, exit code 2). Picks the STEP shell whose min/max radius, height and azimuthal coverage match the STL (STEP in mm, divided by 1000); refuses (`KO:` / 1) if no shell matches (deviation > 0.05 m) or if the registration deviation exceeds `MAX_DEV_M = 2e-3`. Writes the JSON (`airfoil` with `N_AIRFOIL = 160` points, `sectionZAsset`, `frame`, `provenance`, `maxDevM`, `fitScale`).
+- `_shell_metrics`, `_mid_section_loop`, `_resample_closed`, `_similarity` (2D Umeyama), `_best_fit` (all cyclic shifts + reversal).
+**Depends on**: `numpy`, `trimesh`, `cadquery`, `shapely`. **Used by**: no code; its output is read by `buildChamber.py`.
+**Notes**: the final `OK:` message goes to **stderr** (not stdout), unlike the common protocol. The registration scale (~1.001) is deliberately dropped: only rotation + translation is applied. `FINE_TESS_MM = 0.3`.
+
+## `apps/api/scripts/buildChamber.py`
+**Role**: "one-shot" geometry builder of the Chamber Creation feature. Receives parameters already resolved in meters (the X1/X2/X3 empirical model lives on the TS side), builds a CadQuery solid (chamfered box minus a stack of cylinders and torque feet, plus optionally the guide-vane distributor), cuts it into named patches and emits the same GLB + `manifest.json` + `edges.bin` transport as `extractPatches.py`, plus the OpenFOAM/CAD exports. Called by `apps/api/src/modules/chamber/chamber.service.ts` (`buildChamber`, `generateChamberStep`, then `mirrorStep.py`) with `CHAMBER_PYTHON_BIN`, args `[script, paths.params, paths.dir]` or `[..., '--step']`, timeout `CHAMBER_BUILD_TIMEOUT_MS`; override `BUILD_CHAMBER_SCRIPT`. The API serializes, per build hash, the builds, `--step` re-runs and mirrors that share the same folder.
+
+### CLI contract and interpreter
+- Argv: `python buildChamber.py <paramsJson> <outDir> [--step]`. 3 or 4 arguments, the 4th must be exactly `--step`, otherwise usage on stderr and exit code 2.
+- Success: `OK: <n> patches -> <outDir>/chamber.glb` on stdout, exit code 0 (`WARNING:` lines may precede it). Failure: any exception (including refusal `ValueError`s) becomes `KO: <message>` on stderr, exit code 1.
+- Warnings: `WARNING: ...` on stdout and `WARN: ...` on stderr; `chamber.service.ts` collects both (regex `^WARN(?:ING)?:\s*(.+)$`, stderr first) and returns them to the client.
+- Dependencies: `numpy`, `cadquery` (+ `OCP`: `BRepAdaptor_Surface`, `BRepAdaptor_Curve`, `GeomAbs_*`, `BRepPrimAPI_MakeSphere`, `BRepBuilderAPI_GTransform`), `trimesh`. Vaned builds additionally: `scipy` (`PchipInterpolator`, `cKDTree`), `shapely`, `manifold3d` boolean engine, `networkx` (trimesh split/repair).
+- Env variables read: `CHAMBER_DEBUG_DUMP` (debug dump), `CHAMBER_STEP_DEBUG` (`STEPDBG` traces on stderr).
+
+### Input parameters (JSON) and constants
+- Required: `width`, `height`, `length`, `distFromSideChamfer1`, `chamferLength1`, `chamferWidth1`, `chamferLength2`, `chamferWidth2`, `distFromEnd`, `dLast`, `hMiddle`, `hMiddlePlusFirst` (h_first = `hMiddlePlusFirst - hMiddle`). Stepped: `hLast`. Hollow: `wallThickness`, `hollowLength`, `centralDiameter`, and outside Simplify Generator `centralHeight`, `domeHeight`.
+- Optional (default): `variant` (`stepped`), `footAngleDeg` (40), `guideVanes` (false), `chamferEnabled` (true), `feetEnabled` (true), `simplifyGenerator` (false), `vaneAngleDeg` (50), `partScale` (1.0), `dFirst`, `dMiddle` (overrides in meters at `partScale` 1, otherwise ratios of `dLast`), `outletOuterD` (resolved X1), `outletRatio`.
+- Configuration constants (not inputs): `RATIO_D_FIRST_OVER_LAST = 1.147030`, `RATIO_D_MIDDLE_OVER_LAST = 0.80`, `FLOOR_OVERCUT = 0.01`, `MIN_LAST_CYL_H = 0.05`, `CHAMFER_END = ">Y"`, `BIG_CORNER_SIDE = ">X"`, `TESS_TOL`/`STL_TOLERANCE = 0.01`, `PLANE_TOL = 1e-4`. Feet: `FOOT_WIDTH 0.14`, `FOOT_LENGTH 0.45`, `FOOT_TAPER 0.07`, `FOOT_CHAMFER 0.04`, `FOOT_PLANK_THICK 0.05`, `FOOT_PLANK_OVERLAP 0.02`, `FOOT_GUSSET_MIN_BASE 0.05`, `FOOT_CLEARANCE 0.02`, `FOOT_ANGLE_DEG 40`, `FOOT_ANGLES_DEG (0, 90, 180, 270)`. Vanes: `VANE_BASE_ANGLE_DEG 50`, `VANE_OUTLET_SAFE_MARGIN 0.97`, `VANE_SKIN_TOL 1e-3`, hub points `VANE_HUB_P1/P2/P3`, `VANE_P3_RATIO 0.93840`, shroud ellipse `VANE_SHROUD_ELL_A 0.160` / `VANE_SHROUD_ELL_B 0.119` (spec 2026-08-10), `VANE_STEP_VOL_TOL 0.005`, `VANE_TE_ROUND_R_FRAC 0.00585`, `VANE_TE_ROUND_SEGS 16`, `VANE_TE_MAX_AREA_DRIFT 0.02`.
+- `PATCH_ORDER = ("inlet", "outlet", "cylinder_walls", "walls")`; `PATCH_TYPES`: `inlet`/`outlet` = `patch`, `cylinder_walls`/`walls`/`hub`/`shroud`/`guide_vanes` = `wall`.
+
+### Stepped / hollow variants, scale and positioning
+- `make_box(cq, width, length, height, end, big_side, ch_big, ch_small, enabled=True)`. Box with two asymmetric chamfers on the vertical corners of the `+Y` end (`_corner_prism` prisms); `enabled=False` returns the intact box (never a zero-size cut).
+- `make_part(cq, d_first, h_first, d_middle, h_middle, d_last, h_last, omit_middle=False, h_last_override=None)`. `stepped` variant: three coaxial cylinders stacked from z = 0. `omit_middle` (vaned builds) leaves the middle band as fluid. In stepped, the last cylinder is always pinned THROUGH the top of the box (`height + 2·FLOOR_OVERCUT - (h_first + h_middle)`); only the shoulder follows `partScale`.
+- `make_part_hollow(...)`. `hollow` variant: first + middle solid, last cylinder as an open cup (`wall` wall, bottom of the same thickness), central cylinder (generator) + semi-ellipsoidal dome `make_dome()`. `dome_h=None` (Simplify Generator): no dome and the generator is pinned through the ceiling as in stepped.
+- `partScale` multiplies all internal dimensions (cylinders, cup, generator, dome, feet, vane ring) but NOT the box, the chamfers or the axis position (`target_x = width/2 - distFromSideChamfer1` on the `>X` side, `target_y = length/2 - distFromEnd` on the `>Y` side, part lowered by `height/2 + FLOOR_OVERCUT`).
+
+### Torque feet
+- `make_feet(cq, cx, cy, z0, z_top, r_cyl, d_first, foot_angle_deg=..., ...)`. Four voids: a pointed hexagonal leg extruded from the floor to above the plank, rotated by `foot_angle_deg - 90` around its inner tip (0/180 = tangential, 90 = radial), plus a horizontal triangular gusset welded to the wall of the last cylinder. Returns `(feet_union, r_outer)`. Raises `ValueError` ("cannot form the triangular gusset") near 0/90/180 degrees. Disabled by `feetEnabled: false` (no call, `foot_r_outer = 0`).
+
+### Guide vanes (distributor)
+- `vane_scale_and_height(meta, d_ring)`. Uniform scale `s = d_ring / (2·pivotRadius)` and scaled passage height.
+- `make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_angle_deg=0.0, outlet_outer_d=None, outlet_ratio=None, d_ring=None)`. Radial scale `s` (ring = `dMiddle`), vertical scale `sz` to fill the HLE band (blade bottom at the pivot on the top of the first cylinder, hub roof on the base of the upper cylinder). Applied blade pitch = `vaneAngleDeg - 50` around the pivot axis. `R_anchor` = inner radius of the placed blade. Outlet: `ro = outletOuterD/2` clamped to `0.97·R_anchor` (warning), `ri = outletRatio·ro`. Piecewise monotonic radial remap (`place_throat`) pinned at both edges and identity beyond `R_anchor`. Two paths: **analytic** if `outletOuterD` and `outletRatio` are provided (hub = polyline rim, P1, P2, P3 via `_hub_point_radii` + flat roof; shroud = quarter-ellipse fillet `_shroud_fillet_profile`, both revolved by `_revolve_open` after `_densify`); **fallback** otherwise (old cached builds: remapped asset, roof resynthesized as an `_flat_annulus` annulus, shroud floor read by radial binning). The bottom of each blade is "draped" onto the shroud floor (overlap `0.01·band`, ramp over `0.15·band`), then copied `bladeCount` times with a step of `bladeAngleStepDeg`. Returns `hub`, `hub_throat`, `shroud`, `outlet`, `guide_vanes`, `outlet_ri`, `outlet_ro`, `hub_profile`, `shroud_profile`, `hub_pts`.
+- Helpers: `_vane_assets_dir`, `_load_vane_meta`, `_open_cylinder`, `_flat_annulus`, `_split_hub_shroud` (score `n.z - n.r_hat > 0` = hub), `_hub_point_radii`, `_shroud_fillet_profile`, `_densify` (3 mm step), `_revolve_open`.
+- In `main()`: the first cylinder is hollowed over the whole disk `r < d_last/2` (it keeps only its outer ring); the hub/shroud meshes are extended by vertical ducts down to `z_duct_bottom = -height/2 - 2·FLOOR_OVERCUT`; the outlet becomes a flat annulus at the real floor `[ri, ro]`.
+
+### Distributor booleans (vaned builds)
+- Distributor solid = hub core ∪ shroud casing ∪ vane prisms, via `trimesh.boolean.union(..., engine="manifold")`, subtracted from the tessellated OCC fluid: `fluid_F = trimesh.boolean.difference([_result_mesh, _solid], engine="manifold")`.
+- `_revolve_profile` (watertight solid of revolution, inverted if the volume is negative); analytic core = hub profile closed down to the axis and capped at `z_mid_top`; otherwise `_hub_core_solid` (PCHIP-smoothed r(z) silhouette, without the flat roof). Analytic casing = annulus below the shroud floor; otherwise `_shroud_casing_solid` (envelope made monotonic by `np.maximum.accumulate`, outer wall pushed out to `d_last/2 + FLOOR_OVERCUT`).
+- `_vane_prisms(np, trimesh, blades_mesh, cx, cy, z0, z1)`. Vertical prisms extruded from the mid-height section of each blade, trailing edge rounded by `_round_blade_te`; returns `(prisms, outlines)`.
+- `_round_blade_te(np, loop)`. Shapely morphological opening (erosion then dilation of radius `0.00585·chord`) that replaces the blunt trailing edge with a tangent arc; at the slightest doubt (shapely missing, degenerate polygon, area drift > 2 %) returns the input unchanged.
+- The tessellated OCC mesh is filtered: if there are several shells, all closed shells are kept (a legitimate internal cavity produces two shells).
+
+### Patch classification
+- `classify(faces, adaptor, geomabs, variant, pocket_radius, guide_vanes=False)`. `inlet` = planar face at minimal y; faces whose vertices are all within `pocket_radius = max(rmax, foot_r_outer) + 0.1` of the axis = pocket (`cylinder_walls`); the rest = `walls`. In stepped without vanes, `outlet` = the cylinder with the median z; in hollow or with vanes, no BREP `outlet`. Raises `RuntimeError` if there is no inlet or too few cylindrical faces (3, or 1 with vanes). `_face_kind` is described as "ported from `prepare_openfoam.py`" (file absent from the repo).
+- Vaned builds: each face of `fluid_F` is labeled by the nearest source (`_label_by_nearest_source`, centroid KD-tree) among `inlet`, `walls`, `cylinder_walls` (bottom disk of the upper cylinder removed from the source), `hub`, `shroud`, `outlet`. Then deterministic overrides: horizontal floor annulus `[ri, ro]` to `outlet`; horizontal annulus at `z_mid_top`, `r <= d_last/2` to `hub`; vertical walls below `z_mid_base` at r ≈ ri to `hub` and r ≈ ro to `shroud`; finally the blade skin (`_blade_skin_mask`: centroid within `VANE_SKIN_TOL` of a prism outline AND `|nz| < 0.5`) to `guide_vanes`, applied last. The blades are deliberately NOT a source of the vote.
+
+### Exports (GLB, manifest, edges, STL, STEP, triSurface)
+- Emission order: `PATCH_ORDER` without vanes; `inlet, cylinder_walls, walls, hub, shroud, outlet, guide_vanes` with vanes.
+- `chamber.glb`: `trimesh.Scene`, one node per patch. `manifest.json`: array of `{name, type, nFaces, edgeOffset, edgeCount}`. `nFaces` = number of CAD faces (without vanes) or number of triangles (with vanes).
+- `edges.bin`: little-endian float32, pairs of segment endpoints (`patch_edges`: real CAD edges, deduplicated, 64 samples for curves). Empty for vaned builds (the viewer computes its own edges). "Best-effort" write (`WARN:` on failure).
+- `exports/chamber.stl`: `fluid_F` (vanes) or the tessellated OCC result (`STL_TOLERANCE`).
+- `exports/chamber.step`: always written without vanes; with vanes, ONLY with `--step`. With `--step`, attempts an editable vaned STEP via `build_vane_step_solid` (analytic path only), otherwise falls back to the vane-less solid.
+- `build-meta.json`: `{"stepHasVanes": bool}` written only for a vaned build run with `--step`; absent otherwise (the API then returns `stepHasVanes = null`).
+- `exports/trisurface.zip`: one ASCII STL named per patch (`write_ascii_solid`) + concatenated `domain.stl`.
+- Atomic writes: each file goes to `<final>.tmp` then `os.replace()`. `chamber.glb` is promoted LAST, just before `OK:`: it is the cache completeness marker on the API side.
+
+### Vaned STEP (OCC BREP)
+- `build_vane_step_solid(cq, np, trimesh, result, core_prof, cas_prof, airfoil, blades_mesh, cx, cy, z0, z1, fluid_volume, vol_tol=VANE_STEP_VOL_TOL)`. Revolves hub and shroud from the same analytic profiles, registers the committed profile (`_load_vane_blade_profile`, `_resample_loop`, `_fit_airfoil`, `_similarity_2d`) onto each meshed blade section, rounds the trailing edge, extrudes a periodic spline, cuts from the OCC result then `clean()`. Accepted only if it is a single valid solid and then, after a STEP export/reimport round-trip, its volume is within 0.5 % of `fluid_F`. Any failure returns `None` (vane-less fallback, never a build failure).
+
+### Validations, warnings and refusals
+- Refusals (`ValueError`, hence `KO:`): dimensions ≤ 0; `hFirst` ≤ 0; `distFromSideChamfer1` / `distFromEnd` outside the box; chamfer setbacks ≤ 0 ("disable the chamfer instead of zeroing it") or larger than the box; `footAngleDeg` outside [0, 180]; `partScale` ≤ 0; `vaneAngleDeg` outside 45..55; invalid hollow parameters (`wallThickness` outside (0, dLast/2), `hollowLength <= wallThickness`); height overflow ("H Kammer only allows", with, in hollow, the Part scale value that would fit, "hollow cone stack" wording in Simplify Generator, "cylinder shoulder" in stepped); axis inside a chamfered corner ("lies inside the ... corner cut"); part sticking out of a wall or chamfer ("stick out of the box"); foot outside the box ("a torque foot reaches"), computed on the exact rotated footprint; distributor outside the box ("the guide-vane distributor (blades + shroud)", extent measured on the real meshes); impossible gusset.
+- Warnings: `WARNING: outlet outer radius ... clamped ...` and `WARNING: hub shoulder non-monotonic ...` (stdout); `WARN: central diameter ... exceeds the hollow bore`, `WARN: could not write edges.bin`, `WARN: OCC vane STEP reconstruction failed`, `WARN: chamber.step falls back to the vane-less solid (no vanes carved)` (stderr).
+- Internal `RuntimeError`s: `could not find the inlet (min-Y) face`, `expected >=N cylindrical faces, found M`, `no patches produced`.
+
+### Debugging
+- `CHAMBER_DEBUG_DUMP` (non-empty): writes `<outDir>/_debug/` with `core.stl`, `casing.stl`, `result.stl`, `hub_throat.stl`, `hub_source.stl`, `shroud_source.stl`, `vanes_source.stl`, `F.stl` and `meta.json` (`target_x`, `target_y`, `z_mid_base`, `z_mid_top`, `z_box_floor`, `d_last`, `vane_outlet_ri`, `vane_outlet_ro`, `hub_pts`, `shroud_ell`). Consumed by `_verify_outlet_ratio.py`.
+- `CHAMBER_STEP_DEBUG`: `STEPDBG` traces (fit of each blade, rejections, volume gate).
+
+**Depends on**: `assets/guideVanes*.{json,stl}`, `assets/guideVanes_blade_profile.json`. **Used by**: `chamber.service.ts` (builds, on-demand `--step`), `tests/test_build_chamber.py`, `_test_hub_shroud_math.py`.
+**Notes**:
+- `_core_prof` / `_cas_prof` are defined only on the analytic path; the `--step` block retrieves them through a `try/except NameError`. Without `outletOuterD`/`outletRatio`, the STEP is therefore always vane-less.
+- Several comments still describe the old "triSurface obstacles, no OCC boolean" model (section header "guide-vane throat (mesh patches, no OCC boolean)", comment in `main()`) whereas the distributor is now subtracted by a manifold boolean.
+- Some messages still use the old vocabulary ("box", "cylinder shoulder"); the tests lock these fragments, so any rewording requires updating `test_build_chamber.py`.
+- The golden volumes of the tests depend on the versions pinned in `requirements-geometry.txt`.
+
+## `apps/api/scripts/csv_to_boundaryData.py`
+**Role**: converts a velocity profile CSV (ParaView / CFX-Post export at the runner outlet) into the `constant/boundaryData/<patch>/` format read by `timeVaryingMappedFixedValue`. Called by `apps/api/src/lib/boundaryData.ts` with `MESH_PYTHON_BIN`, args `[script, csvAbs, caseDir, patch]`, cwd = `caseDir`, timeout `CSV_TO_BOUNDARY_TIMEOUT_MS`; override `CSV_TO_BOUNDARY_DATA_SCRIPT`.
+**Exports**:
+- `main()`. Argv `<csv> <caseDir> <patch>`; otherwise `sys.exit(__doc__)` (docstring on stderr, exit code 1). Columns x, y, z, Ux, Uy, Uz required (message `Missing required columns` + headers found, exit code 1), k and omega optional. Writes `points`, `0/U`, and `0/k`, `0/omega` if present. Success: `Wrote N points to <dir>` then a BC reminder on stdout (no `OK:` prefix).
+- `find_col(fieldnames, key)`. Case-insensitive matching via `ALIASES` (ParaView names `points:0`, `U:0`, CFX names `x [ m ]`, `Velocity u [ m s^-1 ]`, etc.).
+**Depends on**: standard library only (`csv`, `pathlib`). **Used by**: `boundaryData.ts` (DraftTube object).
+**Notes**: values copied as is from the CSV, without numeric validation. Byte-for-byte identical copy in `documents/old/csv_to_boundaryData.py`.
+
+## `apps/api/scripts/extractPatches.py`
+**Role**: reads the boundary patches of an OpenFOAM case and produces a compact GLB + JSON manifest + `edges.bin` for the three.js viewer. Stripped-down descendant of the German inspector `patch_viewer.py` (not tracked). Called with `MESH_PYTHON_BIN`, args `[script, caseDir, glb, manifest]`, cwd = `caseDir`, by `modules/projects/mesh.service.ts`, `modules/projects/meshes.service.ts` and `modules/meshing/meshing.service.ts`; override `EXTRACT_PATCHES_SCRIPT`, timeout `MESH_BUILD_TIMEOUT_MS`.
+**Exports**:
+- `main()`. Argv `<caseDirOrFoamFile> <out.glb> <out_manifest.json>` (otherwise usage, exit code 2). Creates `case.foam` in the case folder if missing (side effect), reads only the boundary blocks via `pv.OpenFOAMReader`, triangulates each patch, writes the GLB (one node per patch), `edges.bin` NEXT TO the GLB (implicit path), then the manifest `{name, type, nFaces, edgeOffset, edgeCount}`. `nFaces` = number of faces before triangulation. No patch: `KO: no non-empty boundary patches found`. Success: `OK: <n> patches -> <glb>`.
+- `parse_boundary_types(case_dir)`. `{patch: type}` by regex on `constant/polyMesh/boundary` (type `"?"` if absent).
+- `extract_edge_vertices(surface)`. Edges of the original cells (not the triangulated wireframe), (2K, 3) float32 array, empty on error.
+**Depends on**: `numpy`, `pyvista`, `trimesh`. **Used by**: the three services listed; stub in vitest tests.
+**Notes**: does not normalize the case layout (the backend has already done it). `buildChamber.py` reproduces exactly this transport.
+
+## `apps/api/scripts/mirrorStep.py`
+**Role**: produces the mirrored STEP of a chamber (YZ plane, x to -x, then translation by `xmin + xmax`) for the "Change rotational direction" action: same bounding box, only the chirality changes. Called by `chamber.service.ts` with `CHAMBER_PYTHON_BIN`, args `[script, src, dst]`, only if `stepHasVanes === true` (the source STEP is first generated via `--step` if needed); override `MIRROR_STEP_SCRIPT`.
+**Exports**:
+- `mirror_step(src: str, dst: str) -> None`. CadQuery STEP import, mirror, export to a unique temporary file (`mkstemp` in the target folder, suffix `.step.tmp`) then `os.replace()`; the temporary file is deleted on failure.
+- `main(argv) -> int`. Success: `OK: mirrored` on stdout, exit code 0; failure: `KO: <reason>`, exit code 1.
+**Depends on**: `cadquery`. **Used by**: `chamber.service.ts`, `test_build_chamber.py`.
+**Notes**: deviation from the common protocol: a usage error returns `KO: usage: ...` with exit code **1** (not 2).
+
+## `apps/api/scripts/preprocessVanes.py`
+**Role**: offline (one-time) tool that splits `GuideVanes50DegOpen.stl` (17 components: 16 blades + 1 shell) into committed assets. Not called by the API.
+**Exports**:
+- `main()`. Argv `<sourceStl> <assetsDir> [outletStl]` (default `outlet.stl` next to the source; otherwise usage, exit code 2). Recenters on the axis (XY centroid, min z), writes `guideVanes_blade.stl` (first component with fewer than 20,000 faces), `guideVanes_outlet.stl` (recentered on its own axis, vertices welded), `guideVanes_walls.stl` (shell without the horizontal outlet cap, full resolution) and `guideVanes.json` (see asset). Outputs `OK: <meta JSON>` on stdout.
+**Depends on**: `numpy`, `trimesh` (module-level imports). **Used by**: nobody at runtime.
+**Notes**: `PIVOT_RADIUS = 0.86732` hard-coded (CAD value provided by the user); `bladeBottomZ` measured at the pivot radius within ±0.02. No global `try`: a failure produces a raw Python traceback. The docstring talks about decimating the shell whereas the code no longer decimates (explicit comment), and its usage omits `[outletStl]`.
+
+## `apps/api/scripts/requirements-geometry.txt`
+Pinned environment of the geometry suite (mirror of the local WSL CadQuery venv): `cadquery==2.8.0`, `trimesh==4.12.2`, `numpy==2.4.6`, `scipy==1.18.0`, `networkx==3.6.1`, `manifold3d==3.5.2`, `shapely==2.1.2`, `pytest>=8,<9`. Changing an OCC version can shift the tessellated volumes and requires refreshing `GOLDEN` in `test_build_chamber.py` in the same commit. Installed by CI.
+
+## `apps/api/scripts/requirements.txt`
+Version floors of the runtime dependencies, per script: `vtk>=9.2` (CgnsToVtk, CgnsInspect; `FoamToCgns.py` excluded because ParaView), `h5py>=3.0` (CgnsMergeTime), `pyvista>=0.43`, `trimesh>=4.0`, `numpy>=1.24` (extractPatches), then for `CHAMBER_PYTHON_BIN` (separate venv) `cadquery>=2.4`, `manifold3d>=2.3`, `networkx>=3.0`, `shapely>=2.0`. **Pitfall**: `scipy` is not listed although `buildChamber.py` imports it for every vaned build (`PchipInterpolator`, `cKDTree`); it is only guaranteed in `requirements-geometry.txt` (transitive presence via cadquery: to verify).
+
+## `apps/api/tests/fixtures/CgnsToVtk.py`
+Never-executed stub (`sys.exit("stub: ...")`): the conversion checks that the script exists before launching python, and `apps/api/vitest.config.ts` points `CGNS_TO_VTK_SCRIPT` at this file while injecting a fake command runner.
+
+## `apps/api/tests/fixtures/extractPatches.py`
+Never-executed stub, same principle: `vitest.config.ts` points `EXTRACT_PATCHES_SCRIPT` at this file to satisfy the existence check of the extraction pipeline.
+
+## `documents/`: reference materials
+
+Folder of business sources of truth and templates, not executed by the application. Who cites them:
+
+| File | Content | Cited by |
+|---|---|---|
+| `documents/Gen Dim v3 Only Calculator (standalone).xlsx` | Workbook (not opened here) described as the "source of record" of the Gen Dim v3 empirical model of the generator dimensions (hollow variant): auto X4 = 0.9·9.81·X2·X3, frame code R by range rules, length code L, Ø by catalog (26:572 ... 115:2225), height = 71.258 + 0.45856·Ø + 6.2368·L, dome = 79.609 + 0.21315·Ø. | `packages/shared/src/index.ts` (`computeChamberGeneratorDims`, `CHAMBER_GENERATOR_FRAME_DIAMETERS_MM`), `brain/features/chamber-creation.md`, `brain/decisions.md`; parity locked by `apps/api/tests/chamberModel.test.ts` and `apps/web/src/features/chamber/chamberForm.test.ts`. If its formulas change, these functions and tests must follow. |
+| `documents/Semi-spiral-creation/SEMI_SPIRAL_TOOL_SPEC.md` | Approved specification of a tool (not yet implemented in the app): 7 inputs (`Q`, `c_flow`, `H_ch`, `D_LE`, `clearance`, `max_width`, `phi_start`) to a JSON geometric object (6 spiral segments + 3 nose segments) in a "mirrored view" frame, optimization of the max area error (fixed-seed differential evolution, bounded L-BFGS-B polishing, 0.05 m grid), acceptance cases A/B/C. | No application code. References files absent from the repo: `spiral_handoff_*/build_handoff.py` and `Semi-spiral calculator.xlsx`. |
+| `documents/Semi-spiral-creation/reference_semi_spiral.py` | Reference implementation: `design_semi_spiral(Q, c_flow, H_ch, D_LE, clearance, max_width, phi_start, seed=5)` returns a dict compliant with §7; helpers `derived`, `to_frame`, `ray_distances`. Run standalone, it computes case A and writes `case_A.json` in the cwd. Depends on `numpy`, `scipy`. | No application code. |
+| `documents/calculator/turbulence_cfd_notes.md` | Notes (FR/EN) on k, ε, ω: Re, I, k = 1.5·(U·I)², L = 0.07·D_h, ω and ε. The line "I = 0.05 × Re" is written as is (to verify against the implementation). | `apps/web/src/features/solver/TurbulenceCalculator.tsx`. |
+| `documents/dynamicMeshDict.forcedRotation` | OpenFOAM.org v12 template: `solidBodyMotionFvMesh`, `cellZone innerAMI`, `rotatingMotion` origin (0.1 .025 0), z axis, ω 2.14 rad/s. | `apps/api/src/lib/openfoamCase.ts`. |
+| `documents/dynamicMeshDict.notforced` | ESI v2412 template: `dynamicMotionSolverFvMesh` + `sixDoFRigidBodyMotion` on the `kaplan` patch (mass, inertia, rotation only around y, `sphericalAngularDamper` damper, Newmark solver). | `apps/api/src/lib/openfoamCase.ts`, `packages/shared/src/index.ts`. |
+| `documents/old/1_turbine_fullMachine_BCs_1.txt` | Full turbine BC template (simpleFoam + MRF, kOmegaSST): total pressure at the inlet, static pressure at the outlet (single anchor), MRF walls. | Referred to by the pattern `documents/*_BCs*.txt` in `openfoamCase.ts`, `packages/shared/src/index.ts` and `apps/api/tests/boundary.test.ts`. |
+| `documents/old/2_pipe_BCs_1.txt` | Pipe BC template: variant A imposed flow rate, variant B imposed pressure. | Same. |
+| `documents/old/3_draftTube_csvInlet_BCs_1.txt` | Draft tube template: `timeVaryingMappedFixedValue` inlet fed by `csv_to_boundaryData.py`, `fixedMeanValue` outlet. | Same; justifies `csv_to_boundaryData.py`. |
+| `documents/old/4_turbineChamber_BCs.txt` | Chamber template (spiral + stay vanes + guide vanes, no rotation): imposed Q or imposed pressure variant, patches `inlet/outlet/casing/stayVanes/guideVanes`. | Same. |
+| `documents/old/csv_to_boundaryData.py` | Identical copy of `apps/api/scripts/csv_to_boundaryData.py`. | Cited by templates 3 and 4. |
+
+**Notes**: the code comments refer to the BC templates as `documents/*_BCs*.txt` whereas they live in `documents/old/` (drifted path). The `documents/old/` folder and the script copy are not referenced by exact path.

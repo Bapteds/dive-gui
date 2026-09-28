@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils';
  * The recurring "joint" of the engineered-hairline language: brand lockup,
  * sidebar active marker, empty-state bullet, favicon. Monochrome by design,
  * sized in pixels, colored via `currentColor` (inherits text color) unless a
- * color is passed. Never large, never orange-filled (DESIGN.md section 1).
+ * color is passed. Never large, never orange-filled (brain/design/design-system.md section 1).
  */
 export interface DiamondProps {
   /** Edge length of the (unrotated) square in pixels. */

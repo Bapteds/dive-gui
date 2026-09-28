@@ -2,7 +2,7 @@ import { forwardRef } from 'react';
 import { cn } from '@/lib/utils';
 
 /**
- * Table primitives - hairline-separated data table (DESIGN.md section 6).
+ * Table primitives - hairline-separated data table (brain/design/design-system.md section 6).
  *
  * Rows are separated by `divide-y` hairlines (no zebra striping); the header
  * sits on the page-bg tint with muted 12px labels; cells use tabular figures

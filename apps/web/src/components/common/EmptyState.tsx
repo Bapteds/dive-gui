@@ -2,7 +2,7 @@ import { cn } from '@/lib/utils';
 import { Diamond } from '@/components/brand/Diamond';
 
 /**
- * EmptyState - centered "teach the next step" placeholder (DESIGN.md section 6).
+ * EmptyState - centered "teach the next step" placeholder (brain/design/design-system.md section 6).
  *
  * A small monochrome diamond mark inside a tinted disc, a title line, one muted
  * guidance line, and an optional action. Used for blank content areas (Home,

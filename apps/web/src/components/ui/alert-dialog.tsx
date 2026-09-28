@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils';
 import { buttonVariants } from './button';
 
 /**
- * AlertDialog - confirmation dialog on Radix AlertDialog (DESIGN.md section 6).
+ * AlertDialog - confirmation dialog on Radix AlertDialog (brain/design/design-system.md section 6).
  *
  * Narrower than the form Dialog (max-w 420px). Used for destructive
  * confirmations: the Action button is rendered with the destructive style and
