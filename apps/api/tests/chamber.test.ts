@@ -492,6 +492,17 @@ describe('Chamber Creation', () => {
     expect(res.body.error.message).toContain('must be positive');
   });
 
+  it('refuses a Closed generator H Kammer below LEB + the Gen Dim height, before any builder run', async () => {
+    setCommandRunner(notFoundRunner);
+    const auth = authHeader(await createTestUser());
+    const res = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, constraints: { height: { exact: 1800 } } })
+      .expect(422);
+    expect(res.body.error.message).toContain('too low for the closed generator');
+  });
+
   it('refuses an inverted Min>Max constraint range, before any builder run', async () => {
     setCommandRunner(notFoundRunner);
     const auth = authHeader(await createTestUser());

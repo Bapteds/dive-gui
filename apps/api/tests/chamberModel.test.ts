@@ -7,6 +7,7 @@ import {
   CHAMBER_GENERATOR_FRAME_DIAMETERS_MM,
   CHAMBER_GRID_MM,
   computeChamberGeneratorDims,
+  closedGeneratorHeightRefusal,
   computeChamberOutputs,
   nonPositiveChamberFinals,
   snapToChamberGrid,
@@ -402,3 +403,32 @@ describe('computeChamberGeneratorDims', () => {
   });
 });
 
+describe('closedGeneratorHeightRefusal (Closed generator, blank height)', () => {
+  // BASE finals: LEB 1200; Gen Dim v3 height ≈ 1077 at X1 1450 / X2 7.85 / X3 8.
+  const H = (exact: number) => ({ constraints: { height: { exact } } });
+  const refusal = (input: Parameters<typeof closedGeneratorHeightRefusal>[0]) =>
+    closedGeneratorHeightRefusal(input, computeChamberOutputs(input));
+
+  it('accepts an H Kammer that holds LEB + the Gen Dim height', () => {
+    expect(refusal({ ...BASE })).toBeNull();
+    expect(refusal({ ...BASE, ...H(2300) })).toBeNull(); // 1200 + 1077 = 2277
+  });
+
+  it('refuses a lower H Kammer and names the Gen Dim minimum', () => {
+    const msg = refusal({ ...BASE, ...H(1800) });
+    expect(msg).toContain('H Kammer = 1800 mm is too low for the closed generator');
+    expect(msg).toContain('minimum generator height 1077 mm (Gen Dim model)');
+  });
+
+  it('scales with Part scale', () => {
+    expect(refusal({ ...BASE, ...H(2300), partScale: 1.1 })).toContain('× Part scale 1.1');
+  });
+
+  it('leaves a typed height and the With cone designs to the builder', () => {
+    expect(refusal({ ...BASE, ...H(1800), centralHeight: 500 })).toBeNull();
+    expect(refusal({ ...BASE, ...H(1800), variant: 'hollow', hollowLength: 200 })).toBeNull();
+    expect(
+      refusal({ ...BASE, ...H(1800), variant: 'hollow', hollowLength: 200, simplifyGenerator: true }),
+    ).toBeNull();
+  });
+});

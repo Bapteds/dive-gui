@@ -150,6 +150,7 @@ All of them enter the build hash (unless stated) and never affect the 12 outputs
 - zod schema: X1..X3 out of range, dimensions ≤ 0 or > 100,000, `x4` outside ]0, 100,000], `footAngleDeg` outside [0, 180], `vaneAngleDeg` outside [45, 55], `outletRatio` outside [0.35, 0.50], `partScale` outside ]0, 5], With cone without `hollowLength`;
 - Final ≤ 0 (`nonPositiveChamberFinals`, except `noEffect`; the 4 chamfers LF1/BF1/LF2/BF2 are exempt if `chamferEnabled === false`, LT and B1 always count): message starting with "Cannot build: H Kammer = … mm", which lists each offending dimension and the levers (Runner Ø / Head / Q_max, relations, constraints);
 - Min > Max (§3.3).
+- **Closed generator, blank Generator height: H Kammer below LEB + the Gen Dim v3 height** (since 2026-09-28, `closedGeneratorHeightRefusal`): the generator runs through the top, so without this check any H Kammer above the shoulder built. Minimum = `computeChamberGeneratorDims(input).resolved.centralHeight` × Part scale (the form hint shows "min ≈ N mm"). A typed height and the With cone designs are checked on the real geometry by the builder.
 
 **Builder refusals** (`ValueError`/`RuntimeError` ⇒ `KO:` + exit code 1 ⇒ API 502 `CHAMBER_BUILD_FAILED` with the tail of stderr, shown as is in "Build errors"):
 - base dimensions ≤ 0, `hFirst = LEB − HLE ≤ 0`, B1 outside ]0, width[, LT outside ]0, length[;

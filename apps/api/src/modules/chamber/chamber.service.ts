@@ -15,6 +15,7 @@ import path from 'node:path';
 import {
   CHAMBER_OUTPUT_KEYS,
   CHAMBER_WALL_THICKNESS_MM,
+  closedGeneratorHeightRefusal,
   computeChamberGeneratorDims,
   computeChamberOutputs,
   nonPositiveChamberFinals,
@@ -284,6 +285,11 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
       `Cannot build: inverted constraint range on ${list}. Fix or clear those Min/Max values.`,
     );
   }
+
+  // Closed generator, blank height: the generator runs through the chamber top,
+  // so only this check stops H Kammer from shrinking it below its Gen Dim height.
+  const generatorRefusal = closedGeneratorHeightRefusal(input, outputs);
+  if (generatorRefusal) throw new AppError(422, 'VALIDATION_ERROR', generatorRefusal);
 
   const params = resolveGeometryParams(input, outputs);
   const hash = chamberHash(params);
