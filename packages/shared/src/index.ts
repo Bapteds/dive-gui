@@ -2879,6 +2879,35 @@ export function nonPositiveChamberFinals(outputs: ChamberOutput[]): ChamberOutpu
   return outputs.filter((o) => o.final <= 0 && !o.noEffect);
 }
 
+/**
+ * Closed generator with a BLANK generator height: the generator runs through
+ * the chamber top, so the builder alone accepts any H Kammer above the
+ * shoulder. Its minimum height is the Gen Dim v3 height (the generator model,
+ * the same value as the form hint): refuse when partScale x (LEB + that
+ * height) exceeds H Kammer. Returns the refusal message, else null. A typed
+ * height (and the With cone designs) are checked on the real geometry by the
+ * builder.
+ */
+export function closedGeneratorHeightRefusal(
+  input: ChamberInput,
+  outputs: ChamberOutput[],
+): string | null {
+  if ((input.variant ?? 'stepped') !== 'stepped' || input.centralHeight != null) return null;
+  const final = (k: ChamberOutputKey) => outputs.find((o) => o.key === k)!.final;
+  const genH = computeChamberGeneratorDims(input).resolved.centralHeight;
+  const s = input.partScale ?? 1;
+  const leb = final('hMiddlePlusFirst');
+  const h = final('height');
+  const required = s * (leb + genH);
+  if (!Number.isFinite(required) || required <= h + 1e-3) return null;
+  const scaled = Math.abs(s - 1) > 1e-9 ? ` × Part scale ${s}` : '';
+  return (
+    `Cannot build: H Kammer = ${Math.round(h)} mm is too low for the closed generator: ` +
+    `LEB ${Math.round(leb)} mm + minimum generator height ${Math.round(genH)} mm (Gen Dim model)${scaled} ` +
+    `= ${Math.round(required)} mm. Increase H Kammer, type a lower Generator height, or lower HLE / Part scale.`
+  );
+}
+
 
 /**
  * Machine-readable error codes the API may emit in its `{ error: { code } }`

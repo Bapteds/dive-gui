@@ -72,10 +72,16 @@ export function ChamberInputsForm({
   // Closed generator and Simplify generator: a blank generator height runs the
   // generator through the chamber top; the With cone default is Gen Dim v3.
   const generatorToTop = variant === 'stepped' || simplifyGenerator;
+  // Closed generator also names its minimum: the Gen Dim v3 height (the API
+  // refuses an H Kammer below LEB + that height while the field is blank).
+  const generatorMin =
+    variant === 'stepped' && autoDims.centralHeight != null
+      ? ` (min ≈ ${Math.round(autoDims.centralHeight)} mm)`
+      : '';
   const generatorHeightHint = generatorToTop
     ? autoDims.generatorToTop != null
-      ? `Blank = through the chamber top ≈ ${Math.round(autoDims.generatorToTop)} mm; a value closes it below`
-      : 'Blank = through the chamber top; a value closes it below'
+      ? `Blank = through the chamber top ≈ ${Math.round(autoDims.generatorToTop)} mm${generatorMin}; a value closes it below`
+      : `Blank = through the chamber top${generatorMin}; a value closes it below`
     : autoHint(autoDims.centralHeight);
   const generatorHeightField = (
     <Field
