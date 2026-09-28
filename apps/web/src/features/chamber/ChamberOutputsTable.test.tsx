@@ -64,11 +64,13 @@ describe('ChamberOutputsTable', () => {
     expect(onChange).toHaveBeenCalledWith('height', 'exact', 5000);
   });
 
-  it('marks LEOW "no effect" when H Kammer is pinned by an Exact', () => {
+  it('marks LEOW "no effect" when H Kammer is pinned by an Exact (With cone)', () => {
+    // In Closed generator LEOW stays the generator's model height, so With cone here.
     const outputs = computeChamberOutputs({
       x1: 1450,
       x2: 7.85,
       x3: 8,
+      variant: 'hollow',
       constraints: { height: { exact: 4200 } },
     });
     render(

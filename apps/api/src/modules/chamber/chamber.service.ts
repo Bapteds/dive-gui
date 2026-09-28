@@ -15,6 +15,7 @@ import path from 'node:path';
 import {
   CHAMBER_OUTPUT_KEYS,
   CHAMBER_WALL_THICKNESS_MM,
+  chamberGeneratorHeightRefusal,
   computeChamberGeneratorDims,
   computeChamberOutputs,
   nonPositiveChamberFinals,
@@ -284,6 +285,11 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
       `Cannot build: inverted constraint range on ${list}. Fix or clear those Min/Max values.`,
     );
   }
+
+  // The generator runs through the chamber top in these designs, so only this
+  // check stops a chamber lower than LEB + the generator's (model) height.
+  const generatorRefusal = chamberGeneratorHeightRefusal(input, outputs);
+  if (generatorRefusal) throw new AppError(422, 'VALIDATION_ERROR', generatorRefusal);
 
   const params = resolveGeometryParams(input, outputs);
   const hash = chamberHash(params);
