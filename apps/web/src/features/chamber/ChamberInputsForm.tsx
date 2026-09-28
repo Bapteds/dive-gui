@@ -20,8 +20,9 @@ export type { ChamberAutoDims } from './chamberForm';
 
 /**
  * ChamberInputsForm - the three empirical inputs (X1/X2/X3), the cylinder design
- * variant, the box length (blank = 2 x width), and - for the hollow variant - the
- * hollow cup's length and wall thickness, plus X4 steering the generator autos
+ * variant, the box length (blank = 2 x width, grown to fit the parts), the
+ * generator height (both designs), and - for the hollow variant - the hollow
+ * cup's length and wall thickness, plus X4 steering the generator autos
  * (Gen Dim v3). Presentational: the parent owns the react-hook-form instance (so
  * the outputs table can live-compute from the same values) and passes register +
  * errors + the current variant + the auto length in.
@@ -45,6 +46,7 @@ export function ChamberInputsForm({
   variant,
   simplifyGenerator,
   autoLengthMm,
+  autoLengthRaised = false,
   autoDims,
   relationsMaster,
   relations,
@@ -58,6 +60,8 @@ export function ChamberInputsForm({
   /** Current Simplify Generator state (hides the height/dome fields when on). */
   simplifyGenerator: boolean;
   autoLengthMm: number | null;
+  /** True when the auto length grew beyond 2 x width to hold the parts. */
+  autoLengthRaised?: boolean;
   /** Auto (empirical) placeholders for the five manual dimension overrides. */
   autoDims: ChamberAutoDims;
   /** Current master switch state (governs whether individual relations apply). */
@@ -68,6 +72,28 @@ export function ChamberInputsForm({
   onRelationChange: (key: string, on: boolean) => void;
 }) {
   const relOn = (key: string, fallback: boolean) => relations[key] ?? fallback;
+  // Closed generator and Simplify generator: a blank generator height runs the
+  // generator through the chamber top; the With cone default is Gen Dim v3.
+  const generatorToTop = variant === 'stepped' || simplifyGenerator;
+  const generatorHeightHint = generatorToTop
+    ? autoDims.generatorToTop != null
+      ? `Blank = through the chamber top ≈ ${Math.round(autoDims.generatorToTop)} mm; a value closes it below`
+      : 'Blank = through the chamber top; a value closes it below'
+    : autoHint(autoDims.centralHeight);
+  const generatorHeightField = (
+    <Field
+      label="Generator height (mm)"
+      error={errors.centralHeight?.message}
+      helperText={generatorHeightHint}
+    >
+      <Input
+        type="number"
+        step="any"
+        placeholder="auto"
+        {...register('centralHeight', { setValueAs: numOrUndef })}
+      />
+    </Field>
+  );
   const activeCount = CHAMBER_RELATIONS.filter((rel) => relOn(rel.key, rel.defaultOn)).length;
   return (
     <form
@@ -218,7 +244,9 @@ export function ChamberInputsForm({
           error={errors.lengthOverride?.message}
           helperText={
             autoLengthMm != null
-              ? `Blank = 2 × width ≈ ${Math.round(autoLengthMm)} mm`
+              ? autoLengthRaised
+                ? `Blank = auto ≈ ${Math.round(autoLengthMm)} mm (grown to fit the parts)`
+                : `Blank = 2 × width ≈ ${Math.round(autoLengthMm)} mm`
               : 'Blank = 2 × width'
           }
         >
@@ -243,7 +271,7 @@ export function ChamberInputsForm({
         <Field
           label="Part scale (×)"
           error={errors.partScale?.message}
-          helperText="Scales runner case, middle cylinder, cone & generator, feet & vanes together; chamber & axis stay fixed. Closed generator: overgrowing the chamber is refused; with cone: scaled down to fit"
+          helperText="Scales runner case, middle cylinder, cone & generator, feet & vanes together; the chamber grows to fit them unless its dimensions are set Exact"
         >
           <Input
             type="number"
@@ -302,6 +330,7 @@ export function ChamberInputsForm({
             {...register('dMiddle', { setValueAs: numOrUndef })}
           />
         </Field>
+        {variant === 'stepped' && generatorHeightField}
       </div>
 
       {variant === 'hollow' && (
@@ -314,8 +343,8 @@ export function ChamberInputsForm({
           <span className="text-sm">
             <span className="font-medium text-text">Simplify generator</span>
             <span className="mt-0.5 block text-text-secondary">
-              Extend the generator as a straight cylinder through the chamber top — no dome
-              (as in the Closed generator design).
+              Straight generator with no dome, through the chamber top unless you set a
+              generator height (as in the Closed generator design).
             </span>
           </span>
         </label>
@@ -373,20 +402,7 @@ export function ChamberInputsForm({
               {...register('centralDiameter', { setValueAs: numOrUndef })}
             />
           </Field>
-          {!simplifyGenerator && (
-            <Field
-              label="Generator height (mm)"
-              error={errors.centralHeight?.message}
-              helperText={autoHint(autoDims.centralHeight)}
-            >
-              <Input
-                type="number"
-                step="any"
-                placeholder="auto"
-                {...register('centralHeight', { setValueAs: numOrUndef })}
-              />
-            </Field>
-          )}
+          {generatorHeightField}
           {!simplifyGenerator && (
             <Field
               label="Dome height (mm)"

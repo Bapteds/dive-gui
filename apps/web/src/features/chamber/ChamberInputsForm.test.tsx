@@ -22,6 +22,7 @@ const AUTO_DIMS: ChamberAutoDims = {
   centralDiameter: 1087.5,
   centralHeight: 1446.4,
   domeHeight: 289.3,
+  generatorToTop: 2700,
 };
 
 function Harness({
@@ -57,11 +58,35 @@ function Harness({
   );
 }
 
+function ChamberInputsFormHarnessWithRaisedLength() {
+  const { register, handleSubmit, formState } = useForm<ChamberFormValues>({
+    resolver: zodResolver(chamberFormSchema),
+    defaultValues: CHAMBER_FORM_DEFAULTS,
+  });
+  return (
+    <ChamberInputsForm
+      register={register}
+      errors={formState.errors}
+      onSubmit={handleSubmit(() => {})}
+      isBuilding={false}
+      variant="stepped"
+      simplifyGenerator={false}
+      autoLengthMm={9500}
+      autoLengthRaised
+      autoDims={AUTO_DIMS}
+      relationsMaster
+      relations={CHAMBER_FORM_DEFAULTS.relations}
+      onRelationChange={() => {}}
+    />
+  );
+}
+
 describe('ChamberInputsForm', () => {
   it('shows the hollow-only fields for the hollow variant and hides them for stepped', () => {
     const { rerender } = render(<Harness onValid={() => {}} />);
     expect(screen.queryByLabelText('Cone length (mm)')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Generator Ø (mm)')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Dome height (mm)')).not.toBeInTheDocument();
 
     rerender(
       <Harness onValid={() => {}} variant="hollow" defaults={{ variant: 'hollow' }} />,
@@ -158,7 +183,34 @@ describe('ChamberInputsForm', () => {
     ).toBeInTheDocument();
   });
 
-  it('Simplify generator toggles in the hollow section and hides the height/dome fields', () => {
+  it('offers a generator height in the Closed generator design (blank = through the top)', async () => {
+    const onValid = vi.fn();
+    render(<Harness onValid={onValid} />);
+    expect(screen.getByLabelText('Generator height (mm)')).toBeInTheDocument();
+    expect(
+      screen.getByText('Blank = through the chamber top ≈ 2700 mm; a value closes it below'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
+    await waitFor(() => expect(onValid).toHaveBeenCalledTimes(1));
+    expect((onValid.mock.calls[0][0] as ChamberFormValues).centralHeight).toBeUndefined();
+
+    fireEvent.change(screen.getByLabelText('Generator height (mm)'), { target: { value: '1500' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
+    await waitFor(() => expect(onValid).toHaveBeenCalledTimes(2));
+    expect((onValid.mock.calls[1][0] as ChamberFormValues).centralHeight).toBe(1500);
+  });
+
+  it('says when the auto length grew to fit the parts', () => {
+    render(
+      <ChamberInputsFormHarnessWithRaisedLength />,
+    );
+    expect(
+      screen.getByText('Blank = auto ≈ 9500 mm (grown to fit the parts)'),
+    ).toBeInTheDocument();
+  });
+
+  it('Simplify generator toggles in the hollow section: keeps the height, hides the dome', () => {
     const { rerender } = render(<Harness onValid={() => {}} />);
     // Stepped: no Simplify generator checkbox at all.
     expect(screen.queryByLabelText(/Simplify generator/)).not.toBeInTheDocument();
@@ -176,7 +228,8 @@ describe('ChamberInputsForm', () => {
         defaults={{ variant: 'hollow', simplifyGenerator: true }}
       />,
     );
-    expect(screen.queryByLabelText('Generator height (mm)')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Generator height (mm)')).toBeInTheDocument();
+    expect(screen.getByText(/Blank = through the chamber top ≈ 2700 mm/)).toBeInTheDocument();
     expect(screen.queryByLabelText('Dome height (mm)')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Generator Ø (mm)')).toBeInTheDocument();
     expect(screen.getByLabelText('Power (kW)')).toBeInTheDocument();

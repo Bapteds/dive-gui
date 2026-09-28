@@ -59,7 +59,7 @@ export interface ChamberFormValues {
   x4?: number;
   /** Generator (central cylinder) Ø (mm); blank => Gen Dim catalog Ø for the suggested frame. Hollow only. */
   centralDiameter?: number;
-  /** Generator (central cylinder) height (mm); blank => Gen Dim fit from the resolved Ø + length code. Hollow only. */
+  /** Generator height above LEB (mm). With cone: blank => Gen Dim fit. Closed generator / Simplify: blank => through the chamber top. */
   centralHeight?: number;
   /** Dome height (mm); blank => Gen Dim fit from the resolved Ø. Hollow variant only. */
   domeHeight?: number;
@@ -230,6 +230,11 @@ export interface ChamberAutoDims {
   centralHeight: number | null;
   /** Dome height, mm (hollow variant). */
   domeHeight: number | null;
+  /**
+   * Generator height that reaches the chamber top, mm at partScale 1: the
+   * blank-field hint of the Closed generator and Simplify generator designs.
+   */
+  generatorToTop: number | null;
 }
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -246,7 +251,9 @@ export function computeChamberAutoDims(
     'x1' | 'x2' | 'x3' | 'x4' | 'centralDiameter' | 'centralHeight' | 'domeHeight'
   >,
   dLastFinal: number | null,
+  top?: { heightFinal: number | null; lebFinal: number | null; partScale: number },
 ): ChamberAutoDims {
+  const scale = top && finite(top.partScale) && top.partScale > 0 ? top.partScale : null;
   const gen =
     finite(values.x1) && finite(values.x2) && finite(values.x3)
       ? computeChamberGeneratorDims({
@@ -266,5 +273,10 @@ export function computeChamberAutoDims(
     centralDiameter: gen?.auto.centralDiameter ?? null,
     centralHeight: gen?.auto.centralHeight ?? null,
     domeHeight: gen?.auto.domeHeight ?? null,
+    // The pinned generator's top is the chamber top: (H - scale x LEB) / scale.
+    generatorToTop:
+      top && scale != null && top.heightFinal != null && top.lebFinal != null
+        ? (top.heightFinal - scale * top.lebFinal) / scale
+        : null,
   };
 }

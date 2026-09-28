@@ -2589,16 +2589,11 @@ export interface ChamberInput {
   /**
    * Uniform scale for the WHOLE internal assembly at once — the three cylinders
    * (and the hollow-variant cup / central cylinder / dome), the four torque feet,
-   * and the guide vanes (which key off the last diameter). The BOX (width /
-   * length / height), the chamfers, and the part AXIS (positioned by
-   * distFromSideChamfer1 / distFromEnd) are NOT scaled, so the cavity grows or
-   * shrinks about its own floor-anchored axis inside an unchanged box. Geometry-
-   * only (not part of the empirical model). Default 1. Scaling down is unbounded.
-   * When the internal stack would overgrow the box height the two designs differ:
-   * the STEPPED design REFUSES the build (a clear error) so the entered heights are
-   * never silently ignored; the HOLLOW (cone) design — whose generator + dome are
-   * meant to fill and usually exceed the box — scales the internal part down to fit
-   * (with a warning), which also reduces its heights.
+   * and the guide vanes (which key off the last diameter). The box and the part
+   * axis are not scaled, but fitChamberToParts raises the AUTO chamber
+   * dimensions (B1, B Kammer, LT, length, H Kammer) until the scaled assembly
+   * fits; a user-pinned dimension that is too small makes the builder refuse.
+   * Geometry-only (not part of the empirical model). Default 1.
    */
   partScale?: number;
   /** Box length along Y (mm). Omitted => 2 x the (final) width. */
@@ -2627,8 +2622,13 @@ export interface ChamberInput {
    */
   centralDiameter?: number;
   /**
-   * Manual override for the GENERATOR (central cylinder) height, in mm. Omitted =>
-   * the Gen Dim fit 71.258 + 0.45856·Ø(resolved) + 6.2368·L. Hollow variant only.
+   * Manual override for the GENERATOR height above LEB, in mm. Scaled by partScale.
+   *  - With cone: omitted => the Gen Dim fit 71.258 + 0.45856·Ø(resolved) + 6.2368·L
+   *    (capped by the dome).
+   *  - Closed generator (the last cylinder is the generator) and With cone +
+   *    Simplify generator: omitted => the generator runs through the chamber top;
+   *    a value => a flat-topped cylinder of that height (a top reaching the
+   *    chamber top is the same as omitted).
    * Geometry-only.
    */
   centralHeight?: number;
@@ -2638,9 +2638,9 @@ export interface ChamberInput {
    */
   domeHeight?: number;
   /**
-   * Simplify Generator: the central cylinder becomes a strict cylinder pinned
-   * THROUGH the box top (the stepped variant's mechanism) and no dome is
-   * built — centralHeight/domeHeight are ignored while this is on. Hollow
+   * Simplify Generator: the central cylinder becomes a strict cylinder with no
+   * dome, pinned THROUGH the box top (the stepped variant's mechanism) unless a
+   * centralHeight is given; domeHeight is ignored while this is on. Hollow
    * variant only. Geometry-only. Default false.
    */
   simplifyGenerator?: boolean;
@@ -2679,7 +2679,8 @@ export type ChamberStatus =
   | 'raised to min'
   | 'set exact'
   | '! min>max'
-  | 'from relation';
+  | 'from relation'
+  | 'raised to fit';
 
 /** One computed output: the raw model value, the clamped FINAL, and metadata. */
 export interface ChamberOutput {
@@ -2876,6 +2877,202 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
  */
 export function nonPositiveChamberFinals(outputs: ChamberOutput[]): ChamberOutput[] {
   return outputs.filter((o) => o.final <= 0 && !o.noEffect);
+}
+
+// ---------------------------------------------------------------------------
+// Fit the chamber around its parts. The twelve fits are independent, so the
+// chamber they describe (B Kammer, B1, LT, H Kammer) is often too small for the
+// parts sized from dLast / HLE (runner case = 1.147 x dLast, the feet, the
+// distributor, the generator stack). fitChamberToParts raises the AUTO chamber
+// dimensions to the smallest 50 mm grid value that contains every part. The
+// constants mirror apps/api/scripts/buildChamber.py (keep them in sync): the
+// builder re-checks the fit on the real geometry and refuses what still sticks
+// out (a pinned dimension, never raised here).
+// ---------------------------------------------------------------------------
+
+/** Torque-foot plan dimensions (mm, at partScale 1): FOOT_* in buildChamber.py. */
+export const CHAMBER_FOOT_MM = {
+  width: 140,
+  length: 450,
+  taper: 70,
+  chamfer: 40,
+  clearance: 20,
+} as const;
+/** buildChamber.py FLOOR_OVERCUT (mm): the part pokes this far below the floor. */
+const CHAMBER_FLOOR_OVERCUT_MM = 10;
+/** buildChamber.py MIN_LAST_CYL_H (mm): stepped last cylinder kept above the shoulder. */
+const CHAMBER_MIN_LAST_CYL_H_MM = 50;
+/** Guide-vane blade reach / vane-ring Ø (max over the 45..55° swing, asset-measured 0.5985). */
+export const CHAMBER_VANE_REACH_OVER_RING = 0.6;
+/** Shroud outer reach beyond dLast / 2 (mm), measured on the vane asset. */
+const CHAMBER_SHROUD_EXTRA_MM = 10;
+
+/** The fitted outputs plus the resolved chamber length (mm). */
+export interface ChamberFit {
+  outputs: ChamberOutput[];
+  /** lengthOverride verbatim, else 2 x width (raised to fit when needed). */
+  lengthMm: number;
+  /** True when the auto length had to grow beyond 2 x width. */
+  lengthRaised: boolean;
+}
+
+/** Smallest grid multiple >= v (a hair of float noise does not bump a step). */
+function ceilToChamberGrid(v: number): number {
+  return Math.ceil(v / CHAMBER_GRID_MM - 1e-9) * CHAMBER_GRID_MM;
+}
+
+/**
+ * The torque-foot footprint (mm, relative to the part axis): the swung leg
+ * hexagon of make_feet at the four ring angles. The gusset planks stay inside
+ * the leg tips + the cylinder wall, so these corners bound the whole foot.
+ */
+function chamberFeetPoints(dFirst: number, scale: number, footAngleDeg: number): [number, number][] {
+  const f = CHAMBER_FOOT_MM;
+  const hw = (f.width * scale) / 2;
+  const rIn = dFirst / 2 + f.clearance * scale + hw;
+  const rOut = rIn + f.length * scale;
+  const tap = f.taper * scale;
+  const chf = f.chamfer * scale;
+  const plan: [number, number][] = [
+    [rIn, 0],
+    [rIn + tap, hw],
+    [rOut - chf, hw],
+    [rOut, hw - chf],
+    [rOut, -(hw - chf)],
+    [rOut - chf, -hw],
+    [rIn + tap, -hw],
+  ];
+  const lean = ((footAngleDeg - 90) * Math.PI) / 180;
+  const cl = Math.cos(lean);
+  const sl = Math.sin(lean);
+  const pts: [number, number][] = [];
+  for (const ring of [0, 90, 180, 270]) {
+    const ca = Math.cos((ring * Math.PI) / 180);
+    const sa = Math.sin((ring * Math.PI) / 180);
+    for (const [x, y] of plan) {
+      const sx = rIn + (x - rIn) * cl - y * sl;
+      const sy = (x - rIn) * sl + y * cl;
+      pts.push([sx * ca - sy * sa, sx * sa + sy * ca]);
+    }
+  }
+  return pts;
+}
+
+/**
+ * Raise the AUTO chamber dimensions so every part fits inside the chamber:
+ *  - B1 and B Kammer - B1 (the two side walls), LT and length - LT (the two
+ *    ends) must clear the widest part: runner case / cylinders, the exact foot
+ *    footprint, and the guide-vane distributor;
+ *  - LT also moves the axis away from the two chamfer faces when they would cut
+ *    into a part;
+ *  - H Kammer must hold the part stack (Closed generator: LEB + 50 mm of last
+ *    cylinder, or LEB + the generator height; With cone: LEB + max(cone,
+ *    generator + dome); Simplify: LEB + max(cone, generator height)).
+ * A raised output gets status 'raised to fit' and a grid value. An Exact is
+ * never raised and a Max caps the raise; the builder then refuses. A typed
+ * lengthOverride is never changed. Every size scales with partScale.
+ */
+export function fitChamberToParts(input: ChamberInput, outputs: ChamberOutput[]): ChamberFit {
+  const byKey = new Map(outputs.map((o) => [o.key, { ...o }]));
+  const final = (k: ChamberOutputKey) => byKey.get(k)!.final;
+  const raise = (k: ChamberOutputKey, required: number): void => {
+    if (!Number.isFinite(required)) return;
+    const o = byKey.get(k)!;
+    const con = input.constraints?.[k] ?? {};
+    if (con.exact != null || o.status === 'capped at max' || o.status === '! min>max') return;
+    if (o.final >= required - 1e-6) return;
+    let next = ceilToChamberGrid(required);
+    if (con.max != null) next = Math.min(next, con.max);
+    if (next <= o.final) return;
+    o.final = next;
+    o.status = 'raised to fit';
+    o.relationLabel = undefined;
+    o.userDriven = false;
+  };
+
+  const s = input.partScale ?? 1;
+  const variant = input.variant ?? 'stepped';
+  const dLast = final('dLast') * s;
+  const dFirst = (input.dFirst ?? CHAMBER_D_FIRST_OVER_LAST * final('dLast')) * s;
+  const dMiddle = (input.dMiddle ?? CHAMBER_D_MIDDLE_OVER_LAST * final('dLast')) * s;
+  const valid = [dLast, dFirst, dMiddle, s].every((v) => Number.isFinite(v) && v > 0);
+  const footAngle = Number.isFinite(input.footAngleDeg) ? input.footAngleDeg! : 40;
+
+  if (valid) {
+    // Radial reach of the round parts (cylinders, distributor) and the feet.
+    let radius = Math.max(dFirst, dMiddle, dLast) / 2;
+    if (input.guideVanes) {
+      radius = Math.max(
+        radius,
+        CHAMBER_VANE_REACH_OVER_RING * dMiddle,
+        dLast / 2 + CHAMBER_SHROUD_EXTRA_MM,
+      );
+    }
+    const feet =
+      input.feetEnabled !== false ? chamberFeetPoints(dFirst, s, footAngle) : [];
+    // Support function: how far the parts reach along the direction (a, b).
+    const reach = (a: number, b: number): number =>
+      feet.reduce((m, [x, y]) => Math.max(m, a * x + b * y), radius * Math.hypot(a, b));
+    // The footprint is 4-fold symmetric, so one axis extent serves all four walls.
+    const extent = reach(1, 0);
+
+    raise('distFromSideChamfer1', extent);
+    raise('width', final('distFromSideChamfer1') + extent);
+    // LT: the chamfered end, then each chamfer face. The big corner sits on the
+    // B1 side (+X), the small one on the far side; a part point q (relative to
+    // the axis, +X toward the B1 wall, +Y toward the chamfered end) clears the
+    // corner cut when (B1 - qx) / BF + (LT - qy) / LF >= 1.
+    let lt = extent;
+    if (input.chamferEnabled !== false) {
+      const b1 = final('distFromSideChamfer1');
+      const far = final('width') - b1;
+      const corners: [number, number, number, number][] = [
+        [final('chamferWidth1'), final('chamferLength1'), b1, 1],
+        [final('chamferWidth2'), final('chamferLength2'), far, -1],
+      ];
+      for (const [bf, lf, side, sx] of corners) {
+        if (bf > 0 && lf > 0) lt = Math.max(lt, lf * (1 + reach(sx / bf, 1 / lf) - side / bf));
+      }
+    }
+    raise('distFromEnd', lt);
+
+    // Height of the part stack above the floor (the shoulder is LEB).
+    const leb = final('hMiddlePlusFirst') * s;
+    const genH = input.centralHeight != null ? input.centralHeight * s : null;
+    let stack: number;
+    if (variant === 'hollow') {
+      const cone = (input.hollowLength ?? 0) * s;
+      if (input.simplifyGenerator) {
+        stack = leb + Math.max(cone, genH ?? 0);
+      } else {
+        const gen = computeChamberGeneratorDims({ ...input });
+        stack = leb + Math.max(cone, (gen.resolved.centralHeight + gen.resolved.domeHeight) * s);
+      }
+    } else {
+      stack =
+        genH != null
+          ? leb + genH
+          : leb + CHAMBER_MIN_LAST_CYL_H_MM - 2 * CHAMBER_FLOOR_OVERCUT_MM;
+    }
+    raise('height', stack);
+    // A raised H Kammer no longer reads LEOW.
+    if (byKey.get('height')!.status === 'raised to fit') byKey.get('hLast')!.noEffect = true;
+
+    const autoLength = 2 * final('width');
+    const lengthMm =
+      input.lengthOverride ??
+      Math.max(autoLength, ceilToChamberGrid(final('distFromEnd') + extent));
+    return {
+      outputs: outputs.map((o) => byKey.get(o.key)!),
+      lengthMm,
+      lengthRaised: input.lengthOverride == null && lengthMm > autoLength,
+    };
+  }
+  return {
+    outputs: outputs.map((o) => byKey.get(o.key)!),
+    lengthMm: input.lengthOverride ?? 2 * final('width'),
+    lengthRaised: false,
+  };
 }
 
 /**

@@ -6,6 +6,7 @@
 
 ## 1. Where we are
 
+- **Work in progress** (2026-09-28, branch `fix/chamber-fit-and-generator-height`, not committed): chamber grown around its parts (`fitChamberToParts`) + editable generator height in Closed generator / Simplify generator. To do before merge: commit on request, browser check, purge the server chamber cache at deploy.
 - **Branch**: `main`, which now contains the merge of `docs/brain` (brain reorganization, 2026-09-28) on top of `d43a6ce` (merge of PR #3 `feat/chamber-ui-feedback`). No known open PR.
 - **Version**: 1.0.x (v1.0.1 audit fixes included: every CRITICAL and HIGH finding).
 - **Last delivered work** (PR #3, 2026-08-31 → 2026-09-04): Chamber Creation.
