@@ -4,7 +4,7 @@ import { MobileNav } from './MobileNav';
 import { UserMenu } from './UserMenu';
 
 /**
- * Header - fixed top bar (64px) for the authenticated shell (DESIGN.md section 5).
+ * Header - fixed top bar (64px) for the authenticated shell (brain/design/design-system.md section 5).
  *
  * Left: the mobile nav trigger (below lg) plus the brand lockup linking Home.
  * Right: the user menu. Surface background with a bottom hairline; stays a

@@ -6,7 +6,7 @@ The heavy OpenFOAM / ParaView / Python toolchain runs on the **Linux host where 
 
 > **Deploy target:** Debian 12 (bookworm) with **ESI OpenFOAM.com v2406** (`/usr/lib/openfoam/openfoam2406`). The production server runs as **root** with the app checked out in **`/home/app`**.
 
-> **Not a developer?** A copy-paste, step-by-step install/update/run guide (root user, app in `/home/app`) lives in **[`INSTALLATION.md`](INSTALLATION.md)**. This README is the fuller technical reference; §5 below mirrors the same layout.
+> **Not a developer?** A copy-paste, step-by-step install/update/run guide (root user, app in `/home/app`) lives in **[`brain/operations/installation.md`](brain/operations/installation.md)**. This README is the fuller technical reference; §5 below mirrors the same layout.
 
 ---
 
@@ -22,6 +22,7 @@ The heavy OpenFOAM / ParaView / Python toolchain runs on the **Linux host where 
 8. [Authentication model](#8-authentication-model)
 9. [REST API](#9-rest-api)
 10. [Known issues](#10-known-issues)
+11. [Project knowledge base (`brain/`)](#11-project-knowledge-base-brain)
 
 ---
 
@@ -33,12 +34,15 @@ An npm-workspaces monorepo (no pnpm/yarn):
 app/
 ├── apps/
 │   ├── api/   @dive/api    — Express + TypeScript REST API (JWT auth, Prisma/SQLite, WebSocket terminal).
-│   └── web/   @dive/web    — React 18 + Vite + TypeScript SPA (Tailwind v3, Radix, three.js, CodeMirror).
+│   ├── web/   @dive/web    — React 18 + Vite + TypeScript SPA (Tailwind v3, Radix, three.js, CodeMirror).
+│   └── mcp/   @dive/mcp    — MCP server exposing the REST API as tools for Claude.
 ├── packages/
 │   └── shared/ @dive/shared — shared API contract (roles, validation constants, error codes). Dual CJS+ESM.
-├── apps/api/scripts/       — bundled Python helpers (CGNS/VTK/mesh extraction; see §6).
+├── apps/api/scripts/       — bundled Python helpers (CGNS/VTK/mesh extraction, CadQuery chamber builder; see §6).
 ├── apps/api/prisma/        — schema.prisma (SQLite) + seed.
-└── .github/workflows/ci.yml — lint / typecheck / test / build on push & PR.
+├── brain/                  — agent & developer knowledge base (see §11).
+├── documents/              — domain reference material (Gen Dim v3 workbook, semi-spiral spec, BC profiles).
+└── .github/workflows/ci.yml — lint / typecheck / test / build + real geometry tests on push & PR.
 ```
 
 `@dive/shared` is built **before** the apps (the root `dev` / `build` / `typecheck` / `test` scripts all run `build:shared` first), so the API and web share one source of truth for roles, password rules and error codes.
@@ -148,7 +152,7 @@ Meshing/merge/export step timeouts, MPI flags, solver runtime cap, upload size, 
 
 ## 5. Full deployment tutorial (Debian)
 
-Target: a fresh **Debian 12 (bookworm)** server. The commands below deploy into **`/home/app`** and run the service as **root** (matching the live server and `INSTALLATION.md`). If you deploy under a non-root user instead, keep the `sudo` prefixes and adjust the paths/`User=` to taste; as root you can drop `sudo`.
+Target: a fresh **Debian 12 (bookworm)** server. The commands below deploy into **`/home/app`** and run the service as **root** (matching the live server and `brain/operations/installation.md`). If you deploy under a non-root user instead, keep the `sudo` prefixes and adjust the paths/`User=` to taste; as root you can drop `sudo`.
 
 ### 5.1 Node.js ≥ 20
 
@@ -231,7 +235,7 @@ npm run build            # build:shared → api (tsc) → web (vite build)
 Create the database and the first admin:
 
 ```bash
-npm run db:migrate -w @dive/api   # prisma migrate deploy is also run by `npm start`
+npm run db:deploy -w @dive/api    # prisma migrate deploy (also run by `npm start`); never db:migrate (= migrate dev) in production
 npm run db:seed -w @dive/api
 ```
 
@@ -295,12 +299,13 @@ server {
 
 Because nginx terminates TLS in front of the API, set `TRUST_PROXY=1` (done in §5.5) so the rate limiter sees real client IPs. The refresh cookie is `Secure` in production, so the site **must** be served over HTTPS or logins won't persist.
 
-Build the web with the API origin baked in if it differs from the site origin (`VITE_API_URL`); with the same-origin nginx layout above the default relative `/api/v1` works.
+`VITE_API_URL` is **required** at build time (the client throws when it is unset, and the terminal WebSocket needs an absolute URL): create `apps/web/.env` with e.g. `VITE_API_URL=https://dive.example.de/api/v1` before `npm run build`.
 
 ### 5.8 Verify
 
 ```bash
-curl -k https://dive.example.de/api/v1/health   # or open the site and log in
+curl -k https://dive.example.de/api/v1/config   # through nginx: {"terminalEnabled":false}
+curl http://127.0.0.1:4000/health              # on the server: API liveness (not proxied by nginx)
 ```
 
 Then run one CFD action end-to-end (e.g. import a small CGNS mesh and Convert) and confirm each step reports success in the UI — that proves the OpenFOAM + Python paths in `.env` are correct.
@@ -315,19 +320,19 @@ Every action degrades to a clean per-step "not found" if its tool is missing, so
 | --- | --- |
 | **Case files** | none (pure file editing) |
 | **Mesh → Convert CGNS→Foam** | `CGNS_PYTHON_BIN` + `vtk` wheel → `vtkUnstructuredToFoam` → `checkMesh` |
-| **Mesh → Import Fluent/Gmsh `.msh`** | `fluent3DMeshToFoam` (or `gmshToFoam`) |
+| **Mesh → Import Fluent/Gmsh `.msh`** | `fluent3DMeshToFoam` (set `FLUENT_TO_FOAM_BIN=gmshToFoam` for Gmsh meshes) |
 | **Mesh → auto-patch** | `autoPatch` |
 | **Visualize (3D viewer)** | `MESH_PYTHON_BIN` + `pyvista`/`trimesh`/`numpy` (`extractPatches.py`) |
 | **Meshing page (snappyHexMesh)** | `blockMesh`, `surfaceFeatureExtract`, `snappyHexMesh` (+ `decomposePar`/`reconstructParMesh`/`mpirun` for parallel) |
 | **Meshing page (cfMesh)** | `surfaceFeatureEdges`, `cartesianMesh` (OpenMP, `OMP_NUM_THREADS`) |
-| **Merge meshes** | `mergeMeshes`, `stitchMesh`, `checkMesh` |
-| **Assemble (non-conformal couple)** | `mergeMeshes` + `createNonConformalCouples` (see note below) |
+| **Merge meshes** | `mergeMeshes`, `stitchMesh`, `splitMeshRegions` (one cellZone per part), `checkMesh` |
+| **Assemble (non-conformal couple)** | `mergeMeshes` + `splitMeshRegions`; coupled interfaces are retyped in `constant/polyMesh/boundary` as non-conformal `cyclicAMI` (no extra utility, see note below) |
 | **Draft-tube inlet from CSV** | `MESH_PYTHON_BIN` (`csv_to_boundaryData.py`, pure Python) |
 | **Solver** | the case's `application` (e.g. `simpleFoam`/`pimpleFoam`); parallel path adds `decomposePar` + `mpirun` + `reconstructPar` |
-| **Export → CFD-Post** | `pvbatch` (+ `xvfb`), `foamDictionary`, `postProcess`, and `MESH_PYTHON_BIN` + `h5py` for the transient time-series merge |
-| **Terminal** | a login shell (opt-in; `node-pty` for a real PTY, else piped fallback) |
+| **Export → CFD-Post** | `pvbatch` (+ `xvfb`) and `MESH_PYTHON_BIN` + `h5py` for the transient time-series merge |
+| **Terminal** | an interactive shell, `bash -i` by default (opt-in; `node-pty` for a real PTY, else piped fallback) |
 
-> **Coupling note (ESI v2406):** the app's merge/stitch path is written for ESI positional CLI. `createNonConformalCouples` originated on OpenFOAM.org v12; on v2406 verify the utility and its patch-argument order on the box before relying on the Assemble coupling in production (see `BUG_AUDIT.md`).
+> **Coupling note (ESI v2406):** the app's merge/stitch path is written for ESI positional CLI. Assemble coupling does not call `createNonConformalCouples` (an OpenFOAM.org utility): it retypes the chosen interface patches as non-conformal `cyclicAMI` in the boundary file. Validate a coupled case end-to-end on the deploy box before relying on it in production (see `brain/features/merge-and-assembly.md`).
 
 ---
 
@@ -377,15 +382,16 @@ Prefix `/api/v1`. Errors use a normalized envelope `{ error: { code, message } }
 | `GET/POST` | `/users`, `/users/:id` | **super-admin only** |
 | `GET` | `/audit-logs` | **super-admin only** (read-only) |
 
+This table is a summary; the exhaustive list (118 REST routes + the terminal WebSocket, with guards, validation and error codes) is in `brain/architecture/api-routes.md`.
+
 Projects are visibility-scoped: a user sees only projects they own or collaborate on; a super-admin sees all. A project the viewer may not see returns `404` (no existence leak). Only the owner or a super-admin can delete a project or manage its collaborators.
 
 ---
 
 ## 10. Known issues
 
-A full read-only bug audit of the codebase lives in **`BUG_AUDIT.md`** (4 CRITICAL / 10 HIGH / 24 MEDIUM / 21 LOW, ranked, each with a file:line and a concrete failure scenario). **Read it before a production rollout** — several findings ship silent data corruption or can take down the API. None are fixed yet. Highlights:
+The living register of known bugs, technical debt and open threads is **`brain/known-issues.md`**. It merges the original read-only bug audit (4 CRITICAL / 10 HIGH / 24 MEDIUM / 21 LOW) with the v1.0.1 fix log: every CRITICAL and HIGH finding is fixed (some still need confirmation on the Debian deploy box), while most MEDIUM and LOW findings remain open. **Read it before a production rollout.**
 
-- **CGNS export scrambles time-step order** once a case has ≥10 written times (this branch's flagship feature).
-- **Deleting a user** cascade-deletes their projects and orphans multi-GB storage on disk.
-- **An unhandled solver-log stream error** can crash the whole API mid-run.
-- **Logout doesn't clear the client cache**, so the next user on a shared machine sees the previous user's data.
+## 11. Project knowledge base (`brain/`)
+
+Agent and developer documentation lives in **`brain/`** (index: `brain/README.md`): current state (`STATUS.md`), monthly changelog, architecture (routes, data model, storage layout, configuration, frontend), conventions (workflow, code style, testing, UI, vocabulary), one file per feature, a file-by-file code map, and the design specs and implementation plans. AI agents start from `AGENTS.md` (imported by `CLAUDE.md`).

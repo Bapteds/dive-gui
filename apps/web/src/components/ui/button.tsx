@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 /**
  * Button - the app's single button primitive.
  *
- * Variants follow DESIGN.md section 6:
+ * Variants follow brain/design/design-system.md section 6:
  *  - primary:     orange CTA fill behind white text (one per zone).
  *  - secondary:   blue outline, primary-tint hover.
  *  - ghost:       transparent, page-bg hover (low-emphasis / toolbar).

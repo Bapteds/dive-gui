@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/check-changelog.sh\"",
+            "timeout": 20,
+            "statusMessage": "Checking brain changelog"
+          }
+        ]
+      }
+    ]
+  }
+}

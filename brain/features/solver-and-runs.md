@@ -1,0 +1,128 @@
+# Feature · Solver and runs
+
+> **Status**: in production · **Updated**: 2026-09-28
+> **Specs**: no dedicated spec in `brain/specs/` (design traced in `brain/changelog/2026-06.md` and `2026-07.md`, "Solveur" and "Solver v2" entries) · **Codemaps**: `brain/codemap/web-features-meshing-solver.md` (section `features/solver`), `brain/codemap/api-projects.md` (`runs.*`, `files.service.ts`), `brain/codemap/api-lib.md` (`openfoamCase`, `streamRunner`, `runStorage`, `residualParser`, `cores`, `openfoamCommand`), `brain/codemap/root-shared-mcp.md` (solver catalog, turbulence, runs)
+
+## 1. Purpose
+
+Make a project's OpenFOAM case runnable, then launch an ESI v2406 solver (serial or MPI parallel) and follow its convergence live. The user picks a solver from the ESI library and a turbulence model, lets the app generate the `system/`, `constant/` and `0/` files consistent with that pair, adjusts the parameters (Easy or Advanced), then launches the run. Two side tools live in the same feature: the turbulence calculator (k / ε / ω seeds) and the TopoSet assistant. Access: any member who can see the project (owner, collaborator, super-admin) can configure, launch and stop a run; an invisible project answers 404.
+
+## 2. User journey
+
+### `Solver` tab (`/projects/:id`, tab disabled as long as there is no `constant/polyMesh/`)
+1. **Loading**: `SolverSkeleton` during `GET /runnable`; on error, a `role="alert"` block "We could not load the solver status." + `Retry` button.
+2. **Setup assistant** (`SolverSetupWizard`), opened automatically on the first response if the case is not runnable, or via `Reconfigure` / `Configure the solver`:
+   - Step 1, solver: card of the current solver (the one from `controlDict` if it is in the library, otherwise `simpleFoam`) + `Browse all solvers` (`SolverBrowserDialog`: 41 solvers grouped into 12 families, search, `Guided` badge for the `full` tier, `Base setup` for the `base` tier).
+   - Step 2, turbulence: `TurbulencePicker` (Laminar/DNS, RANS, LES/DES; default `kOmegaSST`), "align the boundaryFields" checkbox checked by default, warning if LES/DES with a `steady` solver. Single orange CTA `Generate and continue`: scaffold then `sync-boundaries`.
+   - Step 3, files: 90 % overlay `SolverFilesStep` (`FileTreeEditor` editor restricted to `system/`, `0/`, `constant/` excluding `polyMesh`, plus `Add from template file`). Closing the overlay ends the assistant.
+3. **"not runnable" gate** (`NotRunnableGate`) if the assistant is closed and the case is still not runnable: list of missing files + CTA `Configure the solver`.
+4. **Runnable panel** (`RunnablePanel`):
+   - `SolverConfigPanel`: `Reconfigure`, core selector (remembered in `localStorage` `dive.solver.cores.<projectId>`), orange CTA `Run solver` then `Run again`, `Configure` button that opens the "Configure the solver" dialog in Easy mode (guided form, default if `scaffoldable`) or Advanced (`application` field + raw CodeMirror editor with 600 ms autosave). `ChangeSolver`: explicit two-step solver change (`Apply <solver>` / `Cancel`). Every edit is locked during an active run.
+   - `LiveRun`: status badge, `Elapsed` timer, last iteration, `Stop run` button (secondary, danger-tinted) while the run is active, `RunBanner` banner once terminal (`role="alert"` for `failed`), `ResidualChart` graph (SVG, log Y axis, "Show residual values" table for screen readers), `RunLog` log (`role="log"`, follows the tail unless the user scrolls up).
+   - `RunHistory`: runs from most recent to oldest (status, solver, date, duration, exit code).
+5. **End messages** (`RunBanner`): `converged` "Run converged. The residuals met the convergence tolerance.", `completed` "Reached endTime without meeting the convergence tolerance.", `diverged` "Residuals diverged…", `failed` "Run failed. See the log for the error.", `stopped` "Run stopped."; the server `reason` replaces the default text if it exists.
+
+### Tools in the "Case files" bar (`CaseFilesSection`, Detail tab)
+- **`Calculator`**: `TurbulenceCalculatorDialog`. Inputs U (default 2 m/s), Dh (0.1 m), ν (1e-6, water), intensity I in % (5), remembered in `localStorage` `dive.turbulence-calculator.<projectId>`. The model is read from `constant/turbulenceProperties` (indicative fallback `kOmegaSST`) and is used to highlight the relevant seeds. Copy button per value, `Write to case`.
+- **`TopoSet`**: `TopoSetDialog` in three screens (mode, cylinder, done). Basic: zone (default `rotor`), points `p1`/`p2`, radius, generates `cylinderToCell` + `setToCellZone`. Manual: commented skeleton with an empty `actions ( );`. Never runs `topoSet`: the final screen reminds the user to run it on the server (`Open files` link).
+
+## 3. Business rules and invariants
+
+- **"runnable" gate** (`computeRunnable`, `files.service.ts`): complete mesh (`constant/polyMesh/{points,faces,owner,neighbour,boundary}`) + solver required files specialized to the turbulence model (`requiredFilesForModel`: only the `0/` fields read by the model, never a stale `0/omega` in k-ε) + correct `system/` numerics (`systemNumericsNeedsRepair` on `controlDict`, `fvSchemes`, `fvSolution`: `application` = solver, `endTime` > 1 in steady state, `SIMPLE`/`PIMPLE`, `pRef` in incompressible, `div(phi,<field>)` and a linear solver for each transported field…). `foamRun`, an unknown or missing solver are never runnable (missing files computed against the `simpleFoam` set). `maxCores` returned to the front end = `SOLVER_TOTAL_CORES` or the number of logical cores.
+- **ESI catalog** (`packages/shared`): `SOLVER_IDS` = 41 ESI v2406 binaries + `foamRun` (reserved, never runnable). `SOLVER_CATALOG` is **generated** by `buildSolverSpec` from `SOLVER_LIBRARY`: families `incompressible`, `compressible`, `supersonic` = `full` tier (complete template, `nu` or `mu`, p residual and relaxation, SIMPLEC in steady state); all other families = `base` tier (same incompressible RANS file set, universal parameters). Three effective levels: `full`, `base`, `foamRun` placeholder. The categories `compressible`, `supersonic`, `heatTransfer`, `combustion` get the compressible set (`thermophysicalProperties`, `0/T`, `0/alphat`, absolute `0/p`).
+- **Easy parameters**: `turbulence` (fluid families), `nu` / `mu`, initial `U`, initial `T` and `p` (compressible full), `endTime`, `writeInterval`, then `deltaT` / `adjustTimeStep` / `maxCo` in transient, or p residual / p relaxation / `Consistent (SIMPLEC)` (`system/fvSolution`, `SIMPLE.consistent`) in steady full. The `rasModel` parameter is never spliced: it goes back through the scaffold (rewrites `turbulenceProperties` and the `0/` fields).
+- **Scaffold** (`scaffoldSolver`), idempotent: `system/` trio rewritten only if it needs repair, `0/p` rewritten if its dimension does not match the family (kinematic vs Pa), other files only if missing; `application` forced; `turbulenceProperties` rewritten if different; turbulence fields created for the model (carry-over of the mixing-length inlet between `omega` and `epsilon` via `carryTurbulenceInlet`), auto-managed wall functions refreshed, fields not read removed from `0/` and `0.orig/`. `0.orig/` is copied to `0/` if `0/` is missing. Effective model: explicit choice, otherwise the case's model, otherwise `kOmegaSST`.
+- **Model-aware fvSchemes / fvSolution** (`renderSolverFile`): transported fields = the model's fields minus `nut`; each one gets `div(phi,<field>)` (bounded Gauss upwind in steady, Gauss limitedLinear 1 in transient), a place in the regex of the `U` linear solver, `residualControl` / `relaxationFactors` entries. Steady: SIMPLE `consistent yes` (SIMPLEC by default), residuals 1e-4 (1e-3 in compressible). Transient: `Euler`, PIMPLE, `adjustTimeStep yes`, `maxCo 1`. `wallDist meshWave` everywhere.
+- **Run admission** (`startRun`): at most `SOLVER_MAX_CONCURRENT_RUNS` (default 1) active run per project (409 `RUN_IN_PROGRESS`); no mesh 409 `NO_MESH`; not runnable 422 `NOT_RUNNABLE`; solver = `controlDict`, otherwise body, otherwise `SOLVER_BIN` (outside `SOLVER_IDS`: 422); `cores` > machine budget 422 `TOO_MANY_CORES`; sum of the active cores across **all projects** + request > budget: 409 `NOT_ENOUGH_CORES`. Recount and creation of the `queued` row under the FIFO lock `runExclusive('startRun')` (H2).
+- Before each run: a leftover `stopAt writeNow;` is reset to `stopAt endTime;` (`clearGracefulStop`) and `runTimeModifiable true;` is guaranteed.
+- **End classification** (`classifyExit`, in this order): binary not found `failed`; stop requested `stopped`; timeout `SOLVER_MAX_RUNTIME_MS` `failed`; `nan`/`inf` residual or "floating point exception" `diverged`; `FOAM FATAL` `failed`; exit 0 with the banner "solution converged in N iterations" `converged`, otherwise `completed` (end of iterations without reaching the tolerance, never `diverged`); other exit `failed`. A non-numeric residual token is not a divergence.
+- **First writer wins**: every terminal update filters on the active statuses (`updateMany`), so a stop, a reconciliation or a concurrent end do not overwrite one another.
+- **Stop**: idempotent; writes `stopAt writeNow;` (clean stop with a write), then SIGTERM after `RUN_STOP_GRACE_MS` (30 s) if the process is still alive; without a local handle (after a restart) the row goes directly to `stopped`.
+- **Calculator**: `Re = U·Dh/ν`, `k = 1.5·(U·I)²`, `L = 0.07·Dh`, `ε = k^1.5/(Cmu^0.75·L)`, `ω = k^0.5/(Cmu^0.75·L) = ε/k`, `Cmu = 0.09`. `Write to case` rereads each file bypassing the cache then splices `internalField uniform <v>` into `0/k` and into `0/omega` if present, otherwise `0/epsilon`.
+
+## 4. Technical flow
+
+### Gate and assistant
+`SolverTab` → `useRunnableQuery` (`['projects', id, 'runnable']`, `staleTime` 10 s) → `GET /api/v1/projects/:id/runnable` → `verifyRunnable` → `computeRunnable`. Wizard step 2: `useScaffoldSolver` → `POST /projects/:id/runnable/scaffold` `{ solver?, turbulence? }` (zod: `SOLVER_IDS`, `TURBULENCE_MODEL_IDS`) → `scaffoldSolver` → `openfoamCase.renderSolverFile` / `renderTurbulenceProperties` / `setApplication` / `carryTurbulenceInlet`. On success: `setQueryData` of the runnable + invalidation of `['projects', id, 'files']`. Then `useSyncBoundaries` → `POST /projects/:id/files/sync-boundaries` (the controller forces `merge` mode: existing BCs kept, new patches get the default `fieldBcBody`).
+
+### Easy / Advanced configuration
+`SolverEasyForm` loads in parallel (`useQueries`, key `caseFileContentQueryKey`) each file cited by `SOLVER_CATALOG[solver].easyParams`, splices the value with `foamModel.setFoamValue` (or `insertFoamField`) and saves via `useSaveCaseFile` → `PUT /projects/:id/files/content`. `TurbulenceField` goes through `useScaffoldSolver({ solver, turbulence })`. `AdvancedConfig`: `application` written into `system/controlDict`, then `RawFileEditor` on a real case file.
+
+### Serial launch
+`useStartRun` → `POST /projects/:id/runs` `{ cores? }` (sent only if > 1) → `startRun` → `planOpenfoamCommand(solver, ['-case', caseDir])` (wrapper `bash -c 'source "$OPENFOAM_BASHRC" && exec "$@"'` if configured) → `runStream` (`streamRunner`, output appended to `runs/<runId>/solver.log`) → `running` row (`pid`, `command`, `logPath`) → 201 response → `finalizeRun` hooked on `onExit`.
+
+### Parallel launch
+Immediate `queued` response, then `launchParallelRun` in the background: "Decomposing the mesh…" message in the log, writing of `system/decomposeParDict` (`renderDecomposeParDict(cores, DECOMPOSE_METHOD)`; balanced grid for `simple`/`hierarchical`), `decomposePar -case <dir> -force` (timeout `SOLVER_DECOMPOSE_TIMEOUT_MS`, output copied into the log; failure: `failed` with the last 3 lines), early exit if stopped during decomposition, then `MPI_BIN <MPI_RUN_FLAGS> -np N <solver> -case <dir> -parallel` via `runStream`, `running` row. At the end: `finalizeRun` classifies the exit then `reconstructPar -case <dir>` (all times) and deletes `processor0..N-1` on success (kept otherwise, error only logged). Any exception ends in `failed`, never stuck in `queued`.
+
+### Live log, residuals, polling
+`useRunsQuery` (`['projects', id, 'runs']`) and `useRunLogQuery` (`['projects', id, 'runs', runId, 'log']`) poll every 1,200 ms as long as no data has arrived or the status is `queued`/`running` (polling resumes after a failed fetch, H5), then stop. `GET /runs/:runId/log` → `getRunLog`: bounded read of the last `SOLVER_LOG_MAX_BYTES` bytes (32 MiB, H3), `parseResiduals` (one sample per `Time =`, **initial** residual per field, leading `(` of vector residuals removed) then `downsampleResiduals` (4,000 points max), 20,000-character tail, total size. The displayed status comes from the log payload, with a fallback to the list.
+
+### Stop
+`useStopRun` → `POST /runs/:runId/stop` → `stopRun` (see §3); `onExit` then triggers `finalizeRun`, which classifies as `stopped`.
+
+### Reconciliation at boot (H1)
+`server.ts` launches `reconcileOrphanRuns()` without awaiting it: for each active run with a `pid`, `killOrphanIfOurs` reads `/proc/<pid>/cmdline`, only kills if the command line contains the case folder (SIGTERM then SIGKILL after the grace period; no-op outside Linux), then all active rows go to `failed` ("Interrupted by a server restart"). The log is kept.
+
+### Project or account deletion
+`stopProjectRuns` (without access control) sends SIGTERM to each active handle and marks the rows `stopped` ("Project or account deleted") before the deletion (M3, C2).
+
+### Case files tools
+Calculator: `useCaseFilesQuery` (presence of `0/k`, `0/omega`, `0/epsilon`), `useCaseFileContentQuery('constant/turbulenceProperties')`, `getCaseFileContent` then `useSaveCaseFile`. TopoSet: `useCaseFilesQuery` (existence of `system/topoSetDict`, `Overwrite file` button), then `useCreateCaseFile` or `useSaveCaseFile`.
+
+## 5. Data and storage
+
+- **Prisma `Run`**: `projectId` (cascade), `solver`, `cores` (default 1), `status` (string validated in the app, `RUN_STATUSES` = `queued`, `running`, `converged`, `completed`, `diverged`, `failed`, `stopped`), `pid` (non-null only during execution), `exitCode`, `command` (displayed logical line), `logPath` (`runs/<runId>/solver.log`), `reason`, `startedAt`, `finishedAt`. Index `(projectId, status)` for the concurrency guard.
+- **Disk**: `STORAGE_DIR/projects/<id>/case/` (generated files, temporary `processor<N>/`, time folders); `projects/<id>/runs/<runId>/solver.log` (never purged individually, survives the case reset, deleted with the project). See `brain/architecture/storage-layout.md`.
+- **API process memory state**: `handles` (runId → `StreamHandle`), `stopRequested`, `locks`. Lost on restart, hence the reconciliation.
+- **Web caches**: `['projects', id, 'runnable']` (updated by the scaffold's `setQueryData` and invalidated by `sync-boundaries`, not by `useStartRun`); `useStartRun` / `useStopRun` invalidate `['projects', id, 'runs']`, a prefix that also covers the logs; `useScaffoldSolver` invalidates `['projects', id, 'files']` (tree and contents).
+- **`localStorage`**: cores per project, calculator inputs per project.
+
+## 6. Configuration and external dependencies
+
+- `OPENFOAM_BASHRC` (sourced for the solver, `decomposePar`, `reconstructPar`, `mpirun`), `SOLVER_BIN` (default `simpleFoam`, fallback if `controlDict` has no `application`), `SOLVER_MAX_RUNTIME_MS` (6 h), `SOLVER_MAX_CONCURRENT_RUNS` (1), `SOLVER_LOG_MAX_BYTES` (32 MiB), `RUN_STOP_GRACE_MS` (30 s), `SOLVER_TOTAL_CORES` (0 = logical cores), `SOLVER_DECOMPOSE_TIMEOUT_MS` (30 min), `MPI_BIN` (`mpirun`), `MPI_RUN_FLAGS` (OpenMPI default `--allow-run-as-root --use-hwthread-cpus --oversubscribe`), `DECOMPOSE_METHOD` (`scotch`; `hierarchical`/`simple` if scotch is missing).
+- `decomposePar` and `reconstructPar` are hard-coded in `runs.service.ts` (K5); `DECOMPOSE_PAR_BIN` is only read by the snappy pipeline.
+- Missing binary: the run ends `failed` with "Solver binary not found. Check the OpenFOAM environment on the server (OPENFOAM_BASHRC)…". Missing `decomposePar`: `failed` "decomposePar could not start".
+- `killOrphanIfOurs` relies on `/proc`: Linux only.
+
+## 7. Tests
+
+- `apps/api/tests/solver.test.ts`: full lifecycle (`converged`, `completed`, `failed` on non-zero exit, `FOAM FATAL`, ENOENT, `diverged` even with exit 0, `stopped`), `stopAt` reset, 409 `RUN_IN_PROGRESS`, simultaneous starts (H2), `NO_MESH`, `NOT_RUNNABLE`, 404 for an outsider, reconciliation at boot, parallel pipeline (`decomposePar -force`, `mpirun -np 4`, `reconstructPar`), `NOT_ENOUGH_CORES`, `TOO_MANY_CORES`, decomposition failure not stuck in `queued`. Fake streamed runner (`setStreamRunner`).
+- `apps/api/tests/runnable.test.ts`: `renderSolverFile` renders (simpleFoam, pimpleFoam, rhoSimpleFoam, rhoPimpleFoam, turbulence variants), `renderDecomposeParDict`, `setApplication`, `carryTurbulenceInlet`; gate + scaffold integration (idempotence, solver switch, compressible, per-model fields, wall functions, `laminar`, `LRR`, guided `interFoam`, `foamRun` not runnable); `sync-boundaries`.
+- `apps/api/tests/solverCatalog.test.ts`: contract of the shared catalog (tiers, required files, Easy parameters, SIMPLEC only in steady full).
+- `apps/api/tests/residualParser.test.ts`: residual parsing, `converged`, `diverged` on `nan`/`inf`, non-divergent iteration cap, `foamError`, downsampling.
+- `apps/web/src/features/solver/SolverTab.test.tsx`: wizard journey, solver and turbulence choice, runnable panel, persisted cores, parallel run, turbulence via scaffold, display of a converged run.
+- Not covered: `TurbulenceCalculator`, `TopoSetDialog`, `ResidualChart` (no dedicated test).
+
+## 8. History
+
+- 2026-06-24: Slice 0 (runnable simpleFoam case + gate), Slice 1 (`Run` model, background execution, reconciliation), Solver tab with live convergence monitor (`brain/changelog/2026-06.md`).
+- 2026-06-29: `clearGracefulStop` (a run relaunched after Stop stopped after one write).
+- 2026-07-02: Solver v2, slices A to F6: shared catalog, compressible solvers, solver then turbulence assistant, full ESI library, gate/scaffold by tier, choice overlay, Easy/Advanced (`brain/changelog/2026-07.md`).
+- 2026-07-03: parallel runs (cores, global budget, decomposePar/mpirun/reconstructPar, asynchronous launch), model-aware `fvSchemes`/`fvSolution`, automatic wall functions.
+- 2026-07-07: `Consistent (SIMPLEC)` checkbox; `reconstructPar` of all times.
+- 2026-07-08 and 2026-07-09: turbulence calculator (first in the assistant, then as the Case files `Calculator` button, project model and remembered inputs); `TopoSet` button.
+- 2026-07-10: v1.0.1 fixes H1, H2, H3, H5, M3, C2, C3.
+- 2026-07-13: a run that reached its iteration limit is no longer classified `diverged`.
+
+## 9. Known limits and bugs
+
+- **H1** ⚠️ orphan kill via `/proc`: to validate on the Debian server. **C3** ⚠️ log write error caught: to validate.
+- **M1**: no "active run" guard on destructive case mutations (reset, merge, restore, autoPatch…).
+- **M6**: a `streamRunner` timeout kills with SIGKILL and can orphan the MPI ranks.
+- **M13**: two quick Easy edits, the second overwrites the first on the server.
+- **M18**: `buildSolverSpec` gives non-RANS solvers (interFoam, solidDisplacementFoam…) the incompressible RANS family and required files.
+- **L5**: stop/launch race between `decomposePar` and the handle registration. **L6** / **K7**: the `solver` override of `startRun` is ignored (the `controlDict` wins). **L7**: the generic skeleton (`foamRun`) writes `application foamRun;`. **L8**: `fmtFoamNumber` flattens |x| < 5e-7. **L18**: duplicated tick keys in `ResidualChart`.
+- **K4** circular import `projects.service` / `runs.service`; **K5** hard-coded `decomposePar`/`reconstructPar`; **K6** `startRun` lock global to all projects; **K22** calculator: ω with `Cmu^0.75` (see below) and only `0/omega` written if both files exist; **K23** `RawFileEditor` could send back a stale draft after `Apply` of a solver change; **K24** `TopoSetDialog` never reset, `p1`/`p2` not validated, `clampCores` returns 0 if `maxCores` is 0; **K29** `renderSolverFile('constant/turbulenceProperties')` always renders `kOmegaSST` (the scaffold uses `renderTurbulenceProperties`); **K31** in-memory locks, single API instance.
+- **Note on K22**: the code is faithful to `documents/calculator/turbulence_cfd_notes.md`, which itself writes `ω = k^0.5/(0.09^0.75·L)`. The gap (factor ≈ 3.3) is between the note and the usual form `ω = k^0.5/(Cmu^0.25·L)`, not between the note and the code. Formula decision to be made with the user.
+- **Dead code**: in `computeRunnable`, the "known but non-configurable solver" branch (`scaffoldable: false`, `system/` trio only) is unreachable, since `isConfigurableSolver` is true for the whole library. Likewise, the `!isConfigurableSolver` branch of `scaffoldSolver` now only serves `foamRun`.
+- Meshing job cores are not counted in the global run budget (L21).
+
+## 10. Changing this feature
+
+- **Gate / scaffold parity**: `systemNumericsNeedsRepair` detects through markers what `renderSolverFile` emits. Any change to a `system/` render requires reviewing the markers, otherwise the gate declares a freshly generated case "not runnable" or the scaffold stops being idempotent. Same logic for `requiredFilesForModel` and the list of fields written by the scaffold.
+- **Shared contract**: `SOLVER_LIBRARY`, `SOLVER_CATALOG`, `TURBULENCE_MODELS` live in `packages/shared/src/index.ts`; rebuild `@dive/shared` before the API tests. `TURBULENCE_MODEL_IDS` must be kept aligned by hand with `TURBULENCE_MODELS` (zod validation).
+- **Statuses**: adding a status requires touching `RUN_STATUSES`, `ACTIVE_RUN_STATUSES`, `runStatusMeta.ts`, `RunBanner` and the dashboard counters.
+- **Polling**: the `runs` keys are a prefix of the `log` keys; an invalidation of the runs also refetches the logs.
+- `isConfigFile` and `clampCores` are duplicated between `SolverConfigPanel` and `SolverFilesStep` (resp. the meshing forms).
+- The fake runners in `solver.test.ts` imitate OpenFOAM output: a change to the regexes of `residualParser` or `classifyExit` must be carried over into the scripted logs.
+- Update this sheet, the relevant codemaps and `brain/changelog/` in the same change.

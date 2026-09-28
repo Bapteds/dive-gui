@@ -13,7 +13,7 @@ import { useAuth } from '@/features/auth/AuthProvider';
 import { ApiError } from '@/lib/api/client';
 
 /**
- * LoginPage - the sign-in screen (DESIGN.md section 7.1).
+ * LoginPage - the sign-in screen (brain/design/design-system.md section 7.1).
  *
  * Calm full-height page on the page-bg tint with the faint blueprint ground; a
  * centered card (lg radius) holds the brand lockup, a "Sign in" title, the email
@@ -41,7 +41,7 @@ export function LoginPage() {
   const [formError, setFormError] = useState<string | null>(null);
   // Rejected credentials mark both fields (not one) since the server never says
   // which is wrong. Cleared as soon as the operator edits either field so the
-  // danger borders track the live input (DESIGN.md section 7.1).
+  // danger borders track the live input (brain/design/design-system.md section 7.1).
   const [credentialsInvalid, setCredentialsInvalid] = useState(false);
 
   const {

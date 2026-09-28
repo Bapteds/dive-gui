@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 import { useFieldControl } from './field';
 
 /**
- * Select - dropdown select on Radix Select (DESIGN.md section 6).
+ * Select - dropdown select on Radix Select (brain/design/design-system.md section 6).
  *
  * The trigger matches the Input shape (40px, sm radius, hairline border, focus
  * ring). The content popover uses the md shadow. The trigger consumes Field

@@ -16,7 +16,7 @@ import { useDeleteUser } from './useUsers';
 
 /**
  * DeleteUserDialog - destructive confirmation for removing an account
- * (DESIGN.md section 7.3).
+ * (brain/design/design-system.md section 7.3).
  *
  * Names the account being removed, confirms with a destructive button (the
  * pre-styled AlertDialog action) and a secondary cancel. The confirm click is
@@ -48,7 +48,7 @@ export function DeleteUserDialog({ open, onOpenChange, user }: DeleteUserDialogP
     }
   };
 
-  /** Map a thrown ApiError to a clear toast message (DESIGN.md section 7.3). */
+  /** Map a thrown ApiError to a clear toast message (brain/design/design-system.md section 7.3). */
   function handleServerError(error: unknown) {
     if (error instanceof ApiError) {
       switch (error.code) {

@@ -5,7 +5,7 @@ import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 
 /**
- * AppShell - the authenticated layout (DESIGN.md section 5).
+ * AppShell - the authenticated layout (brain/design/design-system.md section 5).
  *
  * Fixed top Header, a left Sidebar on desktop, and a main content area that
  * renders the matched child route via <Outlet/>. Content is centered to a

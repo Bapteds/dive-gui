@@ -9,7 +9,7 @@ import { useAuth } from '@/features/auth/AuthProvider';
 import { visibleNavItems } from './nav';
 
 /**
- * MobileNav - the sidebar as a slide-over for < 1024px (DESIGN.md section 5).
+ * MobileNav - the sidebar as a slide-over for < 1024px (brain/design/design-system.md section 5).
  *
  * A `Menu`-triggered Radix Dialog panel that slides in from the left, holding
  * the same nav items as the desktop sidebar. It closes automatically on route

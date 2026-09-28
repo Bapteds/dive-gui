@@ -1,7 +1,7 @@
 import { Toaster as SonnerToaster, type ToasterProps } from 'sonner';
 
 /**
- * Toaster - tokenised sonner toast host (DESIGN.md section 6).
+ * Toaster - tokenised sonner toast host (brain/design/design-system.md section 6).
  *
  * Top-right, 4s auto-dismiss, light theme. Toasts are announced politely and
  * never steal focus (sonner default). Success toasts carry the success accent,

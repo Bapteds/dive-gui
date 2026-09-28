@@ -1,0 +1,212 @@
+# Codemap: API tests (vitest + supertest)
+
+> Scope: `apps/api/tests/**` (excluding `apps/api/tests/fixtures/`), `apps/api/vitest.config.ts` · Updated: 2026-09-28
+
+## Overview
+Integration and unit suite for the Express API, run by vitest in a `node` environment (34 `*.test.ts` files + `globalSetup.ts` + `helpers.ts`). `vitest.config.ts` injects a complete test environment (`DATABASE_URL=file:./test.db`, `STORAGE_DIR=./test-storage`, dummy JWT secrets, Python stubs), `globalSetup.ts` recreates the SQLite schema once per run (`prisma db push --force-reset`), and `fileParallelism: false` serializes files on this single database.
+Two families of tests coexist: (1) **HTTP integration** via `supertest` on the shared `app` instance from `helpers.ts`, with `resetDatabase()` in `beforeEach` and, for file features, `fs.rm('./test-storage')`; (2) **pure unit tests** (OpenFOAM dictionary renderers, parsers, the `@dive/shared` chamber model) with no HTTP and no DB.
+No external tool (OpenFOAM, Python/CadQuery, PyVista, ParaView, mpirun) is ever launched: the injection points `setCommandRunner` (`src/lib/commandRunner.ts`, one-shot) and `setStreamRunner` (`src/lib/streamRunner.ts`, long streamed process) receive fakes that write to disk the artifacts the real tool would produce, then are restored with `setX(null)` in `afterEach`. `logicalCommand` (helpers) lets fakes see through the `bash -c 'source "$OPENFOAM_BASHRC" …'` wrapper.
+The two Python stubs in `apps/api/tests/fixtures/` (`CgnsToVtk.py`, `extractPatches.py`, out of scope) only exist to satisfy the script existence check (`CGNS_TO_VTK_SCRIPT`, `EXTRACT_PATCHES_SCRIPT`); they call `sys.exit` and are never executed.
+Suites known to fail outside CI when `apps/api/.env` defines `OPENFOAM_BASHRC`: `conversion.test.ts` and `meshes.test.ts` (fakes dispatch on raw `spec.command`, see their Notes). Green in CI.
+
+## `apps/api/tests/account.test.ts`
+**Covers**: `PATCH /api/v1/auth/me` (401 without auth, renaming one's own `fullName`, `passwordHash` never serialized, 422 `VALIDATION_ERROR` on a blank name, `role`/`email` fields ignored: no privilege escalation) and `POST /api/v1/auth/change-password` (401, success that returns a new `accessToken`, old password rejected afterwards, 400 `INVALID_PASSWORD`, 422 on a too-short password, revocation of other sessions while keeping the current session via the returned refresh cookie).
+**Technique**: local helper `loginAs(email)` that goes through `POST /auth/login` and returns `accessToken` + `set-cookie`; `createTestUser`; `resetDatabase` in `beforeEach`, `prisma.$disconnect` in `afterAll`.
+**Notable cases**: two sessions A and B open, change made from A: B's cookie is rejected (401), A's rotated cookie passes (200).
+
+## `apps/api/tests/accountStatus.test.ts`
+**Covers**: `PATCH /api/v1/users/:id { isActive }`. Disabling: `tokenVersion` goes to 1, refresh rejected, still-valid access token rejected on `/auth/me`, re-login 403 `ACCOUNT_DISABLED`. Re-enabling makes login possible again. 409 `PROTECTED_ACCOUNT` on the protected super-admin, 409 `SELF_DISABLE_FORBIDDEN` on oneself (even when not protected). No-op re-enabling of an active account: `tokenVersion` unchanged. `lastLoginAt` stamped on login.
+**Technique**: `createProtectedAdmin`, `authHeader`, direct read of `prisma.user` to check `tokenVersion`.
+**Notable cases**: the "no self-disable" rule is tested with an `isProtected: false` super-admin, to prove it is independent of protection.
+
+## `apps/api/tests/appConfig.test.ts`
+Single test of `GET /api/v1/config` without authentication: returns exactly `{ terminalEnabled: false }` since `TERMINAL_ENABLED` is not defined in the test env (the project terminal is disabled by default). No DB reset.
+
+## `apps/api/tests/audit.test.ts`
+**Covers**: `GET /api/v1/audit-logs` (401, 403 `FORBIDDEN` for a `USER`) and action recording: `LOGIN` with `actorEmail` and `createdAt`, `USER_CREATED` with `targetEmail` and `metadata.role`, `USER_DISABLED`, sorting and the `limit` parameter (`?limit=1` returns one entry), 422 on `limit=9999`.
+**Technique**: actions triggered through the real API then read back from `res.body.logs`.
+**Notable cases**: no strict assertion on entry order beyond size ("newest first" is only checked via `limit`).
+
+## `apps/api/tests/auth.test.ts`
+**Covers**: `POST /auth/login` (200 + `accessToken` + `user` without `passwordHash` or `tokenVersion`, `refresh_token` cookie `HttpOnly` and `Path=/api/v1/auth`), 401 `INVALID_CREDENTIALS` with the same `Invalid email or password` message for a wrong password and an unknown email, 422 on a malformed body; `GET /auth/me` (401 without token or with a malformed token, 200 otherwise); `POST /auth/refresh` (200 with cookie, 401 without); `POST /auth/logout` (204, `tokenVersion` incremented, old refresh rejected, 401 without auth).
+**Technique**: `extractRefreshCookie` (helpers) to read the cookie; `createProtectedAdmin`.
+**Notable cases**: locks in email anti-enumeration (identical message).
+
+## `apps/api/tests/boundary.test.ts`
+**Covers**: the pure boundary conditions renderers of `src/lib/openfoamCase` (CFD contract from `documents/*_BCs*.txt`) and the `POST /projects/:id/boundary-conditions/apply` endpoint.
+- Unit: `componentInletBc` / `componentOutletBc` per `objectType` (`turbine`: `totalPressure` with p0 = g·H = 490.5 for H=50 and `gamma`; `pipe`: without `gamma`; `chamber` flowRate: `flowRateInletVelocity` + `extrapolateProfile`; `pipe` flowRate without `extrapolateProfile`; `draftTube` csvProfile: `timeVaryingMappedFixedValue`, k mapped only if the CSV column exists, default intensity 0.08 versus 0.05 elsewhere); outlet pressure anchor `fixedValue` (never `fixedMeanValue`); sensitivity to the turbulence model (`kEpsilon` → `turbulentMixingLengthDissipationRateInlet`); `fieldBcBody` for walls. `renderMrfProperties`, `renderDynamicMeshDict` (`solidBodyMotionFvMesh` + `rotatingMotion`) and `renderDynamicMeshDictFree` (`sixDoFRigidBodyMotion`, axis constraint, `sphericalAngularDamper`), exact strings checked.
+- Integration: 401, 409 `NO_MESH`, turbine preset (a single `fixedValue` anchor in `0/p`, walls retyped `wall` in `constant/polyMesh/boundary`), Frozen Rotor (writes `constant/MRFProperties`, no `dynamicMeshDict`), Moving Rotor (writes `constant/dynamicMeshDict`, note mentioning `pimpleFoam`, no MRF), free sixDoF rotor, 422 `INVALID_BC_PLAN` (unknown patch, inlet == outlet, missing driving value, non-rotating or moving patch absent from the mesh), preservation of a `symmetryPlane` patch passed as a wall, 422 `BC_CSV_REQUIRED` for the draft tube without CSV, successful CSV (U + k mapped, omega as fallback with a note), failed CSV (BCs still applied, `csvSteps[0].status === 'failed'`, "did not complete" note).
+**Technique**: `setCommandRunner(csvOkRunner)` in `beforeEach`; `csvOkRunner` reads `caseDir = spec.args[2]` and `patch = spec.args[3]` and writes `constant/boundaryData/<patch>/0/{U,k}`; `csvFailRunner` exits with 1; payload sent as multipart (`.field('payload', JSON)` + `.attach('csv', …)`); fake mesh via `writeCaseFile` (5 `polyMesh` files, only `boundary` is realistic); results read with `readCaseFile` and `parseBoundaryPatchesWithTypes`.
+**Notable cases**: a failure of the CSV tool does not fail the apply (200 response, `success: true`).
+
+## `apps/api/tests/cfMeshDicts.test.ts`
+**Covers** (pure): `resolveMaxCellSize` (configured size, otherwise bounds diagonal/40, `null` without size or bounds for an FMS input) and `renderMeshDict` from `src/lib/cfMeshDicts`: `surfaceFile` and `maxCellSize`, optional entries omitted when undefined, `renameBoundary` block only for typed patches, `boundaryLayers`, `patchBoundaryLayers` only for per-patch overrides, `localRefinement` only if per-patch sizes exist, `noLayerPatches` rendered as `nLayers 0`, `perPatch` override taking precedence over `noLayerPatches`.
+**Technique**: `DEFAULT_CFMESH_CONFIG` from `@dive/shared` extended by a `config(overrides)` helper. Requires `@dive/shared` to be built.
+
+## `apps/api/tests/chamber.test.ts`
+**Covers**: Chamber Creation, `POST /api/v1/chamber/build` and the hash-based reads (`/chamber/:hash/manifest|geometry|edges|export/:kind`).
+- Build: 401, response with `hash` + 12 `outputs` (first is `width`, all finite), manifest with 4 patches, `model/gltf-binary`, STL `application/sla` with `Cache-Control` `immutable`, `warnings: []` on a clean build.
+- Builder warnings: `WARN:` (stderr, first) and `WARNING:` (stdout) prefixes stripped, persisted and returned identically on a cache hit.
+- Deferred STEP for guide vanes (`guideVanes: true`): `stepHasVanes: null` at build, generation with `--step` on the first download then served from disk, `stepHasVanes: true` afterwards; mirrored STEP (`export/stepMirrored`, `chamber-mirrored.step`, `application/step`) that first generates the STEP then calls `mirrorStep.py`, only once; merging of new warnings from the `--step` pass; 409 ("carries the guide vanes") for a fallback without vanes or a build without vanes; clean 502 if the mirrorer fails, then recovery.
+- Per-hash lock: two concurrent identical builds, two first STEP downloads, two concurrent mirrored STEPs, each triggers only one tool execution.
+- Validation before any build: 422 if a model final becomes non-positive ("H Kammer … must be positive"), inverted Min > Max range ("B Kammer", "Min 5000 > Max 4000"), negative or absurd dimensions at the schema level, `x4` ∈ {0, -5, 100 001} rejected, `outletRatio` outside 0.35 to 0.50, `footAngleDeg` outside 0 to 180, `hollow` without `hollowLength`, `x1` out of range.
+- Cache keys: `footAngleDeg`, `guideVanes`, `chamferEnabled`, `feetEnabled`, `outletRatio`, `dFirst`/`dMiddle`, generator overrides (`centralDiameter`, `centralHeight`, `domeHeight`), `x4` (hollow only, ignored in stepped), `simplifyGenerator` (hollow only, hidden heights excluded from the key when active) change the hash without changing the 12 outputs; explicitly sending the values of `computeChamberGeneratorDims(...).resolved` gives the same hash as empty fields.
+- Constraints: `exact` applied (`status: 'set exact'`), refinement via a partner `Exact` (`distFromSideChamfer1` → `width.refined`), can be disabled with `relationsMaster: false`.
+- 502 `CHAMBER_BUILD_FAILED` when the interpreter cannot be found.
+**Technique**: `successRunner` writes into `outDir = spec.args[2]` (`args = [script, paramsJson, outDir]`) `chamber.glb`, `manifest.json`, `edges.bin`, `exports/{chamber.stl,chamber.step,trisurface.zip}`; `vaneRunner(stepHasVanes)` mimics the real policy (without `--step` it deletes `chamber.step`, with `--step` in `spec.args[3]` it writes `build-meta.json`); `withMirrorRunner(builder, mirror)` dispatches on `spec.args[0].endsWith('mirrorStep.py')`; `notFoundRunner` returns an ENOENT `spawnError` and serves as proof that a cache hit does not rerun the builder; `stepRuns`/`mirrorRuns` counters; 50 ms `delay()` to hold the lock during the `Promise.all` calls. `beforeEach` purges `path.join(storageRoot(), 'chamber')` (so `test-storage/chamber`) to prevent a cache from masking a failure path.
+**Notable cases**: no `afterAll` `prisma.$disconnect` in this file. Never runs `buildChamber.py`: the real geometry is covered by `apps/api/scripts/tests` (pytest).
+
+## `apps/api/tests/chamberModel.test.ts`
+**Covers** (pure, `@dive/shared`): `computeChamberOutputs` (12 X1 to X3 fits with relations off, `linear`/`power` shapes, snap to the 50 mm `CHAMBER_GRID_MM` grid, default structural relations `height = LEB + LEOW`, `LEB = 2 × HLE`, chamfer chain `BF1 = LF1`, `LF2 = LF1`, `BF2 = LF2`, `LT = LF1 + LF2`, `LE = 255.16 + 3.4954 × HLE` re-snapped, `relationLabel`, statuses `within range` / `capped at max` / `raised to min` / `set exact` / `! min>max` / `from relation`, `refined` refinement, per-relation `relations` map, `userDriven`: user values propagated without rounding), `nonPositiveChamberFinals` (flags a negative H Kammer at a legal corner x1=700/x2=1.8/x3=23, excludes `noEffect` outputs), `noEffect` flag of `hLast` (LEOW) depending on Exact on height, relation off, master off, but not a simple Min/Max, and never on another output; `computeChamberGeneratorDims` (parity with the Gen Dim v3 workbook at X1=1450/X2=7/X3=10: `x4Auto ≈ 618.03`, `frame 62`, `lengthCode 100`, Ø 1242, height ≈ 1264.47, dome ≈ 344.34; frame choice via `it.each`; `x4` override; rounding to 5 before the 30..215 clamp; an entered Ø re-propagates height and dome; an entered height does not move the dome; `CHAMBER_GENERATOR_FRAME_DIAMETERS_MM`).
+**Technique**: `byKey(outputs)` helper as a `Map`; base input `BASE = { x1: 1450, x2: 7.85, x3: 8, length: 14000 }`.
+**Notes**: the house rule requires these parity tests to evolve together with `computeChamberGeneratorDims` if the `documents/Gen Dim v3 …xlsx` workbook changes.
+
+## `apps/api/tests/chamberSaves.test.ts`
+**Covers**: `/api/v1/chamber/saves` (named, shared snapshots of the build body): 401 on read and create, creation with trimmed name and `owner { id, fullName }`, snapshot normalized by the schema (defaults `variant: 'stepped'`, `guideVanes: false`, `vaneAngleDeg: 50`), visible to all users, 422 for a non-buildable snapshot (negative x1, hollow without `hollowLength`), 409 `NAME_TAKEN` on create and rename, `PUT` that renames and/or replaces the snapshot (rename only keeps the snapshot), 422 for an empty `PUT`, 403 for a non-author, super-admin allowed, 404 after deletion, `DELETE` 204.
+**Technique**: `beforeEach` inside the `describe`; no disconnect `afterAll`.
+
+## `apps/api/tests/conversion.test.ts`
+**Covers**: CGNS upload (`POST/GET/DELETE /projects/:id/cgns`, 400 `INVALID_CGNS` for non-`.cgns`, 404 for an invisible project or a missing file) and the `POST /projects/:id/cgns/convert` pipeline: steps `cgnsToVtk` → `vtkToFoam` → `checkMesh`, `verification.hasMesh`, `checkMesh` output surfaced, "Applied template" note, generation of minimal base files when the template has no `controlDict` ("Generated minimal base files"), short-circuit (`failed` then `skipped`) on failure of the first step, ENOENT `spawnError` surfaced in `stderr`, 404 for unknown CGNS or template, 422 missing field, super-admin allowed on someone else's project.
+**Technique**: `successRunner` dispatches on `spec.command` (`python3` writes the VTK to `spec.args[2]`; `vtkUnstructuredToFoam` writes `constant/polyMesh` into `spec.args[1]`; `checkMesh` returns "Mesh OK."); `failFirstRunner`, `missingBinaryRunner`; templates created in DB + `writeTemplateFile`; `CGNS_TO_VTK_SCRIPT` points to the stub in `fixtures/`.
+**Notes**: **known to fail outside CI** when `apps/api/.env` defines `OPENFOAM_BASHRC`: OpenFOAM commands are then wrapped as `bash -c …` and the fakes, which compare `spec.command` without `logicalCommand`, no longer match (changelog finding, entry of 2026-08-12; fix proposed but not applied). Green in CI.
+
+## `apps/api/tests/dashboard.test.ts`
+**Covers**: `GET /api/v1/dashboard`: shape of server metrics (`cpuPercent` between 0 and 100, `cores > 0`, `memTotalBytes > 0`), `activeRuns` with `projectTitle`, `recentRuns`, grouped `runCounts`, `recentProjects` with per-project counters (`runCount`, `converged`, `diverged`, `other`), isolation by visibility (an outsider sees no run); 401 without auth.
+**Technique**: runs inserted directly via `prisma.run.create`.
+**Notable cases**: depends on the real machine for metrics (bounds assertions only).
+
+## `apps/api/tests/export.test.ts`
+**Covers**: OpenFOAM → CGNS export (`POST/GET /projects/:id/export`, `GET …/export/download/:artifact`): 4 steps `inspect` → `convert` → `validate` → `cfdpost`, `profile` (`solver: simpleFoam`, `steady`, `incompressible`, `latestTime: '100'`, `fields`, `patches`, `inletGuess`), `validation.status: 'pass'`, `artifacts` (`cgns`, `session`, `memo`, `report`); `inspect` failure without a time step > 0 ("no solved results"); `convert` failure if pvbatch writes nothing; `null` status before any export; download of the merged `out.cgns` as `application/octet-stream`; fallback to `out_cgns.zip` (`application/zip`, starts with `PK`) when the time merge fails; 404 missing artifact, 422 unknown artifact, 404 invisible project.
+**Technique**: `successRunner` dispatches on `spec.command === 'checkMesh'` and on the presence of `FoamToCgns`, `CgnsMergeTime`, `CgnsInspect` in the args (writes the `out_N.cgns` files, `out.cgns`, the `CGNS_REPORT` inspection JSON); custom `binaryParser` to read a binary body with `.buffer().parse(...)`; solved case written by `writeSolvedCase`.
+**Notable cases**: "C1" test with 12 frames: the order passed to `CgnsMergeTime.py` is numeric (0..11, not lexicographic) and the times come from the `out.cgns.times` sidecar, aligned by index.
+**Notes**: the `checkMesh` fake compares raw `spec.command`; impact under `OPENFOAM_BASHRC` undocumented, to verify.
+
+## `apps/api/tests/fileTreeStorage.test.ts`
+**Covers** (unit): `comparePaths` from `src/lib/fileTreeStorage` (a folder and its children come before a prefix sibling: `0`, `0/p`, `0/U`, then `0.orig`) and `extractArchiveAt` ("H9" decompression cap: 413 `ARCHIVE_TOO_LARGE` before any write, normal extraction under the cap).
+**Technique**: archives built with `AdmZip`; nonexistent root to prove that no write happens; writes into `./test-storage/h9-ok` without cleaning it up.
+
+## `apps/api/tests/globalSetup.ts`
+**Role**: vitest `globalSetup`, executed once before the whole suite. Runs `npx prisma db push --force-reset --skip-generate --accept-data-loss` with `cwd` = API root and `DATABASE_URL=file:./test.db`, which recreates `apps/api/prisma/test.db` from the schema. The dev database is never touched.
+**Exports**:
+- `default function setup(): void`. Side effect: synchronous `execFileSync` process with `shell: true` (required on Windows where `npx` is a `.cmd` shim).
+**Depends on**: Prisma CLI, client already generated (`--skip-generate`). **Used by**: `vitest.config.ts` (`globalSetup`).
+**Notes**: the Prisma client must be generated beforehand (`npm run prisma:generate -w @dive/api`, done by `postinstall` and by the CI job).
+
+## `apps/api/tests/helpers.ts`
+**Role**: utilities shared by all integration tests: single app instance, database reset, user factories, tokens, and the `logicalCommand` tool for fake OpenFOAM runners.
+**Exports**:
+- `app`. Single `createApp()` instance shared by all files.
+- `resetDatabase(): Promise<void>`. Deletes in order `auditLog`, `run`, `template`, `chamberSave`, `project`, `user` (order imposed by foreign keys).
+- `DEFAULT_PASSWORD`. `'Sup3rSecret!'`.
+- `createTestUser(options?): Promise<User>`. Creates the user directly in the database with a real argon2 hash (defaults `user@dive-turbinen.test`, `Regular User`, `USER`, not protected; email lowercased).
+- `createProtectedAdmin(options?): Promise<User>`. `SUPER_ADMIN` + `isProtected: true`, default email `admin@dive-turbinen.test`.
+- `accessTokenFor(user): string`, `refreshTokenFor(user): string`, `authHeader(user): string` (`Bearer <token>` signed directly, without going through login).
+- `logicalCommand(spec: { command; args }): { command; args }`. Unwraps the `bash -c <script> bash <bin> <args…>` form produced by `planOpenfoamCommand` when `OPENFOAM_BASHRC` is defined, identity otherwise.
+- `extractRefreshCookie(setCookie): string | null`. Raw value of the `refresh_token` cookie.
+**Depends on**: `src/app`, `src/lib/password`, `src/lib/prisma`, `src/lib/jwt`, `src/lib/role`. **Used by**: all integration `*.test.ts` files, `snappyPipeline.test.ts` (for `logicalCommand`).
+**Notes**: argon2 is deliberately slow, hence `testTimeout: 20000`. Any new fake OpenFOAM command must go through `logicalCommand`.
+
+## `apps/api/tests/mesh.test.ts`
+**Covers**: project mesh viewer (Visualize tab) and editing of the case mesh.
+- `GET /mesh/manifest`: 401, 409 `NO_MESH` without polyMesh (no execution), on-demand build, patch type corrected from the `boundary` file when the extractor returns `?` for a long name, cache reuse (a single execution), 502 `MESH_BUILD_FAILED`, 404 without leaking existence.
+- `GET /mesh/geometry` (GLB as `model/gltf-binary`, identical bytes; 409 `MESH_NOT_BUILT` before build) and `GET /mesh/edges` (`application/octet-stream`; 404 before build); `POST /mesh/rebuild` (always rerun, super-admin allowed).
+- `POST /mesh/patches/rename` (renames in `boundary` and in the fields' `boundaryField`, 409 `PATCH_EXISTS`, 404, 422 invalid name, 409 `NO_MESH`, Fluent-style dashed names accepted).
+- `POST /mesh/patches/type` (constraint type propagated to fields, switching to `wall` writes `noSlip` and the wall functions for the model, for example `nutkWallFunction`/`kqRWallFunction`/`epsilonWallFunction` in k-epsilon, `inlet`/`outlet` roles keep the geometric type `patch` and apply a BC preset, 422 unknown type, 404).
+- `POST /mesh/auto-patch` (default angle 45, argv `autoPatch <angle> -overwrite`, prior collapse into a single `defaultFaces` patch then removal of remaining empty patches, restoration of the original `boundary` if the tool fails, realignment of `0/`, failure reported as `success: false` with HTTP 200, 409 `NO_MESH`, 422 angle outside [0, 180]).
+- `PUT /mesh/patches` (batch edit: rename and type in one call, dashed names, swapping two names without intermediate collision, 409 `PATCH_EXISTS` on duplicate or collision, 422).
+- Backup slot `GET/POST /mesh/backup`, `POST /mesh/backup/restore` (`original` captured on first edit, `manual` on request, restoration of the mesh and `0/`, 404 without backup).
+**Technique**: `successRunner` writes GLB (`spec.args[2]`), manifest (`spec.args[3]`) and `edges.bin` alongside (required by the freshness check); global `runCount` counter reset in `beforeEach`; `autoPatchRunner` and the collapse runner go through `logicalCommand` and read `-case`; `binaryParser`; `writePolyMesh` writes 5 files of which only `boundary` is realistic.
+**Notes**: fixed on 2026-08-12 to work with `OPENFOAM_BASHRC` defined (see `brain/changelog/2026-08.md`).
+
+## `apps/api/tests/meshPatches.test.ts`
+Pure unit tests of `src/lib/meshPatches`: `parseFmsPatches` reads names and types from the FMS header (`[]` without a patch block); `parseStlSolidNames` lists the `solid`s of a multi-solid ASCII STL (`['rotor', 'stator']`) and returns `[]` for a binary STL.
+
+## `apps/api/tests/meshTransform.test.ts`
+**Covers** (pure): `transformMeshPoints` and `isIdentityTransform` from `src/lib/meshTransform`, the server half of the parity proof with the three.js preview. ASCII and BINARY encodings of `constant/polyMesh/points`: canonical fixture (90° quaternion around +Z, translation (1,2,3), `(1 0 0)` → `(1 3 3)`) shared with the web `placement.test.ts`, multi-point list, header/format/count preserved, identity has no effect, missing format treated as ASCII, binary length unchanged, input buffer not mutated, identical ASCII and BINARY results.
+**Technique**: local builders `asciiPoints`, `binaryPoints` (f64 LE after `(`), readers `readAsciiPoints` / `readBinaryPoints`, tolerance `toBeCloseTo(…, 10)`.
+
+## `apps/api/tests/meshes.test.ts`
+**Covers**: multi-mesh library and assembly pipeline (`/projects/:id/meshes/**`).
+- Import of a polyMesh folder (id = readable slug of the name, 400 `NO_MESH` and cleanup of the partial source), list, patches of a source, deletion, 404.
+- Merge `POST /meshes/merge`: steps `prepare, prepare, mergeMeshes, splitMeshRegions, stitchMesh, cleanup, checkMesh`; ESI v2406 argv locked in (`mergeMeshes [master, add, '-overwrite']`, `stitchMesh [a, b, …, '-partial', '-overwrite', '-case', dir]`, `splitMeshRegions ['-makeCellZones', '-overwrite', '-case', dir]`); unique names kept without prefix, prefix by part slug (`stator_iface`, never `m1_`/`m2_`) only on collision with a "Renamed …" note; single mesh without merge or stitch; short-circuit without promotion if `mergeMeshes` fails; failure if the stitch merges no face; promotion with a warning if `checkMesh` reports failed checks while exiting 0; 422 (empty order, `INVALID_MERGE_PLAN`, `STITCH_PATCH_NOT_FOUND`); super-admin.
+- Non-conformal coupling (Assembly v2): `nonConformalCouple` step instead of the stitch, in-process retyping to `cyclicAMI` without an external command (`createNonConformalCouples`, `createPatch` never called), `cleanup` skipped, non-conformal coupling by default, low AMI overlap surfaced as a note without failure, `cellZones` renamed after the parts (`['casing', 'rotor']`) with a "MRF rotor cellZone" note, `domainN` names kept if the number of regions does not match.
+- Base = case mesh (`'__case__'`): master staged from the case, `0/` physics preserved, `original` backup before promotion, prefix only on collision with the case, 422 if the project has no mesh.
+- Rigid transforms: placement baked into the points of the added part (parity fixture 90°Z + (1,2,3)), nothing moves without `transforms`, the master is never moved, 422 on a non-finite component.
+- Per-source rendering (`/meshes/:meshId/{manifest,geometry,edges}`): on-demand build even if the geometry is requested before the manifest (Assemble tab regression), `edges` 204 before build.
+- Plan draft `GET/PUT /meshes/plan` (transforms included, `null` by default); import of a `.cgns` or `.msh` file (slug `rotor`, then `rotor-2`, conversion failure without a source); `auto-patch` and patch rename of a source; Disassemble (`GET /meshes/assembly`: record after success, reduced re-merge that first restores the original without stacking, no restoration on the first merge to respect a Visualize edit, record cleared by the backup restore); retyping of a source (`PUT /meshes/:meshId/patches`, 404, 409, 422, render marked stale and rebuilt).
+**Technique**: OpenFOAM file helpers (`makeBoundary`, `patchBlocks`, `mergeBoundaries`, `zeroOutPatches`, `makeCellZones`, `makePoints`, `readPoints`); `recordedCommands` reset in `beforeEach`; runners `mergeRunner`, `mergeFailsRunner`, `stitchNoOpRunner`, `checkMeshIssuesRunner`, `lowAmiCheckRunner`, `transformMergeRunner` (also concatenates the points), `sourceVizRunner`, `meshImportRunner`, `importFailsRunner`, `autoPatchRunner`, `mergeAndVizRunner` (dispatches on an arg ending in `.glb`, otherwise `mergeRunner`); `buildMultipart` builds a multipart body by hand because superagent's `.attach()` truncates the relative path of the file name.
+**Notes**: **known to fail outside CI** when `OPENFOAM_BASHRC` is defined in `.env`: the runners compare `spec.command` (`mergeMeshes`, `stitchMesh`, `splitMeshRegions`, `checkMesh`, `autoPatch`, `fluent3DMeshToFoam`…) without `logicalCommand`. The changelog (2026-08-12) counts 21 failing tests for `conversion.test.ts` + `meshes.test.ts` in this configuration. Green in CI.
+
+## `apps/api/tests/meshing.test.ts`
+**Covers**: standalone Meshing (`/api/v1/meshing/**`, STL → snappyHexMesh or cfMesh → polyMesh).
+- Sessions: 401, creation, multipart STL upload with `bounds`, list, rename (422 blank name, 404 missing session), 422 non-STL file, deletion then 404.
+- Background run: `POST /run` returns 202 `running`, polling of `GET /run/log` until `succeeded` (4 `success` steps, `logBytes > 0`), `hasMesh`, `runStatus`, zip download; cfMesh run (commands `surfaceFeatureEdges`, `cartesianMesh`, `checkMesh`); in-process merge of several STLs (first step "Combine surfaces"); 400 `ENGINE_MISMATCH`; missing tool (step 1 `failed` with ENOENT, following ones `skipped`, `runStatus: failed`); `idle` status when never run; 409 `MESH_IN_PROGRESS` then stop; stop that records `stopped`; 400 without STL.
+- Transfers: session copy (engine, config, surfaces, without mesh), import of a chamber build into a new session, an existing session (overwrite by name) or a copy (`copyFrom`), `domain.stl` always excluded, 409 `CHAMBER_NOT_BUILT`.
+- Pure zod schemas `runSnappySchema` / `runCfMeshSchema`: `featureAngle` 150 by default, per-patch `featureRefinements` and `featureSurfaces`, layers per surface or per patch and bounds, `localRefinement` > 0, `noLayerPatches`.
+**Technique**: `setStreamRunner` (not `setCommandRunner`) with `successStreamRunner(commands?)` (goes through `logicalCommand`, appends to `spec.logFile`, writes the polyMesh for `snappyHexMesh`/`cartesianMesh`), `notFoundStreamRunner`, `hangingStreamRunner` (resolves only on `stop()`); `pollMeshLog` with a 15 s deadline and a 15 ms step; binary STL built in memory (`binaryStl`); `seedChamberBuild(hash)` writes a fake `trisurface.zip` via `chamberPaths(hash)`.
+**Notes**: no cleanup of `test-storage` nor Prisma disconnect in this file. A historical flake (`idle` read while `status.json` was being rewritten) was fixed on the `meshingStorage` side (see `meshingStorage.test.ts`).
+
+## `apps/api/tests/meshingStorage.test.ts`
+**Covers**: helpers of `src/lib/meshingStorage`: `slugifySessionName` (lowercase, accents removed, fallback `session`), `sanitizeStlName` (safe basename, `.stl` extension forced, traversal removed, fallback `surface.stl`), `writeMeshStatus`/`readMeshStatus` (a concurrent reader never sees a torn state during 200 rewrites: atomic write), `copySessionSetup` (new id, engine, "(copy)" name, surfaces and config copied, no `constant/polyMesh`).
+**Technique**: actually writes under `test-storage` via `createSession`, `writeStl`, `writeConfig`, `sessionDirAbsolute`; no cleanup.
+
+## `apps/api/tests/openfoamCase.test.ts`
+**Covers** (pure): `collapseBoundaryToSinglePatch` (a single `defaultFaces`, `nFaces` summed, minimum `startFace`, header kept), `removeEmptyBoundaryPatches` (removes 0-face patches and renumbers, including dashed names), `parseBoundaryPatches` (ignores the header, deduplicates), `renderBaseFile` and `BASE_FILE_PATHS`, model-sensitive `fieldBcBody` (k-omega, k-epsilon, Spalart-Allmaras → `nutUSpaldingWallFunction`, constraints copied over, no wall function without a model), `normalizeCasePaths` from `caseStorage` (bare polyMesh placed under `constant/`, wrapper folder removed, traversal rejected), `parseCellZoneNames` / `renameCellZone`.
+
+## `apps/api/tests/projectFiles.test.ts`
+**Covers**: case files of a project (`/projects/:id/files/**`): empty tree, 401, 404 for an outsider; folder import (bare polyMesh placed under `constant/polyMesh/`); 400 `NO_FILES_UPLOADED`; zip import; 400 `INVALID_ARCHIVE` for a zip-slip entry `../../evil.txt`; reset `DELETE /files`; `GET /files/verify` (`missingBase`, `canScaffold`, `hasMesh`); `POST /files/scaffold` (creates the base files without overwriting existing ones, checked by re-reading the downloaded zip); zip download (404 if empty); collaborator allowed to import, super-admin allowed to verify; content read (404, 400 traversal, 413 `FILE_TOO_LARGE` beyond 2 MB); `PUT` write (404 if missing); `POST` creation (409 `FILE_EXISTS`, 422 blank path); deletion of a file or a folder; `POST /files/move` (empty source folder pruned, folder move, 409, 400 into itself, 404).
+**Technique**: manual `buildMultipart` (preserves the relative path, like the browser and busboy `preservePath`); `AdmZip`; malicious zip entry forced via `entryName` because adm-zip normalizes `../` when adding.
+**Notable cases**: a sibling file `keep.txt` is added to prevent the importer from removing a folder as a common wrapper.
+
+## `apps/api/tests/projects.test.ts`
+**Covers**: `POST /api/v1/projects` (401, 201 with `ownerId` not serialized but actually stored, 422 blank title), `PATCH /projects/:id` (rename, 422, 404 for an outsider without leaking existence), `GET /projects` (only one's own projects, most recent first).
+
+## `apps/api/tests/projectsAccess.test.ts`
+**Covers**: visibility (project hidden from a non-member, visible to an added collaborator, super-admin sees everything), `GET /projects/:id` (404 `NOT_FOUND` for a non-member, `owner` and `collaborators` for the owner), `DELETE` (204 owner, 403 `FORBIDDEN` collaborator, 404 outsider, super-admin allowed), collaborator management (add by email, 404 `USER_NOT_FOUND`, 409 `COLLABORATOR_EXISTS` for the owner, 403 for a collaborator, removal).
+**Technique**: projects created via the API (`makeProject(owner, title)`).
+
+## `apps/api/tests/residualParser.test.ts`
+Pure unit tests of `src/lib/residualParser`. `parseResiduals`: one record per `Time =` with the initial residual of each field, noise ignored, `SIMPLE solution converged` banner → `converged`, `nan`/`inf` (any case, signed, inside a vector) → `diverged` without a record, iteration cap with finite residuals not diverged, vector residual read as its first component, `foamError` on `FOAM FATAL ERROR` or `Floating point exception`, `lastTime: null` without a block. `downsampleResiduals`: short series untouched, long series capped while keeping the last point.
+
+## `apps/api/tests/runnable.test.ts`
+**Covers**:
+- Unit tests of `src/lib/openfoamCase`: `renderSolverFile` for `simpleFoam`, `pimpleFoam` (PIMPLE, `Euler`, `adjustTimeStep`, no `residualControl`), `rhoSimpleFoam` (`perfectGas` thermo, `0/T`, absolute `0/p` `[1 -1 -2 0 0 0 0]`, no `pRefCell`), `rhoPimpleFoam`, turbulence variants (`kEpsilon`, `SpalartAllmaras`, `laminar`); shared files identical between simpleFoam and pimpleFoam; `parseApplication` (ignores comments); `renderDecomposeParDict` (`scotch` without coeffs, `hierarchical`/`simple` with balanced grid `(1 2 3)` for 6, `(2 2 2)` for 8); `setApplication`; `carryTurbulenceInlet` (omega mixing-length inlet translated to epsilon while keeping `mixingLength`).
+- Integration `GET /projects/:id/runnable` and `POST /runnable/scaffold`: polyMesh alone not runnable with `missingFiles`, idempotent simpleFoam scaffold, pimpleFoam, solver switch that only rewrites the `system/` trio, compressible (also rewrites `0/p`), turbulence model applied with only its fields (`0/omega` deleted in k-epsilon, `removed`), k-omega/k-epsilon round trip that keeps the mixing-length inlet, trio re-rendered on a model-only change, wall functions per model, refresh of `nut` in Spalart-Allmaras, `laminar`, `LRR` with the `0/R` field, guided `interFoam` base solver (`scaffoldable`), generic `foamRun` retargeted, complete case pointing to `foamRun` or generic `fvSolution` judged not runnable, repair of the generic trio, 404 outsider.
+- `POST /files/sync-boundaries`: `boundaryField` realigned on the patches and their types, user BCs preserved on existing patches (a single `fixedValue` anchor), 409 without mesh, `0/` seeded from `0.orig/` without touching `0.orig`.
+**Technique**: no runner injected (pure file generation); `writeMesh` via `writeCaseFile`; assertions on content read back with `readCaseFile`.
+
+## `apps/api/tests/snappyDicts.test.ts`
+**Covers** (pure): `computeDomain` (enlarged box, cell count from `baseCellSize`, location-in-mesh point at the center for internal, in an outer corner for external, explicit point takes precedence), `regionNameFor`, `renderBlockMeshDict`, `renderSurfaceFeatureExtractDict` (global angle 150, per-patch override, surfaces excluded via `featureSurfaces`, empty list = all), `renderSnappyHexMeshDict` (regions, global or per-patch feature level, eMesh referenced by the exact dashed file name while the region is sanitized, layers global or limited to some surfaces or per surface, v2406 keyword `minMedialAxisAngle` and not `minMedianAxisAngle`, per-surface refinement).
+**Technique**: `DEFAULT_SNAPPY_CONFIG` from `@dive/shared` extended by `config(overrides)`.
+
+## `apps/api/tests/snappyPipeline.test.ts`
+**Covers**: `runSnappyPipeline` called directly (without HTTP): dictionaries written into `system/`, order `blockMesh`, `surfaceFeatureExtract`, `snappyHexMesh`, `checkMesh`; MPI chain when `cores > 1` (`decomposePar`, `mpirun`, `reconstructParMesh`, `decomposeParDict` with 4 subdomains); prior cleanup of an old mesh, of `0/cellLevel` and `processor0` while keeping `constant/triSurface`; short-circuit on `blockMesh` failure; missing binary as a `failed` step.
+**Technique**: `setCommandRunner` with fakes that go through `logicalCommand`; temporary case folder `fs.mkdtemp(os.tmpdir())`, not cleaned up; no DB.
+
+## `apps/api/tests/solver.test.ts`
+**Covers**: lifecycle of solver runs (`/projects/:id/runs/**`): start 201 `running`, classification `converged` (banner), `completed` (exit 0 without banner), `failed` (non-zero exit, `FOAM FATAL ERROR`, spawn ENOENT with `reason` "binary not found"), `diverged` (`nan` residuals even with exit 0), `stopped`; resetting `stopAt writeNow;` to `stopAt endTime;` before a new run; 409 `RUN_IN_PROGRESS`; two simultaneous starts of which only one is admitted ("H2 TOCTOU"); 409 `NO_MESH`; 422 `NOT_RUNNABLE`; 404 outsider, super-admin allowed; `reconcileOrphanRuns()` that moves an orphaned `running` run to `failed` ("restart"). Parallel: `decomposePar -force`, solver under `mpirun -np 4 … -parallel --oversubscribe`, `reconstructPar`; 409 `NOT_ENOUGH_CORES` (budget `SOLVER_TOTAL_CORES=8` from the test env); 422 `TOO_MANY_CORES`; `decomposePar` failure that ends the run as `failed` rather than stuck in `queued`.
+**Technique**: `fakeRunner(mode)` injected via `setStreamRunner` writes a scripted log into `spec.logFile` then resolves `onExit` according to the mode (`hang` waits for `stop()`); `setCommandRunner(recordingCommandRunner(sink))` for one-shot commands; `makeRunnableProject` goes through the real `POST /runnable/scaffold`; `waitForTerminal` polls every 20 ms, 3 s deadline; `RUN_STOP_GRACE_MS=50` in the test env speeds up the SIGTERM escalation.
+
+## `apps/api/tests/solverCatalog.test.ts`
+Pure contract of `@dive/shared`: every solver in `SOLVER_LIBRARY` has an entry in `SOLVER_CATALOG` and `isConfigurableSolver` true (`foamRun` and unknown ids excluded); `full` tier for the `incompressible`/`compressible`/`supersonic` families, `base` otherwise; `requiredFiles` contains `system/controlDict` and `0/U`; universal `easyParams` `endTime`, `writeInterval`, plus `deltaT` for transient; `nu` (simpleFoam), `mu` (rhoSimpleFoam), `rasModel` without `nu` for `interFoam`; SIMPLEC `consistent` toggle (file `system/fvSolution`) only on complete steady templates.
+
+## `apps/api/tests/stlBounds.test.ts`
+Pure unit tests of `src/lib/stlBounds`: `parseStlBounds` on binary STL (detected only by the exact size 84 + n·50) and ASCII, `valid: false` and `triangleCount: 0` on unreadable content; `unionBounds` component by component, `null` on an empty list.
+
+## `apps/api/tests/stlMerge.test.ts`
+Unit tests of `mergeStlFilesToAscii` (`src/lib/stlMerge`) on a temporary folder cleaned in `afterEach`: merge into a multi-solid ASCII STL (one `solid` per file, named after the root name), binary STL read back and re-emitted as ASCII facets, rejection of an STL without a readable triangle.
+
+## `apps/api/tests/templates.test.ts`
+**Covers**: shared templates (`/api/v1/templates/**`): 401, creation and listing for everyone with `owner.email`, 404, update by the author (403 outsider, super-admin allowed), deletion by the author; template files (creation, 409 `FILE_EXISTS`, 403 outsider, read by any authenticated user, zip import 403 for an outsider, file deletion 404, folder deletion, move, 403 outsider); applying to a project (`GET /projects/:id/apply-template/:tid/preview` with `conflicts` and `newFiles`, `POST` that keeps existing files by default and writes new ones, `decisions: { path: 'overwrite' }`, 404 invisible project, collaborator allowed with a third party's template, per-file import `POST …/files` that overwrites and skips nonexistent paths, 422 empty list); tags normalized (lowercase, slug, deduplicated, empties removed) on creation and on `PATCH`, single-file template with inline content.
+**Technique**: `importTemplateZip` and `importCaseZip` via `AdmZip`, `readCaseContent` via the content endpoint.
+
+## `apps/api/tests/users.test.ts`
+**Covers**: back office `/api/v1/users`: 401, 403 `FORBIDDEN` for a `USER`, list with the protected super-admin first and without secrets, creation 201 with working login, 409 `EMAIL_TAKEN`, 422 short password, single read and 404 `NOT_FOUND`, `PATCH` (name, role, password; 409 `PROTECTED_ROLE` "The super-admin role cannot be changed"; role no-op accepted; 409 `EMAIL_TAKEN`; 422 empty body), `DELETE` (204, purge of the disk storage of owned projects "C2", 409 `PROTECTED_ACCOUNT` with exact message, 409 `SELF_DELETE_FORBIDDEN`, 404), session revocation (`tokenVersion` incremented on password reset or actual role change, unchanged on rename only or role no-op).
+**Technique**: `writeCaseFile` + `projectDirAbsolute` to check deletion of the project folder; `afterAll` cleans `test-storage`.
+
+## `apps/api/vitest.config.ts`
+**Role**: vitest configuration for the API. `node` environment, variables injected via `test.env` (they win over `.env` because `dotenv/config` does not overwrite an already-present variable), `globalSetup: ['./tests/globalSetup.ts']`, `fileParallelism: false`, `include: ['tests/**/*.test.ts']`, `testTimeout: 20000`, `hookTimeout: 30000`.
+**Exports**:
+- `default` (`defineConfig`). Env values: `NODE_ENV=test`, `DATABASE_URL=file:./test.db` (relative to the schema folder, so `prisma/test.db`), dummy `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET`, `ACCESS_TOKEN_TTL=15m`, `REFRESH_TOKEN_TTL_DAYS=7`, `CORS_ORIGIN=http://localhost:5173`, `STORAGE_DIR=./test-storage`, `CGNS_TO_VTK_SCRIPT=./tests/fixtures/CgnsToVtk.py`, `EXTRACT_PATCHES_SCRIPT=./tests/fixtures/extractPatches.py`, `RUN_STOP_GRACE_MS=50`, `SOLVER_TOTAL_CORES=8`, `SEED_ADMIN_EMAIL`/`SEED_ADMIN_PASSWORD`/`SEED_ADMIN_NAME`.
+**Used by**: `npm test -w @dive/api` (`vitest run`).
+**Notes**: `OPENFOAM_BASHRC`, `TERMINAL_ENABLED` and the Python binaries are not set here; a value present in `apps/api/.env` is therefore loaded during tests (cause of the local failures of `conversion.test.ts` and `meshes.test.ts`). `test-storage/` and `*.db` are gitignored.

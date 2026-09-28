@@ -7,7 +7,7 @@ import { UsersTable } from './UsersTable';
 /**
  * UsersTable guard tests.
  *
- * Verifies the visible action guards required by DESIGN.md section 7.3:
+ * Verifies the visible action guards required by brain/design/design-system.md section 7.3:
  *  - the protected super-admin row cannot be deleted or disabled (guarded),
  *  - a normal account row can be deleted / disabled (enabled, fires handler),
  *  - the signed-in operator's own row cannot be deleted or disabled (guarded),

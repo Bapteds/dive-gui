@@ -2,7 +2,7 @@ import { cn } from '@/lib/utils';
 
 /**
  * SettingsSection - the hairline-bordered surface that groups one account
- * concern (DESIGN.md section 1: hairlines do the work of cards).
+ * concern (brain/design/design-system.md section 1: hairlines do the work of cards).
  *
  * A header zone (section title + one muted description line) sits above the
  * body, separated by a 1px divider. The body (`children`) is supplied by the
