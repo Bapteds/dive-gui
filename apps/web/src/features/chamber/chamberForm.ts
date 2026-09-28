@@ -1,11 +1,16 @@
 import { z } from 'zod';
 import {
+  CHAMBER_D_FIRST_OVER_LAST,
+  CHAMBER_D_MIDDLE_OVER_LAST,
+  CHAMBER_DIMENSION_MAX_MM,
   CHAMBER_INPUT_RANGES,
   CHAMBER_RELATIONS,
   CHAMBER_VARIANTS,
   CHAMBER_WALL_THICKNESS_MM,
+  CHAMBER_X4_MAX,
+  computeChamberGeneratorDims,
 } from '@dive/shared';
-import type { ChamberVariant } from '@dive/shared';
+import type { ChamberInput, ChamberVariant } from '@dive/shared';
 
 /**
  * Form contract for the chamber inputs, kept apart from the component file so
@@ -48,15 +53,25 @@ export interface ChamberFormValues {
   dFirst?: number;
   /** Guide vanes / middle cylinder Ø (mm); blank => auto from D_last. Both variants. */
   dMiddle?: number;
-  /** Generator (central cylinder) Ø (mm); blank => auto from X1. Hollow variant only. */
+  /** Simplify Generator: strict cylinder pinned through the chamber top, no dome. Hollow only. */
+  simplifyGenerator: boolean;
+  /** X4 (≈ power) steering the generator model; blank => 0.9 · 9.81 · X2 · X3. Hollow only. */
+  x4?: number;
+  /** Generator (central cylinder) Ø (mm); blank => Gen Dim catalog Ø for the suggested frame. Hollow only. */
   centralDiameter?: number;
-  /** Generator (central cylinder) height (mm); blank => auto from its diameter. Hollow only. */
+  /** Generator (central cylinder) height (mm); blank => Gen Dim fit from the resolved Ø + length code. Hollow only. */
   centralHeight?: number;
-  /** Dome height (mm); blank => auto from the central height. Hollow variant only. */
+  /** Dome height (mm); blank => Gen Dim fit from the resolved Ø. Hollow variant only. */
   domeHeight?: number;
 }
 
-const optionalPositive = z.number({ invalid_type_error: 'Enter a number' }).positive().optional();
+// A user-entered dimension (mm): strictly positive and bounded, mirroring the
+// API schema (CHAMBER_DIMENSION_MAX_MM) so the server never sees an absurdity.
+const optionalPositive = z
+  .number({ invalid_type_error: 'Enter a number' })
+  .positive('Must be greater than 0')
+  .max(CHAMBER_DIMENSION_MAX_MM, `Max ${CHAMBER_DIMENSION_MAX_MM.toLocaleString('en-US')} mm`)
+  .optional();
 
 /** Range-validated schema; hollowLength is required for the hollow variant. */
 export const chamberFormSchema = z
@@ -91,6 +106,12 @@ export const chamberFormSchema = z
     wallThickness: optionalPositive,
     dFirst: optionalPositive,
     dMiddle: optionalPositive,
+    simplifyGenerator: z.boolean(),
+    x4: z
+      .number({ invalid_type_error: 'Enter a number' })
+      .positive('Must be greater than 0')
+      .max(CHAMBER_X4_MAX, `Max ${CHAMBER_X4_MAX.toLocaleString('en-US')}`)
+      .optional(),
     centralDiameter: optionalPositive,
     centralHeight: optionalPositive,
     domeHeight: optionalPositive,
@@ -115,7 +136,9 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   relations: Object.fromEntries(CHAMBER_RELATIONS.map((rel) => [rel.key, rel.defaultOn])),
   footAngleDeg: 40,
   partScale: 1,
-  guideVanes: false,
+  // On by default: the guide-vane distributor is the configuration the team
+  // builds most. (Saved builds always carry their own explicit value.)
+  guideVanes: true,
   chamferEnabled: true,
   feetEnabled: true,
   vaneAngleDeg: 50,
@@ -125,7 +148,123 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   wallThickness: CHAMBER_WALL_THICKNESS_MM,
   dFirst: undefined,
   dMiddle: undefined,
+  simplifyGenerator: false,
+  x4: undefined,
   centralDiameter: undefined,
   centralHeight: undefined,
   domeHeight: undefined,
 };
+
+/** Recursively sort object keys so serialization ignores property order. */
+function sortKeysDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeysDeep);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value as Record<string, unknown>)
+        .sort()
+        .map((key) => [key, sortKeysDeep((value as Record<string, unknown>)[key])]),
+    );
+  }
+  return value;
+}
+
+/**
+ * Canonical comparison key for a build body ({ ...form values, constraints }).
+ * Key-order-insensitive: the live form (watch(), keys in registration order)
+ * and the last built body (handleSubmit's zod parse output, keys in schema
+ * order) hold the same data in different property orders, so a plain
+ * JSON.stringify comparison would flag every build as stale immediately.
+ * Blank overrides (undefined) and omitted keys serialize identically.
+ */
+export function chamberBodyKey(body: object): string {
+  return JSON.stringify(sortKeysDeep(body));
+}
+
+/**
+ * Map a saved build snapshot (the `POST /chamber/build` body) back onto the
+ * form. Snapshot fields with server-side defaults fall back to the same values
+ * the form starts with, so loading an old, sparser snapshot behaves exactly
+ * like typing it in fresh; blank optional overrides stay blank (auto).
+ */
+export function chamberInputToFormValues(input: ChamberInput): ChamberFormValues {
+  return {
+    x1: input.x1,
+    x2: input.x2,
+    x3: input.x3,
+    variant: input.variant ?? CHAMBER_FORM_DEFAULTS.variant,
+    relationsMaster: input.relationsMaster ?? CHAMBER_FORM_DEFAULTS.relationsMaster,
+    relations: Object.fromEntries(
+      CHAMBER_RELATIONS.map((rel) => [rel.key, input.relations?.[rel.key] ?? rel.defaultOn]),
+    ),
+    footAngleDeg: input.footAngleDeg ?? CHAMBER_FORM_DEFAULTS.footAngleDeg,
+    partScale: input.partScale ?? CHAMBER_FORM_DEFAULTS.partScale,
+    guideVanes: input.guideVanes ?? CHAMBER_FORM_DEFAULTS.guideVanes,
+    chamferEnabled: input.chamferEnabled ?? CHAMBER_FORM_DEFAULTS.chamferEnabled,
+    feetEnabled: input.feetEnabled ?? CHAMBER_FORM_DEFAULTS.feetEnabled,
+    vaneAngleDeg: input.vaneAngleDeg ?? CHAMBER_FORM_DEFAULTS.vaneAngleDeg,
+    outletRatio: input.outletRatio ?? CHAMBER_FORM_DEFAULTS.outletRatio,
+    lengthOverride: input.lengthOverride,
+    hollowLength: input.hollowLength,
+    wallThickness: input.wallThickness,
+    dFirst: input.dFirst,
+    dMiddle: input.dMiddle,
+    simplifyGenerator: input.simplifyGenerator ?? CHAMBER_FORM_DEFAULTS.simplifyGenerator,
+    x4: input.x4,
+    centralDiameter: input.centralDiameter,
+    centralHeight: input.centralHeight,
+    domeHeight: input.domeHeight,
+  };
+}
+
+/** The auto (empirical) values shown as placeholders on the blank override fields. */
+export interface ChamberAutoDims {
+  /** Runner case (first cylinder) Ø, mm. */
+  dFirst: number | null;
+  /** Guide vanes / middle cylinder Ø, mm. */
+  dMiddle: number | null;
+  /** X4 (≈ power): 0.9 · 9.81 · X2 · X3 (generator model steering input). */
+  x4: number | null;
+  /** Generator (central cylinder) Ø, mm (hollow variant). */
+  centralDiameter: number | null;
+  /** Generator (central cylinder) height, mm (hollow variant). */
+  centralHeight: number | null;
+  /** Dome height, mm (hollow variant). */
+  domeHeight: number | null;
+}
+
+const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+/**
+ * The "Blank = auto ≈ N" hints: the dLast-driven Ø ratios plus the Gen Dim v3
+ * generator dims — computed WITH the current overrides, so a typed Generator Ø
+ * re-bases the height/dome hints exactly like the API build will (the shared
+ * function is the single source of truth for both).
+ */
+export function computeChamberAutoDims(
+  values: Pick<
+    ChamberFormValues,
+    'x1' | 'x2' | 'x3' | 'x4' | 'centralDiameter' | 'centralHeight' | 'domeHeight'
+  >,
+  dLastFinal: number | null,
+): ChamberAutoDims {
+  const gen =
+    finite(values.x1) && finite(values.x2) && finite(values.x3)
+      ? computeChamberGeneratorDims({
+          x1: values.x1,
+          x2: values.x2,
+          x3: values.x3,
+          x4: values.x4,
+          centralDiameter: values.centralDiameter,
+          centralHeight: values.centralHeight,
+          domeHeight: values.domeHeight,
+        })
+      : null;
+  return {
+    dFirst: dLastFinal != null ? CHAMBER_D_FIRST_OVER_LAST * dLastFinal : null,
+    dMiddle: dLastFinal != null ? CHAMBER_D_MIDDLE_OVER_LAST * dLastFinal : null,
+    x4: gen?.x4Auto ?? null,
+    centralDiameter: gen?.auto.centralDiameter ?? null,
+    centralHeight: gen?.auto.centralHeight ?? null,
+    domeHeight: gen?.auto.domeHeight ?? null,
+  };
+}

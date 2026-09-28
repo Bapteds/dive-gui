@@ -195,6 +195,10 @@ const envSchema = z
     // API at apps/api/scripts/buildChamber.py (resolved relative to the module,
     // cwd-independent). Set only to point at a script kept elsewhere.
     BUILD_CHAMBER_SCRIPT: z.string().default(''),
+    // Absolute path to the on-demand STEP mirrorer ("Change rotational
+    // direction" download). Empty => apps/api/scripts/mirrorStep.py bundled
+    // with the API. Same interpreter as the builder (CHAMBER_PYTHON_BIN).
+    MIRROR_STEP_SCRIPT: z.string().default(''),
     // Wall-clock timeout (ms) for one chamber build (CadQuery boolean + tessellate).
     CHAMBER_BUILD_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
     // --- Draft-tube inlet profile (boundary-condition overlay) ----------------

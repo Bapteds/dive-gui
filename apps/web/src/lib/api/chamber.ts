@@ -13,8 +13,10 @@ import type {
  * transport (GLB + manifest + edges) is identical to the mesh viewer's.
  */
 
-/** Artifact kinds the build exports for download. */
-export type ChamberExportKind = 'stl' | 'step' | 'trisurface';
+/** Artifact kinds the build exports for download. stepMirrored is the
+ * z-y-mirrored STEP ("Change rotational direction"), generated server-side on
+ * demand at its first download (~10-30 s) and cached with the build after. */
+export type ChamberExportKind = 'stl' | 'step' | 'stepMirrored' | 'trisurface';
 
 /** Compute the 12 outputs and build (or reuse) the geometry. Returns the hash + outputs. */
 export async function buildChamber(input: ChamberInput): Promise<ChamberBuildResponse> {

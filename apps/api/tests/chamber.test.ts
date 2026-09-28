@@ -8,6 +8,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { computeChamberGeneratorDims } from '@dive/shared';
 import { app, authHeader, createTestUser, resetDatabase } from './helpers';
 import { setCommandRunner, type CommandResult, type CommandRunner } from '../src/lib/commandRunner';
 import { storageRoot } from '../src/lib/fileTreeStorage';
@@ -47,10 +48,39 @@ const warningRunner: CommandRunner = async (spec) => {
   return {
     ...result,
     stdout:
-      'WARNING: outlet outer radius 0.8400 clamped to 0.6666 (X1 too large for this vane/d_last combination)\nOK: 7 patches\n',
+      'WARNING: outlet outer radius 0.8400 clamped to 0.6666 (Runner Ø too large for this vane/d_last combination)\nOK: 7 patches\n',
     stderr:
       'WARN: the hollow stack 3.3984 m exceeds H Kammer 2.7000 m; the internal part is scaled to 0.7945 to fit (its heights are reduced to match)\n',
   };
+};
+
+/** Fake VANE builder mirroring the real deferred-STEP policy: a plain build
+ * writes NO chamber.step and NO build-meta.json; a --step run writes both
+ * (stepHasVanes as given, i.e. whether the vane carve succeeded). */
+function vaneRunner(stepHasVanes: boolean): CommandRunner {
+  return async (spec) => {
+    const result = await successRunner(spec);
+    const outDir = spec.args[2];
+    if (spec.args[3] === '--step') {
+      await fs.writeFile(path.join(outDir, 'build-meta.json'), JSON.stringify({ stepHasVanes }));
+    } else {
+      await fs.rm(path.join(outDir, 'exports', 'chamber.step'), { force: true });
+    }
+    return result;
+  };
+}
+
+/** Route builder invocations to `builder` and mirrorStep.py ones to `mirror`
+ * (the mirrorer is spawned with args = [script, src.step, dst.step]). */
+function withMirrorRunner(builder: CommandRunner, mirror: CommandRunner): CommandRunner {
+  return async (spec) =>
+    spec.args[0]?.endsWith('mirrorStep.py') ? mirror(spec) : builder(spec);
+}
+
+/** Fake mirrorer: writes the destination STEP, then succeeds. */
+const mirrorSuccessRunner: CommandRunner = async (spec) => {
+  await fs.writeFile(spec.args[2], 'ISO-10303-21; mirrored');
+  return ok(spec);
 };
 
 /** Fake builder: the interpreter is missing (ENOENT); nothing is written. */
@@ -120,6 +150,8 @@ describe('Chamber Creation', () => {
       .set('Authorization', auth)
       .expect(200);
     expect(stl.headers['content-type']).toContain('application/sla');
+    // Hash-addressed artifacts are immutable: long-lived private caching.
+    expect(stl.headers['cache-control']).toContain('immutable');
     // A clean build reports no warnings (empty list, not undefined).
     expect(built.body.warnings).toEqual([]);
   });
@@ -136,7 +168,7 @@ describe('Chamber Creation', () => {
     // Prefixes are stripped; stderr WARNs come first, then stdout WARNINGs.
     expect(built.body.warnings).toEqual([
       'the hollow stack 3.3984 m exceeds H Kammer 2.7000 m; the internal part is scaled to 0.7945 to fit (its heights are reduced to match)',
-      'outlet outer radius 0.8400 clamped to 0.6666 (X1 too large for this vane/d_last combination)',
+      'outlet outer radius 0.8400 clamped to 0.6666 (Runner Ø too large for this vane/d_last combination)',
     ]);
 
     // The same build again is a cache hit (a failing runner proves the builder is
@@ -149,6 +181,346 @@ describe('Chamber Creation', () => {
       .expect(200);
     expect(cached.body.hash).toBe(built.body.hash);
     expect(cached.body.warnings).toEqual(built.body.warnings);
+  });
+
+  describe('mirrored STEP (Change rotational direction)', () => {
+    const VANES = { ...BUILD, guideVanes: true };
+
+    it('defers the vane STEP: null stepHasVanes at build, meta persisted after generation', async () => {
+      const auth = authHeader(await createTestUser());
+      setCommandRunner(successRunner);
+      const plain = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(BUILD)
+        .expect(200);
+      expect(plain.body.stepHasVanes).toBeNull();
+
+      // A fresh vane build ships no STEP and no meta: stepHasVanes is unknown.
+      setCommandRunner(vaneRunner(true));
+      const vanes = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      expect(vanes.body.stepHasVanes).toBeNull();
+
+      // Downloading the STEP re-runs the builder with --step and serves it.
+      const step = await request(app)
+        .get(`/api/v1/chamber/${vanes.body.hash}/export/step`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(step.headers['content-disposition']).toContain('chamber.step');
+
+      // Now the meta exists: a cache hit (failing runner proves no re-run)
+      // reports stepHasVanes true.
+      setCommandRunner(notFoundRunner);
+      const cached = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      expect(cached.body.hash).toBe(vanes.body.hash);
+      expect(cached.body.stepHasVanes).toBe(true);
+    });
+
+    it('generates the vane STEP once with --step, then serves the cached file', async () => {
+      const auth = authHeader(await createTestUser());
+      let stepRuns = 0;
+      setCommandRunner(
+        withMirrorRunner(async (spec) => {
+          if (spec.args[3] === '--step') stepRuns += 1;
+          return vaneRunner(true)(spec);
+        }, mirrorSuccessRunner),
+      );
+      const built = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      expect(stepRuns).toBe(0);
+
+      await request(app)
+        .get(`/api/v1/chamber/${built.body.hash}/export/step`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(stepRuns).toBe(1);
+
+      // Second download is served from disk — no new builder run.
+      await request(app)
+        .get(`/api/v1/chamber/${built.body.hash}/export/step`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(stepRuns).toBe(1);
+    });
+
+    it('one click on the mirrored STEP generates the STEP first, then mirrors, then caches', async () => {
+      const auth = authHeader(await createTestUser());
+      let stepRuns = 0;
+      let mirrorRuns = 0;
+      setCommandRunner(
+        withMirrorRunner(
+          async (spec) => {
+            if (spec.args[3] === '--step') stepRuns += 1;
+            return vaneRunner(true)(spec);
+          },
+          async (spec) => {
+            mirrorRuns += 1;
+            return mirrorSuccessRunner(spec);
+          },
+        ),
+      );
+      const built = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+
+      const first = await request(app)
+        .get(`/api/v1/chamber/${built.body.hash}/export/stepMirrored`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(first.headers['content-type']).toContain('application/step');
+      expect(first.headers['content-disposition']).toContain('chamber-mirrored.step');
+      expect(stepRuns).toBe(1);
+      expect(mirrorRuns).toBe(1);
+
+      // Second download is served from disk — no tool runs again.
+      await request(app)
+        .get(`/api/v1/chamber/${built.body.hash}/export/stepMirrored`)
+        .set('Authorization', auth)
+        .expect(200);
+      expect(stepRuns).toBe(1);
+      expect(mirrorRuns).toBe(1);
+    });
+
+    it('merges NEW warnings from the on-demand --step run into the persisted list', async () => {
+      const auth = authHeader(await createTestUser());
+      const FALLBACK = 'chamber.step falls back to the vane-less solid (no vanes carved)';
+      setCommandRunner(
+        withMirrorRunner(async (spec) => {
+          const result = await vaneRunner(false)(spec);
+          // Only the --step re-run discovers the fallback and warns about it.
+          return spec.args[3] === '--step' ? { ...result, stderr: `WARN: ${FALLBACK}\n` } : result;
+        }, mirrorSuccessRunner),
+      );
+      const built = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      expect(built.body.warnings).toEqual([]);
+
+      await request(app)
+        .get(`/api/v1/chamber/${built.body.hash}/export/step`)
+        .set('Authorization', auth)
+        .expect(200);
+
+      // A cache hit now reports the merged warning, exactly once.
+      setCommandRunner(notFoundRunner);
+      const cached = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      expect(cached.body.warnings).toEqual([FALLBACK]);
+    });
+
+    it('refuses the mirrored STEP for a vane-less fallback or a non-vane build', async () => {
+      const auth = authHeader(await createTestUser());
+      // The vane carve falls back: the generated STEP downloads fine, but the
+      // mirror is refused (meta stepHasVanes false).
+      setCommandRunner(withMirrorRunner(vaneRunner(false), mirrorSuccessRunner));
+      const fallback = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      const refused = await request(app)
+        .get(`/api/v1/chamber/${fallback.body.hash}/export/stepMirrored`)
+        .set('Authorization', auth)
+        .expect(409);
+      expect(refused.body.error.message).toContain('carries the guide vanes');
+      await request(app)
+        .get(`/api/v1/chamber/${fallback.body.hash}/export/step`)
+        .set('Authorization', auth)
+        .expect(200);
+
+      // Non-vane build: STEP exists from build time, mirror refused (no meta).
+      setCommandRunner(withMirrorRunner(successRunner, mirrorSuccessRunner));
+      const plain = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(BUILD)
+        .expect(200);
+      await request(app)
+        .get(`/api/v1/chamber/${plain.body.hash}/export/stepMirrored`)
+        .set('Authorization', auth)
+        .expect(409);
+    });
+
+    it('fails cleanly when the mirrorer errors, and recovers on the next attempt', async () => {
+      const auth = authHeader(await createTestUser());
+      setCommandRunner(
+        withMirrorRunner(vaneRunner(true), async (spec) => ({
+          command: spec.command,
+          args: spec.args,
+          exitCode: 1,
+          stdout: '',
+          stderr: 'KO: no solids found in chamber.step',
+          durationMs: 1,
+          timedOut: false,
+        })),
+      );
+      const built = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      const failed = await request(app)
+        .get(`/api/v1/chamber/${built.body.hash}/export/stepMirrored`)
+        .set('Authorization', auth)
+        .expect(502);
+      expect(failed.body.error.message).toContain('KO: no solids');
+
+      // The failure left no half-written file: a later attempt regenerates.
+      setCommandRunner(withMirrorRunner(vaneRunner(true), mirrorSuccessRunner));
+      await request(app)
+        .get(`/api/v1/chamber/${built.body.hash}/export/stepMirrored`)
+        .set('Authorization', auth)
+        .expect(200);
+    });
+  });
+
+  // The per-hash lock: concurrent work on one build directory must collapse
+  // into a single tool run (the second caller re-checks the disk and takes the
+  // cache path). The fakes hold the lock across the overlap via a short delay.
+  describe('per-hash build lock', () => {
+    const VANES = { ...BUILD, guideVanes: true };
+    const delay = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+    it('collapses two concurrent identical builds into one builder run', async () => {
+      const auth = authHeader(await createTestUser());
+      let runs = 0;
+      setCommandRunner(async (spec) => {
+        runs += 1;
+        await delay();
+        return successRunner(spec);
+      });
+      const [a, b] = await Promise.all([
+        request(app).post('/api/v1/chamber/build').set('Authorization', auth).send(BUILD),
+        request(app).post('/api/v1/chamber/build').set('Authorization', auth).send(BUILD),
+      ]);
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      expect(a.body.hash).toBe(b.body.hash);
+      expect(runs).toBe(1);
+    });
+
+    it('collapses two concurrent first STEP downloads into one --step run', async () => {
+      const auth = authHeader(await createTestUser());
+      let stepRuns = 0;
+      setCommandRunner(
+        withMirrorRunner(async (spec) => {
+          if (spec.args[3] === '--step') {
+            stepRuns += 1;
+            await delay();
+          }
+          return vaneRunner(true)(spec);
+        }, mirrorSuccessRunner),
+      );
+      const built = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      const url = `/api/v1/chamber/${built.body.hash}/export/step`;
+      const [a, b] = await Promise.all([
+        request(app).get(url).set('Authorization', auth),
+        request(app).get(url).set('Authorization', auth),
+      ]);
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      expect(stepRuns).toBe(1);
+    });
+
+    it('collapses two concurrent mirrored-STEP downloads into one generation chain', async () => {
+      const auth = authHeader(await createTestUser());
+      let stepRuns = 0;
+      let mirrorRuns = 0;
+      setCommandRunner(
+        withMirrorRunner(
+          async (spec) => {
+            if (spec.args[3] === '--step') stepRuns += 1;
+            return vaneRunner(true)(spec);
+          },
+          async (spec) => {
+            mirrorRuns += 1;
+            await delay();
+            return mirrorSuccessRunner(spec);
+          },
+        ),
+      );
+      const built = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send(VANES)
+        .expect(200);
+      const url = `/api/v1/chamber/${built.body.hash}/export/stepMirrored`;
+      const [a, b] = await Promise.all([
+        request(app).get(url).set('Authorization', auth),
+        request(app).get(url).set('Authorization', auth),
+      ]);
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      expect(stepRuns).toBe(1);
+      expect(mirrorRuns).toBe(1);
+    });
+  });
+
+  it('refuses a build whose model finals go non-positive, before any builder run', async () => {
+    // The failing runner proves the refusal happens pre-build (else 502).
+    setCommandRunner(notFoundRunner);
+    const auth = authHeader(await createTestUser());
+    const res = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      // Legal inputs whose own H Kammer fit is ≈ -3442 mm with relations off.
+      .send({ x1: 700, x2: 1.8, x3: 23, relationsMaster: false })
+      .expect(422);
+    expect(res.body.error.message).toContain('H Kammer');
+    expect(res.body.error.message).toContain('must be positive');
+  });
+
+  it('refuses an inverted Min>Max constraint range, before any builder run', async () => {
+    setCommandRunner(notFoundRunner);
+    const auth = authHeader(await createTestUser());
+    const res = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, constraints: { width: { min: 5000, max: 4000 } } })
+      .expect(422);
+    expect(res.body.error.message).toContain('B Kammer');
+    expect(res.body.error.message).toContain('Min 5000 > Max 4000');
+  });
+
+  it('rejects non-positive and absurdly large dimensions at the schema', async () => {
+    const auth = authHeader(await createTestUser());
+    await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, constraints: { width: { exact: -100 } } })
+      .expect(422);
+    await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, constraints: { height: { max: 0 } } })
+      .expect(422);
+    await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, dFirst: 200_000 })
+      .expect(422);
   });
 
   it('applies a Min/Max/Exact constraint to the returned outputs', async () => {
@@ -343,6 +715,122 @@ describe('Chamber Creation', () => {
     // The generator/dome overrides reshape the hollow geometry => a different key.
     expect(overridden.body.hash).not.toBe(auto.body.hash);
     expect(overridden.body.outputs).toEqual(auto.body.outputs);
+  });
+
+  it('keys the hollow build on x4 (a new frame) but ignores x4 on stepped', async () => {
+    setCommandRunner(successRunner);
+    const auth = authHeader(await createTestUser());
+    const hollow = { ...BUILD, variant: 'hollow', hollowLength: 2000 };
+
+    const auto = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(hollow)
+      .expect(200);
+    // BUILD's auto X4 ~ 554 -> frame 62; x4 2000 -> frame 115 -> new generator dims.
+    const powered = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...hollow, x4: 2000 })
+      .expect(200);
+    expect(powered.body.hash).not.toBe(auto.body.hash);
+    expect(powered.body.outputs).toEqual(auto.body.outputs);
+
+    // Stepped builds have no generator: x4 must not enter the cache key.
+    const stepped = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(BUILD)
+      .expect(200);
+    const steppedX4 = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, x4: 2000 })
+      .expect(200);
+    expect(steppedX4.body.hash).toBe(stepped.body.hash);
+  });
+
+  it('keys the hollow build on Simplify Generator and drops the hidden heights from the key', async () => {
+    setCommandRunner(successRunner);
+    const auth = authHeader(await createTestUser());
+    const hollow = { ...BUILD, variant: 'hollow', hollowLength: 2000 };
+
+    const domed = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(hollow)
+      .expect(200);
+    const simplified = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...hollow, simplifyGenerator: true })
+      .expect(200);
+    // The flag reshapes the geometry => a different cache key.
+    expect(simplified.body.hash).not.toBe(domed.body.hash);
+
+    // Hidden heights are ignored while the flag is on => the SAME cache key.
+    const simplifiedHeights = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...hollow, simplifyGenerator: true, centralHeight: 1200, domeHeight: 250 })
+      .expect(200);
+    expect(simplifiedHeights.body.hash).toBe(simplified.body.hash);
+
+    // With the flag off a height override still re-keys (existing behavior).
+    const domedHeights = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...hollow, centralHeight: 1200 })
+      .expect(200);
+    expect(domedHeights.body.hash).not.toBe(domed.body.hash);
+
+    // Stepped builds have no generator: the flag must not enter the cache key.
+    const stepped = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(BUILD)
+      .expect(200);
+    const steppedFlag = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, simplifyGenerator: true })
+      .expect(200);
+    expect(steppedFlag.body.hash).toBe(stepped.body.hash);
+  });
+
+  it('resolves blank generator dims from the shared Gen Dim model', async () => {
+    setCommandRunner(successRunner);
+    const auth = authHeader(await createTestUser());
+    const hollow = { ...BUILD, variant: 'hollow', hollowLength: 2000 };
+
+    const auto = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(hollow)
+      .expect(200);
+    // Sending the model's own resolved values EXPLICITLY must land on the same
+    // cache key — proof the API resolves blanks through the shared function.
+    const gen = computeChamberGeneratorDims({ x1: BUILD.x1, x2: BUILD.x2, x3: BUILD.x3 });
+    const explicit = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({
+        ...hollow,
+        centralDiameter: gen.resolved.centralDiameter,
+        centralHeight: gen.resolved.centralHeight,
+        domeHeight: gen.resolved.domeHeight,
+      })
+      .expect(200);
+    expect(explicit.body.hash).toBe(auto.body.hash);
+  });
+
+  it.each([0, -5, 100_001])('rejects x4 = %s', async (x4) => {
+    const auth = authHeader(await createTestUser());
+    await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, variant: 'hollow', hollowLength: 2000, x4 })
+      .expect(422);
   });
 
   it('rejects an outlet ratio outside 0.35-0.50', async () => {

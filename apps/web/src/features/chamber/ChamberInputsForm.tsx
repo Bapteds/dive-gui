@@ -14,34 +14,23 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import type { ChamberFormValues } from './chamberForm';
+import type { ChamberAutoDims, ChamberFormValues } from './chamberForm';
+
+export type { ChamberAutoDims } from './chamberForm';
 
 /**
  * ChamberInputsForm - the three empirical inputs (X1/X2/X3), the cylinder design
  * variant, the box length (blank = 2 x width), and - for the hollow variant - the
- * hollow cup's length and wall thickness. Presentational: the parent owns the
- * react-hook-form instance (so the outputs table can live-compute from the same
- * values) and passes register + errors + the current variant + the auto length in.
+ * hollow cup's length and wall thickness, plus X4 steering the generator autos
+ * (Gen Dim v3). Presentational: the parent owns the react-hook-form instance (so
+ * the outputs table can live-compute from the same values) and passes register +
+ * errors + the current variant + the auto length in.
  */
 
 const r = CHAMBER_INPUT_RANGES;
 
 /** Map a blank field to undefined (so an optional number stays optional). */
 const numOrUndef = (v: unknown) => (v === '' || v == null ? undefined : Number(v));
-
-/** The auto (empirical) values shown as placeholders on the blank override fields. */
-export interface ChamberAutoDims {
-  /** Runner case (first cylinder) Ø, mm. */
-  dFirst: number | null;
-  /** Guide vanes / middle cylinder Ø, mm. */
-  dMiddle: number | null;
-  /** Generator (central cylinder) Ø, mm (hollow variant). */
-  centralDiameter: number | null;
-  /** Generator (central cylinder) height, mm (hollow variant). */
-  centralHeight: number | null;
-  /** Dome height, mm (hollow variant). */
-  domeHeight: number | null;
-}
 
 /** Helper text for an override field: "Blank = auto ≈ N mm" (or a bare fallback). */
 function autoHint(mm: number | null): string {
@@ -54,6 +43,7 @@ export function ChamberInputsForm({
   onSubmit,
   isBuilding,
   variant,
+  simplifyGenerator,
   autoLengthMm,
   autoDims,
   relationsMaster,
@@ -65,6 +55,8 @@ export function ChamberInputsForm({
   onSubmit: FormEventHandler<HTMLFormElement>;
   isBuilding: boolean;
   variant: ChamberVariant;
+  /** Current Simplify Generator state (hides the height/dome fields when on). */
+  simplifyGenerator: boolean;
   autoLengthMm: number | null;
   /** Auto (empirical) placeholders for the five manual dimension overrides. */
   autoDims: ChamberAutoDims;
@@ -91,10 +83,10 @@ export function ChamberInputsForm({
         </p>
       </div>
 
-      <Field label="Cylinder design">
+      <Field label="Design">
         <NativeSelect {...register('variant')}>
-          <option value="stepped">Closed generator — three solid cylinders</option>
-          <option value="hollow">With cone — open-top cone</option>
+          <option value="stepped">Closed generator</option>
+          <option value="hollow">With cone</option>
         </NativeSelect>
       </Field>
 
@@ -109,7 +101,7 @@ export function ChamberInputsForm({
             <span className="font-medium text-text">Structural relations</span>
             <span className="mt-0.5 block text-text-secondary">
               Link parameters to each other (e.g. LT = LF1 + LF2, LEB = 2 × HLE). Uncheck to
-              make every parameter depend on X1–X3 only.
+              make every parameter depend on Runner Ø / Head / Q_max only.
             </span>
           </span>
         </label>
@@ -178,8 +170,8 @@ export function ChamberInputsForm({
         <span className="text-sm">
           <span className="font-medium text-text">Chamfer</span>
           <span className="mt-0.5 block text-text-secondary">
-            Cut the two corners at the inlet end. Turn off for a square-ended box - the rest of
-            the geometry (cylinders, feet, outputs table) is unaffected.
+            Cut the two corners at the inlet end. Turn off for a square-ended chamber - the rest
+            of the geometry (internals, feet, outputs table) is unaffected.
           </span>
         </span>
       </label>
@@ -193,20 +185,32 @@ export function ChamberInputsForm({
         <span className="text-sm">
           <span className="font-medium text-text">Feet</span>
           <span className="mt-0.5 block text-text-secondary">
-            Cut the four torque-foot voids (legs and their planks). Turn off to keep the box
-            solid where the feet would be - the cylinders and outputs table are unaffected.
+            Cut the four torque-foot voids (legs and their planks). Turn off to keep the chamber
+            solid where the feet would be - the internals and outputs table are unaffected.
           </span>
         </span>
       </label>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="X1" error={errors.x1?.message} helperText={`Valid ${r.x1.min}–${r.x1.max}`}>
+        <Field
+          label="Runner Ø (mm)"
+          error={errors.x1?.message}
+          helperText={`Valid ${r.x1.min}–${r.x1.max}`}
+        >
           <Input type="number" step="any" {...register('x1', { valueAsNumber: true })} />
         </Field>
-        <Field label="X2" error={errors.x2?.message} helperText={`Valid ${r.x2.min}–${r.x2.max}`}>
+        <Field
+          label="Head (m)"
+          error={errors.x2?.message}
+          helperText={`Valid ${r.x2.min}–${r.x2.max}`}
+        >
           <Input type="number" step="any" {...register('x2', { valueAsNumber: true })} />
         </Field>
-        <Field label="X3" error={errors.x3?.message} helperText={`Valid ${r.x3.min}–${r.x3.max}`}>
+        <Field
+          label="Q_max (m³/s)"
+          error={errors.x3?.message}
+          helperText={`Valid ${r.x3.min}–${r.x3.max}`}
+        >
           <Input type="number" step="any" {...register('x3', { valueAsNumber: true })} />
         </Field>
         <Field
@@ -239,7 +243,7 @@ export function ChamberInputsForm({
         <Field
           label="Part scale (×)"
           error={errors.partScale?.message}
-          helperText="Scales all cylinders, feet & vanes together; box & axis stay fixed. Stepped: overgrowing the box is refused; cone: scaled down to fit"
+          helperText="Scales runner case, middle cylinder, cone & generator, feet & vanes together; chamber & axis stay fixed. Closed generator: overgrowing the chamber is refused; with cone: scaled down to fit"
         >
           <Input
             type="number"
@@ -301,6 +305,23 @@ export function ChamberInputsForm({
       </div>
 
       {variant === 'hollow' && (
+        <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-bg p-3">
+          <input
+            type="checkbox"
+            {...register('simplifyGenerator')}
+            className="mt-0.5 size-4 shrink-0 cursor-pointer rounded-sm border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40"
+          />
+          <span className="text-sm">
+            <span className="font-medium text-text">Simplify generator</span>
+            <span className="mt-0.5 block text-text-secondary">
+              Extend the generator as a straight cylinder through the chamber top — no dome
+              (as in the Closed generator design).
+            </span>
+          </span>
+        </label>
+      )}
+
+      {variant === 'hollow' && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field
             label="Cone length (mm)"
@@ -325,6 +346,22 @@ export function ChamberInputsForm({
             />
           </Field>
           <Field
+            label="Power (kW)"
+            error={errors.x4?.message}
+            helperText={
+              autoDims.x4 != null
+                ? `Blank = auto ≈ ${Math.round(autoDims.x4)} kW (0.9 · 9.81 · Head · Q_max)`
+                : 'Blank = auto (0.9 · 9.81 · Head · Q_max)'
+            }
+          >
+            <Input
+              type="number"
+              step="any"
+              placeholder="auto"
+              {...register('x4', { setValueAs: numOrUndef })}
+            />
+          </Field>
+          <Field
             label="Generator Ø (mm)"
             error={errors.centralDiameter?.message}
             helperText={autoHint(autoDims.centralDiameter)}
@@ -336,30 +373,34 @@ export function ChamberInputsForm({
               {...register('centralDiameter', { setValueAs: numOrUndef })}
             />
           </Field>
-          <Field
-            label="Generator height (mm)"
-            error={errors.centralHeight?.message}
-            helperText={autoHint(autoDims.centralHeight)}
-          >
-            <Input
-              type="number"
-              step="any"
-              placeholder="auto"
-              {...register('centralHeight', { setValueAs: numOrUndef })}
-            />
-          </Field>
-          <Field
-            label="Dome height (mm)"
-            error={errors.domeHeight?.message}
-            helperText={autoHint(autoDims.domeHeight)}
-          >
-            <Input
-              type="number"
-              step="any"
-              placeholder="auto"
-              {...register('domeHeight', { setValueAs: numOrUndef })}
-            />
-          </Field>
+          {!simplifyGenerator && (
+            <Field
+              label="Generator height (mm)"
+              error={errors.centralHeight?.message}
+              helperText={autoHint(autoDims.centralHeight)}
+            >
+              <Input
+                type="number"
+                step="any"
+                placeholder="auto"
+                {...register('centralHeight', { setValueAs: numOrUndef })}
+              />
+            </Field>
+          )}
+          {!simplifyGenerator && (
+            <Field
+              label="Dome height (mm)"
+              error={errors.domeHeight?.message}
+              helperText={autoHint(autoDims.domeHeight)}
+            >
+              <Input
+                type="number"
+                step="any"
+                placeholder="auto"
+                {...register('domeHeight', { setValueAs: numOrUndef })}
+              />
+            </Field>
+          )}
         </div>
       )}
 

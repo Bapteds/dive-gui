@@ -16,14 +16,15 @@ import type { ChamberBuildInput, ChamberExportParam } from './chamber.schemas';
 const EXPORT_META: Record<ChamberExportParam['kind'], { contentType: string; filename: string }> = {
   stl: { contentType: 'application/sla', filename: 'chamber.stl' },
   step: { contentType: 'application/step', filename: 'chamber.step' },
+  stepMirrored: { contentType: 'application/step', filename: 'chamber-mirrored.step' },
   trisurface: { contentType: 'application/zip', filename: 'chamber-trisurface.zip' },
 };
 
 /** POST /chamber/build — compute the 12 outputs and build the geometry. */
 export async function buildChamberController(req: Request, res: Response): Promise<void> {
   const input = req.body as ChamberBuildInput;
-  const { hash, outputs, warnings } = await buildChamber(input);
-  res.status(200).json({ hash, outputs, warnings });
+  const { hash, outputs, warnings, stepHasVanes } = await buildChamber(input);
+  res.status(200).json({ hash, outputs, warnings, stepHasVanes });
 }
 
 /** GET /chamber/:hash/manifest — the patch manifest for a build. */
@@ -59,5 +60,8 @@ export async function getChamberExportController(req: Request, res: Response): P
   const meta = EXPORT_META[kind];
   res.setHeader('Content-Type', meta.contentType);
   res.setHeader('Content-Disposition', `attachment; filename="${meta.filename}"`);
+  // Hash-addressed artifacts never change once served (the on-demand STEP /
+  // mirrored STEP are generated before this line and immutable after).
+  res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
   res.status(200).send(buf);
 }

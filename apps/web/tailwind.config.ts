@@ -29,6 +29,7 @@ const config: Config = {
           DEFAULT: 'var(--color-accent)',
           hover: 'var(--color-accent-hover)',
           tint: 'var(--color-accent-tint)',
+          strong: 'var(--color-accent-strong)',
         },
         // Accessible CTA fill (white-bold label clears AA at normal text size)
         cta: 'var(--color-cta)',

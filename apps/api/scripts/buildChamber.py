@@ -30,7 +30,10 @@ Outputs written under <outDir>:
     manifest.json          bare MeshPatch[]  ({name,type,nFaces,edgeOffset,edgeCount})
     edges.bin              raw little-endian float32 line-segment endpoints
     exports/chamber.stl    the whole solid (single watertight mesh)
-    exports/chamber.step   the whole solid (BREP)
+    exports/chamber.step   the whole solid (BREP). Guide-vane builds write it
+                           only with --step (the carve + gate is ~2/3 of the
+                           build); the API re-runs the builder with the flag
+                           on the first STEP download.
     exports/trisurface.zip inlet/outlet/cylinder_walls/walls.stl + domain.stl
 
 Dependencies (runtime): cadquery, trimesh, numpy. Imported INSIDE main() (after
@@ -88,6 +91,12 @@ VANE_OUTLET_SAFE_MARGIN = 0.97   # outlet outer radius clamp: stay this fraction
                                  # the vane's own inner working radius (R_anchor in
                                  # make_vane_patches) so the blade always has shroud/hub
                                  # material to seat on and never overhangs the hole.
+VANE_SKIN_TOL = 1e-3             # XY distance (m) within which a wetted face centroid
+                                 # counts as ON a blade wall (_blade_skin_mask). Skin
+                                 # centroids sit exactly on the outline (the prisms are
+                                 # vertical); the nearest junction faces (hub roof /
+                                 # shroud floor rings around each airfoil hole) sit a
+                                 # half face-width away, >= ~1.5 mm.
 
 # --- parametric hub/shroud baseline (spec 2026-08-10) ------------------------
 # Hub meridional interior points (asset space = absolute metres), measured from
@@ -189,7 +198,9 @@ def make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
       * the LAST cylinder as an open-top hollow shell (outer d_last, wall
         thickness `wall`) of height `hollow_len`,
       * a central cylinder (dia c_dia, height c_h) rising coaxially from the top
-        of the middle cylinder, capped by an oval dome of height dome_h.
+        of the middle cylinder, capped by an oval dome of height dome_h —
+        dome_h None skips the dome (Simplify Generator: the caller pins the
+        cylinder through the box top instead, stepped-style).
     The whole union is later SUBTRACTED from the block, so every surface here is
     carved out (walls included). With omit_middle the MIDDLE cylinder is left out
     (the guide-vane band is open fluid); the cup/central/dome still start at
@@ -219,9 +230,11 @@ def make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
         .circle(c_dia / 2)
         .extrude(c_h)
     )
+    out = part.union(tube).union(central)
+    if dome_h is None:
+        return out
     dome = make_dome(cq, c_dia / 2, dome_h, z_mid_top + c_h)
-
-    return part.union(tube).union(central).union(dome)
+    return out.union(dome)
 
 
 def make_feet(cq, cx, cy, z0, z_top, r_cyl, d_first, foot_angle_deg=FOOT_ANGLE_DEG,
@@ -554,7 +567,7 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
         ro_target = outlet_outer_d / 2.0
         if ro_target >= VANE_OUTLET_SAFE_MARGIN * R_anchor:
             print("WARNING: outlet outer radius %.4f clamped to %.4f "
-                  "(X1 too large for this vane/d_last combination)"
+                  "(Runner Ø too large for this vane/d_last combination)"
                   % (ro_target, VANE_OUTLET_SAFE_MARGIN * R_anchor))
             ro_target = VANE_OUTLET_SAFE_MARGIN * R_anchor
         ri_target = max(outlet_ratio * ro_target, 1e-3)
@@ -624,8 +637,8 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
         # The real invalid case is the shoulder folding (P1 overtaking P2 at high X1).
         # rim vs P1 is an inherent ~0.25 mm lean (P1_0 sits just inside R_hub0), not a fold.
         if not (r_p1 <= r_p2 <= r_p3):
-            print("WARNING: hub shoulder non-monotonic (X1 too large for the point "
-                  "spacing): rim=%.4f P1=%.4f P2=%.4f P3=%.4f"
+            print("WARNING: hub shoulder non-monotonic (Runner Ø too large for the "
+                  "point spacing): rim=%.4f P1=%.4f P2=%.4f P3=%.4f"
                   % (r_rim, r_p1, r_p2, r_p3))
         hub_profile = np.array([
             [r_rim, _z(0.05288)],                       # outlet inner rim (passage bottom)
@@ -848,6 +861,10 @@ def build_vane_step_solid(cq, np, trimesh, result, core_prof, cas_prof, airfoil,
             continue
         c, R, t, dev = _fit_airfoil(np, airfoil, tgt)
         placed = (c * (R @ airfoil.T).T) + t
+        # Blunt TE -> tangent arc, applied AFTER the fit (the fit target is the
+        # raw blunt mesh section, so fitting stays exact) with the same rule as
+        # the mesh prisms — the STEP blades keep matching the meshed fluid.
+        placed = _round_blade_te(np, placed)
         pts = [(float(x), float(y)) for x, y in placed]
         blade = (cq.Workplane("XY").spline(pts, periodic=True).close()
                  .extrude(z1 - z0).translate((0, 0, z0)))
@@ -966,6 +983,86 @@ def _hub_core_solid(np, trimesh, throat_mesh, cx, cy, z_top, nb=200, nfine=90):
     return _revolve_profile(np, trimesh, prof, cx, cy)
 
 
+# --- guide-vane trailing-edge rounding ---------------------------------------
+# The CAD blade ends in a BLUNT trailing edge: a flat base ~1.11% of the chord
+# wide meeting the two blade surfaces at sharp corners. Those corners force
+# degenerate cells / heavy local refinement on the mesher at all 16 blades, so
+# every blade cross-section is rounded with a TANGENT arc before it is extruded
+# (_vane_prisms, the mesh/triSurface path) or lofted (build_vane_step_solid, the
+# STEP path — same rule, so the CAD keeps matching the meshed fluid and the
+# volume gate stays exact). A morphological OPENING (erode by r, dilate by r)
+# replaces the blunt tail — the only region of the airfoil thinner than 2r —
+# with an arc tangent to both surfaces; the leading edge (radius ~6r) and the
+# rest of the section are restored unchanged. r scales with the loop's own PCA
+# chord, so ring-diameter scale and pitch rotation need no special handling.
+VANE_TE_ROUND_R_FRAC = 0.00585  # arc radius / chord: half the CAD blunt-base
+                                # width fraction (0.01114 / 2) x 1.05 margin
+VANE_TE_ROUND_SEGS = 16         # buffer quad_segs: arc facets per quarter turn
+VANE_TE_MAX_AREA_DRIFT = 0.02   # sanity: the opening only trims two corner
+                                # slivers, it must never move >2% of the area
+
+
+def _round_blade_te(np, loop):
+    """Round the blunt trailing edge of a closed 2D blade section `loop` (N,2)
+    with a tangent arc; returns the rounded loop (M,2). On ANY doubt (shapely
+    missing, degenerate polygon, area drift beyond sanity) the input is returned
+    unchanged — a blunt TE must never fail a build."""
+    try:
+        from shapely.geometry import MultiPolygon, Polygon
+        pts = np.asarray(loop, dtype=float)[:, :2]
+        poly = Polygon(pts)
+        if not poly.is_valid:
+            poly = poly.buffer(0.0)
+        if poly.is_empty or poly.area <= 0.0:
+            return loop
+        X = pts - pts.mean(axis=0)                  # chord = PCA extent of the
+        _u, _s, vt = np.linalg.svd(X, full_matrices=False)  # section (rotation-
+        chord = float(np.ptp(X @ vt[0]))            # invariant)
+        r = VANE_TE_ROUND_R_FRAC * chord
+        eroded = poly.buffer(-r, quad_segs=VANE_TE_ROUND_SEGS)
+        if isinstance(eroded, MultiPolygon):        # a sliver split off: keep the body
+            eroded = max(eroded.geoms, key=lambda g: g.area)
+        if eroded.is_empty:
+            return loop
+        rounded = eroded.buffer(r, quad_segs=VANE_TE_ROUND_SEGS)
+        if isinstance(rounded, MultiPolygon):
+            rounded = max(rounded.geoms, key=lambda g: g.area)
+        if (rounded.is_empty
+                or abs(rounded.area - poly.area) > VANE_TE_MAX_AREA_DRIFT * poly.area):
+            return loop
+        return np.asarray(rounded.exterior.coords, dtype=float)[:-1]
+    except Exception:  # noqa: BLE001
+        return loop
+
+
+def _blade_skin_mask(np, pts_xy, outlines, tol):
+    """True for the XY points lying within `tol` of any blade outline. The
+    blade prisms are STRICT vertical extrusions of these rings, so a wetted
+    face lies on a blade wall iff its centroid's XY distance to a ring is ~0 —
+    an exact test, unlike the nearest-centroid vote, which is biased at the
+    blade/hub/shroud junctions by whichever source happens to be sampled more
+    densely there (both bias directions were observed on real builds)."""
+    pts = np.asarray(pts_xy, dtype=float)
+    mask = np.zeros(len(pts), dtype=bool)
+    for ring in outlines:
+        a = np.asarray(ring, dtype=float)
+        b = np.roll(a, -1, axis=0)
+        ab = b - a
+        ab2 = np.maximum((ab ** 2).sum(axis=1), 1e-18)
+        lo, hi = a.min(axis=0) - 2 * tol, a.max(axis=0) + 2 * tol
+        cand = np.where(~mask
+                        & (pts[:, 0] >= lo[0]) & (pts[:, 0] <= hi[0])
+                        & (pts[:, 1] >= lo[1]) & (pts[:, 1] <= hi[1]))[0]
+        # Chunked point-to-segment distances: (chunk, segments, 2) stays small.
+        for s in range(0, len(cand), 4096):
+            ci = cand[s:s + 4096]
+            ap = pts[ci][:, None, :] - a[None, :, :]
+            t = np.clip((ap * ab[None]).sum(-1) / ab2[None], 0.0, 1.0)
+            d2 = ((ap - t[..., None] * ab[None]) ** 2).sum(-1).min(axis=1)
+            mask[ci[d2 <= tol * tol]] = True
+    return mask
+
+
 def _vane_prisms(np, trimesh, blades_mesh, cx, cy, z0, z1):
     """Turn the (prismatic) guide-vane blades into watertight vertical PRISM solids that
     span z0..z1 — below the shroud floor up to the hub roof. Each blade's airfoil
@@ -974,9 +1071,17 @@ def _vane_prisms(np, trimesh, blades_mesh, cx, cy, z0, z1):
     casing, these prisms PIERCE the hub and shroud, so the boolean cuts a real airfoil
     hole in each surface with the vane skin connected to it (no vane surface left inside
     the non-wetted solids). Extruding straight and letting the boolean cut at the shroud
-    floor / hub roof also makes the blade ends conform to those curved surfaces exactly."""
+    floor / hub roof also makes the blade ends conform to those curved surfaces exactly.
+
+    Returns (prisms, outlines): the prism solids for the boolean, plus each
+    prism's exact XY footprint ring — the input to _blade_skin_mask, which
+    assigns the wetted blade skin to the guide_vanes patch analytically (the
+    nearest-centroid vote is NOT used for the blades: the prisms' full-height
+    side quads put every centroid on two horizontal rows, which lost half the
+    skin to the hub roof; a densified source overshot the other way and stole
+    shroud-floor rings around the blade roots)."""
     from shapely.geometry import Polygon
-    prisms = []
+    prisms, outlines = [], []
     for blade in blades_mesh.split(only_watertight=False):
         bz = np.asarray(blade.vertices, dtype=float)[:, 2]
         zc = 0.5 * (float(bz.min()) + float(bz.max()))
@@ -984,7 +1089,7 @@ def _vane_prisms(np, trimesh, blades_mesh, cx, cy, z0, z1):
         if sec is None:
             continue
         loop = max(sec.discrete, key=len)              # airfoil outline (world XY)
-        poly = Polygon(loop[:, :2])
+        poly = Polygon(_round_blade_te(np, loop[:, :2]))   # blunt TE -> tangent arc
         if not poly.is_valid:
             poly = poly.buffer(0.0)
         if poly.is_empty or poly.area <= 0:
@@ -992,7 +1097,8 @@ def _vane_prisms(np, trimesh, blades_mesh, cx, cy, z0, z1):
         pr = trimesh.creation.extrude_polygon(poly, height=z1 - z0)
         pr.apply_translation([0.0, 0.0, z0])
         prisms.append(pr)
-    return prisms
+        outlines.append(np.asarray(poly.exterior.coords, dtype=float)[:-1])
+    return prisms, outlines
 
 
 def _shroud_casing_solid(np, trimesh, shroud_mesh, cx, cy, d_last, nb=200, nfine=160):
@@ -1190,11 +1296,17 @@ def write_ascii_solid(fh, name, tri):
 
 
 def main():
-    if len(sys.argv) != 3:
-        sys.stderr.write("usage: python buildChamber.py <paramsJson> <outDir>\n")
+    if len(sys.argv) not in (3, 4) or (len(sys.argv) == 4 and sys.argv[3] != "--step"):
+        sys.stderr.write("usage: python buildChamber.py <paramsJson> <outDir> [--step]\n")
         sys.exit(2)
 
     params_path, out_dir = sys.argv[1], sys.argv[2]
+    # --step: also produce the guide-vane STEP (OCC blade carve + round-trip
+    # gate, ~2/3 of a vane build's wall clock). Without it a guide-vane build
+    # skips chamber.step entirely — the API re-runs the builder with the flag
+    # when the STEP is first downloaded. Non-vane STEPs are effectively free
+    # and are always written, flag or not.
+    force_step = len(sys.argv) == 4
 
     try:
         import numpy as np
@@ -1231,6 +1343,10 @@ def main():
         guide_vanes = bool(P.get("guideVanes", False))
         chamfer_enabled = bool(P.get("chamferEnabled", True))
         feet_enabled = bool(P.get("feetEnabled", True))
+        # Simplify Generator (hollow only): the central cylinder is pinned
+        # THROUGH the box top (stepped-style) and no dome is built; the API
+        # omits centralHeight/domeHeight in this mode, so they are never read.
+        simplify_generator = bool(P.get("simplifyGenerator", False))
         # Absolute guide-vane open angle (deg). The asset is baked at
         # VANE_BASE_ANGLE_DEG (50); each blade swings about its own spindle by
         # (vane_angle - VANE_BASE_ANGLE_DEG) to reach the requested angle. Range is
@@ -1256,6 +1372,25 @@ def main():
             raise ValueError(
                 "distFromSideChamfer1 %.4f must be between 0 and width %.4f"
                 % (dist_c1, width))
+        if not 0 < dist_from_end < length:
+            raise ValueError(
+                "distFromEnd %.4f must be between 0 and length %.4f"
+                % (dist_from_end, length))
+        if chamfer_enabled:
+            # The corner cuts eat (length-wise, width-wise) into the box; a
+            # non-positive setback makes a degenerate zero-area prism (cryptic
+            # OCC failure), one beyond the box is geometric nonsense.
+            for _cnm, (_cl, _cw) in (("chamfer 1 (LF1/BF1)", ch_big),
+                                     ("chamfer 2 (LF2/BF2)", ch_small)):
+                if _cl <= 0 or _cw <= 0:
+                    raise ValueError(
+                        "%s setbacks must be > 0 (got length %.4f, width %.4f); "
+                        "disable the chamfer instead of zeroing it" % (_cnm, _cl, _cw))
+                if _cl >= length or _cw >= width:
+                    raise ValueError(
+                        "%s (length %.4f, width %.4f) must be smaller than the "
+                        "box (Length %.4f, B Kammer %.4f)"
+                        % (_cnm, _cl, _cw, length, width))
         if not 0.0 <= foot_angle <= 180.0:
             raise ValueError(
                 "footAngleDeg %.3f must be between 0 and 180 "
@@ -1275,15 +1410,25 @@ def main():
             wall = num("wallThickness")
             hollow_len = num("hollowLength")
             c_dia = num("centralDiameter")
-            c_h = num("centralHeight")
-            dome_h = num("domeHeight")
+            if simplify_generator:
+                c_h = None
+                dome_h = None
+            else:
+                c_h = num("centralHeight")
+                dome_h = num("domeHeight")
             if not 0 < wall < d_last / 2:
                 raise ValueError("wallThickness must be in (0, dLast/2)")
-            if min(hollow_len, c_dia, c_h, dome_h) <= 0:
+            if simplify_generator:
+                if min(hollow_len, c_dia) <= 0:
+                    raise ValueError("hollow params (length/central dia) must be > 0")
+            elif min(hollow_len, c_dia, c_h, dome_h) <= 0:
                 raise ValueError("hollow params (length/central dia+height/dome) must be > 0")
             if hollow_len <= wall:
                 raise ValueError("hollowLength must exceed the wall thickness (open-top cup)")
-            unscaled_part_height = h_first + h_middle + max(hollow_len, c_h + dome_h)
+            # With Simplify Generator the central cylinder is pinned to the box
+            # top (it always fits); only the cone stack can overflow.
+            unscaled_part_height = h_first + h_middle + (
+                hollow_len if simplify_generator else max(hollow_len, c_h + dome_h))
         else:
             h_last = num("hLast")
             if h_last <= 0:
@@ -1298,14 +1443,10 @@ def main():
         #  - stepped: the last cylinder is pinned THROUGH the box top, so only the
         #    shoulder (first+middle) grows with partScale; it must leave room for at
         #    least MIN_LAST_CYL_H of last cylinder.
-        # The two designs behave DIFFERENTLY when it does not fit:
-        #  - STEPPED shoulders normally sit far below the box, so an overflow means
-        #    the entered HLE / Part scale cannot be honored — REFUSE rather than
-        #    silently shrink the whole assembly (which would ignore the heights).
-        #  - HOLLOW is designed so the generator + dome fill and usually EXCEED the
-        #    box; scaling the assembly DOWN to fit is its load-bearing behavior (most
-        #    hollow builds overflow at partScale 1). Keep it, but WARN so a down-
-        #    scaled build is not entirely silent.
+        # BOTH designs REFUSE when it does not fit: silently shrinking would ignore
+        # the heights the user entered. (Hollow used to be scaled down to fit with a
+        # warning; since most hollow configurations overflow at partScale 1, the
+        # refusal names the exact Part scale that WOULD fit so the fix is one edit.)
         if variant == "hollow":
             clamp_basis = unscaled_part_height
             clamp_limit = height
@@ -1314,12 +1455,20 @@ def main():
             clamp_limit = height + 2 * FLOOR_OVERCUT - MIN_LAST_CYL_H
         if clamp_basis > 0 and part_scale * clamp_basis > clamp_limit + 1e-6:
             if variant == "hollow":
-                clamped = clamp_limit / clamp_basis
-                sys.stderr.write(
-                    "WARN: the hollow stack %.4f m exceeds H Kammer %.4f m; the internal "
-                    "part is scaled to %.4f to fit (its heights are reduced to match)\n"
-                    % (part_scale * clamp_basis, clamp_limit, clamped))
-                part_scale = clamped
+                fit_scale = clamp_limit / clamp_basis
+                if simplify_generator:
+                    raise ValueError(
+                        "the hollow cone stack (first + middle + cone) is %.4f m "
+                        "tall but H Kammer only allows %.4f m. To fit, reduce Part "
+                        "scale to <= %.4f, lower the cone height or HLE, or "
+                        "increase H Kammer."
+                        % (part_scale * clamp_basis, clamp_limit, fit_scale))
+                raise ValueError(
+                    "the hollow stack (first + middle + max(cone, generator + dome)) "
+                    "is %.4f m tall but H Kammer only allows %.4f m. To fit, reduce "
+                    "Part scale to <= %.4f, lower the cone / generator / dome heights "
+                    "or HLE, or increase H Kammer."
+                    % (part_scale * clamp_basis, clamp_limit, fit_scale))
             else:
                 scaled = part_scale * clamp_basis
                 scale_note = "" if abs(part_scale - 1.0) < 1e-9 else (" (scaled x %.4g)" % part_scale)
@@ -1351,8 +1500,16 @@ def main():
             wall *= part_scale
             hollow_len *= part_scale
             c_dia *= part_scale
-            c_h *= part_scale
-            dome_h *= part_scale
+            if simplify_generator:
+                # Pin the generator's top a hair above the box top so box.cut
+                # opens it through the top at ANY partScale (the stepped last
+                # cylinder's mechanism). The part is later translated by
+                # z_floor = -height/2 - FLOOR_OVERCUT, so a local top of
+                # (height + 2*FLOOR_OVERCUT) lands at +height/2 + FLOOR_OVERCUT.
+                c_h = (height + 2 * FLOOR_OVERCUT) - (h_first + h_middle)
+            else:
+                c_h *= part_scale
+                dome_h *= part_scale
             if c_dia > d_last - 2 * wall:
                 sys.stderr.write(
                     "WARN: central diameter %.3f exceeds the hollow bore %.3f\n"
@@ -1360,7 +1517,8 @@ def main():
             part = make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
                                     wall, hollow_len, c_dia, c_h, dome_h,
                                     omit_middle=guide_vanes)
-            part_height = h_first + h_middle + max(hollow_len, c_h + dome_h)
+            part_height = h_first + h_middle + max(
+                hollow_len, c_h + (0.0 if dome_h is None else dome_h))
             rmax = max(d_first, d_middle, d_last) / 2
         else:
             h_last *= part_scale  # scaled model value (kept for reference/logging)
@@ -1376,11 +1534,17 @@ def main():
             part_height = h_first + h_middle + last_h_local  # == height + 2*FLOOR_OVERCUT
             rmax = max(d_first, d_middle, d_last) / 2
 
-        # Hollow: the stack must fit under the box top. Stepped: the last cylinder
-        # is intentionally pinned THROUGH the top, so guard its height is positive
-        # instead (the clamp above guarantees the shoulder leaves room).
+        # Hollow: the stack must fit under the box top — except with Simplify
+        # Generator, whose central cylinder is intentionally pinned THROUGH the
+        # top (stepped-style), so guard its height is positive instead. Stepped:
+        # same positive-height guard on the pinned last cylinder.
         if variant == "hollow":
-            if part_height > height + 1e-6:
+            if simplify_generator:
+                if c_h <= 0:
+                    raise ValueError(
+                        "generator height %.4f <= 0 (shoulder above the box top)"
+                        % c_h)
+            elif part_height > height + 1e-6:
                 raise ValueError(
                     "part height %.4f exceeds box height %.4f" % (part_height, height))
         else:
@@ -1399,10 +1563,114 @@ def main():
         target_y = end_sy * (length / 2 - dist_from_end)
         part = part.translate((target_x, target_y, -height / 2 - FLOOR_OVERCUT))
 
-        if abs(target_x) + rmax > width / 2 + 1e-9:
-            sys.stderr.write(
-                "WARN: part radius %.3f at x=%.3f exceeds box half-width %.3f "
-                "-> pocket breaks a side wall\n" % (rmax, target_x, width / 2))
+        # --- fit check: the part (cylinders + torque feet) must stay INSIDE the
+        # box footprint. The axis sits dist_c1 from the chamfer-side wall and
+        # dist_from_end from the chamfered end. Three ways to poke out, each
+        # REFUSED with the lever that fixes it (an overflow used to cut silently
+        # through the box wall and the build "succeeded" with open geometry):
+        #  1. the largest cylinder radius vs the four straight walls;
+        #  2. the largest cylinder radius vs the two chamfer faces (corner cuts);
+        #  3. any torque-foot corner vs walls or chamfer faces — the feet reach
+        #     further out than the cylinders, so they are checked on the EXACT
+        #     swung footprint (mirroring make_feet's plan), not a bounding
+        #     circle: a leg pointing away from a near wall never refuses a build
+        #     that actually fits.
+        half_w, half_l = width / 2, length / 2
+        clearances = [
+            (dist_c1, "chamfer-side wall (B1)"),
+            (width - dist_c1, "far side wall (B Kammer - B1)"),
+            (dist_from_end, "chamfered end (LT)"),
+            (length - dist_from_end, "inlet end (Length - LT)"),
+        ]
+        gap, wall_name = min(clearances, key=lambda c: c[0])
+
+        # The two chamfer corner cuts (full-height prisms at the +Y end). Each is
+        # the triangle corner P / wall point A / wall point B; geometry mirrors
+        # _corner_prism exactly.
+        chamfer_tris = []
+        if chamfer_enabled:
+            for _sx, (_len_set, _wid_set), _nm in (
+                    (big_sx, ch_big, "big-corner chamfer face"),
+                    (-big_sx, ch_small, "small-corner chamfer face")):
+                chamfer_tris.append((
+                    (_sx * half_w, end_sy * half_l),
+                    (_sx * (half_w - _wid_set), end_sy * half_l),
+                    (_sx * half_w, end_sy * (half_l - _len_set)),
+                    _nm,
+                ))
+
+        def _seg_dist(px, py, a, b):
+            vx, vy = b[0] - a[0], b[1] - a[1]
+            t = max(0.0, min(1.0, ((px - a[0]) * vx + (py - a[1]) * vy)
+                             / (vx * vx + vy * vy)))
+            return math.hypot(px - (a[0] + t * vx), py - (a[1] + t * vy))
+
+        def _in_tri(px, py, a, b, c):
+            def _cr(o, p, q):
+                return (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0])
+            d1, d2, d3 = _cr(a, b, (px, py)), _cr(b, c, (px, py)), _cr(c, a, (px, py))
+            return not (((d1 < 0) or (d2 < 0) or (d3 < 0))
+                        and ((d1 > 0) or (d2 > 0) or (d3 > 0)))
+
+        # The axis itself must not sit inside a removed corner: the radial
+        # check below measures distance to the triangle EDGES, which is only a
+        # containment test while the centre is outside the triangle.
+        for _ta, _tb, _tc, _nm in chamfer_tris:
+            if _in_tri(target_x, target_y, _ta, _tb, _tc):
+                raise ValueError(
+                    "the part axis (positioned by B1 / LT) lies inside the %s "
+                    "corner cut. Move the axis (B1 / LT) or reduce that "
+                    "chamfer." % _nm)
+
+        def _refuse_radial(r_check, what, levers):
+            """Refuse when a circle of radius r_check about the part axis pokes
+            through a straight wall or a chamfer corner face."""
+            if r_check > gap + 1e-6:
+                raise ValueError(
+                    "%s reaches %.4f m from the axis but the axis sits only "
+                    "%.4f m from the %s, so it would stick out of the box. %s"
+                    % (what, r_check, gap, wall_name, levers))
+            for _ta, _tb, _tc, _nm in chamfer_tris:
+                if min(_seg_dist(target_x, target_y, p, q)
+                       for p, q in ((_ta, _tb), (_tb, _tc), (_tc, _ta))) < r_check - 1e-6:
+                    raise ValueError(
+                        "%s would stick out through the %s. %s" % (what, _nm, levers))
+
+        _refuse_radial(
+            rmax,
+            "the part is %.4f m wide (radius %.4f m): it" % (2 * rmax, rmax),
+            "Increase B Kammer / Length or move the axis (B1 / LT), or reduce "
+            "Part scale / the diameter overrides.")
+
+        if feet_enabled:
+            # Exact swung plan of the four legs, mirroring make_feet (the planks
+            # stay inside the leg tips + the cylinder wall, so the leg hexagon
+            # corners bound the whole foot footprint).
+            _hw = FOOT_WIDTH * part_scale / 2
+            _r_in = d_first / 2 + FOOT_CLEARANCE * part_scale + _hw
+            _r_out = _r_in + FOOT_LENGTH * part_scale
+            _tap = FOOT_TAPER * part_scale
+            _chf = FOOT_CHAMFER * part_scale
+            _plan = [(_r_in, 0.0), (_r_in + _tap, _hw), (_r_out - _chf, _hw),
+                     (_r_out, _hw - _chf), (_r_out, -(_hw - _chf)),
+                     (_r_out - _chf, -_hw), (_r_in + _tap, -_hw)]
+            _lean = math.radians(foot_angle - 90.0)
+            _cl, _sl = math.cos(_lean), math.sin(_lean)
+            _swung = [(_r_in + (x - _r_in) * _cl - y * _sl,
+                       (x - _r_in) * _sl + y * _cl) for x, y in _plan]
+            for _ring in FOOT_ANGLES_DEG:
+                _ca, _sa = math.cos(math.radians(_ring)), math.sin(math.radians(_ring))
+                for _x, _y in _swung:
+                    _px = target_x + _x * _ca - _y * _sa
+                    _py = target_y + _x * _sa + _y * _ca
+                    _through = next((_nm for _ta, _tb, _tc, _nm in chamfer_tris
+                                     if _in_tri(_px, _py, _ta, _tb, _tc)), None)
+                    if abs(_px) > half_w + 1e-6 or abs(_py) > half_l + 1e-6 or _through:
+                        raise ValueError(
+                            "a torque foot reaches (%.3f, %.3f) m, outside the %s. "
+                            "Increase B Kammer / Length or move the axis (B1 / LT), "
+                            "reduce Part scale, or disable the feet."
+                            % (_px, _py, _through if _through else "box walls"))
 
         # four torque-foot voids (both variants), centred on the part axis. Each
         # leg runs from the floor up to the BASE of the last/hollow cylinder, with
@@ -1479,6 +1747,24 @@ def main():
                 outlet_outer_d=num_opt("outletOuterD"), outlet_ratio=num_opt("outletRatio"))
             vane_outlet_ri = vane_patches["outlet_ri"]
             vane_outlet_ro = vane_patches["outlet_ro"]
+
+            # The distributor reaches FURTHER than the cylinder radii the fit
+            # check above used: the blade tips sit at ~1.25 x the ring radius
+            # and the shroud is wider still. Re-run the wall/chamfer refusals
+            # with the EXACT max radial reach of the built meshes (covers the
+            # vane-angle swing and any dMiddle override, no asset ratio baked
+            # in) — otherwise an oversized ring carves blade holes through the
+            # box wall on a "successful" build.
+            _dist_r = max(
+                float(np.hypot(m.vertices[:, 0] - target_x,
+                               m.vertices[:, 1] - target_y).max())
+                for m in (vane_patches["guide_vanes"], vane_patches["hub"],
+                          vane_patches["shroud"]))
+            _refuse_radial(
+                _dist_r,
+                "the guide-vane distributor (blades + shroud)",
+                "Increase B Kammer / Length or move the axis (B1 / LT), or "
+                "reduce Part scale / the Guide vanes Ø (dMiddle).")
             # The hub and shroud are the FULL true surfaces and continue straight down
             # from their natural passage bottom as mesh DUCTS (open cylinders at the
             # hub-inner rim vane_outlet_ri and the shroud-outer rim vane_outlet_ro). The
@@ -1549,9 +1835,10 @@ def main():
             # inside the casing (absorbed by the union) and the portion above the roof
             # inside the OCC upper cylinder (no fluid there), so only the passage span
             # shows as a vane.
-            _prisms = _vane_prisms(np, trimesh, vane_patches["guide_vanes"],
-                                   target_x, target_y, z_duct_bottom,
-                                   z_mid_top + 2.0 * FLOOR_OVERCUT)
+            _prisms, _blade_outlines = _vane_prisms(np, trimesh,
+                                                    vane_patches["guide_vanes"],
+                                                    target_x, target_y, z_duct_bottom,
+                                                    z_mid_top + 2.0 * FLOOR_OVERCUT)
             _solid = trimesh.boolean.union([_core, _casing] + _prisms, engine="manifold")
             _fd, _tmp_stl = tempfile.mkstemp(suffix=".stl")
             os.close(_fd)
@@ -1577,9 +1864,13 @@ def main():
             fluid_F = trimesh.boolean.difference([_result_mesh, _solid],
                                                  engine="manifold")
             # Classification sources: the OCC box/part patches (inlet, walls,
-            # cylinder_walls), the distributor meshes (hub, shroud, outlet) and the vane
-            # prisms (guide_vanes). F's boundary coincides with these, so nearest-centroid
-            # gives a clean re-split.
+            # cylinder_walls) and the distributor meshes (hub, shroud, outlet). F's
+            # boundary coincides with these, so nearest-centroid gives a clean
+            # re-split. The BLADES are deliberately NOT a source: they are assigned
+            # exactly afterwards (_blade_skin_mask) — any mesh source for them is
+            # sampled either sparser or denser than hub/shroud at the junctions,
+            # and the vote then leaks skin onto the hub roof (sparser) or steals
+            # shroud-floor rings around the blade roots (denser). Both happened.
             _sources = []
             for _nm in ("inlet", "walls", "cylinder_walls"):
                 _sm = patch_trimesh(trimesh, np, patches.get(_nm, []))
@@ -1604,7 +1895,6 @@ def main():
             _sources.append(("hub", vane_patches["hub"]))
             _sources.append(("shroud", vane_patches["shroud"]))
             _sources.append(("outlet", vane_patches["outlet"]))
-            _sources.append(("guide_vanes", trimesh.util.concatenate(_prisms)))
             _names, _who = _label_by_nearest_source(np, fluid_F, _sources)
             # The box pocket floor and the outlet annulus are coincident at z_box_floor,
             # so nearest-source ties a few floor faces the wrong way. The outlet is
@@ -1643,6 +1933,20 @@ def main():
             _wall = (np.abs(_fnz) < 0.5) & (_fc[:, 2] < z_mid_base)
             _who[_wall & (np.abs(_fr - vane_outlet_ri) < 0.03)] = _hi
             _who[_wall & (np.abs(_fr - vane_outlet_ro) < 0.03)] = _si
+            # The BLADE SKIN, assigned exactly (last, so no other override can
+            # touch it): the prisms are strict vertical extrusions, so a wetted
+            # face lies on a blade wall iff its centroid sits on a blade outline
+            # in XY (within VANE_SKIN_TOL) AND the face is not horizontal — the
+            # boolean fans thin hub-roof/shroud-floor slivers along each airfoil
+            # hole rim whose centroids also fall inside the tolerance; those are
+            # horizontal (the walls never are), so |nz| separates them exactly.
+            # There is no other fluid at blade XY anywhere along z (casing below
+            # the floor, hub core / upper cylinder above the roof), so no z
+            # guard is needed.
+            _names.append("guide_vanes")
+            _skin = (_blade_skin_mask(np, _fc[:, :2], _blade_outlines, VANE_SKIN_TOL)
+                     & (np.abs(_fnz) < 0.5))
+            _who[_skin] = len(_names) - 1
             final_patches = {}
             for _li, _nm in enumerate(_names):
                 _idx = np.where(_who == _li)[0]
@@ -1720,37 +2024,60 @@ def main():
         exports_dir = os.path.join(out_dir, "exports")
         os.makedirs(exports_dir, exist_ok=True)
 
-        # GLB
-        scene.export(os.path.join(out_dir, "chamber.glb"), file_type="glb")
+        # Every artifact is written to "<final>.tmp" and os.replace()d onto its
+        # final name, so a concurrent reader (the API serves this directory
+        # while a --step re-run rewrites it) always sees a complete old or
+        # complete new file — never a truncation — and a killed run leaves only
+        # ignorable .tmp leftovers that the next run overwrites. chamber.glb is
+        # the API's cache-completeness marker, so it is exported here but
+        # PROMOTED LAST (just before OK:), after every other artifact landed:
+        # a build that dies anywhere in between leaves no GLB and the next
+        # identical request simply rebuilds.
+        def _tmp(path):
+            return path + ".tmp"
+
+        glb_path = os.path.join(out_dir, "chamber.glb")
+        scene.export(_tmp(glb_path), file_type="glb")
 
         # edges.bin (best-effort; viewer falls back to client feature edges)
         try:
             all_edges = (np.concatenate(edge_chunks) if edge_chunks
                          else np.zeros((0, 3), dtype=np.float32))
-            with open(os.path.join(out_dir, "edges.bin"), "wb") as fh:
+            edges_path = os.path.join(out_dir, "edges.bin")
+            with open(_tmp(edges_path), "wb") as fh:
                 fh.write(all_edges.astype("<f4").tobytes())
+            os.replace(_tmp(edges_path), edges_path)
         except Exception as edge_err:  # noqa: BLE001
             sys.stderr.write("WARN: could not write edges.bin: %s\n" % edge_err)
 
         # manifest
-        with open(os.path.join(out_dir, "manifest.json"), "w") as fh:
+        manifest_path = os.path.join(out_dir, "manifest.json")
+        with open(_tmp(manifest_path), "w") as fh:
             json.dump(manifest, fh)
+        os.replace(_tmp(manifest_path), manifest_path)
 
         # exports: whole solid STL + STEP. For guide-vane builds the STL is the true
         # boolean fluid F (core + casing removed).
+        stl_path = os.path.join(exports_dir, "chamber.stl")
         if guide_vanes:
-            fluid_F.export(os.path.join(exports_dir, "chamber.stl"))
+            fluid_F.export(_tmp(stl_path), file_type="stl")
         else:
-            cq.exporters.export(result, os.path.join(exports_dir, "chamber.stl"),
+            cq.exporters.export(result, _tmp(stl_path), exportType="STL",
                                 tolerance=STL_TOLERANCE)
+        os.replace(_tmp(stl_path), stl_path)
 
-        # STEP. Non-guide-vane builds: the OCC `result` (already the true solid).
-        # Guide-vane builds: try to carve the distributor as OCC BREP so the STEP
-        # carries editable vanes; on ANY failure fall back to the vane-less OCC solid
-        # (a STEP issue must never fail the build). step_has_vanes: True/False for
-        # guide-vane builds (False = vane-less fallback), None = not a vane build.
+        # STEP. Non-guide-vane builds: the OCC `result` (already the true solid),
+        # written unconditionally (it costs ~0.05 s). Guide-vane builds: the carve
+        # + gate below costs ~2/3 of the build, so it only runs with --step (the
+        # on-demand STEP download); a plain vane build ships no chamber.step and
+        # no build-meta.json. With --step: try to carve the distributor as OCC
+        # BREP so the STEP carries editable vanes; on ANY failure fall back to the
+        # vane-less OCC solid (a STEP issue must never fail the build).
+        # step_has_vanes: True/False for guide-vane builds (False = vane-less
+        # fallback), None = not a vane build / vane STEP not generated.
         step_has_vanes = None
-        if guide_vanes:
+        step_path = os.path.join(exports_dir, "chamber.step")
+        if guide_vanes and force_step:
             step_has_vanes = False
             occ_fluid = None
             airfoil = _load_vane_blade_profile(np)
@@ -1768,24 +2095,28 @@ def main():
                 except Exception as _step_exc:  # noqa: BLE001
                     sys.stderr.write("WARN: OCC vane STEP reconstruction failed: %s\n" % _step_exc)
             if occ_fluid is not None:
-                cq.exporters.export(occ_fluid, os.path.join(exports_dir, "chamber.step"))
+                cq.exporters.export(occ_fluid, _tmp(step_path), exportType="STEP")
                 step_has_vanes = True
             else:
                 sys.stderr.write(
                     "WARN: chamber.step falls back to the vane-less solid (no vanes carved)\n")
-                cq.exporters.export(result, os.path.join(exports_dir, "chamber.step"))
-        else:
-            cq.exporters.export(result, os.path.join(exports_dir, "chamber.step"))
+                cq.exporters.export(result, _tmp(step_path), exportType="STEP")
+            os.replace(_tmp(step_path), step_path)
+        elif not guide_vanes:
+            cq.exporters.export(result, _tmp(step_path), exportType="STEP")
+            os.replace(_tmp(step_path), step_path)
 
         # per-build meta: does the STEP carry the guide vanes? (guide-vane builds only;
         # non-vane builds write no meta file -> the API reports stepHasVanes = null).
         if step_has_vanes is not None:
-            with open(os.path.join(out_dir, "build-meta.json"), "w") as fh:
+            meta_path = os.path.join(out_dir, "build-meta.json")
+            with open(_tmp(meta_path), "w") as fh:
                 json.dump({"stepHasVanes": bool(step_has_vanes)}, fh)
+            os.replace(_tmp(meta_path), meta_path)
 
         # exports: OpenFOAM triSurface zip (per-patch STL + combined domain.stl)
-        with zipfile.ZipFile(os.path.join(exports_dir, "trisurface.zip"), "w",
-                             zipfile.ZIP_DEFLATED) as zf:
+        zip_path = os.path.join(exports_dir, "trisurface.zip")
+        with zipfile.ZipFile(_tmp(zip_path), "w", zipfile.ZIP_DEFLATED) as zf:
             combined = io.StringIO()
             for name in emit_order:
                 tri = patch_meshes.get(name)
@@ -1796,9 +2127,12 @@ def main():
                 zf.writestr("%s.stl" % name, buf.getvalue())
                 combined.write(buf.getvalue())
             zf.writestr("domain.stl", combined.getvalue())
+        os.replace(_tmp(zip_path), zip_path)
 
-        sys.stdout.write("OK: %d patches -> %s\n"
-                         % (len(manifest), os.path.join(out_dir, "chamber.glb")))
+        # Promote the GLB last: its presence marks the build directory complete.
+        os.replace(_tmp(glb_path), glb_path)
+
+        sys.stdout.write("OK: %d patches -> %s\n" % (len(manifest), glb_path))
         sys.exit(0)
 
     except SystemExit:

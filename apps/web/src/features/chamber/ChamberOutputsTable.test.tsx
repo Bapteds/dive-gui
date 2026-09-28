@@ -18,6 +18,25 @@ describe('ChamberOutputsTable', () => {
     expect(screen.getByText(/enter valid inputs/i)).toBeInTheDocument();
   });
 
+  it('offers the dimension-reference drawing behind a collapsed toggle', () => {
+    const { unmount } = render(
+      <ChamberOutputsTable outputs={null} constraints={{}} onConstraintChange={() => {}} />,
+    );
+    // The toggle is there even before outputs exist; the drawing starts hidden.
+    expect(screen.getByRole('button', { name: 'Dimension reference' })).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /annotated chamber drawings/i })).toBeNull();
+    unmount();
+
+    render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />);
+    const toggle = screen.getByRole('button', { name: 'Dimension reference' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('img', { name: /annotated chamber drawings/i })).toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(screen.queryByRole('img', { name: /annotated chamber drawings/i })).toBeNull();
+  });
+
   it('renders a row per output with its label and status', () => {
     render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />);
     expect(screen.getByText('B Kammer')).toBeInTheDocument();
@@ -65,6 +84,34 @@ describe('ChamberOutputsTable', () => {
   it('shows no "no effect" tag while LEOW still drives H Kammer', () => {
     render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />);
     expect(screen.queryByText('no effect')).not.toBeInTheDocument();
+  });
+
+  it('shows the cross-validation error visibly in the confidence pill', () => {
+    render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />);
+    // LEOW's Low pill carries its 38.9% CV error as text, not only as a title.
+    expect(screen.getByText(/Low · 38\.9%/)).toBeInTheDocument();
+  });
+
+  it('explains the 50 mm grid in the header hint', () => {
+    render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />);
+    expect(screen.getByText(/snap to the 50 mm grid/)).toBeInTheDocument();
+  });
+
+  it('flags a non-positive final as not buildable, live', () => {
+    // Legal inputs whose own H Kammer fit is negative with relations off.
+    const outputs = computeChamberOutputs({ x1: 700, x2: 1.8, x3: 23, relationsMaster: false });
+    render(<ChamberOutputsTable outputs={outputs} constraints={{}} onConstraintChange={() => {}} />);
+    expect(screen.getAllByText('! ≤ 0 mm — not buildable').length).toBeGreaterThan(0);
+  });
+
+  it('drops non-positive or absurd constraint input instead of propagating it', () => {
+    const onChange = vi.fn();
+    render(<ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={onChange} />);
+    fireEvent.change(screen.getByLabelText('B Kammer minimum'), { target: { value: '-5' } });
+    expect(onChange).toHaveBeenLastCalledWith('width', 'min', undefined);
+    // Above CHAMBER_DIMENSION_MAX_MM (100 000): dropped like any invalid entry.
+    fireEvent.change(screen.getByLabelText('B Kammer maximum'), { target: { value: '200000' } });
+    expect(onChange).toHaveBeenLastCalledWith('width', 'max', undefined);
   });
 
   it('clears a constraint when its cell is emptied', () => {
