@@ -7,7 +7,6 @@ import {
   CHAMBER_GENERATOR_FRAME_DIAMETERS_MM,
   CHAMBER_GRID_MM,
   computeChamberGeneratorDims,
-  chamberGeneratorHeightRefusal,
   computeChamberOutputs,
   nonPositiveChamberFinals,
   snapToChamberGrid,
@@ -286,7 +285,6 @@ describe('computeChamberOutputs', () => {
     it('excludes a non-positive LEOW the build never reads (noEffect)', () => {
       const outputs = computeChamberOutputs({
         ...BASE,
-        variant: 'hollow',
         relationsMaster: false,
         constraints: { hLast: { exact: -5 } },
       });
@@ -299,39 +297,29 @@ describe('computeChamberOutputs', () => {
     });
   });
 
-  // LEOW (hLast) reaches the build through the H Kammer = LEB + LEOW relation
-  // and, in Closed generator with a blank generator height, as the generator's
-  // model height (chamberGeneratorHeightRefusal). The model flags it `noEffect`
-  // when both levers are disconnected. HOLLOW = the With cone design.
+  // LEOW (hLast) is never consumed by the builder directly (the stepped last
+  // cylinder is pinned through the box top; hollow ignores it) — its ONLY lever
+  // on the build is the H Kammer = LEB + LEOW relation. The model flags it
+  // `noEffect` whenever that lever is disconnected so the UI can say so.
   describe('LEOW (hLast) noEffect flag', () => {
-    const HOLLOW = { ...BASE, variant: 'hollow' as const };
-    it('stays effective in Closed generator (blank height) even with H Kammer set Exact', () => {
-      const m = byKey(computeChamberOutputs({ ...BASE, constraints: { height: { exact: 4200 } } }));
-      expect(m.get('hLast')!.noEffect).toBeFalsy();
-      const typed = byKey(
-        computeChamberOutputs({ ...BASE, centralHeight: 1500, constraints: { height: { exact: 4200 } } }),
-      );
-      expect(typed.get('hLast')!.noEffect).toBe(true);
-    });
-
     it('is unflagged while the H Kammer relation is on and unpinned (LEOW drives H)', () => {
       const m = byKey(computeChamberOutputs(BASE));
       expect(m.get('hLast')!.noEffect).toBeFalsy();
     });
 
     it('flags LEOW when H Kammer is set Exact (H no longer reads LEOW)', () => {
-      const m = byKey(computeChamberOutputs({ ...HOLLOW, constraints: { height: { exact: 4200 } } }));
+      const m = byKey(computeChamberOutputs({ ...BASE, constraints: { height: { exact: 4200 } } }));
       expect(m.get('hLast')!.noEffect).toBe(true);
       expect(m.get('height')!.status).toBe('set exact');
     });
 
     it('flags LEOW when the H = LEB + LEOW relation is toggled off', () => {
-      const m = byKey(computeChamberOutputs({ ...HOLLOW, relations: { height: false } }));
+      const m = byKey(computeChamberOutputs({ ...BASE, relations: { height: false } }));
       expect(m.get('hLast')!.noEffect).toBe(true);
     });
 
     it('flags LEOW when the relations master switch is off', () => {
-      const m = byKey(computeChamberOutputs({ ...HOLLOW, relationsMaster: false }));
+      const m = byKey(computeChamberOutputs({ ...BASE, relationsMaster: false }));
       expect(m.get('hLast')!.noEffect).toBe(true);
     });
 
@@ -342,7 +330,7 @@ describe('computeChamberOutputs', () => {
 
     it('never flags any other output', () => {
       const m = byKey(
-        computeChamberOutputs({ ...HOLLOW, constraints: { height: { exact: 4200 } } }),
+        computeChamberOutputs({ ...BASE, constraints: { height: { exact: 4200 } } }),
       );
       for (const [key, output] of m) {
         if (key !== 'hLast') expect(output.noEffect).toBeFalsy();
@@ -414,47 +402,3 @@ describe('computeChamberGeneratorDims', () => {
   });
 });
 
-describe('chamberGeneratorHeightRefusal (H Kammer must hold the generator)', () => {
-  // BASE finals: LEB 1200, LEOW 2700, H Kammer 3900 (= LEB + LEOW).
-  const H = (exact: number) => ({ constraints: { height: { exact } } });
-
-  it('accepts the model chamber in both generator designs', () => {
-    const stepped = { ...BASE };
-    expect(chamberGeneratorHeightRefusal(stepped, computeChamberOutputs(stepped))).toBeNull();
-    const simplify = { ...BASE, variant: 'hollow' as const, simplifyGenerator: true, hollowLength: 200 };
-    expect(chamberGeneratorHeightRefusal(simplify, computeChamberOutputs(simplify))).toBeNull();
-  });
-
-  it('Closed generator: refuses an H Kammer below LEB + LEOW when the height is blank', () => {
-    const input = { ...BASE, ...H(1800) };
-    const msg = chamberGeneratorHeightRefusal(input, computeChamberOutputs(input));
-    expect(msg).toContain('H Kammer = 1800 mm cannot hold the generator');
-    expect(msg).toContain('generator height 2700 mm (model LEOW)');
-  });
-
-  it('a typed generator height replaces the model height', () => {
-    const fits = { ...BASE, ...H(1800), centralHeight: 500 };
-    expect(chamberGeneratorHeightRefusal(fits, computeChamberOutputs(fits))).toBeNull();
-    const tall = { ...BASE, ...H(1800), centralHeight: 700 };
-    expect(chamberGeneratorHeightRefusal(tall, computeChamberOutputs(tall))).toContain('(typed)');
-  });
-
-  it('Simplify generator: refuses an H Kammer below LEB + the Gen Dim height', () => {
-    const input = { ...BASE, ...H(1800), variant: 'hollow' as const, simplifyGenerator: true, hollowLength: 200 };
-    const gen = computeChamberGeneratorDims(input).resolved.centralHeight;
-    expect(1200 + gen).toBeGreaterThan(1800);
-    expect(chamberGeneratorHeightRefusal(input, computeChamberOutputs(input))).toContain(
-      '(Gen Dim model)',
-    );
-    // The domed With cone stack is the builder's job.
-    const domed = { ...input, simplifyGenerator: false };
-    expect(chamberGeneratorHeightRefusal(domed, computeChamberOutputs(domed))).toBeNull();
-  });
-
-  it('scales the generator stack with Part scale', () => {
-    const input = { ...BASE, partScale: 1.1 };
-    expect(chamberGeneratorHeightRefusal(input, computeChamberOutputs(input))).toContain(
-      '× Part scale 1.1',
-    );
-  });
-});

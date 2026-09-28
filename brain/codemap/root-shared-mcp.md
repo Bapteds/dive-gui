@@ -203,7 +203,6 @@ Extends `tsconfig.base.json`; `module`/`moduleResolution` `NodeNext` (hence impo
 - `resolveChamberFinal` (internal): Exact wins; min > max gives `! min>max` and keeps the model value; otherwise clamping.
 - `computeChamberOutputs(input: ChamberInput): ChamberOutput[]`. Pass 1: outputs with no relation, a disabled relation or a refine relation (reads the partner's Exact from `constraints`); pass 2: active `combination` relations resolved to a fixed point (chaining LEB then H Kammer). Estimates are rounded to the 50 mm grid; an identity fed by a user value propagates it as is (`userDriven`), an `empirical` relation always re-rounds. `hLast` gets `noEffect` if the `height` relation is inactive or if `height` has an Exact. `relationsMaster === false` turns off all relations.
 - `nonPositiveChamberFinals(outputs): ChamberOutput[]`. Outputs with `final <= 0` excluding `noEffect`; the API rejects the build before launching CadQuery.
-- `chamberGeneratorHeightRefusal(input, outputs): string | null`. Closed generator and Simplify generator: message when `partScale × (LEB + generator height) > H Kammer`, the generator height being the typed `centralHeight`, else LEOW (stepped) or the Gen Dim v3 height (Simplify). The API refuses with 422 before the builder. `computeChamberOutputs` keeps LEOW effective (no `noEffect`) in stepped with a blank `centralHeight`.
 
 ### Server error codes
 - `SERVER_ERROR_CODES`, `ServerErrorCode`. List of `{ error: { code } }` envelope codes known to the web client (which adds its own transport codes).

@@ -160,14 +160,14 @@ export function ChamberOutputsTable({
                       )}
                       {o.noEffect && (
                         <span
-                          title="Not used by the build: H Kammer no longer reads LEOW (it is set Exact, or the H = LEB + LEOW relation is off), and it is not the generator height (With cone design, or a typed Generator height)."
+                          title="Not used by the build: H Kammer no longer reads LEOW (it is set Exact, or the H = LEB + LEOW relation is off), and the geometry itself never consumes LEOW directly."
                           className="inline-block rounded-sm border border-border bg-bg px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-secondary"
                         >
                           no effect
                           <span className="sr-only">
                             : not used by the build. H Kammer no longer reads LEOW (it is set
-                            Exact, or the H = LEB + LEOW relation is off), and it is not the
-                            generator height (With cone design, or a typed Generator height)
+                            Exact, or the H = LEB + LEOW relation is off), and the geometry never
+                            consumes LEOW directly
                           </span>
                         </span>
                       )}

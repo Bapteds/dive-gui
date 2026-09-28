@@ -2856,15 +2856,13 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
     }
   }
 
-  // LEOW (hLast) reaches the build through H Kammer = LEB + LEOW and, in the
-  // Closed generator design with a blank generator height, as the generator's
-  // model height (H Kammer must hold LEB + LEOW, chamberGeneratorHeightRefusal).
-  // The hollow build never reads it. When neither applies, LEOW has no effect
-  // on the geometry — flag it so the UI can say so.
+  // LEOW (hLast) only reaches the build through H Kammer = LEB + LEOW: the
+  // builder pins the stepped last cylinder through the box top and the hollow
+  // build never reads it. When that relation is inactive, or H Kammer is pinned
+  // by an Exact, LEOW has no effect on the geometry — flag it so the UI can say so.
   const heightSpec = CHAMBER_OUTPUT_SPECS.find((s) => s.key === 'height')!;
   const heightReadsLeow = relationOn(heightSpec) && constraints?.height?.exact == null;
-  const generatorReadsLeow = (input.variant ?? 'stepped') === 'stepped' && input.centralHeight == null;
-  if (!heightReadsLeow && !generatorReadsLeow) byKey.get('hLast')!.noEffect = true;
+  if (!heightReadsLeow) byKey.get('hLast')!.noEffect = true;
 
   return CHAMBER_OUTPUT_KEYS.map((k) => byKey.get(k)!);
 }
@@ -2879,39 +2877,6 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
  */
 export function nonPositiveChamberFinals(outputs: ChamberOutput[]): ChamberOutput[] {
   return outputs.filter((o) => o.final <= 0 && !o.noEffect);
-}
-
-/**
- * Refusal message when H Kammer cannot hold the generator, else null. The
- * generator height is the typed centralHeight, or the model's own when blank:
- * LEOW in the Closed generator design, the Gen Dim v3 height with Simplify
- * generator (both run through the chamber top, so the builder alone would
- * accept any H Kammer above the shoulder). Everything scales with partScale.
- * The domed With cone stack (generator + dome) is checked by the builder.
- */
-export function chamberGeneratorHeightRefusal(
-  input: ChamberInput,
-  outputs: ChamberOutput[],
-): string | null {
-  const variant = input.variant ?? 'stepped';
-  if (variant === 'hollow' && !input.simplifyGenerator) return null;
-  const final = (k: ChamberOutputKey) => outputs.find((o) => o.key === k)!.final;
-  const typed = input.centralHeight != null;
-  const genH =
-    input.centralHeight ??
-    (variant === 'stepped' ? final('hLast') : computeChamberGeneratorDims(input).resolved.centralHeight);
-  const s = input.partScale ?? 1;
-  const leb = final('hMiddlePlusFirst');
-  const h = final('height');
-  const required = s * (leb + genH);
-  if (!Number.isFinite(required) || required <= h + 1e-3) return null;
-  const source = typed ? 'typed' : variant === 'stepped' ? 'model LEOW' : 'Gen Dim model';
-  const scaled = Math.abs(s - 1) > 1e-9 ? ` × Part scale ${s}` : '';
-  return (
-    `Cannot build: H Kammer = ${Math.round(h)} mm cannot hold the generator: ` +
-    `LEB ${Math.round(leb)} mm + generator height ${Math.round(genH)} mm (${source})${scaled} ` +
-    `= ${Math.round(required)} mm. Increase H Kammer, or lower the generator height, HLE or Part scale.`
-  );
 }
 
 

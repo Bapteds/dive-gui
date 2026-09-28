@@ -492,23 +492,6 @@ describe('Chamber Creation', () => {
     expect(res.body.error.message).toContain('must be positive');
   });
 
-  it.each([
-    ['Closed generator', {}],
-    ['Simplify generator', { variant: 'hollow', simplifyGenerator: true, hollowLength: 200 }],
-  ])(
-    'refuses an H Kammer lower than LEB + the generator height (%s), before any builder run',
-    async (_name, design) => {
-      setCommandRunner(notFoundRunner);
-      const auth = authHeader(await createTestUser());
-      const res = await request(app)
-        .post('/api/v1/chamber/build')
-        .set('Authorization', auth)
-        .send({ ...BUILD, ...design, constraints: { height: { exact: 1800 } } })
-        .expect(422);
-      expect(res.body.error.message).toContain('H Kammer = 1800 mm cannot hold the generator');
-    },
-  );
-
   it('refuses an inverted Min>Max constraint range, before any builder run', async () => {
     setCommandRunner(notFoundRunner);
     const auth = authHeader(await createTestUser());
