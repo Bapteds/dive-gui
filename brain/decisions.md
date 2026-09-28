@@ -70,6 +70,7 @@
 | 2026-09-04 | Blade skin assigned by an **exact geometric test** (and not a nearest-centroid vote) | Two successive failed density tunings. |
 | 2026-09-28 | A chamber too small for its parts stays a **refusal**; no automatic enlargement of the model's chamber dimensions | User decision (an enlargement was merged then removed the same day). Confirms "refuse rather than shrink" in the other direction too. |
 | 2026-09-28 | **Generator height editable in both designs**: blank = through the chamber top, a value = closed flat-topped cylinder | User request. |
+| 2026-09-28 | **H Kammer must hold LEB + the generator height**, the blank height being the model's (LEOW in Closed generator, Gen Dim v3 in Simplify) | User choice: a chamber lower than the generator must not build. |
 
 ## Project organization
 
