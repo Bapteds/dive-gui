@@ -1,6 +1,6 @@
 # Feature · Chamber Creation
 
-> **Status**: in production · **Updated**: 2026-09-28 (chamber fit + generator height)
+> **Status**: in production · **Updated**: 2026-09-28 (generator height in both designs)
 > **Specs**: `brain/specs/2026-08-03-guide-vane-throat-design.md`, `2026-08-06-outlet-x1-ratio-design.md`, `2026-08-10-hub-shroud-x1-adaptation-design.md`, `2026-08-11-chamfer-disable-toggle-design.md`, `2026-08-11-stepped-last-cylinder-through-top-design.md`, `2026-08-11-chamber-to-meshing-transfer-design.md`, `2026-08-13-guide-vane-step-export-design.md`, `2026-08-31-chamber-fullwidth-and-saved-builds-design.md`, `2026-08-31-part-fit-refusals-design.md`, `2026-08-31-vane-te-rounding-design.md`, `2026-09-01-chamber-cache-integrity-design.md`, `2026-09-01-chamber-input-floors-design.md`, `2026-09-01-chamber-minor-polish-design.md`, `2026-09-01-chamber-ux-consistency-design.md`, `2026-09-01-deferred-vane-step-design.md`, `2026-09-01-empirical-50mm-rounding-design.md`, `2026-09-01-mirrored-step-download-design.md`, `2026-09-02-chamber-vocabulary-design.md`, `2026-09-02-generator-dimensions-design.md`, `2026-09-02-physical-input-names-design.md`, `2026-09-02-simplify-generator-design.md` (all under `brain/specs/`) · related plans under `brain/plans/`
 > **Codemaps**: `brain/codemap/root-shared-mcp.md` (model, Gen Dim v3, `ChamberInput`), `brain/codemap/api-core.md` (`chamber` module, saves, Prisma), `brain/codemap/api-lib.md` (`chamberStorage`), `brain/codemap/api-scripts.md` (`buildChamber.py`, `mirrorStep.py`, assets, pytest), `brain/codemap/api-tests.md` (`chamber*.test.ts`, `meshing.test.ts`), `brain/codemap/web-features-assemble-chamber.md` (`features/chamber/*`), `brain/codemap/web-core.md` (`pages/ChamberPage.tsx`, `lib/api/chamber*.ts`)
 > **Other references**: `brain/conventions/vocabulary.md` (naming rules, read it BEFORE touching a label), `brain/assets/chamber-parameter-map.html` (map of the 12 parameters and their relations, "model v2" state of 2026-08-04: covers neither Gen Dim v3 nor the geometric options), `brain/architecture/storage-layout.md`.
@@ -75,7 +75,7 @@ Single source: `CHAMBER_OUTPUT_SPECS` in `packages/shared/src/index.ts` (full-pr
 4. Each value goes through the 50 mm rounding (§3.4) then through Min / Max / Exact (§3.3).
 5. `hLast` (LEOW) gets `noEffect` if the `height` relation is inactive or if `height` has an Exact: the builder never reads LEOW directly (the last stepped cylinder is pinned through the ceiling, the With cone variant ignores it).
 
-The geometric options (§3.7) never influence the empirical model (`computeChamberOutputs`); since 2026-09-28 they can raise the chamber dimensions through the fit post-pass (§3.5b).
+The geometric options (§3.7) **never** influence the 12 outputs. A chamber too small for its parts is **refused** by the builder (§3.8), by design (user decision 2026-09-28).
 
 ### 3.3 Min / Max / Exact constraints and statuses
 - `ChamberConstraint { min?, max?, exact? }` per output; each value must be `> 0` and `≤ CHAMBER_DIMENSION_MAX_MM` (100,000 mm). In the table, `NumCell` only accepts `0 < v ≤ 100,000`; any other entry clears the constraint.
@@ -111,9 +111,6 @@ auto dome    = 79.609 + 0.21315 · resolved Ø
 - Reference parity (tested): X1 = 1450, X2 = 7, X3 = 10 gives X4 ≈ 618.03, R = 62, L = 100, Ø 1242, height ≈ 1264.47, dome ≈ 344.34.
 - No 50 mm rounding on these values.
 
-### 3.5b Chamber fit around the parts (since 2026-09-28)
-The 12 fits are independent, so the model's chamber was often too small for the parts it sizes (≈ 70 % of the X1..X3 range refused with "would stick out of the box"). `fitChamberToParts(input, outputs)` (`@dive/shared`), run by the API before building and by the page for the live table, raises the AUTO B1, B Kammer, LT, H Kammer and length to the next 50 mm step that holds the scaled parts: runner case / cylinders, the exact swung foot footprint, the guide-vane distributor (0.6 × dMiddle, dLast/2 + 10 mm), the two chamfer faces (moves LT), and the stack height (Closed generator: LEB + 30 mm, or LEB + Generator height; With cone: LEB + max(cone, generator + dome); Simplify: LEB + max(cone, typed height)). Raised outputs show the status **raised to fit**; an Exact is never raised, a Max caps the raise, a typed Length is kept (the builder then refuses as before). A raised H Kammer marks LEOW `no effect`. Part scale therefore grows the chamber instead of being refused. The builder keeps its own refusals as the safety net (constants mirrored, keep in sync). Decision: user, 2026-09-28.
-
 ### 3.6 Manual overrides and cascade
 All in mm, optional; empty = auto (`setValueAs: numOrUndef`, `placeholder="auto"`, help "Blank = auto ≈ N mm"). Bounds: `> 0`, `≤ 100,000`.
 
@@ -126,7 +123,7 @@ All in mm, optional; empty = auto (`setValueAs: numOrUndef`, `placeholder="auto"
 | `wallThickness` | Wall thickness (mm) | `CHAMBER_WALL_THICKNESS_MM` = 50 | With cone |
 | `x4` | Power (kW) | Gen Dim v3 | With cone |
 | `centralDiameter` | Generator Ø (mm) | Gen Dim v3 | With cone |
-| `centralHeight` | Generator height (mm) | With cone: Gen Dim v3. Closed generator and Simplify generator: blank = through the chamber top (hint "≈ (H Kammer − Part scale × LEB) / Part scale"); a value = flat-topped cylinder closed below the top (a top within 1 mm of the chamber top is pinned like blank; taller than H Kammer allows = refusal unless H Kammer is auto, then it is raised) | both designs (since 2026-09-28) |
+| `centralHeight` | Generator height (mm) | With cone: Gen Dim v3. Closed generator and Simplify generator: blank = through the chamber top (hint "≈ (H Kammer − Part scale × LEB) / Part scale"); a value = flat-topped cylinder closed below the top (a top within 1 mm of the chamber top is pinned like blank; taller than H Kammer allows = refusal "closed generator stack") | both designs (since 2026-09-28) |
 | `domeHeight` | Dome height (mm) | Gen Dim v3; ignored if Simplify generator | With cone |
 
 - `dFirst`/`dMiddle` are sent to the builder **unscaled** (m): the builder multiplies them by `partScale`; without an override it applies its own copies of the ratios to the already scaled `dLast`. The ratios therefore exist twice (TS and Python): keep them in sync.
@@ -262,7 +259,7 @@ Each file is written as `<final>.tmp` then `os.replace()`; `chamber.glb` is prom
 
 ### 5.1 Build cache `<STORAGE_DIR>/chamber/<hash>/`
 - Global, not tied to a project, shared by the team. Tree: `params.json`, `chamber.glb`, `manifest.json`, `edges.bin`, `warnings.json`, `build-meta.json`, `exports/{chamber.stl, chamber.step, chamber-mirrored.step, trisurface.zip}`, and `_debug/` if `CHAMBER_DEBUG_DUMP`.
-- **Key**: `chamberHash(params)` = SHA-1 of the JSON of the sorted `[key, value]` pairs, truncated to 16 hex. `params` contains: `length`, `variant`, `footAngleDeg`, `guideVanes`, `chamferEnabled`, `feetEnabled`, `vaneAngleDeg`, `partScale`, `outletRatio`, `outletOuterD` (= X1 in m), `dFirst`/`dMiddle` if entered, the 12 Finals (m); in hollow `wallThickness`, `hollowLength`, `centralDiameter`, `simplifyGenerator` and, outside Simplify, `centralHeight`, `domeHeight` (in Simplify, `centralHeight` only when typed); in stepped `centralHeight` only when typed. The 12 Finals and `length` are those AFTER `fitChamberToParts`. **Not included**: `x4`, `relations`, `constraints` (only via the Finals), the Python code version, its constants and its assets.
+- **Key**: `chamberHash(params)` = SHA-1 of the JSON of the sorted `[key, value]` pairs, truncated to 16 hex. `params` contains: `length`, `variant`, `footAngleDeg`, `guideVanes`, `chamferEnabled`, `feetEnabled`, `vaneAngleDeg`, `partScale`, `outletRatio`, `outletOuterD` (= X1 in m), `dFirst`/`dMiddle` if entered, the 12 Finals (m); in hollow `wallThickness`, `hollowLength`, `centralDiameter`, `simplifyGenerator` and, outside Simplify, `centralHeight`, `domeHeight` (in Simplify, `centralHeight` only when typed); in stepped `centralHeight` only when typed. **Not included**: `x4`, `relations`, `constraints` (only via the Finals), the Python code version, its constants and its assets.
 - Consequences: explicitly sending the auto values gives the same hash as empty fields; `vaneAngleDeg`, `outletRatio` and `outletOuterD` are set even without vanes, so changing them re-keys a vane-less build (identical geometry, rebuilt).
 - **Completeness** = presence of `chamber.glb` (`chamberGlbExists`). A killed build leaves at most `.tmp` files and partial artifacts, never a GLB: the next request rebuilds.
 - **Lock**: `withChamberLock(hash, fn)`, promise-chain mutex **in process memory**, around the cache check + build, and around the `step`/`stepMirrored` generation (state rechecked inside the lock). Reads without lock (safe thanks to atomic writes). Only one API instance supported (K31).

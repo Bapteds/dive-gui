@@ -2,7 +2,7 @@ import { Suspense, lazy, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader2, Send } from 'lucide-react';
-import { computeChamberOutputs, fitChamberToParts, type ChamberFit } from '@dive/shared';
+import { computeChamberOutputs } from '@dive/shared';
 import type { ChamberConstraint, ChamberInput, ChamberOutput, ChamberOutputKey } from '@/lib/api/types';
 import { ApiError } from '@/lib/api/client';
 import { buildChamber as buildChamberRequest, type ChamberExportKind } from '@/lib/api/chamber';
@@ -76,41 +76,18 @@ export function ChamberPage() {
 
   const values = watch();
   const relationsKey = JSON.stringify(values.relations);
-  // Every form field the chamber fit reads (part sizes and the generator stack).
-  const partsKey = JSON.stringify([
-    values.variant,
-    values.partScale,
-    values.dFirst,
-    values.dMiddle,
-    values.guideVanes,
-    values.feetEnabled,
-    values.footAngleDeg,
-    values.chamferEnabled,
-    values.hollowLength,
-    values.simplifyGenerator,
-    values.x4,
-    values.centralDiameter,
-    values.centralHeight,
-    values.domeHeight,
-  ]);
-  // The twelve outputs, then the chamber grown around its parts: the same two
-  // shared steps the API runs before building, so the table shows what builds.
-  const fit = useMemo<ChamberFit | null>(() => {
-    const { x1, x2, x3 } = values;
+  const outputs = useMemo<ChamberOutput[] | null>(() => {
+    const { x1, x2, x3, relationsMaster, relations } = values;
     if (![x1, x2, x3].every((v) => typeof v === 'number' && Number.isFinite(v))) {
       return null;
     }
-    // Fitted without the typed length, so the length hint is the auto length.
-    const input: ChamberInput = { ...values, constraints, lengthOverride: undefined };
-    return fitChamberToParts(input, computeChamberOutputs(input));
+    return computeChamberOutputs({ x1, x2, x3, constraints, relationsMaster, relations });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [values.x1, values.x2, values.x3, values.relationsMaster, relationsKey, constraints, partsKey]);
-  const outputs: ChamberOutput[] | null = fit?.outputs ?? null;
+  }, [values.x1, values.x2, values.x3, values.relationsMaster, relationsKey, constraints]);
 
-  // Auto length shown on the (blank) length field: 2 x the final width, or more
-  // when the parts need it (mm).
-  const autoLengthMm = fit?.lengthMm ?? null;
-  const autoLengthRaised = fit?.lengthRaised ?? false;
+  // Auto length shown on the (blank) length field = 2 x the final width (mm).
+  const widthFinal = outputs?.find((o) => o.key === 'width')?.final ?? null;
+  const autoLengthMm = widthFinal != null ? 2 * widthFinal : null;
 
   // Auto (empirical) placeholders for the manual dimension overrides + X4 —
   // the same shared model the API resolves with, computed from the CURRENT
@@ -288,7 +265,6 @@ export function ChamberPage() {
             variant={values.variant}
             simplifyGenerator={values.simplifyGenerator}
             autoLengthMm={autoLengthMm}
-            autoLengthRaised={autoLengthRaised}
             autoDims={autoDims}
             relationsMaster={values.relationsMaster}
             relations={values.relations}

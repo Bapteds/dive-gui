@@ -58,29 +58,6 @@ function Harness({
   );
 }
 
-function ChamberInputsFormHarnessWithRaisedLength() {
-  const { register, handleSubmit, formState } = useForm<ChamberFormValues>({
-    resolver: zodResolver(chamberFormSchema),
-    defaultValues: CHAMBER_FORM_DEFAULTS,
-  });
-  return (
-    <ChamberInputsForm
-      register={register}
-      errors={formState.errors}
-      onSubmit={handleSubmit(() => {})}
-      isBuilding={false}
-      variant="stepped"
-      simplifyGenerator={false}
-      autoLengthMm={9500}
-      autoLengthRaised
-      autoDims={AUTO_DIMS}
-      relationsMaster
-      relations={CHAMBER_FORM_DEFAULTS.relations}
-      onRelationChange={() => {}}
-    />
-  );
-}
-
 describe('ChamberInputsForm', () => {
   it('shows the hollow-only fields for the hollow variant and hides them for stepped', () => {
     const { rerender } = render(<Harness onValid={() => {}} />);
@@ -199,15 +176,6 @@ describe('ChamberInputsForm', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
     await waitFor(() => expect(onValid).toHaveBeenCalledTimes(2));
     expect((onValid.mock.calls[1][0] as ChamberFormValues).centralHeight).toBe(1500);
-  });
-
-  it('says when the auto length grew to fit the parts', () => {
-    render(
-      <ChamberInputsFormHarnessWithRaisedLength />,
-    );
-    expect(
-      screen.getByText('Blank = auto ≈ 9500 mm (grown to fit the parts)'),
-    ).toBeInTheDocument();
   });
 
   it('Simplify generator toggles in the hollow section: keeps the height, hides the dome', () => {

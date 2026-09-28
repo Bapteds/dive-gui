@@ -8,9 +8,7 @@ import {
   CHAMBER_GRID_MM,
   computeChamberGeneratorDims,
   computeChamberOutputs,
-  fitChamberToParts,
   nonPositiveChamberFinals,
-  type ChamberInput,
   snapToChamberGrid,
   type ChamberOutput,
 } from '@dive/shared';
@@ -404,86 +402,3 @@ describe('computeChamberGeneratorDims', () => {
   });
 });
 
-describe('fitChamberToParts (chamber grown around its parts)', () => {
-  const fit = (input: ChamberInput) => fitChamberToParts(input, computeChamberOutputs(input));
-  const raised = (input: ChamberInput) =>
-    fit(input)
-      .outputs.filter((o) => o.status === 'raised to fit')
-      .map((o) => [o.key, o.final]);
-
-  it('leaves a chamber that already holds its parts untouched', () => {
-    const input = { x1: 1450, x2: 7.85, x3: 8 };
-    const f = fit(input);
-    expect(f.outputs).toEqual(computeChamberOutputs(input));
-    expect(f.lengthMm).toBe(2 * f.outputs.find((o) => o.key === 'width')!.final);
-    expect(f.lengthRaised).toBe(false);
-  });
-
-  it('raises B1 and B Kammer to the next grid step that holds the feet', () => {
-    // The model gives B Kammer 2900 / B1 1550 here: a foot would poke through.
-    expect(raised({ x1: 1450, x2: 7.85, x3: 1 })).toEqual([
-      ['width', 3600],
-      ['distFromSideChamfer1', 1800],
-    ]);
-    // Without feet the runner case alone fits the model's chamber.
-    expect(raised({ x1: 1450, x2: 7.85, x3: 1, feetEnabled: false })).toEqual([]);
-  });
-
-  it('never raises an Exact dimension and keeps a typed length', () => {
-    const input = {
-      x1: 1450,
-      x2: 7.85,
-      x3: 1,
-      constraints: { width: { exact: 3000 } },
-      lengthOverride: 5000,
-    };
-    const f = fit(input);
-    const width = f.outputs.find((o) => o.key === 'width')!;
-    expect(width.final).toBe(3000);
-    expect(width.status).toBe('set exact');
-    expect(f.lengthMm).toBe(5000);
-    expect(raised(input)).toEqual([['distFromSideChamfer1', 1800]]);
-  });
-
-  it('caps a raise at a Max (the builder then refuses)', () => {
-    const f = fit({ x1: 1450, x2: 7.85, x3: 1, constraints: { width: { max: 3200 } } });
-    const width = f.outputs.find((o) => o.key === 'width')!;
-    // Needs 3600, stops at the Max: the builder refuses what still sticks out.
-    expect(width).toMatchObject({ final: 3200, status: 'raised to fit' });
-  });
-
-  it('raises H Kammer for a tall generator and marks LEOW as no effect', () => {
-    const f = fit({ x1: 1450, x2: 7.85, x3: 8, centralHeight: 4000 });
-    const m = byKey(f.outputs);
-    // LEB 1200 + generator 4000 = 5200 (was 3900 = LEB + LEOW).
-    expect(m.get('height')!.final).toBe(5200);
-    expect(m.get('height')!.status).toBe('raised to fit');
-    expect(m.get('hLast')!.noEffect).toBe(true);
-    // A generator that fits leaves H Kammer alone.
-    expect(raised({ x1: 1450, x2: 7.85, x3: 8, centralHeight: 1500 })).toEqual([]);
-  });
-
-  it('raises H Kammer for the With cone stack (LEB + generator + dome)', () => {
-    const input: ChamberInput = { x1: 1450, x2: 1.8, x3: 8, variant: 'hollow', hollowLength: 200 };
-    const m = byKey(fit(input).outputs);
-    const gen = computeChamberGeneratorDims(input);
-    const stack =
-      m.get('hMiddlePlusFirst')!.final + gen.resolved.centralHeight + gen.resolved.domeHeight;
-    expect(m.get('height')!.final).toBe(Math.ceil(stack / CHAMBER_GRID_MM) * CHAMBER_GRID_MM);
-    // Simplify generator without a typed height: only the cone counts, no raise.
-    expect(raised({ ...input, simplifyGenerator: true })).toEqual([]);
-  });
-
-  it('grows with Part scale and moves the axis off the chamfer faces', () => {
-    const f = fit({ x1: 1450, x2: 7.85, x3: 8, partScale: 1.5 });
-    const m = byKey(f.outputs);
-    expect(m.get('width')!.status).toBe('raised to fit');
-    expect(m.get('distFromEnd')!.final).toBeGreaterThan(2600);
-    expect(f.lengthMm).toBeGreaterThanOrEqual(m.get('distFromEnd')!.final);
-  });
-
-  it('ignores unusable geometry inputs instead of producing NaN', () => {
-    const f = fit({ x1: 1450, x2: 7.85, x3: 1, partScale: Number.NaN, footAngleDeg: Number.NaN });
-    expect(f.outputs.every((o) => Number.isFinite(o.final))).toBe(true);
-  });
-});
