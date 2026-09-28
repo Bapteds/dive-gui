@@ -829,27 +829,6 @@ describe('Chamber Creation', () => {
     expect(seen[1].centralHeight).toBeCloseTo(1.5, 9);
   });
 
-  it('builds the chamber grown around its parts and reports the raised outputs', async () => {
-    const seen: Record<string, number>[] = [];
-    setCommandRunner(async (spec) => {
-      seen.push(JSON.parse(await fs.readFile(spec.args[1], 'utf8')));
-      return successRunner(spec);
-    });
-    const auth = authHeader(await createTestUser());
-
-    // Q_max 1: the model's chamber (B Kammer 2900, B1 1550) cannot hold the feet.
-    const res = await request(app)
-      .post('/api/v1/chamber/build')
-      .set('Authorization', auth)
-      .send({ ...BUILD, x3: 1 })
-      .expect(200);
-    const width = res.body.outputs.find((o: { key: string }) => o.key === 'width');
-    expect(width).toMatchObject({ final: 3600, status: 'raised to fit' });
-    expect(seen[0].width).toBeCloseTo(3.6, 9);
-    expect(seen[0].distFromSideChamfer1).toBeCloseTo(1.8, 9);
-    expect(seen[0].length).toBeCloseTo(7.2, 9); // auto length = 2 x the raised width
-  });
-
   it('resolves blank generator dims from the shared Gen Dim model', async () => {
     setCommandRunner(successRunner);
     const auth = authHeader(await createTestUser());

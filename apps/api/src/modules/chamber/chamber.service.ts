@@ -17,7 +17,6 @@ import {
   CHAMBER_WALL_THICKNESS_MM,
   computeChamberGeneratorDims,
   computeChamberOutputs,
-  fitChamberToParts,
   nonPositiveChamberFinals,
   type ChamberInput,
   type ChamberOutput,
@@ -147,14 +146,16 @@ function outputFinal(outputs: ChamberOutput[], key: string): number {
  * The metres geometry params buildChamber.py consumes: the twelve FINAL outputs
  * (mm -> m) keyed by their param name, plus the resolved LENGTH (mm -> m) and,
  * for the 'hollow' variant, the derived hollow/central/dome dimensions.
- * `lengthMm` comes from fitChamberToParts: the lengthOverride as-is, else
- * 2 x width (raised when the parts need more room).
  */
 function resolveGeometryParams(
   input: ChamberInput,
   outputs: ChamberOutput[],
-  lengthMm: number,
 ): Record<string, number | string | boolean> {
+  const widthMm = outputFinal(outputs, 'width');
+  // Default: length = 2 x width — a true identity, so it inherits width's grid
+  // snap (an empirical width is already on the 50 mm grid) or propagates a
+  // user-driven width verbatim. A lengthOverride is the user's number as-is.
+  const lengthMm = input.lengthOverride ?? 2 * widthMm;
   const variant = input.variant ?? 'stepped';
 
   const params: Record<string, number | string | boolean> = { length: lengthMm * MM_TO_M, variant };
@@ -243,7 +244,7 @@ function resolveGeometryParams(
  * @throws 502 CHAMBER_BUILD_FAILED if the run errors or produces no GLB.
  */
 export async function buildChamber(input: ChamberInput): Promise<ChamberBuildResult> {
-  const modelOutputs = computeChamberOutputs(input);
+  const outputs = computeChamberOutputs(input);
 
   // The fits can go non-positive on legal inputs (esp. with relations off) —
   // refuse before hashing/building instead of handing CadQuery a negative
@@ -255,7 +256,7 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
     'chamferLength2',
     'chamferWidth2',
   ];
-  const nonPositive = nonPositiveChamberFinals(modelOutputs).filter(
+  const nonPositive = nonPositiveChamberFinals(outputs).filter(
     (o) => input.chamferEnabled !== false || !chamferOnly.includes(o.key),
   );
   if (nonPositive.length) {
@@ -269,7 +270,7 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
 
   // An inverted range is a contradiction, not an input: building on the
   // silently-ignored model value hid the mistake (and it survived into saves).
-  const inverted = modelOutputs.filter((o) => o.status === '! min>max');
+  const inverted = outputs.filter((o) => o.status === '! min>max');
   if (inverted.length) {
     const list = inverted
       .map((o) => {
@@ -284,11 +285,7 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
     );
   }
 
-  // Grow the auto chamber dimensions around the parts (runner case, feet,
-  // distributor, generator stack); pinned dimensions stay and the builder
-  // refuses what still sticks out.
-  const { outputs, lengthMm } = fitChamberToParts(input, modelOutputs);
-  const params = resolveGeometryParams(input, outputs, lengthMm);
+  const params = resolveGeometryParams(input, outputs);
   const hash = chamberHash(params);
 
   // The cache check runs INSIDE the per-hash lock: a second identical build

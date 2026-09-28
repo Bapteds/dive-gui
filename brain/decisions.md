@@ -68,6 +68,8 @@
 | 2026-09-02 | **Gen Dim v3 workbook = source of truth** of the generator model; fixed ratios removed | A single source of truth (`documents/Gen Dim v3 Only Calculator (standalone).xlsx`). |
 | 2026-09-02 | **"outlet" = flow exit**, never the middle cylinder | Vocabulary correction by the user. |
 | 2026-09-04 | Blade skin assigned by an **exact geometric test** (and not a nearest-centroid vote) | Two successive failed density tunings. |
+| 2026-09-28 | A chamber too small for its parts stays a **refusal**; no automatic enlargement of the model's chamber dimensions | User decision (an enlargement was merged then removed the same day). Confirms "refuse rather than shrink" in the other direction too. |
+| 2026-09-28 | **Generator height editable in both designs**: blank = through the chamber top, a value = closed flat-topped cylinder | User request. |
 
 ## Project organization
 

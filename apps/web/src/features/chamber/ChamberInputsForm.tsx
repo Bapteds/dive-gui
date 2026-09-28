@@ -20,7 +20,7 @@ export type { ChamberAutoDims } from './chamberForm';
 
 /**
  * ChamberInputsForm - the three empirical inputs (X1/X2/X3), the cylinder design
- * variant, the box length (blank = 2 x width, grown to fit the parts), the
+ * variant, the box length (blank = 2 x width), the
  * generator height (both designs), and - for the hollow variant - the hollow
  * cup's length and wall thickness, plus X4 steering the generator autos
  * (Gen Dim v3). Presentational: the parent owns the react-hook-form instance (so
@@ -46,7 +46,6 @@ export function ChamberInputsForm({
   variant,
   simplifyGenerator,
   autoLengthMm,
-  autoLengthRaised = false,
   autoDims,
   relationsMaster,
   relations,
@@ -60,8 +59,6 @@ export function ChamberInputsForm({
   /** Current Simplify Generator state (hides the height/dome fields when on). */
   simplifyGenerator: boolean;
   autoLengthMm: number | null;
-  /** True when the auto length grew beyond 2 x width to hold the parts. */
-  autoLengthRaised?: boolean;
   /** Auto (empirical) placeholders for the five manual dimension overrides. */
   autoDims: ChamberAutoDims;
   /** Current master switch state (governs whether individual relations apply). */
@@ -244,9 +241,7 @@ export function ChamberInputsForm({
           error={errors.lengthOverride?.message}
           helperText={
             autoLengthMm != null
-              ? autoLengthRaised
-                ? `Blank = auto ≈ ${Math.round(autoLengthMm)} mm (grown to fit the parts)`
-                : `Blank = 2 × width ≈ ${Math.round(autoLengthMm)} mm`
+              ? `Blank = 2 × width ≈ ${Math.round(autoLengthMm)} mm`
               : 'Blank = 2 × width'
           }
         >
@@ -271,7 +266,7 @@ export function ChamberInputsForm({
         <Field
           label="Part scale (×)"
           error={errors.partScale?.message}
-          helperText="Scales runner case, middle cylinder, cone & generator, feet & vanes together; the chamber grows to fit them unless its dimensions are set Exact"
+          helperText="Scales runner case, middle cylinder, cone & generator, feet & vanes together; chamber & axis stay fixed; a part that no longer fits the chamber is refused"
         >
           <Input
             type="number"

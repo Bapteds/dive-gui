@@ -6,7 +6,7 @@
 
 ## 1. Where we are
 
-- **Last change** (2026-09-28, merged into `main` as `322f5bc`, fix commit `d5358d0`): chamber grown around its parts (`fitChamberToParts`) + editable generator height in Closed generator / Simplify generator. Still to do: browser check, and **purge `/var/lib/dive/storage/chamber/*` when deploying**.
+- **Last change** (2026-09-28): editable generator height in Closed generator / Simplify generator (merged `322f5bc`). The automatic chamber enlargement merged with it was **removed** the same day at the user's request (branch `fix/revert-chamber-fit`): a chamber too small for its parts is refused again, by design. Still to do: browser check, and **purge `/var/lib/dive/storage/chamber/*` when deploying** (`buildChamber.py` changed).
 - **Branch**: `main`, which now contains the merge of `docs/brain` (brain reorganization, 2026-09-28) on top of `d43a6ce` (merge of PR #3 `feat/chamber-ui-feedback`). No known open PR.
 - **Version**: 1.0.x (v1.0.1 audit fixes included: every CRITICAL and HIGH finding).
 - **Last delivered work** (PR #3, 2026-08-31 → 2026-09-04): Chamber Creation.
