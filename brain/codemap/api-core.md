@@ -223,6 +223,8 @@ Exports `createMeshingRouter()`, mounted on `/api/v1/meshing`, behind `requireAu
 - `addStlFiles(id, uploads)`. snappy: only readable `.stl`; cfMesh: `.stl` files or a single `.fms`, never both. Errors 400 `NO_STL`, 422 `INVALID_STL`.
 - `readStlBytes(id, name)`, `removeStlFile(id, name)` (404 if the file is missing).
 - `isMeshRunActive(id): boolean`.
+- `isSessionRunning(id): Promise<boolean>`. Registry entry OR persisted `status.json` `running`.
+- `requireMeshedSession(id): Promise<MeshingMeta>`. Gate of the meshing -> project hand-off: 404 `NOT_FOUND` "Meshing session not found.", 409 `MESH_IN_PROGRESS`, 409 `MESHING_NOT_MESHED` (no complete polyMesh, `hasCompleteResultMesh`). Used by `projects/mesh.service.importMeshFromMeshing`.
 - `startMeshingRun(id, config)`. Checks the engine (400 `ENGINE_MISMATCH`), one run per session (409 `MESH_IN_PROGRESS`), at least one surface (400 `NO_STL`), readable bounds for snappy; caps cores to the machine budget (`coreBudget`); registers the run in memory, resets `mesh.log`, writes `status.json` (`running`) and the config, then launches `finishMeshingRun` in the background (snappy or cfMesh pipeline, report, terminal status `succeeded`/`failed`/`stopped`, removal of the stale render).
 - `getMeshingLog(id): Promise<MeshingLogPayload>`. Reads at most `SOLVER_LOG_MAX_BYTES` of the log and returns its last 20,000 characters; the report is attached only once the run has finished.
 - `stopMeshingRun(id)`. Marks the stop, SIGTERM then SIGKILL after `RUN_STOP_GRACE_MS`; with no live process, flips an orphaned `running` status to `stopped`. Idempotent.

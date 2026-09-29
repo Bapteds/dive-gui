@@ -220,6 +220,10 @@ Hook for the BC overlay. `ApplyBoundaryInput` = `{ request: ApplyBoundaryConditi
 **Depends on**: `@/lib/api/conversion`, `useCaseFiles`, `useMeshes`, `features/visualize/useMesh`. **Used by**: `ConvertToFoamFlow`.
 **Notes**: the mutation resolves even when the pipeline fails (`result.success === false`); the caches are then rewritten anyway (no `success` guard, unlike `useRunMerge`).
 
+## `apps/web/src/features/projects/useMeshes.fromMeshing.test.tsx`
+**Covers**: `useImportMeshFromMeshing`: case target removes the case `manifest`/`glb`/`edges`, sets `files` from `result.entries`, invalidates `meshes`, `assembly`, `mergePlan`, `runnable`, `mesh/backup`; library target sets `meshes` and leaves the case render and tree alone; the API receives `(projectId, body)` without `projectId` in the body.
+**Technique**: `renderHook` with a seeded `QueryClient`; `@/lib/api/projects` mocked.
+
 ## `apps/web/src/features/projects/useMeshes.ts`
 **Role**: hooks for the project's mesh library, the merge pipeline and the applied assembly.
 **Exports**:
@@ -236,7 +240,8 @@ Hook for the BC overlay. `ApplyBoundaryInput` = `{ request: ApplyBoundaryConditi
 - `useReapplyAssembly(projectId)`: same endpoint with a reduced plan (removing a part; the server first restores the pre-merge case); same cache effects as `useRunMerge`.
 - `useUndoAssembly(projectId)`: POST `/projects/:id/mesh/backup/restore` (`restoreMeshBackup`, C3) → `MeshManifest`; `setQueryData(meshManifestQueryKey, manifest)`, invalidates the tree, `invalidateAssemblyOutputs`, invalidates `meshBackupQueryKey`.
 - `invalidateAssemblyOutputs` (internal): removes the case GLB / edges and the file contents; invalidates library, plan, assembly.
-**Depends on**: `@/lib/api/meshes`, `restoreMeshBackup`, `useCaseFiles`, `features/visualize/useMesh`, `features/assemble/useAssembly`. **Used by**: `MergeMeshesFlow`, `useConversion`, `pages/ProjectDetailPage.tsx`, `features/assemble/*` (`AssemblyManagePanel`, `AssemblyMergeDialog`, `AssemblyWorkspace`, `PartsRail`), `features/visualize/*` (`AutoPatchDialog`, `EditPatchesDialog`, `VisualizePanel`).
+- `useImportMeshFromMeshing()` + type `ImportMeshFromMeshingVars` (`MeshFromMeshingRequest & { projectId }`, the project travels with the variables because the dialog picks it): POST `/projects/:id/mesh/from-meshing`. Library: `setQueryData(meshesQueryKey, result.meshes)`. Case (H6): removes the case manifest / GLB / edges and file contents, sets the tree, invalidates library, assembly, plan, `runnableQueryKey` (`features/solver/useRuns`) and `meshBackupQueryKey`.
+**Depends on**: `@/lib/api/meshes`, `restoreMeshBackup` and `importMeshFromMeshing` (`@/lib/api/projects`), `useCaseFiles`, `runnableQueryKey` (`features/solver/useRuns`), `features/visualize/useMesh`, `features/assemble/useAssembly`. **Used by**: `MergeMeshesFlow`, `useConversion`, `pages/ProjectDetailPage.tsx`, `features/assemble/*` (`AssemblyManagePanel`, `AssemblyMergeDialog`, `AssemblyWorkspace`, `PartsRail`), `features/visualize/*` (`AutoPatchDialog`, `EditPatchesDialog`, `VisualizePanel`), `features/meshing/SendToProjectDialog` (`useImportMeshFromMeshing`).
 **Notes**: import cycle avoided in one direction (`useMeshes` imports `caseFilesQueryKey`, `useCaseFiles` hardcodes the meshes keys). `useRunMerge` does not invalidate `meshBackupQueryKey` whereas `useUndoAssembly` does. The header comment says "mirrors useConvertToFoam" but the `success` guard differs.
 
 ## `apps/web/src/features/projects/useProjects.ts`

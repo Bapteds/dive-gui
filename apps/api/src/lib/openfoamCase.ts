@@ -10,6 +10,7 @@
 //
 // See docs/openfoam-fichiers-obligatoires.md for the contract this encodes.
 import {
+  CHAMBER_PATCH_TYPES,
   CONSTRAINT_PATCH_TYPES,
   GRAVITY,
   OBJECT_TYPE_TURBULENCE,
@@ -2098,8 +2099,17 @@ export function collapseBoundaryToSinglePatch(content: string, patchName = 'defa
  * boundary file contain no nested braces (groups use parentheses), so a
  * non-greedy `{…}` match is safe. Returns the content unchanged when nothing is
  * empty (or it cannot be parsed).
+ *
+ * `options.only` restricts the removal to the named patches: a zero-face patch
+ * whose name is not listed is kept (the meshing -> project hand-off drops only
+ * snappy's leftover `domainBoundary`, never a chamber patch snappy failed to
+ * populate). Without the option every empty patch is dropped (autoPatch, merge).
  */
-export function removeEmptyBoundaryPatches(content: string): string {
+export function removeEmptyBoundaryPatches(
+  content: string,
+  options?: { only?: readonly string[] },
+): string {
+  const only = options?.only ? new Set(options.only) : null;
   const headerMatch = content.match(/FoamFile\s*\{[^}]*\}/);
   if (!headerMatch) return content;
   const header = headerMatch[0];
@@ -2115,7 +2125,7 @@ export function removeEmptyBoundaryPatches(content: string): string {
   while ((match = blockRe.exec(body)) !== null) {
     const block = match[0];
     const nf = block.match(/\bnFaces\s+(\d+)/);
-    if (nf && Number(nf[1]) === 0) {
+    if (nf && Number(nf[1]) === 0 && (!only || only.has(match[1]))) {
       removed += 1;
       continue;
     }
@@ -2196,6 +2206,31 @@ export function setBoundaryPatchType(content: string, patch: string, type: strin
   const retyped = block.replace(/(\btype\s+)[A-Za-z_][A-Za-z0-9_]*(\s*;)/, `$1${type}$2`);
   const next = retyped !== block ? retyped : block.replace('{', `{\n        type            ${type};`);
   return content.slice(0, open) + next + content.slice(close + 1);
+}
+
+/**
+ * Force the chamber patch contract (`CHAMBER_PATCH_TYPES`, mirror of
+ * buildChamber.py `PATCH_TYPES`) onto a constant/polyMesh/boundary file: every
+ * patch whose name is a chamber patch and whose type differs is retyped (`inlet`
+ * / `outlet` -> `patch`, the walls -> `wall`). Any other name is untouched and a
+ * constraint type (`cyclic*`, `symmetry*`, `empty`, `wedge`, `processor`) is never
+ * overwritten. Used when a meshed chamber is sent to a project's case (the meshers
+ * type every surface `wall` by default). Pure text, idempotent. Returns the new
+ * content and the retyped patch names in file order.
+ */
+export function forceChamberPatchTypes(content: string): { content: string; retyped: string[] } {
+  const constraint = new Set<string>(CONSTRAINT_PATCH_TYPES);
+  const retyped: string[] = [];
+  let next = content;
+  for (const patch of parseBoundaryPatchDetails(content)) {
+    // Own keys only: a patch named e.g. `constructor` must not hit the prototype.
+    if (!Object.prototype.hasOwnProperty.call(CHAMBER_PATCH_TYPES, patch.name)) continue;
+    const wanted = CHAMBER_PATCH_TYPES[patch.name];
+    if (patch.type === wanted || constraint.has(patch.type)) continue;
+    next = setBoundaryPatchType(next, patch.name, wanted);
+    retyped.push(patch.name);
+  }
+  return { content: next, retyped };
 }
 
 /**

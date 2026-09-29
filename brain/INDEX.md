@@ -1,6 +1,6 @@
 # Index of every repository file
 
-> One line per file (546 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
+> One line per file (556 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
 
 Detail of a code file: open the sheet shown and search for the `## path/to/file` section. Documents: the description is their title and introduction line.
 
@@ -15,6 +15,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `AGENTS.md` : instructions common to every AI agent (project, session protocol, golden rules, commands, brain map, design in brief). · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `CLAUDE.md` : Claude Code entry point: imports `AGENTS.md` (`@AGENTS.md`) and adds the Claude-specific parts (memory, changelog hook, UI skills, index, Windows shells). · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `README.md` : technical reference for humans (architecture, prerequisites, dev, configuration, Debian deployment, CFD tools per feature, commands, auth, REST API, links to the brain). · [root-shared-mcp](codemap/root-shared-mcp.md)
+- `brain.zip` : **(undocumented: add a section in brain/codemap)**
 - `eslint.config.js` : ESLint 9 "flat" configuration of the monorepo via `tseslint.config`. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package-lock.json` : npm lockfile for the whole monorepo (workspaces), used by `npm ci` in CI and in production. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package.json` : root of the `dive-turbinen` workspace (private, ESM, `engines.node >=20`). · [root-shared-mcp](codemap/root-shared-mcp.md)
@@ -282,6 +283,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/tests/cfMeshDicts.test.ts` : `resolveMaxCellSize` (configured size, otherwise bounds diagonal/40, `null` without size or bounds for an FMS input) and `renderMeshDict` from `src/lib/cfMeshDicts`: `surfaceFile` and `maxCellSize`, optional entries omit … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/chamber.test.ts` : Chamber Creation, `POST /api/v1/chamber/build` and the hash-based reads (`/chamber/:hash/manifest|geometry|edges|export/:kind`). · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/chamberModel.test.ts` : `computeChamberOutputs` (12 X1 to X3 fits with relations off, `linear`/`power` shapes, snap to the 50 mm `CHAMBER_GRID_MM` grid, default structural relations `height = LEB + LEOW`, `LEB = 2 × HLE`, chamfer chain … · [api-tests](codemap/api-tests.md)
+- `apps/api/tests/chamberPatchTypes.test.ts` : contract parity: `CHAMBER_PATCH_TYPES` (`@dive/shared`) equals the `PATCH_TYPES` dict of `apps/api/scripts/buildChamber.py`. · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/chamberSaves.test.ts` : `/api/v1/chamber/saves` (named, shared snapshots of the build body): 401 on read and create, creation with trimmed name and `owner { id, fullName }`, snapshot normalized by the schema (defaults `variant: 'stepped'` … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/conversion.test.ts` : CGNS upload (`POST/GET/DELETE /projects/:id/cgns`, 400 `INVALID_CGNS` for non-`.cgns`, 404 for an invisible project or a missing file) and the `POST /projects/:id/cgns/convert` pipeline: steps `cgnsToVtk` → `vtkToFoam` → … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/dashboard.test.ts` : `GET /api/v1/dashboard`: shape of server metrics (`cpuPercent` between 0 and 100, `cores > 0`, `memTotalBytes > 0`), `activeRuns` with `projectTitle`, `recentRuns`, grouped `runCounts`, `recentProjects` with per-project … · [api-tests](codemap/api-tests.md)
@@ -290,12 +292,13 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/tests/globalSetup.ts` : vitest `globalSetup`, executed once before the whole suite. · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/helpers.ts` : utilities shared by all integration tests: single app instance, database reset, user factories, tokens, and the `logicalCommand` tool for fake OpenFOAM runners. · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/mesh.test.ts` : project mesh viewer (Visualize tab) and editing of the case mesh. · [api-tests](codemap/api-tests.md)
+- `apps/api/tests/meshFromMeshing.test.ts` : `POST /projects/:id/mesh/from-meshing` (WS-F), 14 tests: 401; 404 for a stranger (case untouched), unknown session; 422 bad target, unsafe `sessionId`, blank name; super-admin allowed; 409 `MESH_IN_PROGRESS` via … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/meshPatches.test.ts` : Pure unit tests of `src/lib/meshPatches`: `parseFmsPatches` reads names and types from the FMS header (`[]` without a patch block); `parseStlSolidNames` lists the `solid`s of a multi-solid ASCII STL ( … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/meshTransform.test.ts` : `transformMeshPoints` and `isIdentityTransform` from `src/lib/meshTransform`, the server half of the parity proof with the three.js preview. · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/meshes.test.ts` : multi-mesh library and assembly pipeline (`/projects/:id/meshes/**`). · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/meshing.test.ts` : standalone Meshing (`/api/v1/meshing/**`, STL → snappyHexMesh or cfMesh → polyMesh). · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/meshingStorage.test.ts` : helpers of `src/lib/meshingStorage`: `slugifySessionName` (lowercase, accents removed, fallback `session`), `sanitizeStlName` (safe basename, `.stl` extension forced, traversal removed, fallback `surface.stl`) … · [api-tests](codemap/api-tests.md)
-- `apps/api/tests/openfoamCase.test.ts` : `collapseBoundaryToSinglePatch` (a single `defaultFaces`, `nFaces` summed, minimum `startFace`, header kept), `removeEmptyBoundaryPatches` (removes 0-face patches and renumbers, including dashed names) … · [api-tests](codemap/api-tests.md)
+- `apps/api/tests/openfoamCase.test.ts` : `collapseBoundaryToSinglePatch` (a single `defaultFaces`, `nFaces` summed, minimum `startFace`, header kept), `removeEmptyBoundaryPatches` (removes 0-face patches and renumbers, including dashed names; `only` filter) … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/projectFiles.test.ts` : case files of a project (`/projects/:id/files/**`): empty tree, 401, 404 for an outsider; folder import (bare polyMesh placed under `constant/polyMesh/`); 400 `NO_FILES_UPLOADED`; zip import; 400 `INVALID_ARCHIVE` for a … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/projects.test.ts` : `POST /api/v1/projects` (401, 201 with `ownerId` not serialized but actually stored, 422 blank title), `PATCH /projects/:id` (rename, 422, 404 for an outsider without leaking existence), `GET /projects` (only one's own p … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/projectsAccess.test.ts` : visibility (project hidden from a non-member, visible to an added collaborator, super-admin sees everything), `GET /projects/:id` (404 `NOT_FOUND` for a non-member, `owner` and `collaborators` for the owner), `DELETE` (2 … · [api-tests](codemap/api-tests.md)
@@ -499,6 +502,8 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/web/src/features/meshing/CfMeshConfigForm.perPatch.test.tsx` : the tri-state semantics of per-patch layers in `CfMeshConfigForm` (unchecked: `noLayerPatches`; checked without Customize: nothing, mirror of the global block; Customize: a `perPatch` entry), the read-only display of "li … · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
 - `apps/web/src/features/meshing/CfMeshConfigForm.tsx` : form for the cfMesh (`cartesianMesh`) parameters of a session. · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
 - `apps/web/src/features/meshing/MeshResultViewer.tsx` : 3D preview of a session's result mesh. · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
+- `apps/web/src/features/meshing/SendToProjectDialog.test.tsx` : 9 tests: visible projects listed, `Case mesh` default with its warning, case body + navigation to `/projects/:id?view=visualize`, "Choose a project." without a pick, library target (name prefilled with the session name … · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
+- `apps/web/src/features/meshing/SendToProjectDialog.tsx` : dialog of the meshing session page that sends the session's polyMesh into a project (WS-F). · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
 - `apps/web/src/features/meshing/SnappyConfigForm.tsx` : form for the snappyHexMesh parameters of a session. · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
 - `apps/web/src/features/meshing/StlViewer.tsx` : client-side three.js preview of a session's uploaded STLs, without server rendering (works without OpenFOAM). · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
 - `apps/web/src/features/meshing/useMeshing.ts` : all TanStack Query hooks of the Meshing feature. · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
@@ -529,6 +534,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/web/src/features/projects/useBoundaryConditions.ts` : Hook for the BC overlay. · [web-features-projects](codemap/web-features-projects.md)
 - `apps/web/src/features/projects/useCaseFiles.ts` : TanStack Query hooks for the tree and the content of the OpenFOAM case files. · [web-features-projects](codemap/web-features-projects.md)
 - `apps/web/src/features/projects/useConversion.ts` : hooks for a project's CGNS sources and for the CGNS to OpenFOAM conversion. · [web-features-projects](codemap/web-features-projects.md)
+- `apps/web/src/features/projects/useMeshes.fromMeshing.test.tsx` : `useImportMeshFromMeshing`: case target removes the case `manifest`/`glb`/`edges`, sets `files` from `result.entries`, invalidates `meshes`, `assembly`, `mergePlan`, `runnable`, `mesh/backup`; library target sets … · [web-features-projects](codemap/web-features-projects.md)
 - `apps/web/src/features/projects/useMeshes.ts` : hooks for the project's mesh library, the merge pipeline and the applied assembly. · [web-features-projects](codemap/web-features-projects.md)
 - `apps/web/src/features/projects/useProjects.ts` : CRUD hooks for projects and collaborators. · [web-features-projects](codemap/web-features-projects.md)
 
@@ -607,7 +613,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/web/src/pages/LoginPage.tsx` : `/login` sign-in screen: `bg-blueprint` background, `rounded-lg shadow-md` `max-w-[400px]` card, `BrandLockup`, email and password fields, full-width CTA. · [web-core](codemap/web-core.md)
 - `apps/web/src/pages/MeshingPage.tsx` : list and creation of meshing sessions (`/meshing`). · [web-core](codemap/web-core.md)
 - `apps/web/src/pages/MeshingSessionPage.tsx` : session detail (`/meshing/:id`): surface management, engine configuration, background execution with live log, report, resulting mesh, download, deletion. · [web-core](codemap/web-core.md)
-- `apps/web/src/pages/ProjectDetailPage.test.tsx` : disabling/enabling of the Visualize and Solver tabs depending on whether a polyMesh exists; opening a tab replaces the Detail body. · [web-core](codemap/web-core.md)
+- `apps/web/src/pages/ProjectDetailPage.test.tsx` : disabling/enabling of the Visualize and Solver tabs depending on whether a polyMesh exists; opening a tab replaces the Detail body; `?view=visualize` opens Visualize at mount, an unknown `?view=` falls back to Detail. · [web-core](codemap/web-core.md)
 - `apps/web/src/pages/ProjectDetailPage.tsx` : project detail (`/projects/:id`): header with terminal button and gear menu, then Detail / Visualize / Assemble / Solver / Export tabs. · [web-core](codemap/web-core.md)
 - `apps/web/src/pages/ProjectEditPage.test.tsx` : file list and initially empty editor; content loaded on selection; debounced autosave (no Save button) calling `saveCaseFileContent('p1', 'system/controlDict', ...)`. · [web-core](codemap/web-core.md)
 - `apps/web/src/pages/ProjectEditPage.tsx` : case file editor (`/projects/:id/edit`): thin wrapper that binds the project's file hooks to the shared `FileTreeEditor`. · [web-core](codemap/web-core.md)
@@ -761,7 +767,11 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `brain/specs/2026-09-02-generator-dimensions-design.md` : Empirical generator dimensions (Gen Dim v3) — design
 - `brain/specs/2026-09-02-physical-input-names-design.md` : Physical names for X1–X4 (display only) — design
 - `brain/specs/2026-09-02-simplify-generator-design.md` : "Simplify Generator" option (hollow variant) — design
+- `brain/specs/2026-09-29-cone-chamfer-design.md` : Cone chamfer (With cone) — design : Area: shared, backend, python (`apps/api/scripts/buildChamber.py`), frontend, tests
+- `brain/specs/2026-09-29-guide-vane-count-design.md` : Guide vane count (16 or 18) — design : Area: shared, backend, python (`apps/api/scripts/buildChamber.py`), frontend, tests
 - `brain/specs/2026-09-29-meshing-to-project-design.md` : Meshing session → project mesh transfer (WS-F) — design
+- `brain/specs/2026-09-29-optimisation-loop-design.md` : Chamber optimisation loop (WS-H) — design
+- `brain/specs/2026-09-29-semi-spiral-casing-design.md` : Semi-spiral casing option (Chamber Creation) — design
 - `brain/specs/2026-09-29-vane-pocket-runner-case-design.md` : Guide-vane pocket robust to Runner case Ø close to or below LE Ø : Area: python (`apps/api/scripts/buildChamber.py`), shared + API (early refusal), tests
 
 ## `documents`

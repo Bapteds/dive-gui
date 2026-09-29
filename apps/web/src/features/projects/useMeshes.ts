@@ -12,9 +12,11 @@ import {
   renameMeshSourcePatch,
   runMerge,
 } from '@/lib/api/meshes';
-import { restoreMeshBackup } from '@/lib/api/projects';
+import { importMeshFromMeshing, restoreMeshBackup } from '@/lib/api/projects';
 import type {
   AppliedAssembly,
+  MeshFromMeshingRequest,
+  MeshFromMeshingResult,
   AutoPatchMeshSourceResponse,
   DeleteMeshResponse,
   EditMeshSourcePatchesResponse,
@@ -27,6 +29,7 @@ import type {
   RenameMeshSourcePatchResponse,
 } from '@/lib/api/types';
 import { caseFilesQueryKey } from '@/features/projects/useCaseFiles';
+import { runnableQueryKey } from '@/features/solver/useRuns';
 import {
   meshBackupQueryKey,
   meshEdgesQueryKey,
@@ -243,6 +246,43 @@ export function useUndoAssembly(projectId: string) {
       queryClient.setQueryData(meshManifestQueryKey(projectId), manifest);
       void queryClient.invalidateQueries({ queryKey: caseFilesQueryKey(projectId) });
       invalidateAssemblyOutputs(queryClient, projectId);
+      void queryClient.invalidateQueries({ queryKey: meshBackupQueryKey(projectId) });
+    },
+  });
+}
+
+/** Variables of useImportMeshFromMeshing: the target project plus the request body. */
+export type ImportMeshFromMeshingVars = MeshFromMeshingRequest & { projectId: string };
+
+/**
+ * Send a meshing session's polyMesh into a project (WS-F). The project is chosen
+ * in the dialog, so it travels with the mutation variables rather than the hook.
+ * On success, the H6 pattern for the chosen project:
+ *  - case target: the case mesh is new, so drop the cached case render
+ *    (manifest / GLB / edges), take the fresh case tree, and invalidate the
+ *    library, assembly, merge plan, Solver gate and backup slot;
+ *  - library target: write the refreshed library into the cache.
+ */
+export function useImportMeshFromMeshing() {
+  const queryClient = useQueryClient();
+  return useMutation<MeshFromMeshingResult, Error, ImportMeshFromMeshingVars>({
+    mutationFn: ({ projectId, ...body }) => importMeshFromMeshing(projectId, body),
+    onSuccess: (result, { projectId }) => {
+      if (result.target === 'library') {
+        if (result.meshes) queryClient.setQueryData(meshesQueryKey(projectId), result.meshes);
+        else void queryClient.invalidateQueries({ queryKey: meshesQueryKey(projectId) });
+        return;
+      }
+      queryClient.removeQueries({ queryKey: meshManifestQueryKey(projectId) });
+      queryClient.removeQueries({ queryKey: meshGeometryQueryKey(projectId) });
+      queryClient.removeQueries({ queryKey: meshEdgesQueryKey(projectId) });
+      queryClient.removeQueries({ queryKey: [...caseFilesQueryKey(projectId), 'content'] });
+      if (result.entries) queryClient.setQueryData(caseFilesQueryKey(projectId), result.entries);
+      else void queryClient.invalidateQueries({ queryKey: caseFilesQueryKey(projectId) });
+      void queryClient.invalidateQueries({ queryKey: meshesQueryKey(projectId) });
+      void queryClient.invalidateQueries({ queryKey: assemblyQueryKey(projectId) });
+      void queryClient.invalidateQueries({ queryKey: mergePlanQueryKey(projectId) });
+      void queryClient.invalidateQueries({ queryKey: runnableQueryKey(projectId) });
       void queryClient.invalidateQueries({ queryKey: meshBackupQueryKey(projectId) });
     },
   });

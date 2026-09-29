@@ -63,11 +63,11 @@ const withoutMesh: CaseEntry[] = [
   { path: 'system/controlDict', type: 'file', size: 64 },
 ];
 
-function renderPage() {
+function renderPage(initialEntry = '/projects/p1') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const router = createMemoryRouter(
     [{ path: '/projects/:id', element: <ProjectDetailPage /> }],
-    { initialEntries: ['/projects/p1'] },
+    { initialEntries: [initialEntry] },
   );
   render(
     <QueryClientProvider client={queryClient}>
@@ -129,5 +129,21 @@ describe('ProjectDetailPage - Solver tab gating', () => {
 
     expect(await screen.findByTestId('solver-tab')).toBeInTheDocument();
     expect(screen.queryByTestId('case-files')).not.toBeInTheDocument();
+  });
+});
+
+describe('ProjectDetailPage - initial tab from ?view=', () => {
+  it('opens Visualize when the URL carries ?view=visualize (meshing hand-off landing)', async () => {
+    vi.mocked(api.getCaseFiles).mockResolvedValue(withMesh);
+    renderPage('/projects/p1?view=visualize');
+    expect(await screen.findByTestId('mesh-viewer')).toBeInTheDocument();
+    expect(screen.queryByTestId('case-files')).not.toBeInTheDocument();
+  });
+
+  it('falls back to Detail for an unknown view value', async () => {
+    vi.mocked(api.getCaseFiles).mockResolvedValue(withMesh);
+    renderPage('/projects/p1?view=bogus');
+    expect(await screen.findByTestId('case-files')).toBeInTheDocument();
+    expect(screen.queryByTestId('mesh-viewer')).not.toBeInTheDocument();
   });
 });

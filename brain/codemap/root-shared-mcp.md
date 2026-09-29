@@ -103,7 +103,9 @@ Extends `tsconfig.base.json`; `module`/`moduleResolution` `NodeNext` (hence impo
 ### Mesh library and assembly (merge)
 - `MESHES_DIRNAME = 'meshes'`. Folder of a project's polyMesh source library. Not referenced in `apps/`.
 - `MERGE_STEP_KINDS = ['prepare', 'mergeMeshes', 'splitMeshRegions', 'stitchMesh', 'nonConformalCouple', 'cleanup', 'checkMesh']`, `MergeStepKind`. Variable number of steps, hence a non-unique `kind`.
-- `MeshSource` (`id` = folder name, `name`, `patches`, `createdAt`).
+- `MESH_SOURCE_KINDS = ['folder', 'zip', 'cgns', 'msh', 'meshing']`, `MeshSourceKind`.
+- `MeshSource` (`id` = folder name, `name`, `kind?`, `patches`, `createdAt`).
+- Meshing -> project hand-off (WS-F): `MESH_TO_PROJECT_TARGETS = ['case', 'library']` (first = default), `MeshToProjectTarget`, `MeshFromMeshingRequest` (`sessionId`, `target`, `name?`), `MeshFromMeshingResult` (`target`, `entries?`, `mesh?`, `meshes?`, `notes`, `retyped?`, `syncedFields?`), `CHAMBER_PATCH_TYPES` (mirror of `buildChamber.py` `PATCH_TYPES`, parity test `apps/api/tests/chamberPatchTypes.test.ts`).
 - `StitchPair` (legacy conformal pair); `MERGE_BASE_CASE = '__case__'` (sentinel: start from the project's case mesh).
 - `InterfaceCoupling = 'nonConformal' | 'stitch'`. `nonConformal` (default) retypes both patches to `cyclicAMI` in place via text editing; `stitch` is the conformal `stitchMesh` merge. The old literal `nonConformalCyclic` is normalized on the API side.
 - `MeshInterface` (pair + `coupling`), `PartTransform` (`meshId`, `translation`, `rotation` quaternion x,y,z,w three.js-style; no scale), `MergePlan` (`order`, `interfaces`, `transforms?`, deprecated `stitches?`).
@@ -207,7 +209,7 @@ Extends `tsconfig.base.json`; `module`/`moduleResolution` `NodeNext` (hence impo
 - `runnerCaseBelowLeRefusal(input, outputs): string | null` + `CHAMBER_RUNNER_CASE_SNAP_MM = 5` (spec 2026-09-29). Guide vanes and a typed `dFirst`: message when `partScale × (LE Ø final − dFirst) > 5 mm` ("With guide vanes the distributor sits inside the runner case: Runner case Ø (…) must be at least LE Ø (…). Increase Runner case Ø, clear it (auto ≈ …), or turn Guide vanes off."), else null. The 5 mm mirrors `SNAP_D_TOL` of `buildChamber.py` (which snaps smaller gaps flush and warns). Called by `chamber.service.buildChamber` (422).
 
 ### Server error codes
-- `SERVER_ERROR_CODES`, `ServerErrorCode`. List of `{ error: { code } }` envelope codes known to the web client (which adds its own transport codes).
+- `SERVER_ERROR_CODES`, `ServerErrorCode`. List of `{ error: { code } }` envelope codes known to the web client (which adds its own transport codes). `MESH_IN_PROGRESS` and `MESHING_NOT_MESHED` added on 2026-09-29.
 **Notes**: inconsistencies found with the API. Codes declared but never emitted by `apps/api/src`: `CONVERSION_FAILED`, `MESH_MERGE_FAILED`, `BC_APPLY_FAILED`. Codes emitted but missing from the list: `NAME_TAKEN` (chamber saves), `ENGINE_MISMATCH` and `MESH_IN_PROGRESS` (meshing), `NOT_ENOUGH_CORES` and `TOO_MANY_CORES` (runs), `ARCHIVE_TOO_LARGE` (archives), as well as `INTERNAL_SERVER_ERROR` and `ERROR` (errorHandler defaults).
 
 ## `packages/shared/package.json`
