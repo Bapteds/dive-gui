@@ -74,6 +74,22 @@ describe('chamber saves', () => {
       .set('Authorization', authHeader(user))
       .send({ name: 'Broken hollow', snapshot: { ...SNAPSHOT, variant: 'hollow' } })
       .expect(422);
+    // Guide vane count: a whole number from 8 to 32.
+    await request(app)
+      .post('/api/v1/chamber/saves')
+      .set('Authorization', authHeader(user))
+      .send({ name: 'Broken vanes', snapshot: { ...SNAPSHOT, guideVanes: true, vaneCount: 33 } })
+      .expect(422);
+  });
+
+  it('keeps any vane count from 8 to 32 in the snapshot', async () => {
+    const user = await createTestUser();
+    const created = await request(app)
+      .post('/api/v1/chamber/saves')
+      .set('Authorization', authHeader(user))
+      .send({ name: 'Twelve vanes', snapshot: { ...SNAPSHOT, guideVanes: true, vaneCount: 12 } })
+      .expect(201);
+    expect(created.body.save.snapshot.vaneCount).toBe(12);
   });
 
   it('refuses a taken name with 409 (create and rename)', async () => {

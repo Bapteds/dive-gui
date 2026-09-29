@@ -736,10 +736,11 @@ def test_vane_skin_stays_on_the_guide_vanes_patch(build, name):
     assert (azimuthal(gv) > 0.35).mean() > 0.5
 
 
-# --- guide vane count (16 or 18) ----------------------------------------------
-# With 18 vanes every blade is scaled by 16/18 about its pivot (same solidity,
-# same pivot radius) and the ring step is 360/18 = 20 deg (spec
-# 2026-09-29-guide-vane-count). A refusal guards neighbouring blades touching.
+# --- guide vane count (any integer from 8 to 32) -------------------------------
+# With n vanes every blade is scaled by 16/n about its pivot (same solidity,
+# same pivot radius) and the ring step is 360/n deg (specs
+# 2026-09-29-guide-vane-count and 2026-09-29-guide-vane-count-any). Refusals
+# guard neighbouring blades touching and a blade leaving the distributor passage.
 
 
 def _patch_mesh(result, pname):
@@ -801,14 +802,118 @@ def test_min_blade_gap_detects_touching_outlines():
     rings = [square(0.0), square(5.0), square(1.002)]
     assert bc._min_blade_gap(rings) == pytest.approx(2e-3, abs=1e-9)
     assert bc.VANE_MIN_GAP == pytest.approx(2e-3)
-    assert bc.VANE_COUNTS == (16, 18)
+    assert (bc.VANE_COUNT_MIN, bc.VANE_COUNT_MAX) == (8, 32)
 
 
-def test_vane_count_outside_16_or_18_is_refused(build):
-    result = build("stepped-vanes", params_override={"vaneCount": 17})
+@pytest.mark.parametrize("count", [7, 33, 12.5, True, "16"])
+def test_vane_count_outside_8_to_32_is_refused(build, count):
+    result = build("stepped-vanes", params_override={"vaneCount": count})
     assert result.exit_code == 1
     assert "KO:" in result.stderr
-    assert "Guide vane count must be 16 or 18 (got 17)." in result.stderr
+    assert ("Guide vane count must be a whole number from 8 to 32 (got %s)." % (count,)
+            in result.stderr)
+
+
+def test_vane_count_fit_scales_the_blade_about_its_pivot():
+    """_vane_count_fit rescales ONE real blade outline (drawn at vane_count) to
+    every count m by vane_count/m about its pivot and keeps the counts whose
+    blade stays inside [r_in, r_out]. A radial 0.2 m blade centred on a pivot at
+    r = 1: at 16 it spans 0.9..1.1; at m it spans 1 -+ 0.1 * 16/m."""
+    import numpy as np
+
+    bc = _builder_module()
+    blade16 = np.array([[0.9, -0.01], [1.1, -0.01], [1.1, 0.01], [0.9, 0.01]])
+    pivot = (1.0, 0.0)
+    # r_out 1.15: m >= 16 * 0.1 / 0.15 = 10.67 -> 11..32; 8 is out.
+    assert bc._vane_count_fit(np, blade16, pivot, 16, 0.0, 0.0, 0.5, 1.15) == (True, 11, 32)
+    blade8 = np.array([[0.8, -0.02], [1.2, -0.02], [1.2, 0.02], [0.8, 0.02]])
+    assert bc._vane_count_fit(np, blade8, pivot, 8, 0.0, 0.0, 0.5, 1.15) == (False, 11, 32)
+    # The inner limit too: r_in 0.87 -> 1 - 1.6/m >= 0.87 -> m >= 12.3 -> 13.
+    assert bc._vane_count_fit(np, blade8, pivot, 8, 0.0, 0.0, 0.87, 2.0) == (False, 13, 32)
+    # Off-axis ring centre: only the radii about (cx, cy) count.
+    shifted = blade8 + np.array([5.0, -3.0])
+    assert (bc._vane_count_fit(np, shifted, (6.0, -3.0), 8, 5.0, -3.0, 0.5, 1.15)
+            == (False, 11, 32))
+    # A 16-vane blade that already leaves the passage (an oversized Guide vanes
+    # diameter) is never refused for the count: the 16-vane blade sets the limit,
+    # so 16 (and every larger count) fits and 8 is compared against it.
+    assert bc._vane_count_fit(np, blade16, pivot, 16, 0.0, 0.0, 0.5, 1.05) == (True, 16, 32)
+    assert bc._vane_count_fit(np, blade8, pivot, 8, 0.0, 0.0, 0.5, 1.05) == (False, 16, 32)
+
+
+def test_eight_vanes_that_leave_the_passage_are_refused(build):
+    """On the stepped-vanes machine the 8-vane blade (chord x 2) reaches ~133 mm
+    past LE/2 at 50 deg: refused, with the counts that fit (13 to 32 there)."""
+    import re
+
+    result = build("stepped-vanes", params_override={"vaneCount": 8})
+    assert result.exit_code == 1
+    assert "KO:" in result.stderr
+    assert re.search(r"With 8 guide vanes the blades \(chord \d+ mm\) no longer fit between "
+                     r"the hub and the runner case edge\. Use between 13 and 32 vanes for "
+                     r"this machine\.", result.stderr), result.stderr
+
+
+# 8 vanes need a smaller guide-vanes ring than the stepped-vanes auto one (the
+# doubled chord reaches past LE/2 otherwise): Guide vanes diameter 1700 mm, and a
+# 1000 mm Runner diameter so the outlet stays inside the longer blade's inner edge.
+EIGHT_VANES = {"vaneCount": 8, "dMiddle": 1.70, "outletOuterD": 1.00}
+# Smallest blade gap / chord measured on the rounded asset outline (the ring
+# curvature grows with the chord, so the ratio drifts from the 16-vane ~0.52-0.58).
+VANE_GAP_RATIO = {(8, 45): 0.394, (8, 55): 0.425, (32, 45): 0.541, (32, 55): 0.611}
+
+
+def _mid_loop(np, blade):
+    z = blade.vertices[:, 2]
+    sec = blade.section(plane_origin=[0.0, 0.0, 0.5 * (z.min() + z.max())],
+                        plane_normal=[0.0, 0.0, 1.0])
+    return np.asarray(max(sec.discrete, key=len), dtype=float)[:, :2]
+
+
+@pytest.mark.parametrize("count,angle", sorted(VANE_GAP_RATIO))
+def test_free_vane_count_builds_n_blades_with_the_scaled_chord(build, count, angle):
+    import numpy as np
+
+    override = dict(EIGHT_VANES) if count == 8 else {"vaneCount": count}
+    override["vaneAngleDeg"] = angle
+    result = build("stepped-vanes", params_override=override)
+    assert result.exit_code == 0, f"builder failed:\n{result.stderr}"
+    assert result.load_stl().is_watertight
+    blades = _vane_components(result)
+    assert len(blades) == count
+
+    # Chord x 16/n (x the ring ratio for the smaller 8-vane ring).
+    c16 = float(np.mean([_mid_chord(np, b) for b in _vane_components(build("stepped-vanes"))]))
+    ring = (EIGHT_VANES["dMiddle"] / (0.8 * 2.4211423554526488)) if count == 8 else 1.0
+    c_n = float(np.mean([_mid_chord(np, b) for b in blades]))
+    assert c_n / c16 == pytest.approx(16.0 / count * ring, rel=0.02)
+
+    # Evenly spaced every 360/n deg about the outlet centre.
+    axis = _patch_mesh(result, "outlet").vertices.mean(axis=0)
+    ang = sorted(float(np.degrees(np.arctan2(c[1] - axis[1], c[0] - axis[0]))) % 360.0
+                 for c in (b.vertices.mean(axis=0) for b in blades))
+    steps = np.diff(ang + [ang[0] + 360.0])
+    assert np.allclose(steps, 360.0 / count, atol=0.5), steps
+
+    # Blade-to-blade gap / chord as measured on the asset outline.
+    bc = _builder_module()
+    gap = bc._min_blade_gap([_mid_loop(np, b) for b in blades])
+    assert gap / c_n == pytest.approx(VANE_GAP_RATIO[(count, angle)], abs=0.02)
+
+
+@pytest.mark.parametrize("count,has_vanes", [(8, False), (32, True)])
+def test_free_vane_count_step_keeps_the_vanes_or_reports_the_fallback(build, count, has_vanes):
+    """--step at 8 and 32 vanes (spec: stepHasVanes true, or the fallback reported).
+    32 keeps its BREP vanes. 8 (EIGHT_VANES) falls back to the vane-less STEP on
+    the round-trip volume gate (re-imported OCC solid 13 % below fluid_F, measured
+    2026-09-29, while 16 vanes on the same ring pass at 0.02 %): reported through
+    the WARN line and stepHasVanes false, never a failed build."""
+    override = dict(EIGHT_VANES) if count == 8 else {"vaneCount": count}
+    result = build("stepped-vanes", params_override=override, step=True)
+    assert result.exit_code == 0, result.stderr
+    assert os.path.getsize(result.export_path("chamber.step")) > 0
+    assert result.build_meta == {"stepHasVanes": has_vanes}
+    assert ("falls back to the vane-less solid" in result.stderr) is (not has_vanes)
 
 
 # --- cone chamfer: 45 deg foot on the LE part (both designs) --------------------

@@ -2469,14 +2469,16 @@ export const CHAMBER_VARIANTS = ['stepped', 'hollow'] as const;
 export type ChamberVariant = (typeof CHAMBER_VARIANTS)[number];
 
 /**
- * Guide vane counts the builder accepts (spec 2026-09-29-guide-vane-count). 16 is
- * the committed asset; with 18 each blade's chord is scaled by 16/18 about its pivot
- * so the cascade solidity and the pivot radius stay the same.
+ * Guide vane counts the builder accepts: any whole number from MIN to MAX (spec
+ * 2026-09-29-guide-vane-count-any). 16 is the committed asset; with n vanes each
+ * blade's chord is scaled by 16/n about its pivot so the cascade solidity and the
+ * pivot radius stay the same. Mirrors VANE_COUNT_MIN / _MAX of buildChamber.py,
+ * which also refuses a count whose blades leave the distributor passage.
  */
-export const CHAMBER_VANE_COUNTS = [16, 18] as const;
-export type ChamberVaneCount = (typeof CHAMBER_VANE_COUNTS)[number];
+export const CHAMBER_VANE_COUNT_MIN = 8;
+export const CHAMBER_VANE_COUNT_MAX = 32;
 /** Default guide vane count (the asset's own count). */
-export const CHAMBER_VANE_COUNT_DEFAULT: ChamberVaneCount = 16;
+export const CHAMBER_VANE_COUNT_DEFAULT = 16;
 
 /** Default wall thickness (mm) of the hollow last cylinder in the 'hollow' variant. */
 export const CHAMBER_WALL_THICKNESS_MM = 50;
@@ -2677,13 +2679,16 @@ export interface ChamberInput {
    */
   vaneAngleDeg?: number;
   /**
-   * Number of guide vanes: 16 (the asset) or 18. With 18 each blade's chord is
-   * scaled by 16/18 about its own pivot, so the cascade solidity and the pivot
-   * radius stay the same; the angular step is 360°/n. Only affects guide-vane
-   * builds (ignored, and left out of the build key, when guideVanes is false).
-   * Geometry-only (not part of the empirical model). Default 16.
+   * Number of guide vanes: any whole number from 8 to 32 (CHAMBER_VANE_COUNT_MIN /
+   * _MAX), 16 being the asset. With n vanes each blade's chord is scaled by 16/n
+   * about its own pivot, so the cascade solidity and the pivot radius stay the
+   * same; the angular step is 360°/n. The builder refuses a count whose blades
+   * leave the distributor passage (past LE Ø/2 or inside the hub rim). Only
+   * affects guide-vane builds (ignored, and left out of the build key, when
+   * guideVanes is false or the count is 16). Geometry-only (not part of the
+   * empirical model). Default 16.
    */
-  vaneCount?: ChamberVaneCount;
+  vaneCount?: number;
   /**
    * Outlet inner/outer diameter ratio (0.35..0.50, default 0.45). The outlet's
    * OUTER diameter is X1 (see resolveGeometryParams); the inner diameter is

@@ -1,6 +1,6 @@
 # Guide vane count: any integer from 8 to 32
 
-> **Status**: approved (2026-09-29) · **Date**: 2026-09-29
+> **Status**: implemented (2026-09-29) · **Date**: 2026-09-29
 > **Amends**: `2026-09-29-guide-vane-count-design.md` (WS-B, 16 or 18): the count becomes free within a range; the chord rule is generalised.
 > **Area**: shared, API, python, web, tests
 

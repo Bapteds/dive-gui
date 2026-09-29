@@ -8,13 +8,14 @@ import {
   CHAMBER_RELATIONS,
   CHAMBER_SPIRAL_FLOW_RANGE,
   CHAMBER_VANE_COUNT_DEFAULT,
-  CHAMBER_VANE_COUNTS,
+  CHAMBER_VANE_COUNT_MAX,
+  CHAMBER_VANE_COUNT_MIN,
   CHAMBER_VARIANTS,
   CHAMBER_WALL_THICKNESS_MM,
   CHAMBER_X4_MAX,
   computeChamberGeneratorDims,
 } from '@dive/shared';
-import type { ChamberInput, ChamberVaneCount, ChamberVariant } from '@dive/shared';
+import type { ChamberInput, ChamberVariant } from '@dive/shared';
 
 /**
  * Form contract for the chamber inputs, kept apart from the component file so
@@ -45,8 +46,8 @@ export interface ChamberFormValues {
   feetEnabled: boolean;
   /** Absolute guide-vane open angle (deg, 45..55; asset baked at 50°); each blade swings about its spindle. Guide-vane builds only. */
   vaneAngleDeg: number;
-  /** Number of guide vanes (16 or 18; 18 = chord x 16/18, same solidity). Guide-vane builds only. */
-  vaneCount: ChamberVaneCount;
+  /** Number of guide vanes (whole number 8..32, default 16; chord x 16/n, same solidity). Guide-vane builds only. */
+  vaneCount: number;
   /** Outlet inner/outer diameter ratio (0.35..0.50, default 0.45). Guide-vane builds only. */
   outletRatio: number;
   /** Box length along Y (mm); blank => auto 2 x width. */
@@ -93,6 +94,9 @@ const modelRange = ({ min, max }: { min: number; max: number }, unit: string) =>
   return z.number({ invalid_type_error: 'Enter a number' }).min(min, msg).max(max, msg);
 };
 
+/** One message for every bad Guide vane count (blank, fractional, out of range). */
+const VANE_COUNT_MESSAGE = `Enter a whole number from ${CHAMBER_VANE_COUNT_MIN} to ${CHAMBER_VANE_COUNT_MAX}`;
+
 /** Range-validated schema; hollowLength is required for the hollow variant. */
 export const chamberFormSchema = z
   .object({
@@ -117,9 +121,11 @@ export const chamberFormSchema = z
       .number({ invalid_type_error: 'Enter a number' })
       .min(45, 'Min 45°')
       .max(55, 'Max 55°'),
-    vaneCount: z.union([z.literal(CHAMBER_VANE_COUNTS[0]), z.literal(CHAMBER_VANE_COUNTS[1])], {
-      errorMap: () => ({ message: 'Choose 16 or 18 vanes' }),
-    }),
+    vaneCount: z
+      .number({ invalid_type_error: VANE_COUNT_MESSAGE })
+      .int(VANE_COUNT_MESSAGE)
+      .min(CHAMBER_VANE_COUNT_MIN, VANE_COUNT_MESSAGE)
+      .max(CHAMBER_VANE_COUNT_MAX, VANE_COUNT_MESSAGE),
     outletRatio: z
       .number({ invalid_type_error: 'Enter a number' })
       .min(0.35, 'Min 0.35')

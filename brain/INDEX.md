@@ -1,6 +1,6 @@
 # Index of every repository file
 
-> One line per file (587 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
+> One line per file (588 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
 
 Detail of a code file: open the sheet shown and search for the `## path/to/file` section. Documents: the description is their title and introduction line.
 
@@ -480,7 +480,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/web/src/features/chamber/ChamberViewer.tsx` : 3D preview of a build (colored per OpenFOAM patch), reusing `MeshScene` and `PatchTable` from Visualize. · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
 - `apps/web/src/features/chamber/SendToMeshingDialog.test.tsx` : default "new" mode (name `chamber-<first 8 characters of the hash>`, engine `snappy`), closing and navigation to `/meshing/sess-new`; `cfmesh` engine; existing mode without a selection sends nothing; existing body; copyF … · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
 - `apps/web/src/features/chamber/SendToMeshingDialog.tsx` : transfers the build (by `hash`) to a meshing session, in three modes: new session (name + engine), existing session, copy of a session's setup with the geometry injected. · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
-- `apps/web/src/features/chamber/chamberForm.test.ts` : valid defaults; cone length required in hollow only; range guards (`footAngleDeg` 0..180, `partScale` ]0,5], `vaneAngleDeg` 45..55, `outletRatio` 0.35..0.50, `vaneCount` 16/18 with "Choose 16 or 18 vanes"); overrides opt … · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
+- `apps/web/src/features/chamber/chamberForm.test.ts` : valid defaults; cone length required in hollow only; range guards (`footAngleDeg` 0..180, `partScale` ]0,5], `vaneAngleDeg` 45..55, `outletRatio` 0.35..0.50, `vaneCount` whole number 8..32 with "Enter a whole number from … · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
 - `apps/web/src/features/chamber/chamberForm.ts` : form contract of the chamber inputs, separated from the component for fast-refresh. · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
 - `apps/web/src/features/chamber/useChamber.ts` : TanStack Query hooks of Chamber Creation. · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
 - `apps/web/src/features/chamber/useChamberSaves.ts` : saved-build hooks. A single shared list (small: names + snapshots); each mutation invalidates it. · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
@@ -779,6 +779,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `brain/specs/2026-09-02-simplify-generator-design.md` : "Simplify Generator" option (hollow variant) — design
 - `brain/specs/2026-09-29-cone-chamfer-design.md` : Cone chamfer (With cone) — design : Area: shared, backend, python (`apps/api/scripts/buildChamber.py`), frontend, tests
 - `brain/specs/2026-09-29-cone-foot-chamfer-design.md` : Cone foot chamfer (replaces the top-rim cone chamfer) : Supersedes: `2026-09-29-cone-chamfer-design.md` (top-rim chamfer, implemented in `dbc944a` then rejected by the user: the chamfer belongs on the lower edge)
+- `brain/specs/2026-09-29-guide-vane-count-any-design.md` : Guide vane count: any integer from 8 to 32 : Amends: `2026-09-29-guide-vane-count-design.md` (WS-B, 16 or 18): the count becomes free within a range; the chord rule is generalised.
 - `brain/specs/2026-09-29-guide-vane-count-design.md` : Guide vane count (16 or 18) — design : Area: shared, backend, python (`apps/api/scripts/buildChamber.py`), frontend, tests
 - `brain/specs/2026-09-29-meshing-to-project-design.md` : Meshing session → project mesh transfer (WS-F) — design
 - `brain/specs/2026-09-29-optimisation-loop-design.md` : Chamber optimisation loop (WS-H) — design
