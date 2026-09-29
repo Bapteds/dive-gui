@@ -36,7 +36,7 @@ Places hard-wired to `dLast/2` in the vane path (audit): blade ring scale withou
 - `r_case = d_first / 2`, `w = r_case − R_env`.
 - **Snap**: if guide vanes and `|d_first − d_last| ≤ SNAP_D_TOL` (`SNAP_D_TOL = 0.005` m, a new constant, compared on the scaled diameters): `r_case_eff = R_env`, no ring is kept, no casing overshoot beyond `R_env`. Otherwise `r_case_eff = r_case`.
 - **Overshoot guard**: the casing outer wall is `R_env + min(FLOOR_OVERCUT, w / 2)` when `0 < w`, so it never pokes out of a thin ring. For `w ≥ 2 · FLOOR_OVERCUT` (20 mm and more) this equals today's `R_env + FLOOR_OVERCUT`: byte-identical for the default regime.
-- Feet, `rmax` and `pocket_radius` use `r_case_eff`. `make_feet` receives `r_case_eff` for both its gusset base and its leg tips when vanes are on (removes the `dLast`/`dFirst` inconsistency).
+- Feet, `rmax` and `pocket_radius` use `r_case_eff`. `make_feet` receives `r_case_eff` for its leg tips; the gusset plank keeps its attachment on the LE cylinder (`dLast/2`), because it sits at LE-cylinder height where no runner case exists (user decision 2026-09-29, after implementation: moving it would leave it floating and change the default geometry).
 
 ### 4.2 Refusal
 Guide vanes on and `d_first < d_last − SNAP_D_TOL` (scaled):
