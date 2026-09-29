@@ -2482,10 +2482,22 @@ export const CHAMBER_VANE_COUNT_DEFAULT: ChamberVaneCount = 16;
 export const CHAMBER_WALL_THICKNESS_MM = 50;
 
 /**
- * Default Cone chamfer size (mm): both legs of the optional 45° chamfer on the
- * inner top edge of the cone wall (With cone only; spec 2026-09-29-cone-chamfer).
+ * Default Cone chamfer size (mm, × Part scale in the builder): both legs of the
+ * optional 45° foot chamfer on the lower outer edge of the LE part, which is
+ * widened by the same amount above it (both designs; spec
+ * 2026-09-29-cone-foot-chamfer). Mirrors CONE_CHAMFER_SIZE of buildChamber.py.
  */
 export const CHAMBER_CONE_CHAMFER_SIZE_MM = 50;
+
+/**
+ * The Cone chamfer widening (mm, unscaled) of the LE part: the size when the
+ * chamfer is on (blank = CHAMBER_CONE_CHAMFER_SIZE_MM), else 0. The widest part
+ * of the machine counts LE Ø + 2 × this (the builder's rmax).
+ */
+export function chamberConeChamferMm(input: ChamberInput): number {
+  if (input.coneChamferEnabled !== true) return 0;
+  return input.coneChamferSize ?? CHAMBER_CONE_CHAMFER_SIZE_MM;
+}
 
 // Fixed geometry ratios that derive the two secondary DIAMETERS from the model
 // outputs when a manual override is absent: consumed by the API
@@ -2697,17 +2709,20 @@ export interface ChamberInput {
   /** Wall thickness (mm) of the hollow last cylinder. Default CHAMBER_WALL_THICKNESS_MM. */
   wallThickness?: number;
   /**
-   * Cone chamfer (With cone only): a 45° chamfer on the INNER top edge of the
-   * cone wall, so the mouth of the cone flares outward. Geometry-only (not part
-   * of the empirical model); ignored, and left out of the build key, in Closed
-   * generator or when false. Default false.
+   * Cone chamfer (both designs): a 45° foot chamfer on the LOWER OUTER edge of
+   * the LE part (the Closed-generator last cylinder, the With cone outer wall),
+   * where it stands on the distributor roof at LEB. The part is widened by the
+   * size above the chamfer, so the foot lands on LE Ø/2 at LEB. Geometry-only
+   * (not part of the empirical model); left out of the build key when false.
+   * Default false. Spec 2026-09-29-cone-foot-chamfer.
    */
   coneChamferEnabled?: boolean;
   /**
-   * Cone chamfer size (mm): both legs of the 45° chamfer, scaled by partScale like
-   * the other part dimensions. At most the Wall thickness (equal = knife-edge rim)
-   * and the cone's inside depth (Cone length minus Wall thickness). Read only when
-   * coneChamferEnabled in With cone. Default CHAMBER_CONE_CHAMFER_SIZE_MM.
+   * Cone chamfer size (mm): both legs of the 45° foot chamfer (= the widening),
+   * scaled by partScale like the other part dimensions. At most the LE part
+   * height above LEB (Closed generator: up to the chamber top or the Generator
+   * height; With cone: Cone length minus Wall thickness). Read only when
+   * coneChamferEnabled. Default CHAMBER_CONE_CHAMFER_SIZE_MM.
    */
   coneChamferSize?: number;
   /**
@@ -3194,9 +3209,10 @@ export interface ChamberSpiralInputs {
 
 /**
  * Map the chamber to the spiral tool inputs (spec section 4). D_LE is twice the
- * widest part of the machine, max(Runner case Ø, Guide vanes Ø, LE Ø) × Part
- * scale (the builder's rmax), so the nose tip lands CHAMBER_SPIRAL_CLEARANCE_M
- * from it; H_ch is H Kammer and max_width B Kammer (Finals, mm -> m).
+ * widest part of the machine, max(Runner case Ø, Guide vanes Ø, LE Ø + 2 × Cone
+ * chamfer size) × Part scale (the builder's rmax), so the nose tip lands
+ * CHAMBER_SPIRAL_CLEARANCE_M from it; H_ch is H Kammer and max_width B Kammer
+ * (Finals, mm -> m).
  */
 export function chamberSpiralInputs(
   input: ChamberInput,
@@ -3211,7 +3227,7 @@ export function chamberSpiralInputs(
     Q: input.x3,
     c_flow: input.spiralFlowVelocity ?? CHAMBER_SPIRAL_FLOW_RANGE.default,
     H_ch: final('height') / 1000,
-    D_LE: (Math.max(dFirst, dMiddle, dLast) * s) / 1000,
+    D_LE: (Math.max(dFirst, dMiddle, dLast + 2 * chamberConeChamferMm(input)) * s) / 1000,
     clearance: CHAMBER_SPIRAL_CLEARANCE_M,
     max_width: final('width') / 1000,
     phi_start: CHAMBER_SPIRAL_PHI_START_DEG,
