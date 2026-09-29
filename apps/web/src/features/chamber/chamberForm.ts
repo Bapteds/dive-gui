@@ -6,6 +6,7 @@ import {
   CHAMBER_DIMENSION_MAX_MM,
   CHAMBER_INPUT_RANGES,
   CHAMBER_RELATIONS,
+  CHAMBER_SPIRAL_FLOW_RANGE,
   CHAMBER_VANE_COUNT_DEFAULT,
   CHAMBER_VANE_COUNTS,
   CHAMBER_VARIANTS,
@@ -72,6 +73,10 @@ export interface ChamberFormValues {
   centralHeight?: number;
   /** Dome height (mm); blank => Gen Dim fit from the resolved Ø. Hollow variant only. */
   domeHeight?: number;
+  /** Semi-spiral casing: the footprint follows the optimised spiral + tongue. Both designs; needs Feet off. */
+  semiSpiral: boolean;
+  /** Casing flow velocity (m/s, 0.3..3, default 0.922). Read only while semiSpiral is on. */
+  spiralFlowVelocity: number;
 }
 
 // A user-entered dimension (mm): strictly positive and bounded, mirroring the
@@ -135,8 +140,22 @@ export const chamberFormSchema = z
     centralDiameter: optionalPositive,
     centralHeight: optionalPositive,
     domeHeight: optionalPositive,
+    semiSpiral: z.boolean(),
+    spiralFlowVelocity: z
+      .number({ invalid_type_error: 'Enter a number' })
+      .min(CHAMBER_SPIRAL_FLOW_RANGE.min, `Min ${CHAMBER_SPIRAL_FLOW_RANGE.min} m/s`)
+      .max(CHAMBER_SPIRAL_FLOW_RANGE.max, `Max ${CHAMBER_SPIRAL_FLOW_RANGE.max} m/s`),
   })
   .superRefine((v, ctx) => {
+    // Mirrors the API refusal (spec 2026-09-29-semi-spiral-casing): the form
+    // unticks Feet when the spiral is ticked, so this only guards a stale state.
+    if (v.semiSpiral && v.feetEnabled) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['feetEnabled'],
+        message: 'The semi-spiral casing needs Feet off for now.',
+      });
+    }
     if (v.variant === 'hollow' && v.hollowLength == null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -197,6 +216,8 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   centralDiameter: undefined,
   centralHeight: undefined,
   domeHeight: undefined,
+  semiSpiral: false,
+  spiralFlowVelocity: CHAMBER_SPIRAL_FLOW_RANGE.default,
 };
 
 /** Recursively sort object keys so serialization ignores property order. */
@@ -262,6 +283,9 @@ export function chamberInputToFormValues(input: ChamberInput): ChamberFormValues
     centralDiameter: input.centralDiameter,
     centralHeight: input.centralHeight,
     domeHeight: input.domeHeight,
+    // Saves made before the semi-spiral casing existed load with it off.
+    semiSpiral: input.semiSpiral ?? CHAMBER_FORM_DEFAULTS.semiSpiral,
+    spiralFlowVelocity: input.spiralFlowVelocity ?? CHAMBER_FORM_DEFAULTS.spiralFlowVelocity,
   };
 }
 

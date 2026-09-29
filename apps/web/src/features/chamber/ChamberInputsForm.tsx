@@ -1,7 +1,13 @@
 import type { FormEventHandler } from 'react';
 import type { FieldErrors, UseFormRegister } from 'react-hook-form';
 import { ChevronDown } from 'lucide-react';
-import { CHAMBER_INPUT_RANGES, CHAMBER_RELATIONS, type ChamberVariant } from '@dive/shared';
+import {
+  CHAMBER_INPUT_RANGES,
+  CHAMBER_RELATIONS,
+  CHAMBER_SPIRAL_FLOW_RANGE,
+  type ChamberVariant,
+} from '@dive/shared';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
@@ -46,6 +52,8 @@ export function ChamberInputsForm({
   variant,
   simplifyGenerator,
   coneChamferEnabled,
+  semiSpiral = false,
+  onSemiSpiralChange,
   autoLengthMm,
   autoDims,
   relationsMaster,
@@ -61,6 +69,13 @@ export function ChamberInputsForm({
   simplifyGenerator: boolean;
   /** Current Cone chamfer state (shows the Cone chamfer size field when on). */
   coneChamferEnabled: boolean;
+  /**
+   * Current Semi-spiral casing state: shows the Casing flow velocity, hides
+   * Length and disables Feet and Chamfer (spec 2026-09-29-semi-spiral-casing).
+   */
+  semiSpiral?: boolean;
+  /** Called when the Semi-spiral casing box is toggled (the parent unticks Feet / Chamfer). */
+  onSemiSpiralChange?: (on: boolean) => void;
   autoLengthMm: number | null;
   /** Auto (empirical) placeholders for the five manual dimension overrides. */
   autoDims: ChamberAutoDims;
@@ -110,8 +125,7 @@ export function ChamberInputsForm({
       <div>
         <h2 className="text-lg font-semibold text-text">Inputs</h2>
         <p className="mt-1 text-sm text-text-secondary">
-          Three empirical inputs drive the twelve geometry parameters. Lengths are in
-          millimetres.
+          Three empirical inputs drive the twelve geometry parameters. Lengths are in millimetres.
         </p>
       </div>
 
@@ -132,8 +146,8 @@ export function ChamberInputsForm({
           <span className="text-sm">
             <span className="font-medium text-text">Structural relations</span>
             <span className="mt-0.5 block text-text-secondary">
-              Link parameters to each other (e.g. LT = LF1 + LF2, LEB = 2 × HLE). Uncheck to
-              make every parameter depend on Runner Ø / Head / Q_max only.
+              Link parameters to each other (e.g. LT = LF1 + LF2, LEB = 2 × HLE). Uncheck to make
+              every parameter depend on Runner Ø / Head / Q_max only.
             </span>
           </span>
         </label>
@@ -196,29 +210,63 @@ export function ChamberInputsForm({
       <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-bg p-3">
         <input
           type="checkbox"
-          {...register('chamferEnabled')}
+          {...register('semiSpiral', {
+            onChange: (e: { target: { checked: boolean } }) =>
+              onSemiSpiralChange?.(e.target.checked),
+          })}
           className="mt-0.5 size-4 shrink-0 cursor-pointer rounded-sm border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40"
         />
         <span className="text-sm">
-          <span className="font-medium text-text">Chamfer</span>
+          <span className="font-medium text-text">Semi-spiral casing</span>
           <span className="mt-0.5 block text-text-secondary">
-            Cut the two corners at the inlet end. Turn off for a square-ended chamber - the rest
-            of the geometry (internals, feet, outputs table) is unaffected.
+            Wrap the chamber around the turbine as a semi-spiral ending in a tongue (both designs).
+            Length, B1, LT and the corner chamfers then come from the spiral.
           </span>
         </span>
       </label>
 
-      <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-bg p-3">
+      {/* Disabled cards keep their reason visible (a disabled control never
+          explains itself): brain/design/design-system.md section 6. */}
+      <label
+        className={cn(
+          'flex items-start gap-3 rounded-md border border-border bg-bg p-3',
+          semiSpiral ? 'cursor-not-allowed' : 'cursor-pointer',
+        )}
+      >
         <input
           type="checkbox"
+          disabled={semiSpiral}
+          {...register('chamferEnabled')}
+          className="mt-0.5 size-4 shrink-0 cursor-pointer rounded-sm border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
+        />
+        <span className="text-sm">
+          <span className="font-medium text-text">Chamfer</span>
+          <span className="mt-0.5 block text-text-secondary">
+            {semiSpiral
+              ? 'Set by the spiral while Semi-spiral casing is on: its two corner cuts are part of the outline.'
+              : 'Cut the two corners at the inlet end. Turn off for a square-ended chamber - the rest of the geometry (internals, feet, outputs table) is unaffected.'}
+          </span>
+        </span>
+      </label>
+
+      <label
+        className={cn(
+          'flex items-start gap-3 rounded-md border border-border bg-bg p-3',
+          semiSpiral ? 'cursor-not-allowed' : 'cursor-pointer',
+        )}
+      >
+        <input
+          type="checkbox"
+          disabled={semiSpiral}
           {...register('feetEnabled')}
-          className="mt-0.5 size-4 shrink-0 cursor-pointer rounded-sm border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40"
+          className="mt-0.5 size-4 shrink-0 cursor-pointer rounded-sm border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
         />
         <span className="text-sm">
           <span className="font-medium text-text">Feet</span>
           <span className="mt-0.5 block text-text-secondary">
-            Cut the four torque-foot voids (legs and their planks). Turn off to keep the chamber
-            solid where the feet would be - the internals and outputs table are unaffected.
+            {semiSpiral
+              ? 'Off while Semi-spiral casing is on: feet are not designed for the spiral yet.'
+              : 'Cut the four torque-foot voids (legs and their planks). Turn off to keep the chamber solid where the feet would be - the internals and outputs table are unaffected.'}
           </span>
         </span>
       </label>
@@ -245,32 +293,45 @@ export function ChamberInputsForm({
         >
           <Input type="number" step="any" {...register('x3', { valueAsNumber: true })} />
         </Field>
-        <Field
-          label="Length (mm)"
-          error={errors.lengthOverride?.message}
-          helperText={
-            autoLengthMm != null
-              ? `Blank = 2 × width ≈ ${Math.round(autoLengthMm)} mm`
-              : 'Blank = 2 × width'
-          }
-        >
-          <Input
-            type="number"
-            step="any"
-            placeholder="auto"
-            {...register('lengthOverride', { setValueAs: numOrUndef })}
-          />
-        </Field>
+        {semiSpiral ? (
+          <Field
+            label="Casing flow velocity (m/s)"
+            error={errors.spiralFlowVelocity?.message}
+            helperText={`Design flow velocity in the casing, ${CHAMBER_SPIRAL_FLOW_RANGE.min}–${CHAMBER_SPIRAL_FLOW_RANGE.max} (default ${CHAMBER_SPIRAL_FLOW_RANGE.default})`}
+          >
+            <Input
+              type="number"
+              step="0.01"
+              inputMode="decimal"
+              min={CHAMBER_SPIRAL_FLOW_RANGE.min}
+              max={CHAMBER_SPIRAL_FLOW_RANGE.max}
+              {...register('spiralFlowVelocity', { valueAsNumber: true })}
+            />
+          </Field>
+        ) : (
+          <Field
+            label="Length (mm)"
+            error={errors.lengthOverride?.message}
+            helperText={
+              autoLengthMm != null
+                ? `Blank = 2 × width ≈ ${Math.round(autoLengthMm)} mm`
+                : 'Blank = 2 × width'
+            }
+          >
+            <Input
+              type="number"
+              step="any"
+              placeholder="auto"
+              {...register('lengthOverride', { setValueAs: numOrUndef })}
+            />
+          </Field>
+        )}
         <Field
           label="Foot angle (°)"
           error={errors.footAngleDeg?.message}
           helperText="Gusset needs ≈37–143° (not ≈90°); nearer 0/90/180 the build is refused"
         >
-          <Input
-            type="number"
-            step="any"
-            {...register('footAngleDeg', { valueAsNumber: true })}
-          />
+          <Input type="number" step="any" {...register('footAngleDeg', { valueAsNumber: true })} />
         </Field>
         <Field
           label="Part scale (×)"
@@ -357,8 +418,8 @@ export function ChamberInputsForm({
           <span className="text-sm">
             <span className="font-medium text-text">Simplify generator</span>
             <span className="mt-0.5 block text-text-secondary">
-              Straight generator with no dome, through the chamber top unless you set a
-              generator height (as in the Closed generator design).
+              Straight generator with no dome, through the chamber top unless you set a generator
+              height (as in the Closed generator design).
             </span>
           </span>
         </label>
