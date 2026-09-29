@@ -48,6 +48,9 @@ describe('chamber saves', () => {
       vaneAngleDeg: 50,
       vaneCount: 16,
       coneChamferEnabled: false,
+      // Semi-spiral casing (spec 2026-09-29): off, at the default casing flow velocity.
+      semiSpiral: false,
+      spiralFlowVelocity: 0.922,
     });
 
     const list = await request(app)

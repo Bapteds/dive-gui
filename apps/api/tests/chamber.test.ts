@@ -100,8 +100,65 @@ beforeEach(async () => {
   // Builds are hash-cached on disk; clear them so each test builds fresh (no
   // cross-test cache bleed, e.g. a prior success masking the failure path).
   await fs.rm(path.join(storageRoot(), 'chamber'), { recursive: true, force: true });
+  await fs.rm(path.join(storageRoot(), 'chamber-spiral'), { recursive: true, force: true });
 });
 afterEach(() => setCommandRunner(null));
+
+/** A designSemiSpiral.py result (the stepped-spiral fixture vertices, metres). */
+function spiralGeometry(overrides: { widthBinding?: boolean; warnings?: string[] } = {}) {
+  const pts: [string, number, number][] = [
+    ['V0', -2.7, -2.13664],
+    ['V1', -2.7, 0.75],
+    ['V2', -1.3, 2.2],
+    ['V3', 0.55, 2.2],
+    ['V4', 1.7, 1.0],
+    ['V5', 1.7, 0.15],
+    ['V6', 1.492759, -0.54332],
+    ['V7', 1.492759, -0.99332],
+    ['V8', 1.7, -1.68664],
+    ['V9', 1.7, -2.13664],
+  ];
+  return {
+    inputs: {},
+    vertices: pts.map(([id, x, y]) => ({ id, group: 'spiral', x, y, role: 'corner' })),
+    dimensions: { width: 4.4, min_x: -2.7, max_x: 1.7, foot_y: -2.13664 },
+    quality: {
+      worst_area_error_m2: 0.4309,
+      at_phi_deg: 219.4,
+      width_binding: overrides.widthBinding ?? false,
+    },
+    algorithm: 'ref-2026-09-22-seed5',
+    warnings: overrides.warnings ?? [],
+  };
+}
+
+/** Route designSemiSpiral.py (args = [script, in.json, out.json]) to a fake that
+ * records its inputs and writes `geometry`; everything else goes to `builder`. */
+function withSpiralRunner(
+  builder: CommandRunner,
+  seen: Record<string, unknown>[] = [],
+  geometry: object = spiralGeometry(),
+  delayMs = 0,
+): CommandRunner {
+  return async (spec) => {
+    if (!spec.args[0]?.endsWith('designSemiSpiral.py')) return builder(spec);
+    seen.push(JSON.parse(await fs.readFile(spec.args[1], 'utf8')));
+    if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    await fs.writeFile(spec.args[2], JSON.stringify(geometry));
+    return ok(spec);
+  };
+}
+
+/** Records every builder params.json, then succeeds like successRunner. */
+function recordingBuilder(seen: Record<string, unknown>[]): CommandRunner {
+  return async (spec) => {
+    seen.push(JSON.parse(await fs.readFile(spec.args[1], 'utf8')));
+    return successRunner(spec);
+  };
+}
+
+/** A semi-spiral build body (Feet must be off). */
+const SPIRAL = { ...BUILD, semiSpiral: true, feetEnabled: false };
 
 describe('Chamber Creation', () => {
   it('requires authentication', async () => {
@@ -1072,5 +1129,221 @@ describe('Chamber Creation', () => {
       .set('Authorization', auth)
       .send({ ...BUILD, x1: 99999 })
       .expect(422);
+  });
+
+  describe('semi-spiral casing (spec 2026-09-29-semi-spiral-casing)', () => {
+    const post = (auth: string, body: object) =>
+      request(app).post('/api/v1/chamber/build').set('Authorization', auth).send(body);
+
+    it('designs the spiral once, feeds its vertices to the builder and answers the derived values', async () => {
+      const spiralRuns: Record<string, unknown>[] = [];
+      const params: Record<string, unknown>[] = [];
+      setCommandRunner(withSpiralRunner(recordingBuilder(params), spiralRuns));
+      const auth = authHeader(await createTestUser());
+
+      const res = await post(auth, SPIRAL).expect(200);
+      const outputs = res.body.outputs as { key: string; final: number; status: string }[];
+      const final = (k: string) => outputs.find((o) => o.key === k)!.final;
+
+      // The tool inputs (spec section 4): Q_max, H Kammer, 2 x the widest part
+      // (auto runner case = 1.14703 x LE), 200 mm, B Kammer, 0.922 m/s, 160 deg.
+      expect(spiralRuns).toHaveLength(1);
+      expect(spiralRuns[0]).toEqual({
+        Q: 8,
+        c_flow: 0.922,
+        H_ch: final('height') / 1000,
+        D_LE: (1.14703 * final('dLast')) / 1000,
+        clearance: 0.2,
+        max_width: final('width') / 1000,
+        phi_start: 160,
+      });
+
+      // The builder gets the frozen vertices; the box keys the spiral replaces
+      // are left out of its params (and of the build key).
+      expect(params).toHaveLength(1);
+      const p = params[0];
+      expect(p.semiSpiral).toBe(true);
+      const spiral = p.spiral as { inputs: object; vertices: { id: string }[]; quality: object };
+      expect(spiral.inputs).toEqual(spiralRuns[0]);
+      expect(spiral.vertices.map((v) => v.id)).toEqual(
+        ['V0', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8', 'V9'],
+      );
+      expect(spiral.vertices[0]).toEqual({ id: 'V0', x: -2.7, y: -2.13664 });
+      expect(spiral.quality).toEqual({
+        worst_area_error_m2: 0.4309,
+        at_phi_deg: 219.4,
+        width_binding: false,
+      });
+      for (const key of [
+        'length',
+        'distFromSideChamfer1',
+        'distFromEnd',
+        'chamferLength1',
+        'chamferWidth1',
+        'chamferLength2',
+        'chamferWidth2',
+        'chamferEnabled',
+      ]) {
+        expect(p).not.toHaveProperty(key);
+      }
+      expect(p.width).toBeCloseTo(final('width') / 1000, 12); // the width LIMIT
+      expect(p.feetEnabled).toBe(false);
+
+      // The response: spiral quality + the derived box (mm), and the derived
+      // rows carry their spiral value with the 'from spiral' status.
+      expect(res.body.spiral).toMatchObject({
+        widthMm: 4400,
+        worstAreaErrorM2: 0.4309,
+        atPhiDeg: 219.4,
+        widthBinding: false,
+      });
+      expect(res.body.spiral.boxMm.length).toBeCloseTo(4336.64, 6);
+      expect(res.body.spiral.boxMm.distFromEnd).toBeCloseTo(2200, 6);
+      const lt = outputs.find((o) => o.key === 'distFromEnd')!;
+      expect(lt.status).toBe('from spiral');
+      expect(lt.final).toBeCloseTo(2200, 6);
+      expect(outputs.find((o) => o.key === 'chamferWidth2')!.final).toBeCloseTo(1400, 6);
+      expect(outputs.find((o) => o.key === 'width')!.status).not.toBe('from spiral');
+      expect(res.body.warnings).toEqual([]);
+
+      // A change that leaves the spiral inputs alone (the vane angle) reuses
+      // the cached spiral: a new build, no new optimisation.
+      const angled = await post(auth, { ...SPIRAL, vaneAngleDeg: 52 }).expect(200);
+      expect(angled.body.hash).not.toBe(res.body.hash);
+      expect(params).toHaveLength(2);
+      expect(spiralRuns).toHaveLength(1);
+      expect(params[1].spiral).toEqual(p.spiral);
+
+      // A new casing flow velocity is a new spiral (and a new build).
+      const slower = await post(auth, { ...SPIRAL, spiralFlowVelocity: 0.7 }).expect(200);
+      expect(slower.body.hash).not.toBe(res.body.hash);
+      expect(spiralRuns).toHaveLength(2);
+      expect(spiralRuns[1].c_flow).toBe(0.7);
+    });
+
+    it('leaves every build without the spiral on its old key', async () => {
+      const params: Record<string, unknown>[] = [];
+      setCommandRunner(withSpiralRunner(recordingBuilder(params)));
+      const auth = authHeader(await createTestUser());
+      const plain = await post(auth, BUILD).expect(200);
+      const off = await post(auth, { ...BUILD, semiSpiral: false, spiralFlowVelocity: 1.5 }).expect(200);
+      expect(off.body.hash).toBe(plain.body.hash);
+      expect(params).toHaveLength(1);
+      expect(params[0]).not.toHaveProperty('semiSpiral');
+      expect(params[0]).not.toHaveProperty('spiral');
+      expect(plain.body.spiral).toBeNull();
+    });
+
+    it('does not re-key on the box values the spiral replaces', async () => {
+      const spiralRuns: Record<string, unknown>[] = [];
+      setCommandRunner(withSpiralRunner(successRunner, spiralRuns));
+      const auth = authHeader(await createTestUser());
+      const base = await post(auth, SPIRAL).expect(200);
+      const edited = await post(auth, {
+        ...SPIRAL,
+        lengthOverride: 12000,
+        chamferEnabled: false,
+        constraints: {
+          distFromSideChamfer1: { exact: 1234 },
+          distFromEnd: { exact: 2345 },
+          chamferLength1: { min: 900, max: 100 }, // inverted: exempt while derived
+          chamferWidth2: { exact: 321 },
+        },
+      }).expect(200);
+      expect(edited.body.hash).toBe(base.body.hash);
+      expect(spiralRuns).toHaveLength(1);
+      // The same inverted range without the spiral is still refused.
+      await post(auth, { ...BUILD, constraints: { chamferLength1: { min: 900, max: 100 } } }).expect(422);
+    });
+
+    it('refuses Feet on with the spiral, including the API default (on)', async () => {
+      setCommandRunner(notFoundRunner);
+      const auth = authHeader(await createTestUser());
+      for (const body of [{ ...BUILD, semiSpiral: true }, { ...SPIRAL, feetEnabled: true }]) {
+        const res = await post(auth, body).expect(422);
+        expect(res.body.error.code).toBe('VALIDATION_ERROR');
+        expect(res.body.error.message).toContain(
+          'The semi-spiral casing needs Feet off for now. Uncheck Feet, or uncheck Semi-spiral casing.',
+        );
+      }
+    });
+
+    it('rejects a casing flow velocity outside 0.3-3 m/s', async () => {
+      const auth = authHeader(await createTestUser());
+      for (const v of [0.2, 3.5, 0]) {
+        const res = await post(auth, { ...SPIRAL, spiralFlowVelocity: v }).expect(422);
+        expect(res.body.error.code).toBe('VALIDATION_ERROR');
+      }
+    });
+
+    it('persists and replays the width-limit warning of the spiral step', async () => {
+      const warning =
+        'The semi-spiral casing is limited by B Kammer (4450 mm): worst cross-section error 0.88 m² at 160°. Raise B Kammer to reduce it.';
+      setCommandRunner(
+        withSpiralRunner(warningRunner, [], spiralGeometry({ widthBinding: true, warnings: [warning] })),
+      );
+      const auth = authHeader(await createTestUser());
+      const built = await post(auth, SPIRAL).expect(200);
+      expect(built.body.warnings[0]).toBe(warning);
+      expect(built.body.warnings).toHaveLength(3); // + the two builder warnings
+      expect(built.body.spiral.widthBinding).toBe(true);
+
+      setCommandRunner(notFoundRunner);
+      const cached = await post(auth, SPIRAL).expect(200);
+      expect(cached.body.hash).toBe(built.body.hash);
+      expect(cached.body.warnings).toEqual(built.body.warnings);
+      expect(cached.body.spiral).toEqual(built.body.spiral);
+    });
+
+    it('shows the spiral refusal alone and never runs the builder', async () => {
+      let builds = 0;
+      setCommandRunner(async (spec) => {
+        if (spec.args[0]?.endsWith('designSemiSpiral.py')) {
+          return {
+            ...ok(spec),
+            exitCode: 1,
+            stdout: '',
+            stderr:
+              'KO: The semi-spiral casing does not fit in B Kammer (4450 mm): the narrowest valid spiral for these inputs is 5012 mm wide. Raise B Kammer to at least 5012 mm.\n',
+          };
+        }
+        builds += 1;
+        return successRunner(spec);
+      });
+      const auth = authHeader(await createTestUser());
+      const res = await post(auth, SPIRAL).expect(502);
+      expect(res.body.error.code).toBe('CHAMBER_BUILD_FAILED');
+      expect(res.body.error.message).toBe(
+        'Cannot build the chamber. The semi-spiral casing does not fit in B Kammer (4450 mm): the narrowest valid spiral for these inputs is 5012 mm wide. Raise B Kammer to at least 5012 mm.',
+      );
+      expect(builds).toBe(0);
+    });
+
+    it('reports a spiral step that runs out of time in plain words', async () => {
+      setCommandRunner(async (spec) =>
+        spec.args[0]?.endsWith('designSemiSpiral.py')
+          ? { ...ok(spec), exitCode: null, timedOut: true }
+          : successRunner(spec),
+      );
+      const auth = authHeader(await createTestUser());
+      const res = await post(auth, SPIRAL).expect(502);
+      expect(res.body.error.code).toBe('CHAMBER_BUILD_FAILED');
+      expect(res.body.error.message).toContain('semi-spiral');
+      expect(res.body.error.message).toContain('CHAMBER_SPIRAL_TIMEOUT_MS');
+    });
+
+    it('runs one optimisation for concurrent builds sharing a spiral (per-spiral lock)', async () => {
+      const spiralRuns: Record<string, unknown>[] = [];
+      setCommandRunner(withSpiralRunner(successRunner, spiralRuns, spiralGeometry(), 50));
+      const auth = authHeader(await createTestUser());
+      const [a, b] = await Promise.all([
+        post(auth, SPIRAL),
+        post(auth, { ...SPIRAL, vaneAngleDeg: 52 }),
+      ]);
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      expect(a.body.hash).not.toBe(b.body.hash);
+      expect(spiralRuns).toHaveLength(1);
+    });
   });
 });
