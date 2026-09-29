@@ -32,6 +32,11 @@ VOL_RTOL = 5e-3
 # name -> (golden volume m^3, expected patch names in manifest order)
 STEPPED_PATCHES = ("inlet", "outlet", "cylinder_walls", "walls")
 VANE_PATCHES = ("inlet", "cylinder_walls", "walls", "hub", "shroud", "outlet", "guide_vanes")
+# Semi-spiral casing (spec 2026-09-29-semi-spiral-casing): `tongue` (nose + plank)
+# follows walls on both paths.
+SPIRAL_PATCHES = ("inlet", "outlet", "cylinder_walls", "walls", "tongue")
+SPIRAL_VANE_PATCHES = ("inlet", "cylinder_walls", "walls", "tongue", "hub", "shroud", "outlet",
+                       "guide_vanes")
 GOLDEN = {
     "stepped": (131.227524, STEPPED_PATCHES),
     "stepped-feet-off": (131.545008, STEPPED_PATCHES),
@@ -43,8 +48,18 @@ GOLDEN = {
     # stepped-vanes with 18 guide vanes (chord x 16/18 about the pivot, spec
     # 2026-09-29-guide-vane-count): the blades' total section drops by 16/18.
     "stepped-vanes-18": (135.495642, VANE_PATCHES),
+    # Semi-spiral casing, frozen vertices in params.spiral (computed 2026-09-29
+    # with the reference tool, Q = 8 m3/s, 0.922 m/s): copies of stepped-vanes /
+    # hollow-vanes with Feet off and the spiral on (the API leaves the box keys out).
+    "stepped-spiral": (0.0, SPIRAL_VANE_PATCHES),
+    "hollow-vanes-spiral": (0.0, SPIRAL_VANE_PATCHES),
 }
-WALL_TYPES = {"cylinder_walls", "walls", "hub", "shroud", "guide_vanes"}
+WALL_TYPES = {"cylinder_walls", "walls", "hub", "shroud", "guide_vanes", "tongue"}
+
+
+def _is_vane_build(name):
+    with open(os.path.join(HERE, "params", f"{name}.json")) as fh:
+        return bool(json.load(fh).get("guideVanes", False))
 
 
 def _zip_names(result):
@@ -100,7 +115,7 @@ def test_build_writes_viewer_and_cad_exports(build, name):
     # Feature edges only exist for BREP-tessellated (non-vane) builds; the
     # mesh-based vane pipeline writes an empty edges.bin (edgeCount 0).
     edges_size = os.path.getsize(os.path.join(result.out_dir, "edges.bin"))
-    if "vanes" in name:
+    if _is_vane_build(name):
         assert edges_size == 0, f"{name}: expected an empty edges.bin, got {edges_size} bytes"
     else:
         assert edges_size > 0, f"{name}: edges.bin is empty"
@@ -108,7 +123,7 @@ def test_build_writes_viewer_and_cad_exports(build, name):
     # The STEP is deferred for guide-vane builds (the carve + gate is ~2/3 of
     # the build): a plain vane build ships neither chamber.step nor
     # build-meta.json — the API regenerates with --step on first download.
-    if "vanes" in name:
+    if _is_vane_build(name):
         assert not os.path.exists(result.export_path("chamber.step")), name
         assert result.build_meta is None, name
     else:
@@ -867,3 +882,178 @@ def test_mirror_step_refuses_a_missing_input(tmp_path):
     assert proc.returncode == 1
     assert "KO:" in proc.stderr
     assert not dst.exists()
+
+
+# --- semi-spiral casing -----------------------------------------------------------
+# The footprint is the semi-spiral outline (frozen vertices in params.spiral, the
+# builder never optimises), the nose tip clears the widest part by 200 mm, and a
+# plank runs from the nose tip tangent to the generator / cone circle, from LEB
+# to the ceiling. Nose + plank = the `tongue` patch. Spec
+# brain/specs/2026-09-29-semi-spiral-casing-design.md, section 11.
+
+def _spiral_frame(name):
+    """(params, vertices in BUILDER coordinates, axis (x, y), r_machine, scale,
+    z_leb, box W, box L). The builder mirrors the tool frame (x -> -x) so the
+    spiral turns with the guide vanes (see the handedness test)."""
+    import numpy as np
+
+    p = _fixture_params(name)
+    raw = {v["id"]: (v["x"], v["y"]) for v in p["spiral"]["vertices"]}
+    x_in, foot_y = raw["V0"]
+    x4, y_top = raw["V4"][0], raw["V2"][1]
+    W, L = x4 - x_in, y_top - foot_y
+    ax, ay = (x4 + x_in) / 2.0, -(y_top + foot_y) / 2.0
+    V = {k: np.array([ax - x, ay + y]) for k, (x, y) in raw.items()}
+    s = p.get("partScale", 1.0)
+    d_last = p["dLast"] * s
+    r_machine = max(1.147030 * d_last, 0.8 * d_last, d_last) / 2.0
+    z_leb = -p["height"] / 2.0 - 0.01 + p["hMiddlePlusFirst"] * s
+    return p, V, np.array([ax, ay]), r_machine, s, z_leb, W, L
+
+
+def _plank_segment(np, V, axis, r_t):
+    """Nose tip P and the tangent point T the builder picks (spec section 5.3)."""
+    P = V["V6"] - axis
+    r_in = float(np.hypot(*P))
+    a = np.arccos(r_t / r_in)
+    u = P / r_in
+    l6 = (V["V6"] - V["V5"]) / np.linalg.norm(V["V6"] - V["V5"])
+    best = None
+    for t in (a, -a):
+        T = r_t * np.array([u[0] * np.cos(t) - u[1] * np.sin(t), u[0] * np.sin(t) + u[1] * np.cos(t)])
+        score = float(np.dot((T - P) / np.linalg.norm(T - P), l6))
+        if best is None or score > best[0]:
+            best = (score, T)
+    return P + axis, best[1] + axis
+
+
+def _fluid_mask(stl, pts_xy, z):
+    """Is each XY point inside the fluid at height z? Even-odd count over the
+    closed loops of the horizontal cross-section."""
+    import numpy as np
+    from shapely.geometry import Point, Polygon
+
+    section = stl.section(plane_origin=(0.0, 0.0, z), plane_normal=(0.0, 0.0, 1.0))
+    assert section is not None, f"no cross-section at z={z}"
+    loops = [Polygon(np.asarray(d)[:, :2]) for d in section.discrete if len(d) >= 4]
+    return [sum(lp.contains(Point(*pt)) for lp in loops) % 2 == 1 for pt in pts_xy]
+
+
+@pytest.mark.parametrize("name", ["stepped-spiral", "hollow-vanes-spiral"])
+def test_spiral_inlet_is_the_single_bottom_opening(build, name):
+    import numpy as np
+
+    result = build(name)
+    assert result.exit_code == 0, result.stderr
+    _p, _V, _axis, _r, _s, _z, W, L = _spiral_frame(name)
+    inlet = _patch_mesh(result, "inlet")
+    assert np.allclose(inlet.vertices[:, 1], -L / 2.0, atol=1e-6)      # one plane, min Y
+    assert float(np.ptp(inlet.vertices[:, 0])) == pytest.approx(W, abs=1e-3)   # x4 - x_in
+
+
+@pytest.mark.parametrize("name", ["stepped-spiral", "hollow-vanes-spiral"])
+def test_spiral_nose_tip_clears_the_widest_part_by_200_mm(build, name):
+    import numpy as np
+
+    result = build(name)
+    assert result.exit_code == 0, result.stderr
+    _p, V, axis, r_machine, _s, z_leb, _W, _L = _spiral_frame(name)
+    tongue = _patch_mesh(result, "tongue")
+    below = tongue.vertices[tongue.vertices[:, 2] < z_leb - 0.01]     # the nose only (no plank)
+    assert len(below)
+    r = np.hypot(below[:, 0] - axis[0], below[:, 1] - axis[1])
+    assert float(r.min()) == pytest.approx(r_machine + 0.2, abs=1e-3)
+    assert np.hypot(*(V["V6"] - axis)) == pytest.approx(r_machine + 0.2, abs=1e-5)
+
+
+@pytest.mark.parametrize("name", ["stepped-spiral", "hollow-vanes-spiral"])
+def test_spiral_plank_runs_from_the_nose_to_the_target_circle_above_leb(build, name):
+    """Solid all along P -> T between LEB and the ceiling (it crosses the
+    section and touches the circle), open fluid there in the vane band,
+    50 mm x Part scale thick."""
+    import numpy as np
+
+    result = build(name)
+    assert result.exit_code == 0, result.stderr
+    p, V, axis, _r, s, z_leb, _W, _L = _spiral_frame(name)
+    stl = result.load_stl()
+    P, T = _plank_segment(np, V, axis, p["dLast"] * s / 2.0)
+    length = float(np.linalg.norm(T - P))
+    assert 0.9 < length < 1.3                                  # spec: 0.94 to 1.22 m
+    d = (T - P) / length
+    n = np.array([-d[1], d[0]])
+    line = [P + f * (T - P) for f in np.linspace(0.08, 0.92, 9)]
+    z_high = z_leb + 0.5 * (p["height"] / 2.0 - z_leb)
+    assert not any(_fluid_mask(stl, line, z_high)), "the plank must be solid above LEB"
+    # the plank end reaches the circle: solid right up to T
+    assert not any(_fluid_mask(stl, [T - 0.01 * d], z_high))
+    # thickness 50 mm x Part scale: solid just inside both faces, fluid just outside
+    mid = P + 0.5 * (T - P)
+    h = 0.025 * s
+    assert _fluid_mask(stl, [mid + (h - 0.002) * n, mid - (h - 0.002) * n], z_high) == [False, False]
+    assert _fluid_mask(stl, [mid + (h + 0.002) * n, mid - (h + 0.002) * n], z_high) == [True, True]
+    # below LEB (the vane band) the same line is fluid: the plank starts at LEB
+    z_band = z_leb - 0.25 * p["hMiddle"] * s
+    assert all(_fluid_mask(stl, line[2:7], z_band)), "no plank in the vane band"
+
+
+@pytest.mark.parametrize("name", ["stepped-spiral", "hollow-vanes-spiral"])
+def test_spiral_tongue_faces_are_never_horizontal(build, name):
+    import numpy as np
+
+    result = build(name)
+    assert result.exit_code == 0, result.stderr
+    tongue = _patch_mesh(result, "tongue")
+    assert len(tongue.faces) > 0
+    assert float(np.abs(tongue.face_normals[:, 2]).max()) < 0.5
+
+
+def test_spiral_turns_with_the_guide_vanes(build):
+    """Handedness (spec section 5.5 / 14 task 5): the guide-vane asset turns the
+    flow counter-clockwise seen from +Z (outer leading edge -> inner trailing
+    edge), so the inlet flow (+Y, along L1) must run on the +X side of the axis
+    and the nose sit on the -X side: the builder mirrors the tool frame."""
+    import numpy as np
+
+    loop = _committed_airfoil(np)
+    r = np.hypot(loop[:, 0], loop[:, 1])
+    le, te = loop[r.argmax()], loop[r.argmin()]
+    lz = le[0] * (te - le)[1] - le[1] * (te - le)[0]
+    assert lz > 0                                              # counter-clockwise swirl
+
+    result = build("stepped-spiral")
+    assert result.exit_code == 0, result.stderr
+    _p, _V, axis, _r, _s, z_leb, _W, _L = _spiral_frame("stepped-spiral")
+    tongue = _patch_mesh(result, "tongue")
+    nose = tongue.vertices[tongue.vertices[:, 2] < z_leb - 0.01]
+    assert np.sign(nose[:, 0].mean() - axis[0]) == -np.sign(lz)
+
+
+def test_spiral_brep_path_carries_the_tongue_patch(build):
+    """Without guide vanes (BREP classify): the tongue patch follows walls, the
+    solid stays watertight and no tongue face is horizontal."""
+    import numpy as np
+
+    result = build("stepped-spiral", params_override={"guideVanes": False})
+    assert result.exit_code == 0, result.stderr
+    assert result.load_stl().is_watertight
+    assert tuple(p["name"] for p in result.manifest) == SPIRAL_PATCHES
+    assert {p["name"]: p["type"] for p in result.manifest}["tongue"] == "wall"
+    assert _zip_names(result) == sorted([f"{p}.stl" for p in SPIRAL_PATCHES] + ["domain.stl"])
+    tongue = _patch_mesh(result, "tongue")
+    assert float(np.abs(tongue.face_normals[:, 2]).max()) < 0.5
+    assert os.path.getsize(result.export_path("chamber.step")) > 0
+
+
+def test_spiral_with_feet_is_refused(build):
+    result = build("stepped-spiral", params_override={"feetEnabled": True})
+    assert result.exit_code == 1
+    assert "KO: The semi-spiral casing needs Feet off for now." in result.stderr
+
+
+def test_spiral_vertices_for_another_machine_are_refused(build):
+    """The frozen vertices must match the machine: a Part scale change without a
+    new spiral is caught before the booleans."""
+    result = build("stepped-spiral", params_override={"partScale": 0.9})
+    assert result.exit_code == 1
+    assert "KO:" in result.stderr and "semi-spiral" in result.stderr
