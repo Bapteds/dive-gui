@@ -123,7 +123,7 @@ All in mm, optional; empty = auto (`setValueAs: numOrUndef`, `placeholder="auto"
 | `wallThickness` | Wall thickness (mm) | `CHAMBER_WALL_THICKNESS_MM` = 50 | With cone |
 | `x4` | Power (kW) | Gen Dim v3 | With cone |
 | `centralDiameter` | Generator Ø (mm) | Gen Dim v3 | With cone |
-| `centralHeight` | Generator height (mm) | With cone: Gen Dim v3. Closed generator and Simplify generator: blank = through the chamber top (hint "≈ (H Kammer − Part scale × LEB) / Part scale"); a value = flat-topped cylinder closed below the top (a top within 1 mm of the chamber top is pinned like blank; taller than H Kammer allows = refusal "The generator does not fit under the chamber top") | both designs (since 2026-09-28) |
+| `centralHeight` | Generator height (mm) | With cone: Gen Dim v3. Closed generator and Simplify generator: blank = through the chamber top (hint "≈ (H Kammer − Part scale × LEB) / Part scale", followed by "(min ≈ G + dome D = N mm)": the Gen Dim generator + dome minimum checked by the API, see §refusals); a value = flat-topped cylinder closed below the top (a top within 1 mm of the chamber top is pinned like blank; taller than H Kammer allows = refusal "The generator does not fit under the chamber top") | both designs (since 2026-09-28) |
 | `domeHeight` | Dome height (mm) | Gen Dim v3; ignored if Simplify generator | With cone |
 
 - `dFirst`/`dMiddle` are sent to the builder **unscaled** (m): the builder multiplies them by `partScale`; without an override it applies its own copies of the ratios to the already scaled `dLast`. The ratios therefore exist twice (TS and Python): keep them in sync.
