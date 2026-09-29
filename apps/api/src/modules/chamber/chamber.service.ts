@@ -371,8 +371,9 @@ function resolveGeometryParams(
   // Absolute guide-vane open angle (deg, 45..55; asset baked at 50°); only affects
   // guide-vane builds. Part of the cache key, so a new angle => a new build.
   params.vaneAngleDeg = input.vaneAngleDeg ?? 50;
-  // Guide vane count (16 or 18). Only passed for an 18-vane guide-vane build: 16
-  // (the asset) and any build without vanes omit it, so their keys never change.
+  // Guide vane count (whole number 8..32). Only passed for a guide-vane build with
+  // a count other than 16: 16 (the asset) and any build without vanes omit it, so
+  // their keys never change (and 18 keys exactly as it did when only 16/18 existed).
   const vaneCount = input.vaneCount ?? CHAMBER_VANE_COUNT_DEFAULT;
   if (params.guideVanes && vaneCount !== CHAMBER_VANE_COUNT_DEFAULT) params.vaneCount = vaneCount;
   // Uniform scale of the whole internal assembly (cylinders + feet + vanes +

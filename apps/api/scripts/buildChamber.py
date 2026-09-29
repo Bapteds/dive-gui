@@ -108,15 +108,18 @@ FOOT_ANGLES_DEG = (0, 90, 180, 270)     # azimuth positions (aligned with the in
 VANE_BASE_ANGLE_DEG = 50.0   # the guide-vane open angle baked into the asset. The
                              # vaneAngleDeg param is this ABSOLUTE angle; the pitch
                              # actually applied is (vaneAngleDeg - VANE_BASE_ANGLE_DEG).
-VANE_COUNTS = (16, 18)       # guide vane counts accepted (vaneCount param). 16 is the
-                             # asset; with n vanes each blade is scaled in XY by
-                             # bladeCount / n about its pivot (same solidity, same
-                             # pivot radius) and the ring step is 360 / n (spec
-                             # 2026-09-29-guide-vane-count).
+VANE_COUNT_MIN = 8           # guide vane counts accepted (vaneCount param): any whole
+VANE_COUNT_MAX = 32          # number in [8, 32]. 16 is the asset; with n vanes each
+                             # blade is scaled in XY by bladeCount / n about its pivot
+                             # (same solidity, same pivot radius) and the ring step is
+                             # 360 / n (specs 2026-09-29-guide-vane-count and
+                             # 2026-09-29-guide-vane-count-any). Mirrors
+                             # CHAMBER_VANE_COUNT_MIN / _MAX of @dive/shared.
 VANE_MIN_GAP = 2e-3          # smallest gap (m) allowed between two neighbouring blade
                              # outlines (2 x VANE_SKIN_TOL: below it the skin mask
                              # cannot tell the blades apart and a mesher cannot fill
-                             # the slot). Never reached with the asset over 45..55 deg.
+                             # the slot). Never reached with the asset over 45..55 deg
+                             # at any count (smallest gap ~0.39 chord, at 8 vanes).
 VANE_OUTLET_SAFE_MARGIN = 0.97   # outlet outer radius clamp: stay this fraction inside
                                  # the vane's own inner working radius (R_anchor in
                                  # make_vane_patches) so the blade always has shroud/hub
@@ -715,13 +718,15 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
     Returns two extra float keys, "outlet_ri"/"outlet_ro", the resolved (possibly
     clamped) rims — main() uses these downstream instead of recomputing them.
 
-    `vane_count` (16 or 18) sets the number of blades in the ring, evenly spaced
+    `vane_count` (8..32) sets the number of blades in the ring, evenly spaced
     every 360/n degrees. With n other than the asset's bladeCount (16) each blade is
     scaled UNIFORMLY in XY by bladeCount/n about its own pivot, before the pitch:
-    the chord shrinks so the cascade solidity n*c/(2 pi R_pivot) is unchanged, the
+    the chord scales so the cascade solidity n*c/(2 pi R_pivot) is unchanged, the
     pivot circle does not move, and the airfoil stays similar (the STEP fit follows
     it). Z is not scaled (the span still fills the HLE band). R_anchor is measured
-    on the scaled blade, so the outlet clamp follows the real blade."""
+    on the scaled blade, so the outlet clamp follows the real blade. The returned
+    "pivot" key is the reference blade's pivot (x, y): main() rescales a real blade
+    outline about it to find the counts that fit the passage (_vane_count_fit)."""
     adir = _vane_assets_dir()
     meta = _load_vane_meta()
     blade = trimesh.load(os.path.join(adir, "guideVanes_blade.stl"))
@@ -995,6 +1000,8 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
         "hub_profile": hub_profile,
         "shroud_profile": shroud_profile,
         "hub_pts": ([r_rim, r_p1, r_p2, r_p3] if analytic else []),
+        # Reference blade pivot (world XY; the ring copies rotate it about the axis).
+        "pivot": (float(piv_x), float(piv_y)),
     }
 
 
@@ -1344,7 +1351,7 @@ def _vane_prisms(np, trimesh, blades_mesh, cx, cy, z0, z1):
 def _min_blade_gap(outlines):
     """Smallest XY distance (m) between any two blade outlines (0 when two touch or
     overlap). All pairs, not just i/i+1: blades_mesh.split() does not return the
-    blades in azimuth order (153 pairs at 18 vanes is negligible)."""
+    blades in azimuth order (496 pairs at 32 vanes is negligible)."""
     from shapely.geometry import Polygon
     polys = [Polygon(o) for o in outlines]
     gap = float("inf")
@@ -1352,6 +1359,43 @@ def _min_blade_gap(outlines):
         for j in range(i + 1, len(polys)):
             gap = min(gap, float(polys[i].distance(polys[j])))
     return gap
+
+
+def _vane_count_fit(np, outline, pivot, vane_count, cx, cy, r_in, r_out):
+    """Does the blade fit the distributor passage at `vane_count`, and which counts
+    do? Returns (fits, a, b): `fits` for vane_count, and [a, b] the contiguous run
+    of counts in [VANE_COUNT_MIN, VANE_COUNT_MAX] around the asset's 16 that fit.
+
+    `outline` is one REAL blade outline (XY ring, built at vane_count) and `pivot`
+    its spindle: the blade at count m is that outline scaled by vane_count/m about
+    the pivot (the chord rule), so one outline gives every count. A count fits when
+    its outline stays within radii [r_in, r_out] about the ring axis (cx, cy): the
+    hub rim and LE/2, the shroud brim edge (spec 2026-09-29-guide-vane-count-any).
+    The limits never get tighter than the 16-vane blade itself: a ring the user
+    oversized (Guide vanes diameter) already pokes out at 16 vanes, which is not the
+    count's doing, so 16 always fits and 16 and 18 build exactly as before."""
+    pts = np.asarray(outline, dtype=float)[:, :2]
+    piv = np.asarray(pivot, dtype=float)
+    ctr = np.array([cx, cy], dtype=float)
+
+    def extent(m):
+        q = piv + (float(vane_count) / m) * (pts - piv) - ctr
+        r = np.hypot(q[:, 0], q[:, 1])
+        return float(r.min()), float(r.max())
+
+    lo16, hi16 = extent(16)
+    lo, hi = min(r_in, lo16) - 1e-6, max(r_out, hi16) + 1e-6
+
+    def ok(m):
+        a, b = extent(m)
+        return a >= lo and b <= hi
+
+    a = b = 16
+    while a - 1 >= VANE_COUNT_MIN and ok(a - 1):
+        a -= 1
+    while b + 1 <= VANE_COUNT_MAX and ok(b + 1):
+        b += 1
+    return ok(vane_count), a, b
 
 
 def _shroud_casing_solid(np, trimesh, shroud_mesh, cx, cy, d_last, nb=200, nfine=160,
@@ -1653,8 +1697,8 @@ def main():
         # +-5 deg about the base (45..55). Only used by guide-vane builds.
         vane_angle = float(P.get("vaneAngleDeg", VANE_BASE_ANGLE_DEG))
         vane_pitch = vane_angle - VANE_BASE_ANGLE_DEG   # signed offset actually applied
-        # Guide vane count (16 = the asset, or 18). Old params.json files and every
-        # 16-vane build omit the key. Only used by guide-vane builds.
+        # Guide vane count (any whole number 8..32; 16 = the asset). Old params.json
+        # files and every 16-vane build omit the key. Only used by guide-vane builds.
         vane_count = P.get("vaneCount", 16)
         # Uniform scale for the WHOLE internal assembly (the three cylinders, the
         # hollow cup / central cylinder / dome, the four feet, and the guide vanes
@@ -1666,8 +1710,11 @@ def main():
         part_scale = float(P.get("partScale", 1.0))
 
         # --- common validation (on the UNSCALED model values) ---------------
-        if vane_count not in VANE_COUNTS or isinstance(vane_count, bool):
-            raise ValueError("Guide vane count must be 16 or 18 (got %s)." % (vane_count,))
+        if (isinstance(vane_count, bool) or not isinstance(vane_count, (int, float))
+                or vane_count != int(vane_count)
+                or not VANE_COUNT_MIN <= vane_count <= VANE_COUNT_MAX):
+            raise ValueError("Guide vane count must be a whole number from %d to %d (got %s)."
+                             % (VANE_COUNT_MIN, VANE_COUNT_MAX, vane_count))
         vane_count = int(vane_count)
         if min(width, height, length, d_last, h_middle) <= 0:
             raise ValueError(
@@ -2400,6 +2447,25 @@ def main():
             if len(_blade_outlines) != vane_count:
                 raise RuntimeError("expected %d blade sections, found %d"
                                    % (vane_count, len(_blade_outlines)))
+            # The blades must stay in the distributor passage, between the hub rim
+            # and LE/2 (the shroud brim edge, where the runner case starts) (spec
+            # 2026-09-29-guide-vane-count-any): a low count lengthens the chord
+            # (x 16/n) until the tips cross LE/2. Measured on a real outline (every
+            # blade is a rotation of it); the pivot-nearest one is the reference
+            # blade, whose pivot _vane_count_fit rescales about.
+            _piv = vane_patches["pivot"]
+            _ref = min(_blade_outlines, key=lambda o: float(np.hypot(
+                *(np.asarray(o, dtype=float).mean(axis=0) - np.asarray(_piv)))))
+            _fits, _n_lo, _n_hi = _vane_count_fit(
+                np, _ref, _piv, vane_count, target_x, target_y,
+                vane_outlet_ri, d_last / 2.0)
+            if not _fits:
+                _X = np.asarray(_ref, dtype=float) - np.asarray(_ref, dtype=float).mean(axis=0)
+                _chord = float(np.ptp(_X @ np.linalg.svd(_X, full_matrices=False)[2][0]))
+                raise ValueError(
+                    "With %d guide vanes the blades (chord %s) no longer fit between the "
+                    "hub and the runner case edge. Use between %d and %d vanes for this "
+                    "machine." % (vane_count, _mm(_chord), _n_lo, _n_hi))
             _gap = _min_blade_gap(_blade_outlines)
             if _gap < VANE_MIN_GAP:
                 raise ValueError(
