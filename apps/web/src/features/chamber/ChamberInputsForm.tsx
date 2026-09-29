@@ -282,6 +282,16 @@ export function ChamberInputsForm({
           />
         </Field>
         <Field
+          label="Guide vane count"
+          error={errors.vaneCount?.message}
+          helperText="Guide-vane builds only: 18 vanes get a chord 16/18 as long (same solidity)"
+        >
+          <NativeSelect {...register('vaneCount', { valueAsNumber: true })}>
+            <option value="16">16</option>
+            <option value="18">18</option>
+          </NativeSelect>
+        </Field>
+        <Field
           label="Vane angle (°)"
           error={errors.vaneAngleDeg?.message}
           helperText="Guide-vane builds only: open angle 45–55° (50 = as-designed); each blade pitches about its spindle"

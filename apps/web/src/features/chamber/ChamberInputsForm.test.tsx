@@ -220,6 +220,26 @@ describe('ChamberInputsForm', () => {
     expect((onValid.mock.calls[0][0] as ChamberFormValues).simplifyGenerator).toBe(true);
   });
 
+  it.each(['stepped', 'hollow'] as const)(
+    'offers a Guide vane count select (16 or 18) in the %s design',
+    (variant) => {
+      render(<Harness onValid={() => {}} variant={variant} defaults={{ variant }} />);
+      const select = screen.getByLabelText('Guide vane count') as HTMLSelectElement;
+      expect(select.tagName).toBe('SELECT');
+      expect(Array.from(select.options).map((o) => o.value)).toEqual(['16', '18']);
+      expect(select.value).toBe('16');
+    },
+  );
+
+  it('submits the chosen guide vane count as a number', async () => {
+    const onValid = vi.fn();
+    render(<Harness onValid={onValid} />);
+    fireEvent.change(screen.getByLabelText('Guide vane count'), { target: { value: '18' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
+    await waitFor(() => expect(onValid).toHaveBeenCalledTimes(1));
+    expect((onValid.mock.calls[0][0] as ChamberFormValues).vaneCount).toBe(18);
+  });
+
   it('submits a typed Power (x4) as a number and a blank one as undefined (auto)', async () => {
     const onValid = vi.fn();
     render(<Harness onValid={onValid} variant="hollow" defaults={{ variant: 'hollow' }} />);

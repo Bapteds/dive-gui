@@ -701,6 +701,61 @@ describe('Chamber Creation', () => {
     expect(r35.body.hash).not.toBe(r50.body.hash);
   });
 
+  it('keys a guide-vane build on the vane count, 16 = omitted', async () => {
+    const seen: Record<string, unknown>[] = [];
+    setCommandRunner(async (spec) => {
+      seen.push(JSON.parse(await fs.readFile(spec.args[1], 'utf8')));
+      return successRunner(spec);
+    });
+    const auth = authHeader(await createTestUser());
+    const vanes = { ...BUILD, guideVanes: true };
+
+    const plain = await request(app).post('/api/v1/chamber/build').set('Authorization', auth).send(vanes).expect(200);
+    const n16 = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...vanes, vaneCount: 16 })
+      .expect(200);
+    const n18 = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...vanes, vaneCount: 18 })
+      .expect(200);
+
+    // 16 is the asset's own count: no key change, so no existing vane build is rebuilt.
+    expect(n16.body.hash).toBe(plain.body.hash);
+    expect(n18.body.hash).not.toBe(plain.body.hash);
+    expect(n18.body.outputs).toEqual(plain.body.outputs);
+    expect(n18.body.outputs).toHaveLength(12);
+    // Only the 18-vane build reached the builder (16 was a cache hit) and it carries the count.
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).not.toHaveProperty('vaneCount');
+    expect(seen[1].vaneCount).toBe(18);
+  });
+
+  it('ignores the vane count without guide vanes', async () => {
+    setCommandRunner(successRunner);
+    const auth = authHeader(await createTestUser());
+
+    const plain = await request(app).post('/api/v1/chamber/build').set('Authorization', auth).send(BUILD).expect(200);
+    const n18 = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, vaneCount: 18 })
+      .expect(200);
+    expect(n18.body.hash).toBe(plain.body.hash);
+  });
+
+  it('rejects a vane count other than 16 or 18', async () => {
+    const auth = authHeader(await createTestUser());
+    const res = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, guideVanes: true, vaneCount: 17 })
+      .expect(422);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+
   it('keys the build on the manual runner-case / guide-vanes diameter overrides', async () => {
     setCommandRunner(successRunner);
     const auth = authHeader(await createTestUser());

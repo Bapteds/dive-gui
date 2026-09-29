@@ -5,12 +5,14 @@ import {
   CHAMBER_DIMENSION_MAX_MM,
   CHAMBER_INPUT_RANGES,
   CHAMBER_RELATIONS,
+  CHAMBER_VANE_COUNT_DEFAULT,
+  CHAMBER_VANE_COUNTS,
   CHAMBER_VARIANTS,
   CHAMBER_WALL_THICKNESS_MM,
   CHAMBER_X4_MAX,
   computeChamberGeneratorDims,
 } from '@dive/shared';
-import type { ChamberInput, ChamberVariant } from '@dive/shared';
+import type { ChamberInput, ChamberVaneCount, ChamberVariant } from '@dive/shared';
 
 /**
  * Form contract for the chamber inputs, kept apart from the component file so
@@ -41,6 +43,8 @@ export interface ChamberFormValues {
   feetEnabled: boolean;
   /** Absolute guide-vane open angle (deg, 45..55; asset baked at 50°); each blade swings about its spindle. Guide-vane builds only. */
   vaneAngleDeg: number;
+  /** Number of guide vanes (16 or 18; 18 = chord x 16/18, same solidity). Guide-vane builds only. */
+  vaneCount: ChamberVaneCount;
   /** Outlet inner/outer diameter ratio (0.35..0.50, default 0.45). Guide-vane builds only. */
   outletRatio: number;
   /** Box length along Y (mm); blank => auto 2 x width. */
@@ -103,6 +107,9 @@ export const chamberFormSchema = z
       .number({ invalid_type_error: 'Enter a number' })
       .min(45, 'Min 45°')
       .max(55, 'Max 55°'),
+    vaneCount: z.union([z.literal(CHAMBER_VANE_COUNTS[0]), z.literal(CHAMBER_VANE_COUNTS[1])], {
+      errorMap: () => ({ message: 'Choose 16 or 18 vanes' }),
+    }),
     outletRatio: z
       .number({ invalid_type_error: 'Enter a number' })
       .min(0.35, 'Min 0.35')
@@ -148,6 +155,7 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   chamferEnabled: true,
   feetEnabled: true,
   vaneAngleDeg: 50,
+  vaneCount: CHAMBER_VANE_COUNT_DEFAULT,
   outletRatio: 0.45,
   lengthOverride: undefined,
   hollowLength: 200,
@@ -208,6 +216,8 @@ export function chamberInputToFormValues(input: ChamberInput): ChamberFormValues
     chamferEnabled: input.chamferEnabled ?? CHAMBER_FORM_DEFAULTS.chamferEnabled,
     feetEnabled: input.feetEnabled ?? CHAMBER_FORM_DEFAULTS.feetEnabled,
     vaneAngleDeg: input.vaneAngleDeg ?? CHAMBER_FORM_DEFAULTS.vaneAngleDeg,
+    // Saves made before the vane count existed load as the asset's 16 vanes.
+    vaneCount: input.vaneCount ?? CHAMBER_FORM_DEFAULTS.vaneCount,
     outletRatio: input.outletRatio ?? CHAMBER_FORM_DEFAULTS.outletRatio,
     lengthOverride: input.lengthOverride,
     hollowLength: input.hollowLength,

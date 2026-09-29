@@ -136,6 +136,7 @@ export function ChamberPage() {
     footAngleDeg: 'Foot angle',
     partScale: 'Part scale',
     vaneAngleDeg: 'Vane angle',
+    vaneCount: 'Guide vane count',
     outletRatio: 'Outlet ratio',
     dFirst: 'Runner case Ø',
     dMiddle: 'Guide vanes Ø',

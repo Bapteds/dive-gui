@@ -187,6 +187,7 @@ Extends `tsconfig.base.json`; `module`/`moduleResolution` `NodeNext` (hence impo
 - `CHAMBER_GRID_MM = 50`; `snapToChamberGrid(valueMm: number): number` (rounds to the nearest multiple of 50).
 - `CHAMBER_DIMENSION_MAX_MM = 100_000`. Upper bound for any entered dimension (API, web form).
 - `ChamberConstraint` (`min?`, `max?`, `exact?`).
+- `CHAMBER_VANE_COUNTS = [16, 18]`, `ChamberVaneCount`, `CHAMBER_VANE_COUNT_DEFAULT = 16` (spec 2026-09-29-guide-vane-count; used by the API schema/service and the web form).
 - `CHAMBER_VARIANTS = ['stepped', 'hollow']`, `ChamberVariant`. `CHAMBER_WALL_THICKNESS_MM = 50`.
 - `CHAMBER_D_FIRST_OVER_LAST = 1.14703`, `CHAMBER_D_MIDDLE_OVER_LAST = 0.8`. Default diameter ratios; the Python script keeps its own copy, which must be kept in sync.
 
@@ -197,7 +198,7 @@ Extends `tsconfig.base.json`; `module`/`moduleResolution` `NodeNext` (hence impo
 - `computeChamberGeneratorDims(input: { x1, x2, x3, x4?, centralDiameter?, centralHeight?, domeHeight? }): ChamberGeneratorDims`. `x4Auto = 0.9·9.81·X2·X3`; frame: 115 if X4 > 1560, otherwise if X4 ≤ 175 then 26 (X1 ≤ 940) or 46, otherwise 48 (X1 ≤ 683) or 62; length code `round((132.21 − 0.8294·R − 0.0825·X1 + 13.861·X3)/5)·5` clamped to 30..215; auto height `71.258 + 0.45856·Ø + 6.2368·L`; auto dome `79.609 + 0.21315·Ø`. An entered Ø rebases height and dome; an entered height does not change the dome. Pure function, no range validation.
 
 ### Chamber: build request, saves and output computation
-- `ChamberInput`. Body of `POST /chamber/build`: `x1..x3`, `x4?`, `constraints?`, `relationsMaster?`, `relations?`, `variant?`, `footAngleDeg?`, `guideVanes?`, `chamferEnabled?`, `feetEnabled?`, `vaneAngleDeg?` (45..55, base 50), `outletRatio?` (0.35..0.50), `partScale?`, `lengthOverride?`, `hollowLength?` (required for hollow), `wallThickness?`, `dFirst?`, `dMiddle?`, `centralDiameter?`, `centralHeight?`, `domeHeight?`, `simplifyGenerator?`.
+- `ChamberInput`. Body of `POST /chamber/build`: `x1..x3`, `x4?`, `constraints?`, `relationsMaster?`, `relations?`, `variant?`, `footAngleDeg?`, `guideVanes?`, `chamferEnabled?`, `feetEnabled?`, `vaneAngleDeg?` (45..55, base 50), `vaneCount?` (16 or 18; 18 = chord × 16/18 about the pivot, same solidity; guide vanes only), `outletRatio?` (0.35..0.50), `partScale?`, `lengthOverride?`, `hollowLength?` (required for hollow), `wallThickness?`, `dFirst?`, `dMiddle?`, `centralDiameter?`, `centralHeight?`, `domeHeight?`, `simplifyGenerator?`.
 - `CHAMBER_SAVE_NAME_MAX = 80`, `ChamberSaveOwner` (`id`, `fullName`), `ChamberSaveSummary` (`id`, `name`, `snapshot: ChamberInput`, `owner`, `createdAt`, `updatedAt`).
 - `ChamberStatus` (`within range`, `capped at max`, `raised to min`, `set exact`, `! min>max`, `from relation`).
 - `ChamberOutput` (`key`, `label`, `form`, `model`, `final`, `status`, `relationLabel?`, `cvError`, `confidence`, `refined`, `userDriven`, `noEffect?`).

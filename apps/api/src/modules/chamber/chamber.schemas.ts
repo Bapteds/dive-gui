@@ -7,6 +7,8 @@ import {
   CHAMBER_DIMENSION_MAX_MM,
   CHAMBER_INPUT_RANGES,
   CHAMBER_OUTPUT_KEYS,
+  CHAMBER_VANE_COUNT_DEFAULT,
+  CHAMBER_VANE_COUNTS,
   CHAMBER_VARIANTS,
   CHAMBER_X4_MAX,
 } from '@dive/shared';
@@ -59,6 +61,12 @@ export const chamberBuildSchema = z
     // swings about its own spindle by (vaneAngleDeg - 50). Range 45..55. Guide-vane
     // builds only. A different angle => a different cached build.
     vaneAngleDeg: z.number().finite().min(45).max(55).default(50),
+    // Number of guide vanes: 16 (the asset) or 18 (each chord scaled by 16/18 about
+    // its pivot, same solidity). Guide-vane builds only. 18 => a different cached
+    // build; 16 keeps the historical key (resolveGeometryParams omits it).
+    vaneCount: z
+      .union([z.literal(CHAMBER_VANE_COUNTS[0]), z.literal(CHAMBER_VANE_COUNTS[1])])
+      .default(CHAMBER_VANE_COUNT_DEFAULT),
     // Outlet inner/outer diameter ratio (0.35..0.50, default 0.45). The outlet's
     // outer diameter is X1; the inner diameter is outletRatio * outer. Guide-vane
     // builds only. A different ratio => a different cached build.
