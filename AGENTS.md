@@ -25,7 +25,7 @@ JWT auth and a super-admin back office sit on top.
 | `packages/shared` (`@dive/shared`) | API ↔ web contract (types, zod, error codes, catalogs, chamber model) |
 | `apps/mcp` (`@dive/mcp`) | MCP server exposing the REST API as tools |
 
-Production: Debian 12, **ESI OpenFOAM v2406** (openfoam.com, not .org), nginx + systemd, app in `/home/app`.
+Production: Ubuntu 24.04 (Proxmox VM; the docs long said Debian 12), **ESI OpenFOAM v2406** used by the API (openfoam.com, not .org; v2606 also installed), nginx + systemd, app in `/home/app`.
 
 ## 2. Session protocol (mandatory)
 

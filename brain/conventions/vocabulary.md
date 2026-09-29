@@ -54,7 +54,7 @@
 
 | Term | Meaning |
 |---|---|
-| **ESI OpenFOAM v2406** | openfoam.**com** edition targeted in production (Debian 12). Do not confuse with OpenFOAM.org (v11/v12): different CLI syntaxes. |
+| **ESI OpenFOAM v2406** | openfoam.**com** edition used by the API in production (v2606 is also installed on the server). Do not confuse with OpenFOAM.org (v11/v12): different CLI syntaxes. |
 | `0/`, `constant/`, `system/` | Initial fields / mesh and physical properties / numerical control of a case. |
 | `polyMesh`, `boundary` | OpenFOAM mesh; `constant/polyMesh/boundary` lists the patches. Rule: `0/*.boundaryField` must cover every patch. |
 | **Patch** | Named, typed boundary surface (`wall`, `patch`, `inlet`, `outlet`, `empty`, `cyclicAMI`…). |
