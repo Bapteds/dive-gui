@@ -1,6 +1,6 @@
 # Guide vane count (16 or 18) — design
 
-> **Status**: approved (2026-09-29; every OPEN question resolved with its recommended option, see the decision note at the end) · **Date**: 2026-09-29 · **Workstream**: WS-B (Chamber Creation v2, branch `feat/chamber-v2-cfd-loop`)
+> **Status**: implemented (2026-09-29, WS-B; approved the same day with every OPEN question resolved by its recommended option, see the decision note at the end) · **Date**: 2026-09-29 · **Workstream**: WS-B (Chamber Creation v2, branch `feat/chamber-v2-cfd-loop`)
 > **Area**: shared, backend, python (`apps/api/scripts/buildChamber.py`), frontend, tests
 > **Related**: `brain/features/chamber-creation.md` §3.7, §3.8, §3.9, §4.3, §4.4, §4.5, §5.1; `brain/playbooks/add-chamber-input-or-parameter.md`; `brain/playbooks/change-chamber-geometry.md`; `brain/specs/2026-08-03-guide-vane-throat-design.md`, `2026-08-13-guide-vane-step-export-design.md`, `2026-08-31-vane-te-rounding-design.md`; WS-A `2026-09-29-vane-pocket-runner-case-design.md` (same builder region, lands first).
 

@@ -91,6 +91,15 @@ FOOT_ANGLES_DEG = (0, 90, 180, 270)     # azimuth positions (aligned with the in
 VANE_BASE_ANGLE_DEG = 50.0   # the guide-vane open angle baked into the asset. The
                              # vaneAngleDeg param is this ABSOLUTE angle; the pitch
                              # actually applied is (vaneAngleDeg - VANE_BASE_ANGLE_DEG).
+VANE_COUNTS = (16, 18)       # guide vane counts accepted (vaneCount param). 16 is the
+                             # asset; with n vanes each blade is scaled in XY by
+                             # bladeCount / n about its pivot (same solidity, same
+                             # pivot radius) and the ring step is 360 / n (spec
+                             # 2026-09-29-guide-vane-count).
+VANE_MIN_GAP = 2e-3          # smallest gap (m) allowed between two neighbouring blade
+                             # outlines (2 x VANE_SKIN_TOL: below it the skin mask
+                             # cannot tell the blades apart and a mesher cannot fill
+                             # the slot). Never reached with the asset over 45..55 deg.
 VANE_OUTLET_SAFE_MARGIN = 0.97   # outlet outer radius clamp: stay this fraction inside
                                  # the vane's own inner working radius (R_anchor in
                                  # make_vane_patches) so the blade always has shroud/hub
@@ -480,7 +489,7 @@ def _revolve_open(np, trimesh, profile_rz, cx, cy, sections=128):
 
 def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_angle_deg=0.0,
                        outlet_outer_d=None, outlet_ratio=None, d_ring=None,
-                       casing_overshoot=FLOOR_OVERCUT):
+                       casing_overshoot=FLOOR_OVERCUT, vane_count=16):
     """Return {patch_name: Trimesh} for the guide-vane throat: the SOLID vane
     surfaces (blades + contoured hub/shroud walls + the outlet annulus) that sit
     as obstacles in the fluid box, centred at (cx, cy).
@@ -503,7 +512,15 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
     IDENTITY at the vane's own inner working radius (R_anchor) — so the vane band,
     hub roof and shroud brim/wall never move; only the outlet throat/fillet reshapes.
     Returns two extra float keys, "outlet_ri"/"outlet_ro", the resolved (possibly
-    clamped) rims — main() uses these downstream instead of recomputing them."""
+    clamped) rims — main() uses these downstream instead of recomputing them.
+
+    `vane_count` (16 or 18) sets the number of blades in the ring, evenly spaced
+    every 360/n degrees. With n other than the asset's bladeCount (16) each blade is
+    scaled UNIFORMLY in XY by bladeCount/n about its own pivot, before the pitch:
+    the chord shrinks so the cascade solidity n*c/(2 pi R_pivot) is unchanged, the
+    pivot circle does not move, and the airfoil stays similar (the STEP fit follows
+    it). Z is not scaled (the span still fills the HLE band). R_anchor is measured
+    on the scaled blade, so the outlet clamp follows the real blade."""
     adir = _vane_assets_dir()
     meta = _load_vane_meta()
     blade = trimesh.load(os.path.join(adir, "guideVanes_blade.stl"))
@@ -554,9 +571,15 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
                    [np.sin(pang), np.cos(pang), 0, 0],
                    [0, 0, 1, 0], [0, 0, 0, 1]])
 
+    # Chord scale for a non-asset vane count (spec 2026-09-29-guide-vane-count):
+    # uniform XY scale about the pivot. Scale and rotation about the same point
+    # commute, so both ride in the pitch block; 16 vanes skips it (bit-identical).
+    k_chord = int(meta["bladeCount"]) / float(vane_count)
     base = place(blade)
-    if vane_angle_deg:
+    if vane_angle_deg or k_chord != 1.0:
         base.apply_translation((-piv_x, -piv_y, 0))     # pitch about the spindle
+        if k_chord != 1.0:
+            base.apply_scale((k_chord, k_chord, 1.0))
         base.apply_transform(Rp)
         base.apply_translation((piv_x, piv_y, 0))
     R_anchor = float(np.hypot(base.vertices[:, 0] - cx, base.vertices[:, 1] - cy).min())
@@ -733,9 +756,9 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
     base.vertices = _bv
 
     blades = []
-    for k in range(int(meta["bladeCount"])):
+    for k in range(int(vane_count)):
         b = base.copy()
-        ang = np.radians(k * meta["bladeAngleStepDeg"])
+        ang = np.radians(k * 360.0 / vane_count)   # 22.5 deg exactly for 16
         R = np.array([[np.cos(ang), -np.sin(ang), 0, 0],
                       [np.sin(ang), np.cos(ang), 0, 0],
                       [0, 0, 1, 0], [0, 0, 0, 1]])
@@ -997,7 +1020,7 @@ def _hub_core_solid(np, trimesh, throat_mesh, cx, cy, z_top, nb=200, nfine=90):
 # --- guide-vane trailing-edge rounding ---------------------------------------
 # The CAD blade ends in a BLUNT trailing edge: a flat base ~1.11% of the chord
 # wide meeting the two blade surfaces at sharp corners. Those corners force
-# degenerate cells / heavy local refinement on the mesher at all 16 blades, so
+# degenerate cells / heavy local refinement on the mesher at every blade, so
 # every blade cross-section is rounded with a TANGENT arc before it is extruded
 # (_vane_prisms, the mesh/triSurface path) or lofted (build_vane_step_solid, the
 # STEP path — same rule, so the CAD keeps matching the meshed fluid and the
@@ -1110,6 +1133,19 @@ def _vane_prisms(np, trimesh, blades_mesh, cx, cy, z0, z1):
         prisms.append(pr)
         outlines.append(np.asarray(poly.exterior.coords, dtype=float)[:-1])
     return prisms, outlines
+
+
+def _min_blade_gap(outlines):
+    """Smallest XY distance (m) between any two blade outlines (0 when two touch or
+    overlap). All pairs, not just i/i+1: blades_mesh.split() does not return the
+    blades in azimuth order (153 pairs at 18 vanes is negligible)."""
+    from shapely.geometry import Polygon
+    polys = [Polygon(o) for o in outlines]
+    gap = float("inf")
+    for i in range(len(polys)):
+        for j in range(i + 1, len(polys)):
+            gap = min(gap, float(polys[i].distance(polys[j])))
+    return gap
 
 
 def _shroud_casing_solid(np, trimesh, shroud_mesh, cx, cy, d_last, nb=200, nfine=160,
@@ -1378,6 +1414,9 @@ def main():
         # +-5 deg about the base (45..55). Only used by guide-vane builds.
         vane_angle = float(P.get("vaneAngleDeg", VANE_BASE_ANGLE_DEG))
         vane_pitch = vane_angle - VANE_BASE_ANGLE_DEG   # signed offset actually applied
+        # Guide vane count (16 = the asset, or 18). Old params.json files and every
+        # 16-vane build omit the key. Only used by guide-vane builds.
+        vane_count = P.get("vaneCount", 16)
         # Uniform scale for the WHOLE internal assembly (the three cylinders, the
         # hollow cup / central cylinder / dome, the four feet, and the guide vanes
         # which key off d_last). The box (width/length/height), the chamfers, and
@@ -1388,6 +1427,9 @@ def main():
         part_scale = float(P.get("partScale", 1.0))
 
         # --- common validation (on the UNSCALED model values) ---------------
+        if vane_count not in VANE_COUNTS or isinstance(vane_count, bool):
+            raise ValueError("Guide vane count must be 16 or 18 (got %s)." % (vane_count,))
+        vane_count = int(vane_count)
         if min(width, height, length, d_last, h_middle) <= 0:
             raise ValueError(
                 "B Kammer, H Kammer, Length, LE (Durchmesser) and HLE must all be "
@@ -1868,7 +1910,7 @@ def main():
                 trimesh, np, target_x, target_y, z_mid_base, z_mid_top, d_last,
                 vane_angle_deg=vane_pitch, d_ring=d_middle,
                 outlet_outer_d=num_opt("outletOuterD"), outlet_ratio=num_opt("outletRatio"),
-                casing_overshoot=casing_overshoot)
+                casing_overshoot=casing_overshoot, vane_count=vane_count)
             vane_outlet_ri = vane_patches["outlet_ri"]
             vane_outlet_ro = vane_patches["outlet_ro"]
 
@@ -1964,6 +2006,21 @@ def main():
                                                     vane_patches["guide_vanes"],
                                                     target_x, target_y, z_duct_bottom,
                                                     z_mid_top + 2.0 * FLOOR_OVERCUT)
+            # Neighbouring blades must not touch (spec 2026-09-29-guide-vane-count,
+            # R2), checked on the real outlines before the expensive union. It cannot
+            # fire with the asset over 45..55 deg (smallest gap ~0.53 chord); it
+            # guards a future angle range or asset.
+            if len(_blade_outlines) != vane_count:
+                raise RuntimeError("expected %d blade sections, found %d"
+                                   % (vane_count, len(_blade_outlines)))
+            _gap = _min_blade_gap(_blade_outlines)
+            if _gap < VANE_MIN_GAP:
+                raise ValueError(
+                    "Neighbouring guide vanes touch or overlap: with %d vanes at a Vane "
+                    "angle of %g\u00b0, the closest gap between two blades is %s (at "
+                    "least %s is needed). Increase the Vane angle%s."
+                    % (vane_count, vane_angle, _mm(_gap), _mm(VANE_MIN_GAP),
+                       " or set Guide vane count to 16" if vane_count != 16 else ""))
             _solid = trimesh.boolean.union([_core, _casing] + _prisms, engine="manifold")
             _fd, _tmp_stl = tempfile.mkstemp(suffix=".stl")
             os.close(_fd)
