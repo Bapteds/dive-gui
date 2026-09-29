@@ -3070,33 +3070,41 @@ export function blankGeneratorHeightRefusal(
  * Tolerance (mm, on the SCALED diameters) within which a typed Runner case Ø
  * counts as equal to LE Ø in a guide-vane build. Mirrors `SNAP_D_TOL` of
  * buildChamber.py (0.005 m): within it the builder snaps the runner case flush
- * with LE Ø and warns; further below it refuses.
+ * with LE Ø and warns; further below it builds the 20 mm ledge (WS-A v2).
  */
 export const CHAMBER_RUNNER_CASE_SNAP_MM = 5;
 
 /**
- * Guide vanes carve the whole disk r < LE Ø/2 out of the runner case (first
- * cylinder) and place the distributor inside it, so a typed Runner case Ø
- * (`dFirst`) below LE Ø would silently erase the runner case. Refuse when
- * partScale x (LE Ø - dFirst) exceeds CHAMBER_RUNNER_CASE_SNAP_MM (the builder
- * snaps smaller gaps). The auto Runner case Ø (CHAMBER_D_FIRST_OVER_LAST x LE Ø)
- * is always larger, and vane-less builds keep a real first cylinder: both pass.
- * Returns the refusal message, else null. Spec 2026-09-29 (WS-A).
+ * Minimum margin (mm) of Runner case Ø over Runner Ø (X1, the outlet outer
+ * diameter) in a guide-vane build: the runner case wall stays at least half of
+ * it (radius) outside the outlet passage. Mirrors `RUNNER_CASE_OUTLET_CLEARANCE`
+ * of buildChamber.py (0.020 m). Spec 2026-09-29-runner-case-below-le.
  */
-export function runnerCaseBelowLeRefusal(
+export const CHAMBER_RUNNER_CASE_OUTLET_CLEARANCE_MM = 20;
+
+/**
+ * Guide vanes: a typed Runner case Ø (`dFirst`) below LE Ø gets a runner case
+ * wall that stops 20 mm under the shroud brim plus a ledge out to LE Ø/2 (the
+ * builder's WS-A v2 geometry), so only a runner case that would not clear the
+ * outlet is refused: partScale x dFirst < X1 + CHAMBER_RUNNER_CASE_OUTLET_CLEARANCE_MM
+ * (the outlet follows X1 unscaled). The auto Runner case Ø and vane-less builds
+ * are never refused here. Returns the refusal message, else null.
+ */
+export function runnerCaseClearanceRefusal(
   input: ChamberInput,
   outputs: ChamberOutput[],
 ): string | null {
   if (input.guideVanes !== true || input.dFirst == null) return null;
   const dLast = outputs.find((o) => o.key === 'dLast')!.final;
   const s = input.partScale ?? 1;
-  if (!Number.isFinite(dLast) || s * (dLast - input.dFirst) <= CHAMBER_RUNNER_CASE_SNAP_MM) {
-    return null;
-  }
+  const minMm = input.x1 + CHAMBER_RUNNER_CASE_OUTLET_CLEARANCE_MM;
+  if (!Number.isFinite(dLast) || s * input.dFirst >= minMm - 1e-6) return null;
   const mm = (v: number) => `${Math.round(v)} mm`;
+  const scaled = Math.abs(s - 1) > 1e-9 ? `, ${mm(s * input.dFirst)} at Part scale ${s}` : '';
   return (
-    `With guide vanes the distributor sits inside the runner case: ` +
-    `Runner case Ø (${mm(input.dFirst)}) must be at least LE Ø (${mm(dLast)}). ` +
+    `With guide vanes the runner case must clear the outlet: ` +
+    `Runner case Ø (${mm(input.dFirst)}${scaled}) must be at least Runner Ø + ` +
+    `${CHAMBER_RUNNER_CASE_OUTLET_CLEARANCE_MM} mm (${mm(minMm)}). ` +
     `Increase Runner case Ø, clear it (auto ≈ ${mm(CHAMBER_D_FIRST_OVER_LAST * dLast)}), ` +
     `or turn Guide vanes off.`
   );

@@ -71,8 +71,16 @@ CONE_CHAMFER_SIZE = 0.05              # default Cone chamfer size (m, x partScal
                                       # foot-chamfer). Mirrors CHAMBER_CONE_CHAMFER_SIZE_MM.
 SNAP_D_TOL = 0.005                    # guide vanes: a Runner case Ø within 5 mm (scaled
                                       # diameters) of LE Ø is built flush with it; further
-                                      # below it is refused (spec 2026-09-29). Mirrors
+                                      # below it gets the LEDGE_GAP ledge (WS-A v2). Mirrors
                                       # CHAMBER_RUNNER_CASE_SNAP_MM of @dive/shared.
+RUNNER_CASE_OUTLET_CLEARANCE = 0.020  # guide vanes: a typed Runner case Ø must be at
+                                      # least Runner Ø (X1, unscaled) + this, so its wall
+                                      # stays 10 mm (radius) outside the outlet passage.
+                                      # Mirrors CHAMBER_RUNNER_CASE_OUTLET_CLEARANCE_MM.
+LEDGE_GAP = 0.020                     # guide vanes, Runner case Ø below LE Ø: the runner
+                                      # case wall stops this far (x partScale) under the
+                                      # shroud brim, where the ledge runs out to LE Ø/2
+                                      # (spec 2026-09-29-runner-case-below-le).
 MIN_LAST_CYL_H = 0.05                 # stepped: min height kept for the last (top)
                                       # cylinder when up-scaling pushes the shoulder up
 CHAMFER_END = ">Y"                    # the chamfered end (a width-side)
@@ -1060,12 +1068,14 @@ def _fit_airfoil(np, src, tgt):
 
 def build_vane_step_solid(cq, np, trimesh, result, core_prof, cas_prof, airfoil,
                           blades_mesh, cx, cy, z0, z1, fluid_volume,
-                          vol_tol=VANE_STEP_VOL_TOL):
+                          vol_tol=VANE_STEP_VOL_TOL, ledge_cut_prof=None):
     """Return the OCC BREP fluid Workplane with the vane distributor carved, or None
     when it cannot be trusted (no blades, invalid solid, volume mismatch, or any
     error). Hub/shroud revolve the analytic profiles about the LOCAL-Y axis (global
     Z); each blade is the clean airfoil fitted onto its placed mesh section, lofted
-    through a periodic spline and extruded across [z0, z1]."""
+    through a periodic spline and extruded across [z0, z1]. `ledge_cut_prof` (the
+    WS-A v2 runner case ledge) is the (r, z) loop of the fluid annulus under the
+    ledge: each blade is clipped by it, as the mesh prisms are."""
     def _revolve(prof):
         # (r, z) on the XZ workplane -> revolve about local Y (== global Z); (0,0,1)
         # is degenerate. Then move onto the part axis (cx, cy).
@@ -1076,6 +1086,7 @@ def build_vane_step_solid(cq, np, trimesh, result, core_prof, cas_prof, airfoil,
     dbg = os.environ.get("CHAMBER_STEP_DEBUG")
     n = len(airfoil)
     dist = _revolve(core_prof).union(_revolve(cas_prof))
+    ledge_cut = _revolve(ledge_cut_prof[:-1]) if ledge_cut_prof else None
     nb = 0
     for bl in blades_mesh.split(only_watertight=False):
         bz = np.asarray(bl.vertices, dtype=float)[:, 2]
@@ -1099,6 +1110,8 @@ def build_vane_step_solid(cq, np, trimesh, result, core_prof, cas_prof, airfoil,
             bv = blade.val()
             sys.stderr.write("STEPDBG blade %d fit_c=%.4f dev=%.5f valid=%s vol=%.6f\n"
                              % (nb, c, dev, bv.isValid(), bv.Volume()))
+        if ledge_cut is not None:
+            blade = blade.cut(ledge_cut)
         dist = dist.union(blade)
         nb += 1
     if nb == 0:
@@ -1860,20 +1873,38 @@ def main():
 
         # Guide vanes carve the whole disk r < d_last/2 out of the runner case (first
         # cylinder) and seat the distributor inside it, so the runner case only keeps
-        # its outer ring [d_last/2, d_first/2] (spec 2026-09-29). A typed Runner case
-        # below LE (beyond SNAP_D_TOL) used to be erased silently: refuse it. Within
-        # SNAP_D_TOL it is snapped flush with LE (no ring, no casing overshoot). The
-        # auto ratio is always larger. From here on d_first is the EFFECTIVE runner
-        # case (feet, fit check, pocket radius, junction labels).
+        # its outer ring [d_last/2, d_first/2] (spec 2026-09-29). Within SNAP_D_TOL of
+        # LE a typed Runner case is snapped flush with LE (no ring, no casing
+        # overshoot). Further below LE (WS-A v2, spec 2026-09-29-runner-case-below-le)
+        # the runner case wall stands at d_first/2 up to LEDGE_GAP under the shroud
+        # brim, where a ledge runs out to LE/2 (runner_case_ledge; built on the
+        # shroud casing below). It must clear the outlet: d_first >= X1 +
+        # RUNNER_CASE_OUTLET_CLEARANCE (X1 = outletOuterD, not scaled), else refused.
+        # The auto ratio is always larger. From here on d_first is the EFFECTIVE
+        # runner case (feet, fit check, pocket radius, junction labels).
         runner_case_snapped = False
+        runner_case_ledge = False
         if guide_vanes and d_first_override is not None:
-            if d_first < d_last - SNAP_D_TOL - 1e-9:
+            _x1 = num_opt("outletOuterD")
+            _auto = _mm(d_last / part_scale * RATIO_D_FIRST_OVER_LAST)
+            if _x1 is not None and d_first < _x1 + RUNNER_CASE_OUTLET_CLEARANCE - 1e-9:
                 raise ValueError(
-                    "With guide vanes the distributor sits inside the runner case: "
-                    "Runner case \u00d8 (%s) must be at least LE \u00d8 (%s). Increase "
+                    "With guide vanes the runner case must clear the outlet: Runner case "
+                    "\u00d8 (%s%s) must be at least Runner \u00d8 + 20 mm (%s). Increase "
                     "Runner case \u00d8, clear it (auto \u2248 %s), or turn Guide vanes off."
-                    % (_mm(d_first_override), _mm(d_last / part_scale),
-                       _mm(d_last / part_scale * RATIO_D_FIRST_OVER_LAST)))
+                    % (_mm(d_first_override),
+                       "" if abs(part_scale - 1.0) < 1e-9
+                       else ", %s at Part scale %g" % (_mm(d_first), part_scale),
+                       _mm(_x1 + RUNNER_CASE_OUTLET_CLEARANCE), _auto))
+            if d_first < d_last - SNAP_D_TOL - 1e-9:
+                if _x1 is None:
+                    # Very old params (no X1): no analytic shroud to build the ledge on.
+                    raise ValueError(
+                        "With guide vanes the distributor sits inside the runner case: "
+                        "Runner case \u00d8 (%s) must be at least LE \u00d8 (%s). Increase "
+                        "Runner case \u00d8, clear it (auto \u2248 %s), or turn Guide vanes "
+                        "off." % (_mm(d_first_override), _mm(d_last / part_scale), _auto))
+                runner_case_ledge = True
             if abs(d_first - d_last) <= SNAP_D_TOL + 1e-9:
                 print("WARNING: Runner case \u00d8 %s is within 5 mm of LE \u00d8 %s: "
                       "built flush with it." % (_mm(d_first_override),
@@ -2096,10 +2127,12 @@ def main():
             + ("Part scale, Runner case \u00d8, Guide vanes \u00d8 or Cone chamfer size."
                if le_c else "Part scale, Runner case \u00d8 or Guide vanes \u00d8."))
 
-        # The feet legs keep their clearance from the runner case and from the
-        # LE part widened by the Cone chamfer (d_feet: the diameter they anchor
-        # from); the planks still weld onto the LE part at LE \u00d8/2.
-        d_feet = max(d_first, d_last + 2 * le_c) if le_c else d_first
+        # The feet legs keep their clearance from the runner case, from the LE part
+        # widened by the Cone chamfer and, with guide vanes, from the distributor /
+        # ledge at LE \u00d8/2 when the runner case is smaller (WS-A v2) (d_feet: the
+        # diameter they anchor from); the planks still weld onto the LE part at LE \u00d8/2.
+        d_feet = (max(d_first, d_last + 2 * le_c) if (le_c or guide_vanes)
+                  else d_first)
 
         if feet_enabled:
             # Exact swung plan of the four legs, mirroring make_feet (the planks
@@ -2294,6 +2327,8 @@ def main():
             # z_mid_top so the throat->roof corner is preserved (see _hub_core_solid).
             _hub_throat = trimesh.util.concatenate(
                 [vane_patches["hub_throat"], _hub_ext])
+            z_ledge = None            # WS-A v2 ledge height (set with the casing)
+            _ledge_cut_prof = None    # fluid annulus under the ledge (clips the prisms)
             if vane_patches.get("hub_profile") is not None:
                 # Analytic core: revolve the closed hub silhouette (duct bottom ->
                 # rim -> P1 -> P2 -> P3) capped flat at z_mid_top from P3 in to the
@@ -2314,11 +2349,37 @@ def main():
                 # -> inner wall down (closed by revolve).
                 _sp = vane_patches["shroud_profile"]
                 _rin, _rout = float(_sp[0, 0]), float(_sp[-1, 0])
-                _cas_prof = ([(_rin, z_duct_bottom), (_rout, z_duct_bottom)]
-                             + [(float(r), float(z)) for r, z in _sp[::-1]]
-                             + [(_rin, z_duct_bottom)])   # close the annular loop (first==last)
+                if runner_case_ledge:
+                    # WS-A v2 ledge: the casing keeps r < d_first/2 from the duct
+                    # bottom up to z_ledge, then the full annulus out to LE/2 (no
+                    # overshoot here: _rout == LE/2) up to the shroud floor; the fluid
+                    # wraps under the ledge. z_ledge = LEDGE_GAP under the brim, or
+                    # under the shroud floor at the runner-case radius when that radius
+                    # is still on the fillet (the floor there is below the brim).
+                    _r_rc = d_first / 2.0
+                    _floor_rc = float(np.interp(_r_rc, _sp[:, 0], _sp[:, 1]))
+                    z_ledge = min(float(_sp[-1, 1]), _floor_rc) - LEDGE_GAP * part_scale
+                    _cas_prof = ([(_rin, z_duct_bottom), (_r_rc, z_duct_bottom),
+                                  (_r_rc, z_ledge), (_rout, z_ledge)]
+                                 + [(float(r), float(z)) for r, z in _sp[::-1]]
+                                 + [(_rin, z_duct_bottom)])
+                    # The fluid annulus under the ledge, pushed 1 mm into the casing
+                    # (inside and above) so clipping the vane prisms with it leaves
+                    # no coincident face: blades whose outline passes over the
+                    # runner-case radius must not hang down into it as pillars.
+                    _ledge_cut_prof = [(_r_rc - 1e-3, z_duct_bottom - FLOOR_OVERCUT),
+                                       (_rout + 0.05, z_duct_bottom - FLOOR_OVERCUT),
+                                       (_rout + 0.05, z_ledge + 1e-3),
+                                       (_r_rc - 1e-3, z_ledge + 1e-3),
+                                       (_r_rc - 1e-3, z_duct_bottom - FLOOR_OVERCUT)]
+                else:
+                    _cas_prof = ([(_rin, z_duct_bottom), (_rout, z_duct_bottom)]
+                                 + [(float(r), float(z)) for r, z in _sp[::-1]]
+                                 + [(_rin, z_duct_bottom)])   # close the annular loop (first==last)
                 _casing = _revolve_profile(np, trimesh, _densify(np, _cas_prof),
                                            target_x, target_y)
+            elif runner_case_ledge:
+                raise RuntimeError("the runner case ledge needs the analytic shroud profile")
             else:
                 _casing = _shroud_casing_solid(np, trimesh, vane_patches["shroud"],
                                                target_x, target_y, d_last,
@@ -2347,6 +2408,11 @@ def main():
                     "least %s is needed). Increase the Vane angle%s."
                     % (vane_count, vane_angle, _mm(_gap), _mm(VANE_MIN_GAP),
                        " or set Guide vane count to 16" if vane_count != 16 else ""))
+            if _ledge_cut_prof is not None:
+                _ledge_cut = _revolve_profile(np, trimesh, _densify(np, _ledge_cut_prof),
+                                              target_x, target_y)
+                _prisms = [trimesh.boolean.difference([_p, _ledge_cut], engine="manifold")
+                           for _p in _prisms]
             _solid = trimesh.boolean.union([_core, _casing] + _prisms, engine="manifold")
             _fd, _tmp_stl = tempfile.mkstemp(suffix=".stl")
             os.close(_fd)
@@ -2458,8 +2524,18 @@ def main():
                 return _names.index(nm)
             _cwi, _wli = _idx("cylinder_walls"), _idx("walls")
             _band = (_fz > _z_brim - 2e-3) & (_fz < z_mid_base + 2e-3)
-            # the runner-case wall (vertical, below the ring top)
-            _who[_vert & (np.abs(_fr - _r_case) < 3e-3) & (_fz < z_mid_base)] = _cwi
+            # the runner-case wall (vertical, below the ring top; below the ledge
+            # when the runner case is smaller than LE)
+            _who[_vert & (np.abs(_fr - _r_case) < 3e-3)
+                 & (_fz < (z_ledge if runner_case_ledge else z_mid_base))] = _cwi
+            if runner_case_ledge:
+                # WS-A v2 (spec 2026-09-29-runner-case-below-le §4): the ledge
+                # underside -> cylinder_walls, the band at LE/2 between the ledge
+                # and the brim (the distributor casing) -> shroud.
+                _who[_hor & (np.abs(_fz - z_ledge) < 2e-3)
+                     & (_fr > _r_case - 1e-3) & (_fr < _r_env + 1e-3)] = _cwi
+                _who[_vert & (np.abs(_fr - _r_env) < 3e-3)
+                     & (_fz > z_ledge - 1e-3) & (_fz < _z_brim + 1e-3)] = _si
             # between the brim and the ring top: ring top -> cylinder_walls, brim -> shroud
             _who[_hor & _band & (_fr > _r_env + 1e-3) & (_fr < _r_case + 3e-3)] = _cwi
             _who[_hor & _band & (_fr > vane_outlet_ro + 3e-3) & (_fr < _r_env - 1e-3)] = _si
@@ -2650,7 +2726,7 @@ def main():
                         cq, np, trimesh, result, _core_prof_ref, _cas_prof_ref, airfoil,
                         vane_patches["guide_vanes"], target_x, target_y,
                         z_duct_bottom, z_mid_top + 2.0 * FLOOR_OVERCUT,
-                        float(fluid_F.volume))
+                        float(fluid_F.volume), ledge_cut_prof=_ledge_cut_prof)
                 except Exception as _step_exc:  # noqa: BLE001
                     sys.stderr.write("WARN: OCC vane STEP reconstruction failed: %s\n" % _step_exc)
             if occ_fluid is not None:

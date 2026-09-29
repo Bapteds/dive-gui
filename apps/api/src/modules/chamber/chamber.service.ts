@@ -24,7 +24,7 @@ import {
   chamberSpiralBoxDims,
   chamberSpiralInputs,
   chamberSpiralModelInput,
-  runnerCaseBelowLeRefusal,
+  runnerCaseClearanceRefusal,
   computeChamberGeneratorDims,
   computeChamberOutputs,
   nonPositiveChamberFinals,
@@ -503,9 +503,9 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
   const generatorRefusal = blankGeneratorHeightRefusal(input, outputs);
   if (generatorRefusal) throw new AppError(422, 'VALIDATION_ERROR', generatorRefusal);
 
-  // Guide vanes carve r < LE Ø/2 out of the runner case: a typed Runner case Ø
-  // below LE Ø (beyond the builder's 5 mm snap) would erase it (spec 2026-09-29).
-  const runnerCaseRefusal = runnerCaseBelowLeRefusal(input, outputs);
+  // Guide vanes: a typed Runner case Ø must clear the outlet (Runner Ø + 20 mm);
+  // below LE Ø the builder adds the 20 mm ledge (spec 2026-09-29-runner-case-below-le).
+  const runnerCaseRefusal = runnerCaseClearanceRefusal(input, outputs);
   if (runnerCaseRefusal) throw new AppError(422, 'VALIDATION_ERROR', runnerCaseRefusal);
 
   // The spiral step runs BEFORE hashing, so the build key covers the actual

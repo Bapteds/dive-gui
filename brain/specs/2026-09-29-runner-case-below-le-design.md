@@ -1,6 +1,6 @@
 # Runner case Ø below LE Ø with guide vanes: 20 mm ledge
 
-> **Status**: approved (2026-09-29) · **Date**: 2026-09-29 · **Workstream**: WS-A v2 (branch `feat/chamber-v2-cfd-loop`)
+> **Status**: implemented (2026-09-29) · **Date**: 2026-09-29 · **Workstream**: WS-A v2 (branch `feat/chamber-v2-cfd-loop`)
 > **Amends**: `2026-09-29-vane-pocket-runner-case-design.md` (WS-A, implemented): its refusal "Runner case Ø below LE Ø − 5 mm" is replaced; the 5 mm snap, the thin-ring overshoot guard and the junction labels stay.
 > **Area**: shared + API (refusal), python, tests
 
