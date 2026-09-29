@@ -2479,6 +2479,12 @@ export const CHAMBER_VANE_COUNT_DEFAULT: ChamberVaneCount = 16;
 /** Default wall thickness (mm) of the hollow last cylinder in the 'hollow' variant. */
 export const CHAMBER_WALL_THICKNESS_MM = 50;
 
+/**
+ * Default Cone chamfer size (mm): both legs of the optional 45° chamfer on the
+ * inner top edge of the cone wall (With cone only; spec 2026-09-29-cone-chamfer).
+ */
+export const CHAMBER_CONE_CHAMFER_SIZE_MM = 50;
+
 // Fixed geometry ratios that derive the two secondary DIAMETERS from the model
 // outputs when a manual override is absent: consumed by the API
 // (resolveGeometryParams) and mirrored as the placeholder "auto" hints in the
@@ -2688,6 +2694,20 @@ export interface ChamberInput {
   hollowLength?: number;
   /** Wall thickness (mm) of the hollow last cylinder. Default CHAMBER_WALL_THICKNESS_MM. */
   wallThickness?: number;
+  /**
+   * Cone chamfer (With cone only): a 45° chamfer on the INNER top edge of the
+   * cone wall, so the mouth of the cone flares outward. Geometry-only (not part
+   * of the empirical model); ignored, and left out of the build key, in Closed
+   * generator or when false. Default false.
+   */
+  coneChamferEnabled?: boolean;
+  /**
+   * Cone chamfer size (mm): both legs of the 45° chamfer, scaled by partScale like
+   * the other part dimensions. At most the Wall thickness (equal = knife-edge rim)
+   * and the cone's inside depth (Cone length minus Wall thickness). Read only when
+   * coneChamferEnabled in With cone. Default CHAMBER_CONE_CHAMFER_SIZE_MM.
+   */
+  coneChamferSize?: number;
   /**
    * Manual override for the RUNNER CASE (first cylinder) diameter, in mm. Omitted =>
    * CHAMBER_D_FIRST_OVER_LAST × D_last. Scaled by partScale like the derived value.

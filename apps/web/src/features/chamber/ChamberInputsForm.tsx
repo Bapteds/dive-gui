@@ -45,6 +45,7 @@ export function ChamberInputsForm({
   isBuilding,
   variant,
   simplifyGenerator,
+  coneChamferEnabled,
   autoLengthMm,
   autoDims,
   relationsMaster,
@@ -58,6 +59,8 @@ export function ChamberInputsForm({
   variant: ChamberVariant;
   /** Current Simplify Generator state (hides the height/dome fields when on). */
   simplifyGenerator: boolean;
+  /** Current Cone chamfer state (shows the Cone chamfer size field when on). */
+  coneChamferEnabled: boolean;
   autoLengthMm: number | null;
   /** Auto (empirical) placeholders for the five manual dimension overrides. */
   autoDims: ChamberAutoDims;
@@ -362,6 +365,22 @@ export function ChamberInputsForm({
       )}
 
       {variant === 'hollow' && (
+        <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-bg p-3">
+          <input
+            type="checkbox"
+            {...register('coneChamferEnabled')}
+            className="mt-0.5 size-4 shrink-0 cursor-pointer rounded-sm border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40"
+          />
+          <span className="text-sm">
+            <span className="font-medium text-text">Cone chamfer</span>
+            <span className="mt-0.5 block text-text-secondary">
+              Cut a 45° chamfer on the inside of the cone rim so its mouth flares outward.
+            </span>
+          </span>
+        </label>
+      )}
+
+      {variant === 'hollow' && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field
             label="Cone length (mm)"
@@ -385,6 +404,19 @@ export function ChamberInputsForm({
               {...register('wallThickness', { setValueAs: numOrUndef })}
             />
           </Field>
+          {coneChamferEnabled && (
+            <Field
+              label="Cone chamfer size (mm)"
+              error={errors.coneChamferSize?.message}
+              helperText="Both legs of the 45° cut; at most the Wall thickness (default 50)"
+            >
+              <Input
+                type="number"
+                step="any"
+                {...register('coneChamferSize', { setValueAs: numOrUndef })}
+              />
+            </Field>
+          )}
           <Field
             label="Power (kW)"
             error={errors.x4?.message}

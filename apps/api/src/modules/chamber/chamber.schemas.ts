@@ -87,6 +87,13 @@ export const chamberBuildSchema = z
     lengthOverride: dimensionMm.optional(),
     hollowLength: dimensionMm.optional(),
     wallThickness: dimensionMm.optional(),
+    // Cone chamfer (With cone only): a 45° chamfer on the inner top edge of the
+    // cone wall (the mouth flares outward). Only when on in With cone do the flag
+    // and the size (blank => CHAMBER_CONE_CHAMFER_SIZE_MM) reach the builder, so
+    // an off chamfer never re-keys a build. The size bounds (<= Wall thickness,
+    // <= Cone length - Wall thickness) are the builder's (KO:) and the form's.
+    coneChamferEnabled: z.boolean().default(false),
+    coneChamferSize: dimensionMm.optional(),
     // Manual overrides for otherwise-derived dimensions (mm). Omitted => the fixed
     // empirical relation is used. dFirst/dMiddle apply to both variants; the three
     // central/dome ones only affect the hollow variant. A different value => a

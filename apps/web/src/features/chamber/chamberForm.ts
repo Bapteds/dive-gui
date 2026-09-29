@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  CHAMBER_CONE_CHAMFER_SIZE_MM,
   CHAMBER_D_FIRST_OVER_LAST,
   CHAMBER_D_MIDDLE_OVER_LAST,
   CHAMBER_DIMENSION_MAX_MM,
@@ -53,6 +54,10 @@ export interface ChamberFormValues {
   hollowLength?: number;
   /** Hollow wall thickness (mm); defaults to CHAMBER_WALL_THICKNESS_MM. */
   wallThickness?: number;
+  /** Cone chamfer: a 45° chamfer on the inner top edge of the cone wall (the mouth flares outward). With cone only. */
+  coneChamferEnabled: boolean;
+  /** Cone chamfer size (mm, both legs; at most the Wall thickness and the cone's inside depth); blank => 50 on the server. */
+  coneChamferSize?: number;
   /** Runner case (first cylinder) Ø (mm); blank => auto from D_last. Both variants. */
   dFirst?: number;
   /** Guide vanes / middle cylinder Ø (mm); blank => auto from D_last. Both variants. */
@@ -117,6 +122,8 @@ export const chamberFormSchema = z
     lengthOverride: optionalPositive,
     hollowLength: optionalPositive,
     wallThickness: optionalPositive,
+    coneChamferEnabled: z.boolean(),
+    coneChamferSize: optionalPositive,
     dFirst: optionalPositive,
     dMiddle: optionalPositive,
     simplifyGenerator: z.boolean(),
@@ -136,6 +143,27 @@ export const chamberFormSchema = z
         path: ['hollowLength'],
         message: 'Enter a cone length: the With cone design needs one.',
       });
+    }
+    // Cone chamfer bounds (the builder's R1/R2, spec 2026-09-29-cone-chamfer):
+    // instant feedback; the builder stays authoritative. Size = wall is allowed.
+    if (v.variant === 'hollow' && v.coneChamferEnabled && v.coneChamferSize != null) {
+      const wall = v.wallThickness ?? CHAMBER_WALL_THICKNESS_MM;
+      const fmt = (mm: number) => `${Math.round(mm)} mm`;
+      if (v.coneChamferSize > wall) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['coneChamferSize'],
+          message: `Must be at most the Wall thickness (${fmt(wall)})`,
+        });
+      } else if (v.hollowLength != null && v.coneChamferSize > v.hollowLength - wall) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['coneChamferSize'],
+          message: `Must be at most the inside depth of the cone (Cone length minus Wall thickness = ${fmt(
+            v.hollowLength - wall,
+          )})`,
+        });
+      }
     }
   });
 
@@ -160,6 +188,8 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   lengthOverride: undefined,
   hollowLength: 200,
   wallThickness: CHAMBER_WALL_THICKNESS_MM,
+  coneChamferEnabled: false,
+  coneChamferSize: CHAMBER_CONE_CHAMFER_SIZE_MM,
   dFirst: undefined,
   dMiddle: undefined,
   simplifyGenerator: false,
@@ -222,6 +252,9 @@ export function chamberInputToFormValues(input: ChamberInput): ChamberFormValues
     lengthOverride: input.lengthOverride,
     hollowLength: input.hollowLength,
     wallThickness: input.wallThickness,
+    // Saves made before the cone chamfer existed load with it off, at 50 mm.
+    coneChamferEnabled: input.coneChamferEnabled ?? CHAMBER_FORM_DEFAULTS.coneChamferEnabled,
+    coneChamferSize: input.coneChamferSize ?? CHAMBER_FORM_DEFAULTS.coneChamferSize,
     dFirst: input.dFirst,
     dMiddle: input.dMiddle,
     simplifyGenerator: input.simplifyGenerator ?? CHAMBER_FORM_DEFAULTS.simplifyGenerator,
