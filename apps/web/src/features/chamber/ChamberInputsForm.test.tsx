@@ -165,7 +165,7 @@ describe('ChamberInputsForm', () => {
     render(<Harness onValid={onValid} />);
     expect(screen.getByLabelText('Generator height (mm)')).toBeInTheDocument();
     expect(
-      screen.getByText('Blank = through the chamber top ≈ 2700 mm (min ≈ 1446 mm); a value closes it below'),
+      screen.getByText('Blank = through the chamber top ≈ 2700 mm (min ≈ 1446 + dome 289 = 1736 mm); a value closes it below'),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
@@ -198,7 +198,7 @@ describe('ChamberInputsForm', () => {
     );
     expect(screen.getByLabelText('Generator height (mm)')).toBeInTheDocument();
     expect(
-      screen.getByText(/Blank = through the chamber top ≈ 2700 mm \(min ≈ \d+ mm\)/),
+      screen.getByText(/Blank = through the chamber top ≈ 2700 mm \(min ≈ 1446 \+ dome 289 = 1736 mm\)/),
     ).toBeInTheDocument();
     expect(screen.queryByLabelText('Dome height (mm)')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Generator Ø (mm)')).toBeInTheDocument();

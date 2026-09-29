@@ -6,7 +6,7 @@
 
 ## 1. Where we are
 
-- **Last change** (2026-09-29, branch `fix/chamber-error-messages`): With cone + Simplify generator now refuses an H Kammer below LEB + the Gen Dim generator height (blank height), and every Chamber Creation error was rewritten in plain English (form names, mm, levers). Before that (2026-09-28): editable generator height, chamber enlargement removed (a chamber too small for its parts is refused, by design), Closed generator minimum height. Still to do: browser check, and **purge `/var/lib/dive/storage/chamber/*` when deploying** (`buildChamber.py` changed).
+- **Last change** (2026-09-29, branch `fix/chamber-error-messages`): With cone + Simplify generator now refuses an H Kammer below LEB + the Gen Dim generator height (blank height), and that minimum now includes the Gen Dim dome height in both designs (branch `fix/generator-min-dome`), and every Chamber Creation error was rewritten in plain English (form names, mm, levers). Before that (2026-09-28): editable generator height, chamber enlargement removed (a chamber too small for its parts is refused, by design), Closed generator minimum height. Still to do: browser check, and **purge `/var/lib/dive/storage/chamber/*` when deploying** (`buildChamber.py` changed).
 - **Branch**: `main`, which now contains the merge of `docs/brain` (brain reorganization, 2026-09-28) on top of `d43a6ce` (merge of PR #3 `feat/chamber-ui-feedback`). No known open PR.
 - **Version**: 1.0.x (v1.0.1 audit fixes included: every CRITICAL and HIGH finding).
 - **Last delivered work** (PR #3, 2026-08-31 → 2026-09-04): Chamber Creation.

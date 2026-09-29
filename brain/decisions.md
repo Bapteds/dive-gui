@@ -72,6 +72,7 @@
 | 2026-09-28 | **Generator height editable in both designs**: blank = through the chamber top, a value = closed flat-topped cylinder | User request. |
 | 2026-09-28 | **Closed generator, blank height: minimum generator height = Gen Dim v3 height** (H Kammer ≥ LEB + that height, × Part scale); the generator still runs through the top above it | User choice, after the LEOW check was rejected. |
 | 2026-09-29 | **Same minimum in With cone + Simplify generator** (blank height): H Kammer ≥ LEB + max(Cone length, Gen Dim v3 height), × Part scale | User report: the refusal only counted runner case + guide vanes + cone, not the generator part above the cone. |
+| 2026-09-29 | **The generator minimum includes the dome** (Closed generator and Simplify generator, blank height): minimum = Gen Dim generator height + Gen Dim dome height, although the dome is not modelled in these designs | User request: the dome belongs to the real generator and must be counted in the H Kammer check. |
 | 2026-09-28 | Chamber height refusals are **purely geometric**: refuse only when the built part would actually leave the chamber (typed generator height, cone / generator + dome stack). No check against a model height (LEOW / Gen Dim) for a generator that runs through the top | User correction: a model-height check (LEOW 2700) was merged then removed the same day because it blocked chambers where nothing sticks out. |
 
 ## Project organization
