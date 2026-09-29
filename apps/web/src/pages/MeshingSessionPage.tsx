@@ -7,6 +7,7 @@ import {
   CircleStop,
   Download,
   FileUp,
+  FolderInput,
   Loader2,
   Trash2,
   XCircle,
@@ -49,6 +50,8 @@ import { StlViewer } from '@/features/meshing/StlViewer';
 import { SnappyConfigForm } from '@/features/meshing/SnappyConfigForm';
 import { CfMeshConfigForm } from '@/features/meshing/CfMeshConfigForm';
 import { MeshResultViewer } from '@/features/meshing/MeshResultViewer';
+import { SendToProjectDialog } from '@/features/meshing/SendToProjectDialog';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 /**
  * MeshingSessionPage - one meshing session: manage STL surfaces (upload / preview
@@ -68,6 +71,7 @@ export function MeshingSessionPage() {
 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [sendOpen, setSendOpen] = useState(false);
 
   // A run exists (idle means none ever started) → poll its live log. The payload's
   // own status then drives the cadence and stops the poll once terminal.
@@ -204,6 +208,31 @@ export function MeshingSessionPage() {
                 Download case
               </Button>
             )}
+            {data.hasMesh &&
+              (running ? (
+                // aria-disabled (not the native attribute) keeps the button focusable
+                // so the tooltip can explain why it is unavailable.
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      aria-disabled="true"
+                      className="cursor-not-allowed border-border text-text-secondary hover:bg-transparent"
+                      onClick={(event) => event.preventDefault()}
+                    >
+                      <FolderInput strokeWidth={1.75} aria-hidden="true" />
+                      Send to project
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Wait for the mesh run to finish.</TooltipContent>
+                </Tooltip>
+              ) : (
+                <Button type="button" variant="secondary" onClick={() => setSendOpen(true)}>
+                  <FolderInput strokeWidth={1.75} aria-hidden="true" />
+                  Send to project
+                </Button>
+              ))}
             <Button
               type="button"
               variant="ghost"
@@ -285,6 +314,13 @@ export function MeshingSessionPage() {
           <MeshResultViewer sessionId={id} />
         </section>
       )}
+
+      <SendToProjectDialog
+        sessionId={id}
+        sessionName={data.name}
+        open={sendOpen}
+        onOpenChange={setSendOpen}
+      />
 
       <AlertDialog open={confirmDelete} onOpenChange={(open) => !deleteSession.isPending && setConfirmDelete(open)}>
         <AlertDialogContent>
