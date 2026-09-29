@@ -1,6 +1,6 @@
 # Index of every repository file
 
-> One line per file (544 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
+> One line per file (546 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
 
 Detail of a code file: open the sheet shown and search for the `## path/to/file` section. Documents: the description is their title and introduction line.
 
@@ -761,6 +761,8 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `brain/specs/2026-09-02-generator-dimensions-design.md` : Empirical generator dimensions (Gen Dim v3) — design
 - `brain/specs/2026-09-02-physical-input-names-design.md` : Physical names for X1–X4 (display only) — design
 - `brain/specs/2026-09-02-simplify-generator-design.md` : "Simplify Generator" option (hollow variant) — design
+- `brain/specs/2026-09-29-meshing-to-project-design.md` : Meshing session → project mesh transfer (WS-F) — design
+- `brain/specs/2026-09-29-vane-pocket-runner-case-design.md` : Guide-vane pocket robust to Runner case Ø close to or below LE Ø : Area: python (`apps/api/scripts/buildChamber.py`), shared + API (early refusal), tests
 
 ## `documents`
 
