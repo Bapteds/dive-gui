@@ -13,6 +13,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
+  CHAMBER_CONE_CHAMFER_SIZE_MM,
   CHAMBER_OUTPUT_KEYS,
   CHAMBER_VANE_COUNT_DEFAULT,
   CHAMBER_WALL_THICKNESS_MM,
@@ -239,6 +240,11 @@ function resolveGeometryParams(
     });
     params.wallThickness = wallMm * MM_TO_M;
     params.hollowLength = (input.hollowLength ?? 0) * MM_TO_M;
+    // Cone chamfer: only written when on, so every existing With cone key stays.
+    if (input.coneChamferEnabled) {
+      params.coneChamferEnabled = true;
+      params.coneChamferSize = (input.coneChamferSize ?? CHAMBER_CONE_CHAMFER_SIZE_MM) * MM_TO_M;
+    }
     params.centralDiameter = gen.resolved.centralDiameter * MM_TO_M;
     // Simplify Generator: no dome; the BUILDER pins the central cylinder
     // through the box top unless a generator height is typed (then a closed

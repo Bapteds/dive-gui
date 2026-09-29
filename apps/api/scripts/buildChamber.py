@@ -60,6 +60,10 @@ import zipfile
 RATIO_D_FIRST_OVER_LAST = 1.147030    # from the original Part.stl (2.81550/2.45460)
 RATIO_D_MIDDLE_OVER_LAST = 0.80       # middle = 0.80 x D_LAST (both variants)
 FLOOR_OVERCUT = 0.01                  # push the part below the floor so it opens
+CONE_CHAMFER_SIZE = 0.05              # With cone: default Cone chamfer size (m, both
+                                      # legs of the 45 deg cut on the inner top edge of
+                                      # the cone wall) when coneChamferSize is missing.
+                                      # Mirrors CHAMBER_CONE_CHAMFER_SIZE_MM of @dive/shared.
 SNAP_D_TOL = 0.005                    # guide vanes: a Runner case Ø within 5 mm (scaled
                                       # diameters) of LE Ø is built flush with it; further
                                       # below it is refused (spec 2026-09-29). Mirrors
@@ -212,7 +216,8 @@ def _mm(metres):
 
 
 def make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
-                     wall, hollow_len, c_dia, c_h, dome_h, omit_middle=False):
+                     wall, hollow_len, c_dia, c_h, dome_h, omit_middle=False,
+                     cone_chamfer=None):
     """The 'hollow' variant (base of the FIRST at z = 0), a union of:
       * first + middle SOLID cylinders (as in 'stepped'),
       * the LAST cylinder as an open-top hollow shell (outer d_last, wall
@@ -224,7 +229,14 @@ def make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
     The whole union is later SUBTRACTED from the block, so every surface here is
     carved out (walls included). With omit_middle the MIDDLE cylinder is left out
     (the guide-vane band is open fluid); the cup/central/dome still start at
-    z_mid_top so the stack above the band is unchanged."""
+    z_mid_top so the stack above the band is unchanged.
+
+    `cone_chamfer` (m, scaled; None = off) cuts a 45 deg chamfer on the INNER top
+    edge of the cup wall so its mouth flares outward (spec 2026-09-29-cone-chamfer):
+    a revolved cutter from r = R_in at z_top - c out to R_in + c at z_top, cut from
+    the cup only, before the union with the generator. The caller guarantees
+    0 < c <= wall (c = wall leaves a knife-edge rim) and c <= hollow_len - wall (so
+    the cut never reaches the cup bottom). Off skips the cut (bit-identical)."""
     z_mid_top = h_first + h_middle
     part = cq.Workplane("XY").circle(d_first / 2).extrude(h_first)
     if not omit_middle:
@@ -244,6 +256,18 @@ def make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
         .extrude(hollow_len - wall)
     )
     tube = outer.cut(bore)
+    if cone_chamfer:
+        # A revolved cutter rather than an OCC edge .chamfer(): the edge chamfer
+        # fails when c equals the rim width (the flat face vanishes). The cone runs
+        # at 45 deg all the way and overshoots the rim top by FLOOR_OVERCUT so no
+        # coplanar face is left (the builder's usual overcut practice).
+        r_in = d_last / 2 - wall
+        z_top = z_mid_top + hollow_len
+        reach = cone_chamfer + FLOOR_OVERCUT
+        flare = cq.Workplane("XY").add(cq.Solid.makeCone(
+            r_in, r_in + reach, reach,
+            pnt=cq.Vector(0, 0, z_top - cone_chamfer), dir=cq.Vector(0, 0, 1)))
+        tube = tube.cut(flare)
     # central cylinder rising from the middle's top, with an oval dome on top
     central = (
         cq.Workplane("XY", origin=(0, 0, z_mid_top))
@@ -1510,6 +1534,31 @@ def main():
                     "Cone length (%s) must be longer than the Wall thickness (%s): "
                     "the cone is an open cup whose bottom is one wall thick."
                     % (_mm(hollow_len), _mm(wall)))
+            # Cone chamfer (spec 2026-09-29-cone-chamfer): a 45 deg cut on the
+            # inner top edge of the cone wall. Checked on the UNSCALED values; wall
+            # and hollow_len scale with it, so the bounds hold at any Part scale.
+            cone_chamfer = None
+            if bool(P.get("coneChamferEnabled", False)):
+                cone_chamfer = num_opt("coneChamferSize")
+                if cone_chamfer is None:
+                    cone_chamfer = CONE_CHAMFER_SIZE
+                if cone_chamfer <= 0:
+                    raise ValueError(
+                        "Cone chamfer size must be greater than 0 mm. Untick Cone "
+                        "chamfer for a square cone rim.")
+                if cone_chamfer > wall + 1e-9:
+                    raise ValueError(
+                        "Cone chamfer size (%s) is larger than the Wall thickness (%s): "
+                        "a 45° chamfer cannot be wider than the cone wall. Lower the "
+                        "Cone chamfer size to %s or less, or increase the Wall thickness."
+                        % (_mm(cone_chamfer), _mm(wall), _mm(wall)))
+                if cone_chamfer > hollow_len - wall + 1e-9:
+                    raise ValueError(
+                        "Cone chamfer size (%s) is deeper than the inside of the cone: "
+                        "Cone length %s minus Wall thickness %s leaves %s. Lower the "
+                        "Cone chamfer size to %s or less, or lengthen the Cone length."
+                        % (_mm(cone_chamfer), _mm(hollow_len), _mm(wall),
+                           _mm(hollow_len - wall), _mm(hollow_len - wall)))
             # With Simplify Generator the central cylinder is pinned to the box
             # top (it always fits) unless its height is typed; then it counts.
             if simplify_generator:
@@ -1648,6 +1697,8 @@ def main():
         if variant == "hollow":
             wall *= part_scale
             hollow_len *= part_scale
+            if cone_chamfer is not None:
+                cone_chamfer *= part_scale
             c_dia *= part_scale
             if simplify_generator and (
                     c_h is None or _reaches_top(h_first + h_middle + c_h * part_scale)):
@@ -1668,7 +1719,7 @@ def main():
                     % (c_dia, d_last - 2 * wall))
             part = make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
                                     wall, hollow_len, c_dia, c_h, dome_h,
-                                    omit_middle=guide_vanes)
+                                    omit_middle=guide_vanes, cone_chamfer=cone_chamfer)
             part_height = h_first + h_middle + max(
                 hollow_len, c_h + (0.0 if dome_h is None else dome_h))
             rmax = max(d_first, d_middle, d_last) / 2

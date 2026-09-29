@@ -693,6 +693,109 @@ def test_vane_count_outside_16_or_18_is_refused(build):
     assert "Guide vane count must be 16 or 18 (got 17)." in result.stderr
 
 
+# --- cone chamfer (With cone) --------------------------------------------------
+# An optional 45 deg chamfer on the INNER top edge of the cone wall, so the mouth
+# flares outward (spec 2026-09-29-cone-chamfer). It only removes cup material, so
+# the fluid gains a ring of right-isosceles section (legs c): the tests assert the
+# volume DELTA against the plain fixture, not a new GOLDEN.
+
+CONE_CHAMFER_25 = {"coneChamferEnabled": True, "coneChamferSize": 0.025}
+
+
+def _cone_geometry(name="hollow-vanes"):
+    """(R_in, z_top, ps) of the fixture's cone, scaled, in the builder's frame."""
+    p = _fixture_params(name)
+    ps = p["partScale"]
+    r_in = (p["dLast"] / 2 - p["wallThickness"]) * ps
+    # The part's base sits FLOOR_OVERCUT under the box floor (box spans -H/2..+H/2).
+    z_top = -p["height"] / 2 - 0.01 + ps * (p["hMiddlePlusFirst"] + p["hollowLength"])
+    return r_in, z_top, ps
+
+
+def _cone_chamfer_faces(result, r_in, z_top, c, tol=0.002):
+    """{patch: count} of 45 deg triangles (|nz| and |n.r| ~ 0.707) in the band of
+    the chamfer ring: R_in - tol <= r <= R_in + c + tol, z_top - c - tol <= z <= z_top + tol."""
+    import numpy as np
+
+    axis = _patch_mesh(result, "outlet").vertices.mean(axis=0)
+    counts = {}
+    for pname in VANE_PATCHES:
+        m = _patch_mesh(result, pname)
+        fc = m.vertices[m.faces].mean(axis=1)
+        n = m.face_normals
+        dx, dy = fc[:, 0] - axis[0], fc[:, 1] - axis[1]
+        r = np.hypot(dx, dy)
+        nr = (n[:, 0] * dx + n[:, 1] * dy) / np.maximum(r, 1e-9)
+        sel = ((np.abs(np.abs(n[:, 2]) - 0.7071) < 0.08) & (np.abs(np.abs(nr) - 0.7071) < 0.08)
+               & (r >= r_in - tol) & (r <= r_in + c + tol)
+               & (fc[:, 2] >= z_top - c - tol) & (fc[:, 2] <= z_top + tol))
+        counts[pname] = int(sel.sum())
+    return counts
+
+
+def test_cone_chamfer_adds_the_flare_volume(build):
+    import math
+
+    plain = build("hollow-vanes")
+    chamfered = build("hollow-vanes", params_override=CONE_CHAMFER_25)
+    assert chamfered.exit_code == 0, f"builder failed:\n{chamfered.stderr}"
+    stl = chamfered.load_stl()
+    assert stl.is_watertight
+    assert tuple(p["name"] for p in chamfered.manifest) == VANE_PATCHES
+
+    r_in, _z_top, ps = _cone_geometry()
+    c = 0.025 * ps
+    expected = math.pi * c * c * (r_in + c / 3.0)
+    delta = stl.volume - plain.load_stl().volume
+    assert delta == pytest.approx(expected, rel=0.03)
+
+
+def test_cone_chamfer_face_is_cylinder_walls(build):
+    r_in, z_top, ps = _cone_geometry()
+    c = 0.025 * ps
+    counts = _cone_chamfer_faces(build("hollow-vanes", params_override=CONE_CHAMFER_25),
+                                 r_in, z_top, c)
+    assert counts["cylinder_walls"] > 0, counts
+    assert all(v == 0 for k, v in counts.items() if k != "cylinder_walls"), counts
+    # The plain fixture has no 45 deg face in that band.
+    plain = _cone_chamfer_faces(build("hollow-vanes"), r_in, z_top, c)
+    assert sum(plain.values()) == 0, plain
+
+
+def test_cone_chamfer_equal_to_the_wall_builds(build):
+    """Size = Wall thickness: the flat rim vanishes into a knife edge (allowed, spec
+    decision Q1 = a)."""
+    result = build("hollow-vanes",
+                   params_override={"coneChamferEnabled": True, "coneChamferSize": 0.05})
+    assert result.exit_code == 0, f"builder failed:\n{result.stderr}"
+    assert result.load_stl().is_watertight
+
+
+def test_cone_chamfer_wider_than_the_wall_is_refused(build):
+    result = build("hollow-vanes",
+                   params_override={"coneChamferEnabled": True, "coneChamferSize": 0.06})
+    assert result.exit_code == 1
+    assert "KO:" in result.stderr
+    assert ("Cone chamfer size (60 mm) is larger than the Wall thickness (50 mm)"
+            in result.stderr)
+
+
+def test_cone_chamfer_deeper_than_the_cone_is_refused(build):
+    result = build("hollow-vanes", params_override={
+        "hollowLength": 0.08, "coneChamferEnabled": True, "coneChamferSize": 0.04})
+    assert result.exit_code == 1
+    assert "KO:" in result.stderr
+    assert "is deeper than the inside of the cone" in result.stderr
+    assert "leaves 30 mm" in result.stderr
+
+
+def test_cone_chamfer_is_ignored_on_closed_generator(build):
+    plain = build("stepped")
+    flagged = build("stepped", params_override=CONE_CHAMFER_25)
+    assert flagged.exit_code == 0, f"builder failed:\n{flagged.stderr}"
+    assert flagged.load_stl().volume == pytest.approx(plain.load_stl().volume, rel=1e-6)
+
+
 # --- mirrored STEP ("Change rotational direction") ----------------------------
 # scripts/mirrorStep.py flips a built STEP on the z-y plane while keeping the
 # original bounding box (spec 2026-09-01): the API runs it on demand for

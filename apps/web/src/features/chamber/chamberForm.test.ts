@@ -168,6 +168,72 @@ describe('simplifyGenerator (generator pinned to the chamber top)', () => {
   });
 });
 
+describe('cone chamfer (With cone: 45° flare on the inner top edge of the cone)', () => {
+  const hollow: ChamberFormValues = { ...CHAMBER_FORM_DEFAULTS, variant: 'hollow' };
+
+  function issueOn(values: ChamberFormValues, key: string) {
+    const res = parse(values);
+    if (res.success) return undefined;
+    return res.error.issues.find((i) => i.path.join('.') === key)?.message;
+  }
+
+  it('ships off, with a 50 mm size', () => {
+    expect(CHAMBER_FORM_DEFAULTS.coneChamferEnabled).toBe(false);
+    expect(CHAMBER_FORM_DEFAULTS.coneChamferSize).toBe(50);
+    expect(parse({ ...hollow, coneChamferEnabled: true }).success).toBe(true);
+  });
+
+  it('loads an old save as off / 50 and round-trips a saved chamfer', () => {
+    const base = { x1: 1450, x2: 7, x3: 10, variant: 'hollow' } as ChamberInput;
+    const old = chamberInputToFormValues(base);
+    expect(old.coneChamferEnabled).toBe(false);
+    expect(old.coneChamferSize).toBe(50);
+    const saved = chamberInputToFormValues({
+      ...base,
+      coneChamferEnabled: true,
+      coneChamferSize: 30,
+    });
+    expect(saved.coneChamferEnabled).toBe(true);
+    expect(saved.coneChamferSize).toBe(30);
+  });
+
+  /** With cone, Cone chamfer ticked, plus a patch. */
+  const on = (patch: Partial<ChamberFormValues>): ChamberFormValues => ({
+    ...hollow,
+    coneChamferEnabled: true,
+    ...patch,
+  });
+
+  it('refuses a size wider than the Wall thickness', () => {
+    const msg = 'Must be at most the Wall thickness (50 mm)';
+    expect(issueOn(on({ coneChamferSize: 60, wallThickness: 50 }), 'coneChamferSize')).toBe(msg);
+    // Blank wall thickness = the 50 mm default.
+    expect(issueOn(on({ coneChamferSize: 60, wallThickness: undefined }), 'coneChamferSize')).toBe(
+      msg,
+    );
+  });
+
+  it('refuses a size deeper than the inside of the cone', () => {
+    const values = on({ coneChamferSize: 40, wallThickness: 50, hollowLength: 80 });
+    expect(issueOn(values, 'coneChamferSize')).toBe(
+      'Must be at most the inside depth of the cone (Cone length minus Wall thickness = 30 mm)',
+    );
+  });
+
+  it('accepts a size equal to the Wall thickness (knife-edge rim)', () => {
+    expect(parse(on({ coneChamferSize: 50, wallThickness: 50 })).success).toBe(true);
+  });
+
+  it('ignores the size when the option is off or on Closed generator', () => {
+    expect(parse(on({ coneChamferEnabled: false, coneChamferSize: 60 })).success).toBe(true);
+    expect(parse(on({ variant: 'stepped', coneChamferSize: 60 })).success).toBe(true);
+  });
+
+  it('refuses a non-positive size', () => {
+    expect(parse(on({ coneChamferSize: 0 })).success).toBe(false);
+  });
+});
+
 describe('chamberBodyKey (stale-build comparison)', () => {
   // ChamberPage flags "Inputs changed since this build" by comparing the live
   // form (watch(): key order = defaults/registration order) against the last

@@ -142,6 +142,7 @@ export function ChamberPage() {
     dMiddle: 'Guide vanes Ø',
     hollowLength: 'Cone length',
     wallThickness: 'Wall thickness',
+    coneChamferSize: 'Cone chamfer size',
     centralDiameter: 'Generator Ø',
     centralHeight: 'Generator height',
     domeHeight: 'Dome height',
@@ -265,6 +266,7 @@ export function ChamberPage() {
             isBuilding={build.isPending}
             variant={values.variant}
             simplifyGenerator={values.simplifyGenerator}
+            coneChamferEnabled={values.coneChamferEnabled}
             autoLengthMm={autoLengthMm}
             autoDims={autoDims}
             relationsMaster={values.relationsMaster}
