@@ -14,17 +14,17 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
-  CHAMBER_CONE_CHAMFER_SIZE_MM,
   CHAMBER_OUTPUT_KEYS,
   CHAMBER_SPIRAL_DERIVED_KEYS,
   CHAMBER_VANE_COUNT_DEFAULT,
   CHAMBER_WALL_THICKNESS_MM,
   applyChamberSpiralToOutputs,
   blankGeneratorHeightRefusal,
+  chamberConeChamferMm,
   chamberSpiralBoxDims,
   chamberSpiralInputs,
   chamberSpiralModelInput,
-  runnerCaseBelowLeRefusal,
+  runnerCaseClearanceRefusal,
   computeChamberGeneratorDims,
   computeChamberOutputs,
   nonPositiveChamberFinals,
@@ -400,6 +400,14 @@ function resolveGeometryParams(
   if (variant === 'stepped' && input.centralHeight != null) {
     params.centralHeight = input.centralHeight * MM_TO_M;
   }
+  // Cone chamfer (both designs, spec 2026-09-29-cone-foot-chamfer): a 45° foot
+  // chamfer on the lower outer edge of the LE part. Only written when on, so
+  // every existing build keeps its key. The builder scales it by partScale.
+  const coneChamferMm = chamberConeChamferMm(input);
+  if (coneChamferMm > 0) {
+    params.coneChamferEnabled = true;
+    params.coneChamferSize = coneChamferMm * MM_TO_M;
+  }
 
   if (variant === 'hollow') {
     const wallMm = input.wallThickness ?? CHAMBER_WALL_THICKNESS_MM;
@@ -419,11 +427,6 @@ function resolveGeometryParams(
     });
     params.wallThickness = wallMm * MM_TO_M;
     params.hollowLength = (input.hollowLength ?? 0) * MM_TO_M;
-    // Cone chamfer: only written when on, so every existing With cone key stays.
-    if (input.coneChamferEnabled) {
-      params.coneChamferEnabled = true;
-      params.coneChamferSize = (input.coneChamferSize ?? CHAMBER_CONE_CHAMFER_SIZE_MM) * MM_TO_M;
-    }
     params.centralDiameter = gen.resolved.centralDiameter * MM_TO_M;
     // Simplify Generator: no dome; the BUILDER pins the central cylinder
     // through the box top unless a generator height is typed (then a closed
@@ -500,9 +503,9 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
   const generatorRefusal = blankGeneratorHeightRefusal(input, outputs);
   if (generatorRefusal) throw new AppError(422, 'VALIDATION_ERROR', generatorRefusal);
 
-  // Guide vanes carve r < LE Ø/2 out of the runner case: a typed Runner case Ø
-  // below LE Ø (beyond the builder's 5 mm snap) would erase it (spec 2026-09-29).
-  const runnerCaseRefusal = runnerCaseBelowLeRefusal(input, outputs);
+  // Guide vanes: a typed Runner case Ø must clear the outlet (Runner Ø + 20 mm);
+  // below LE Ø the builder adds the 20 mm ledge (spec 2026-09-29-runner-case-below-le).
+  const runnerCaseRefusal = runnerCaseClearanceRefusal(input, outputs);
   if (runnerCaseRefusal) throw new AppError(422, 'VALIDATION_ERROR', runnerCaseRefusal);
 
   // The spiral step runs BEFORE hashing, so the build key covers the actual

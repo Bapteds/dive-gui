@@ -1,6 +1,6 @@
 # Index of every repository file
 
-> One line per file (586 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
+> One line per file (587 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
 
 Detail of a code file: open the sheet shown and search for the `## path/to/file` section. Documents: the description is their title and introduction line.
 
@@ -15,7 +15,6 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `AGENTS.md` : instructions common to every AI agent (project, session protocol, golden rules, commands, brain map, design in brief). · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `CLAUDE.md` : Claude Code entry point: imports `AGENTS.md` (`@AGENTS.md`) and adds the Claude-specific parts (memory, changelog hook, UI skills, index, Windows shells). · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `README.md` : technical reference for humans (architecture, prerequisites, dev, configuration, Debian deployment, CFD tools per feature, commands, auth, REST API, links to the brain). · [root-shared-mcp](codemap/root-shared-mcp.md)
-- `brain.zip` : **(undocumented: add a section in brain/codemap)**
 - `eslint.config.js` : ESLint 9 "flat" configuration of the monorepo via `tseslint.config`. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package-lock.json` : npm lockfile for the whole monorepo (workspaces), used by `npm ci` in CI and in production. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package.json` : root of the `dive-turbinen` workspace (private, ESM, `engines.node >=20`). · [root-shared-mcp](codemap/root-shared-mcp.md)
@@ -779,9 +778,11 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `brain/specs/2026-09-02-physical-input-names-design.md` : Physical names for X1–X4 (display only) — design
 - `brain/specs/2026-09-02-simplify-generator-design.md` : "Simplify Generator" option (hollow variant) — design
 - `brain/specs/2026-09-29-cone-chamfer-design.md` : Cone chamfer (With cone) — design : Area: shared, backend, python (`apps/api/scripts/buildChamber.py`), frontend, tests
+- `brain/specs/2026-09-29-cone-foot-chamfer-design.md` : Cone foot chamfer (replaces the top-rim cone chamfer) : Supersedes: `2026-09-29-cone-chamfer-design.md` (top-rim chamfer, implemented in `dbc944a` then rejected by the user: the chamfer belongs on the lower edge)
 - `brain/specs/2026-09-29-guide-vane-count-design.md` : Guide vane count (16 or 18) — design : Area: shared, backend, python (`apps/api/scripts/buildChamber.py`), frontend, tests
 - `brain/specs/2026-09-29-meshing-to-project-design.md` : Meshing session → project mesh transfer (WS-F) — design
 - `brain/specs/2026-09-29-optimisation-loop-design.md` : Chamber optimisation loop (WS-H) — design
+- `brain/specs/2026-09-29-runner-case-below-le-design.md` : Runner case Ø below LE Ø with guide vanes: 20 mm ledge : Amends: `2026-09-29-vane-pocket-runner-case-design.md` (WS-A, implemented): its refusal "Runner case Ø below LE Ø − 5 mm" is replaced; the 5 mm snap, the thin-ring …
 - `brain/specs/2026-09-29-semi-spiral-casing-design.md` : Semi-spiral casing option (Chamber Creation) — design
 - `brain/specs/2026-09-29-vane-pocket-runner-case-design.md` : Guide-vane pocket robust to Runner case Ø close to or below LE Ø : Area: python (`apps/api/scripts/buildChamber.py`), shared + API (early refusal), tests
 

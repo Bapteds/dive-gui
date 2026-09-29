@@ -1,6 +1,6 @@
 # Cone foot chamfer (replaces the top-rim cone chamfer)
 
-> **Status**: approved (2026-09-29) · **Date**: 2026-09-29 · **Workstream**: WS-C v2 (Chamber Creation v2, branch `feat/chamber-v2-cfd-loop`)
+> **Status**: implemented (2026-09-29) · **Date**: 2026-09-29 · **Workstream**: WS-C v2 (Chamber Creation v2, branch `feat/chamber-v2-cfd-loop`)
 > **Supersedes**: `2026-09-29-cone-chamfer-design.md` (top-rim chamfer, implemented in `dbc944a` then rejected by the user: the chamfer belongs on the lower edge)
 > **Area**: shared, API, python, web, tests
 

@@ -55,9 +55,9 @@ export interface ChamberFormValues {
   hollowLength?: number;
   /** Hollow wall thickness (mm); defaults to CHAMBER_WALL_THICKNESS_MM. */
   wallThickness?: number;
-  /** Cone chamfer: a 45° chamfer on the inner top edge of the cone wall (the mouth flares outward). With cone only. */
+  /** Cone chamfer: a 45° foot chamfer on the lower outer edge of the LE part, widened by the size above it. Both designs. */
   coneChamferEnabled: boolean;
-  /** Cone chamfer size (mm, both legs; at most the Wall thickness and the cone's inside depth); blank => 50 on the server. */
+  /** Cone chamfer size (mm, both legs = the widening; With cone: at most Cone length minus Wall thickness); blank => 50 on the server. */
   coneChamferSize?: number;
   /** Runner case (first cylinder) Ø (mm); blank => auto from D_last. Both variants. */
   dFirst?: number;
@@ -163,24 +163,22 @@ export const chamberFormSchema = z
         message: 'Enter a cone length: the With cone design needs one.',
       });
     }
-    // Cone chamfer bounds (the builder's R1/R2, spec 2026-09-29-cone-chamfer):
-    // instant feedback; the builder stays authoritative. Size = wall is allowed.
-    if (v.variant === 'hollow' && v.coneChamferEnabled && v.coneChamferSize != null) {
-      const wall = v.wallThickness ?? CHAMBER_WALL_THICKNESS_MM;
-      const fmt = (mm: number) => `${Math.round(mm)} mm`;
-      if (v.coneChamferSize > wall) {
+    // Cone chamfer (spec 2026-09-29-cone-foot-chamfer): the With cone bound
+    // (Cone length minus Wall thickness), for instant feedback. The Closed
+    // generator bound depends on H Kammer and LEB, so the builder alone checks it.
+    if (
+      v.variant === 'hollow' &&
+      v.coneChamferEnabled &&
+      v.coneChamferSize != null &&
+      v.hollowLength != null
+    ) {
+      const room = v.hollowLength - (v.wallThickness ?? CHAMBER_WALL_THICKNESS_MM);
+      // room <= 0 is the builder's own Cone length refusal.
+      if (room > 0 && v.coneChamferSize > room) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['coneChamferSize'],
-          message: `Must be at most the Wall thickness (${fmt(wall)})`,
-        });
-      } else if (v.hollowLength != null && v.coneChamferSize > v.hollowLength - wall) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['coneChamferSize'],
-          message: `Must be at most the inside depth of the cone (Cone length minus Wall thickness = ${fmt(
-            v.hollowLength - wall,
-          )})`,
+          message: `Must be at most Cone length minus Wall thickness (${Math.round(room)} mm)`,
         });
       }
     }

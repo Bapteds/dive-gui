@@ -408,6 +408,40 @@ export function ChamberInputsForm({
         {variant === 'stepped' && generatorHeightField}
       </div>
 
+      <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-bg p-3">
+        <input
+          type="checkbox"
+          {...register('coneChamferEnabled')}
+          className="mt-0.5 size-4 shrink-0 cursor-pointer rounded-sm border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40"
+        />
+        <span className="text-sm">
+          <span className="font-medium text-text">Cone chamfer</span>
+          <span className="mt-0.5 block text-text-secondary">
+            {variant === 'hollow'
+              ? 'Chamfer the foot of the cone at 45° at LEB; the cone is widened by the chamfer size above it, so its foot stays on LE Ø.'
+              : 'Chamfer the foot of the generator at 45° at LEB; the generator is widened by the chamfer size above it, so its foot stays on LE Ø.'}
+          </span>
+        </span>
+      </label>
+
+      {coneChamferEnabled && (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field
+            label="Cone chamfer size (mm)"
+            error={errors.coneChamferSize?.message}
+            helperText="Blank = 50 mm"
+          >
+            <Input
+              type="number"
+              step="any"
+              min="0"
+              inputMode="decimal"
+              {...register('coneChamferSize', { setValueAs: numOrUndef })}
+            />
+          </Field>
+        </div>
+      )}
+
       {variant === 'hollow' && (
         <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-bg p-3">
           <input
@@ -420,22 +454,6 @@ export function ChamberInputsForm({
             <span className="mt-0.5 block text-text-secondary">
               Straight generator with no dome, through the chamber top unless you set a generator
               height (as in the Closed generator design).
-            </span>
-          </span>
-        </label>
-      )}
-
-      {variant === 'hollow' && (
-        <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-bg p-3">
-          <input
-            type="checkbox"
-            {...register('coneChamferEnabled')}
-            className="mt-0.5 size-4 shrink-0 cursor-pointer rounded-sm border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40"
-          />
-          <span className="text-sm">
-            <span className="font-medium text-text">Cone chamfer</span>
-            <span className="mt-0.5 block text-text-secondary">
-              Cut a 45° chamfer on the inside of the cone rim so its mouth flares outward.
             </span>
           </span>
         </label>
@@ -465,19 +483,6 @@ export function ChamberInputsForm({
               {...register('wallThickness', { setValueAs: numOrUndef })}
             />
           </Field>
-          {coneChamferEnabled && (
-            <Field
-              label="Cone chamfer size (mm)"
-              error={errors.coneChamferSize?.message}
-              helperText="Both legs of the 45° cut; at most the Wall thickness (default 50)"
-            >
-              <Input
-                type="number"
-                step="any"
-                {...register('coneChamferSize', { setValueAs: numOrUndef })}
-              />
-            </Field>
-          )}
           <Field
             label="Power (kW)"
             error={errors.x4?.message}

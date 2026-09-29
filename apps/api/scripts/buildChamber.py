@@ -64,14 +64,23 @@ import zipfile
 RATIO_D_FIRST_OVER_LAST = 1.147030    # from the original Part.stl (2.81550/2.45460)
 RATIO_D_MIDDLE_OVER_LAST = 0.80       # middle = 0.80 x D_LAST (both variants)
 FLOOR_OVERCUT = 0.01                  # push the part below the floor so it opens
-CONE_CHAMFER_SIZE = 0.05              # With cone: default Cone chamfer size (m, both
-                                      # legs of the 45 deg cut on the inner top edge of
-                                      # the cone wall) when coneChamferSize is missing.
-                                      # Mirrors CHAMBER_CONE_CHAMFER_SIZE_MM of @dive/shared.
+CONE_CHAMFER_SIZE = 0.05              # default Cone chamfer size (m, x partScale; both
+                                      # legs of the 45 deg foot chamfer on the lower outer
+                                      # edge of the LE part, both designs) when
+                                      # coneChamferSize is missing (spec 2026-09-29-cone-
+                                      # foot-chamfer). Mirrors CHAMBER_CONE_CHAMFER_SIZE_MM.
 SNAP_D_TOL = 0.005                    # guide vanes: a Runner case Ø within 5 mm (scaled
                                       # diameters) of LE Ø is built flush with it; further
-                                      # below it is refused (spec 2026-09-29). Mirrors
+                                      # below it gets the LEDGE_GAP ledge (WS-A v2). Mirrors
                                       # CHAMBER_RUNNER_CASE_SNAP_MM of @dive/shared.
+RUNNER_CASE_OUTLET_CLEARANCE = 0.020  # guide vanes: a typed Runner case Ø must be at
+                                      # least Runner Ø (X1, unscaled) + this, so its wall
+                                      # stays 10 mm (radius) outside the outlet passage.
+                                      # Mirrors CHAMBER_RUNNER_CASE_OUTLET_CLEARANCE_MM.
+LEDGE_GAP = 0.020                     # guide vanes, Runner case Ø below LE Ø: the runner
+                                      # case wall stops this far (x partScale) under the
+                                      # shroud brim, where the ledge runs out to LE Ø/2
+                                      # (spec 2026-09-29-runner-case-below-le).
 MIN_LAST_CYL_H = 0.05                 # stepped: min height kept for the last (top)
                                       # cylinder when up-scaling pushes the shoulder up
 CHAMFER_END = ">Y"                    # the chamfered end (a width-side)
@@ -199,17 +208,41 @@ def make_box(cq, width, length, height, end, big_side, ch_big, ch_small, enabled
     return b
 
 
+def make_le_part(cq, r_le, z0, h, chamfer):
+    """The LE part as a solid of revolution about the Z axis, from z0 to z0 + h,
+    with the Cone chamfer (spec 2026-09-29-cone-foot-chamfer): outer radius
+    r_le + c above z0 + c and a 45 deg frustum from r_le at z0 (the foot stands
+    on LE Ø/2 at LEB, so the joint with the distributor does not move) out to
+    r_le + c at z0 + c. The caller guarantees 0 < c <= h (c = h leaves no
+    straight part)."""
+    c = min(chamfer, h)
+    prof = [(0.0, z0), (r_le, z0), (r_le + c, z0 + c)]
+    if h - c > 1e-9:
+        prof.append((r_le + c, z0 + h))
+    prof.append((0.0, z0 + h))
+    # (r, z) on the XZ workplane, revolved about local Y (== global Z), as in
+    # build_vane_step_solid.
+    return cq.Workplane("XZ").polyline(prof).close().revolve(360.0, (0, 0, 0), (0, 1, 0))
+
+
 def make_part(cq, d_first, h_first, d_middle, h_middle, d_last, h_last,
-              omit_middle=False, h_last_override=None):
+              omit_middle=False, h_last_override=None, le_chamfer=None):
     """Three coaxial cylinders stacked along +Z, base of the FIRST at z = 0
     (the 'stepped' variant). With omit_middle the MIDDLE cylinder is left out
     (the guide-vane band is open): first (0..h_first) + last, the last floating
     at its usual height (h_first+h_middle .. +h_last) so the band is fluid.
     h_last_override, when given, is the last cylinder's extrude length instead of
     h_last -- the stepped build passes it to pin the last cylinder's TOP to the
-    box top regardless of partScale (base unchanged at h_first+h_middle)."""
+    box top regardless of partScale (base unchanged at h_first+h_middle).
+    `le_chamfer` (m, scaled; None = off) widens the last cylinder with the Cone
+    chamfer (make_le_part); off keeps the historical construction (bit-identical)."""
     last_h = h_last if h_last_override is None else h_last_override
     part = cq.Workplane("XY").circle(d_first / 2).extrude(h_first)
+    if le_chamfer:
+        if not omit_middle:
+            part = part.faces(">Z").workplane().circle(d_middle / 2).extrude(h_middle)
+        return part.union(make_le_part(cq, d_last / 2, h_first + h_middle, last_h,
+                                       le_chamfer))
     if omit_middle:
         last = (cq.Workplane("XY", origin=(0, 0, h_first + h_middle))
                 .circle(d_last / 2).extrude(last_h))
@@ -242,7 +275,7 @@ def _mm(metres):
 
 def make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
                      wall, hollow_len, c_dia, c_h, dome_h, omit_middle=False,
-                     cone_chamfer=None):
+                     le_chamfer=None):
     """The 'hollow' variant (base of the FIRST at z = 0), a union of:
       * first + middle SOLID cylinders (as in 'stepped'),
       * the LAST cylinder as an open-top hollow shell (outer d_last, wall
@@ -256,12 +289,12 @@ def make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
     (the guide-vane band is open fluid); the cup/central/dome still start at
     z_mid_top so the stack above the band is unchanged.
 
-    `cone_chamfer` (m, scaled; None = off) cuts a 45 deg chamfer on the INNER top
-    edge of the cup wall so its mouth flares outward (spec 2026-09-29-cone-chamfer):
-    a revolved cutter from r = R_in at z_top - c out to R_in + c at z_top, cut from
-    the cup only, before the union with the generator. The caller guarantees
-    0 < c <= wall (c = wall leaves a knife-edge rim) and c <= hollow_len - wall (so
-    the cut never reaches the cup bottom). Off skips the cut (bit-identical)."""
+    `le_chamfer` (m, scaled; None = off) is the Cone chamfer (spec
+    2026-09-29-cone-foot-chamfer): the cone's outer wall is widened to
+    d_last/2 + c above z_mid_top + c with a 45 deg foot down to d_last/2 at
+    z_mid_top (make_le_part); the bore does not change, so the wall is c
+    thicker. The caller guarantees 0 < c <= hollow_len - wall. Off keeps the
+    historical construction (bit-identical)."""
     z_mid_top = h_first + h_middle
     part = cq.Workplane("XY").circle(d_first / 2).extrude(h_first)
     if not omit_middle:
@@ -270,29 +303,20 @@ def make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
     # the hollow last cylinder as an open-top CUP (diameter d_last = P9): 5 cm
     # walls + a thin bottom of the same thickness, open at the top. Built as the
     # outer cylinder minus a bore that stops `wall` above the base.
-    outer = (
-        cq.Workplane("XY", origin=(0, 0, z_mid_top))
-        .circle(d_last / 2)
-        .extrude(hollow_len)
-    )
+    if le_chamfer:
+        outer = make_le_part(cq, d_last / 2, z_mid_top, hollow_len, le_chamfer)
+    else:
+        outer = (
+            cq.Workplane("XY", origin=(0, 0, z_mid_top))
+            .circle(d_last / 2)
+            .extrude(hollow_len)
+        )
     bore = (
         cq.Workplane("XY", origin=(0, 0, z_mid_top + wall))
         .circle(d_last / 2 - wall)
         .extrude(hollow_len - wall)
     )
     tube = outer.cut(bore)
-    if cone_chamfer:
-        # A revolved cutter rather than an OCC edge .chamfer(): the edge chamfer
-        # fails when c equals the rim width (the flat face vanishes). The cone runs
-        # at 45 deg all the way and overshoots the rim top by FLOOR_OVERCUT so no
-        # coplanar face is left (the builder's usual overcut practice).
-        r_in = d_last / 2 - wall
-        z_top = z_mid_top + hollow_len
-        reach = cone_chamfer + FLOOR_OVERCUT
-        flare = cq.Workplane("XY").add(cq.Solid.makeCone(
-            r_in, r_in + reach, reach,
-            pnt=cq.Vector(0, 0, z_top - cone_chamfer), dir=cq.Vector(0, 0, 1)))
-        tube = tube.cut(flare)
     # central cylinder rising from the middle's top, with an oval dome on top
     central = (
         cq.Workplane("XY", origin=(0, 0, z_mid_top))
@@ -1044,12 +1068,14 @@ def _fit_airfoil(np, src, tgt):
 
 def build_vane_step_solid(cq, np, trimesh, result, core_prof, cas_prof, airfoil,
                           blades_mesh, cx, cy, z0, z1, fluid_volume,
-                          vol_tol=VANE_STEP_VOL_TOL):
+                          vol_tol=VANE_STEP_VOL_TOL, ledge_cut_prof=None):
     """Return the OCC BREP fluid Workplane with the vane distributor carved, or None
     when it cannot be trusted (no blades, invalid solid, volume mismatch, or any
     error). Hub/shroud revolve the analytic profiles about the LOCAL-Y axis (global
     Z); each blade is the clean airfoil fitted onto its placed mesh section, lofted
-    through a periodic spline and extruded across [z0, z1]."""
+    through a periodic spline and extruded across [z0, z1]. `ledge_cut_prof` (the
+    WS-A v2 runner case ledge) is the (r, z) loop of the fluid annulus under the
+    ledge: each blade is clipped by it, as the mesh prisms are."""
     def _revolve(prof):
         # (r, z) on the XZ workplane -> revolve about local Y (== global Z); (0,0,1)
         # is degenerate. Then move onto the part axis (cx, cy).
@@ -1060,6 +1086,7 @@ def build_vane_step_solid(cq, np, trimesh, result, core_prof, cas_prof, airfoil,
     dbg = os.environ.get("CHAMBER_STEP_DEBUG")
     n = len(airfoil)
     dist = _revolve(core_prof).union(_revolve(cas_prof))
+    ledge_cut = _revolve(ledge_cut_prof[:-1]) if ledge_cut_prof else None
     nb = 0
     for bl in blades_mesh.split(only_watertight=False):
         bz = np.asarray(bl.vertices, dtype=float)[:, 2]
@@ -1083,6 +1110,8 @@ def build_vane_step_solid(cq, np, trimesh, result, core_prof, cas_prof, airfoil,
             bv = blade.val()
             sys.stderr.write("STEPDBG blade %d fit_c=%.4f dev=%.5f valid=%s vol=%.6f\n"
                              % (nb, c, dev, bv.isValid(), bv.Volume()))
+        if ledge_cut is not None:
+            blade = blade.cut(ledge_cut)
         dist = dist.union(blade)
         nb += 1
     if nb == 0:
@@ -1718,31 +1747,6 @@ def main():
                     "Cone length (%s) must be longer than the Wall thickness (%s): "
                     "the cone is an open cup whose bottom is one wall thick."
                     % (_mm(hollow_len), _mm(wall)))
-            # Cone chamfer (spec 2026-09-29-cone-chamfer): a 45 deg cut on the
-            # inner top edge of the cone wall. Checked on the UNSCALED values; wall
-            # and hollow_len scale with it, so the bounds hold at any Part scale.
-            cone_chamfer = None
-            if bool(P.get("coneChamferEnabled", False)):
-                cone_chamfer = num_opt("coneChamferSize")
-                if cone_chamfer is None:
-                    cone_chamfer = CONE_CHAMFER_SIZE
-                if cone_chamfer <= 0:
-                    raise ValueError(
-                        "Cone chamfer size must be greater than 0 mm. Untick Cone "
-                        "chamfer for a square cone rim.")
-                if cone_chamfer > wall + 1e-9:
-                    raise ValueError(
-                        "Cone chamfer size (%s) is larger than the Wall thickness (%s): "
-                        "a 45° chamfer cannot be wider than the cone wall. Lower the "
-                        "Cone chamfer size to %s or less, or increase the Wall thickness."
-                        % (_mm(cone_chamfer), _mm(wall), _mm(wall)))
-                if cone_chamfer > hollow_len - wall + 1e-9:
-                    raise ValueError(
-                        "Cone chamfer size (%s) is deeper than the inside of the cone: "
-                        "Cone length %s minus Wall thickness %s leaves %s. Lower the "
-                        "Cone chamfer size to %s or less, or lengthen the Cone length."
-                        % (_mm(cone_chamfer), _mm(hollow_len), _mm(wall),
-                           _mm(hollow_len - wall), _mm(hollow_len - wall)))
             # With Simplify Generator the central cylinder is pinned to the box
             # top (it always fits) unless its height is typed; then it counts.
             if simplify_generator:
@@ -1761,6 +1765,29 @@ def main():
             unscaled_shoulder = h_first + h_middle
             unscaled_stack = (None if gen_h_typed is None
                               else unscaled_shoulder + gen_h_typed)
+
+        # Cone chamfer (spec 2026-09-29-cone-foot-chamfer), both designs: a 45 deg
+        # foot chamfer on the lower outer edge of the LE part (the Closed-generator
+        # last cylinder, the With cone outer wall), the part widened by the size
+        # above it. Size in metres UNSCALED here (x partScale below). With cone:
+        # at most Cone length - Wall thickness (checked here, both scale alike);
+        # Closed generator: at most the generator above LEB (checked once scaled).
+        cone_chamfer = None
+        if bool(P.get("coneChamferEnabled", False)):
+            cone_chamfer = num_opt("coneChamferSize")
+            if cone_chamfer is None:
+                cone_chamfer = CONE_CHAMFER_SIZE
+            if cone_chamfer <= 0:
+                raise ValueError(
+                    "Cone chamfer size must be greater than 0 mm. Untick Cone chamfer "
+                    "for a square foot.")
+            if variant == "hollow" and cone_chamfer > hollow_len - wall + 1e-9:
+                raise ValueError(
+                    "Cone chamfer size (%s) is taller than the cone: Cone length %s "
+                    "minus Wall thickness %s leaves %s. Lower the Cone chamfer size to "
+                    "%s or less, or lengthen the Cone length."
+                    % (_mm(cone_chamfer), _mm(hollow_len), _mm(wall),
+                       _mm(hollow_len - wall), _mm(hollow_len - wall)))
 
         # Does the internal assembly fit the box at the requested partScale?
         #  - hollow: the whole stack must stay under the box top.
@@ -1846,20 +1873,38 @@ def main():
 
         # Guide vanes carve the whole disk r < d_last/2 out of the runner case (first
         # cylinder) and seat the distributor inside it, so the runner case only keeps
-        # its outer ring [d_last/2, d_first/2] (spec 2026-09-29). A typed Runner case
-        # below LE (beyond SNAP_D_TOL) used to be erased silently: refuse it. Within
-        # SNAP_D_TOL it is snapped flush with LE (no ring, no casing overshoot). The
-        # auto ratio is always larger. From here on d_first is the EFFECTIVE runner
-        # case (feet, fit check, pocket radius, junction labels).
+        # its outer ring [d_last/2, d_first/2] (spec 2026-09-29). Within SNAP_D_TOL of
+        # LE a typed Runner case is snapped flush with LE (no ring, no casing
+        # overshoot). Further below LE (WS-A v2, spec 2026-09-29-runner-case-below-le)
+        # the runner case wall stands at d_first/2 up to LEDGE_GAP under the shroud
+        # brim, where a ledge runs out to LE/2 (runner_case_ledge; built on the
+        # shroud casing below). It must clear the outlet: d_first >= X1 +
+        # RUNNER_CASE_OUTLET_CLEARANCE (X1 = outletOuterD, not scaled), else refused.
+        # The auto ratio is always larger. From here on d_first is the EFFECTIVE
+        # runner case (feet, fit check, pocket radius, junction labels).
         runner_case_snapped = False
+        runner_case_ledge = False
         if guide_vanes and d_first_override is not None:
-            if d_first < d_last - SNAP_D_TOL - 1e-9:
+            _x1 = num_opt("outletOuterD")
+            _auto = _mm(d_last / part_scale * RATIO_D_FIRST_OVER_LAST)
+            if _x1 is not None and d_first < _x1 + RUNNER_CASE_OUTLET_CLEARANCE - 1e-9:
                 raise ValueError(
-                    "With guide vanes the distributor sits inside the runner case: "
-                    "Runner case \u00d8 (%s) must be at least LE \u00d8 (%s). Increase "
+                    "With guide vanes the runner case must clear the outlet: Runner case "
+                    "\u00d8 (%s%s) must be at least Runner \u00d8 + 20 mm (%s). Increase "
                     "Runner case \u00d8, clear it (auto \u2248 %s), or turn Guide vanes off."
-                    % (_mm(d_first_override), _mm(d_last / part_scale),
-                       _mm(d_last / part_scale * RATIO_D_FIRST_OVER_LAST)))
+                    % (_mm(d_first_override),
+                       "" if abs(part_scale - 1.0) < 1e-9
+                       else ", %s at Part scale %g" % (_mm(d_first), part_scale),
+                       _mm(_x1 + RUNNER_CASE_OUTLET_CLEARANCE), _auto))
+            if d_first < d_last - SNAP_D_TOL - 1e-9:
+                if _x1 is None:
+                    # Very old params (no X1): no analytic shroud to build the ledge on.
+                    raise ValueError(
+                        "With guide vanes the distributor sits inside the runner case: "
+                        "Runner case \u00d8 (%s) must be at least LE \u00d8 (%s). Increase "
+                        "Runner case \u00d8, clear it (auto \u2248 %s), or turn Guide vanes "
+                        "off." % (_mm(d_first_override), _mm(d_last / part_scale), _auto))
+                runner_case_ledge = True
             if abs(d_first - d_last) <= SNAP_D_TOL + 1e-9:
                 print("WARNING: Runner case \u00d8 %s is within 5 mm of LE \u00d8 %s: "
                       "built flush with it." % (_mm(d_first_override),
@@ -1877,12 +1922,16 @@ def main():
             the same fluid as one running through it: pin it (no sliver)."""
             return stack_local >= height - 1e-3
 
+        # Cone chamfer, scaled (0 = off): the LE part's widening. Every fit check
+        # that uses the LE radius counts r_le + le_c (rmax, walls, chamfer faces,
+        # feet clearance), and so does the semi-spiral plank tangent circle; the
+        # hub-roof label rule stays at r <= r_le (the roof does not move).
+        le_c = cone_chamfer * part_scale if cone_chamfer is not None else 0.0
+
         # --- build the part (per variant) -----------------------------------
         if variant == "hollow":
             wall *= part_scale
             hollow_len *= part_scale
-            if cone_chamfer is not None:
-                cone_chamfer *= part_scale
             c_dia *= part_scale
             if simplify_generator and (
                     c_h is None or _reaches_top(h_first + h_middle + c_h * part_scale)):
@@ -1903,10 +1952,10 @@ def main():
                     % (c_dia, d_last - 2 * wall))
             part = make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
                                     wall, hollow_len, c_dia, c_h, dome_h,
-                                    omit_middle=guide_vanes, cone_chamfer=cone_chamfer)
+                                    omit_middle=guide_vanes, le_chamfer=le_c or None)
             part_height = h_first + h_middle + max(
                 hollow_len, c_h + (0.0 if dome_h is None else dome_h))
-            rmax = max(d_first, d_middle, d_last) / 2
+            rmax = max(d_first, d_middle, d_last + 2 * le_c) / 2
         else:
             h_last *= part_scale  # scaled model value (kept for reference/logging)
             # Pin the last cylinder's TOP a hair above the box top so box.cut opens
@@ -1921,10 +1970,31 @@ def main():
                 # Typed generator height: a flat-topped last cylinder closed
                 # under the box top (fluid above it).
                 last_h_local = gen_h_typed * part_scale
+                le_room, gen_closed = last_h_local, True
+            else:
+                # LEB up to the chamber top
+                le_room, gen_closed = height - (h_first + h_middle), False
+            # Cone chamfer: the generator must be at least as tall as the chamfer
+            # (the "no room above LEB" case is refused just below).
+            if le_c and last_h_local > 0 and le_c > le_room + 1e-9:
+                scaled = ("" if abs(part_scale - 1.0) < 1e-9
+                          else ", %s at Part scale %g" % (_mm(le_c), part_scale))
+                if gen_closed:
+                    room = "the Generator height is only %s" % _mm(gen_h_typed)
+                    lever = ", or raise the Generator height"
+                else:
+                    room = "the generator rises only %s above LEB up to the chamber top" % (
+                        _mm(le_room))
+                    lever = ", or increase H Kammer"
+                raise ValueError(
+                    "Cone chamfer size (%s%s) is taller than the generator: %s. Lower "
+                    "the Cone chamfer size to %s or less%s."
+                    % (_mm(cone_chamfer), scaled, room, _mm(le_room / part_scale), lever))
             part = make_part(cq, d_first, h_first, d_middle, h_middle, d_last, h_last,
-                             omit_middle=guide_vanes, h_last_override=last_h_local)
+                             omit_middle=guide_vanes, h_last_override=last_h_local,
+                             le_chamfer=le_c or None)
             part_height = h_first + h_middle + last_h_local  # height + 2*FLOOR_OVERCUT when pinned
-            rmax = max(d_first, d_middle, d_last) / 2
+            rmax = max(d_first, d_middle, d_last + 2 * le_c) / 2
 
         # Hollow: the stack must fit under the box top — except with Simplify
         # Generator, whose central cylinder is intentionally pinned THROUGH the
@@ -1952,7 +2022,8 @@ def main():
         # Semi-spiral: the frozen outline must belong to THIS machine (its nose tip
         # 200 mm from the widest part, rmax) - a stale or hand-edited spiral is
         # refused before any boolean. r_t is the target circle of the plank: the
-        # Closed-generator last cylinder / the cone outer wall (both d_last/2).
+        # Closed-generator last cylinder / the cone outer wall (both d_last/2,
+        # widened by the Cone chamfer when it is on).
         if spiral is not None:
             _tip = math.hypot(*sp_box["pts"]["V6"])
             if abs(_tip - (rmax + SPIRAL_CLEARANCE)) > SPIRAL_TIP_TOL:
@@ -1962,7 +2033,7 @@ def main():
                     "%s. Generate again to redesign the spiral."
                     % (_mm(_tip), _mm(2 * rmax), _mm(rmax + SPIRAL_CLEARANCE)))
             sp_tip, sp_tan, sp_rect = spiral_plank(
-                sp_box["pts"], d_last / 2.0, SPIRAL_PLANK_THICK * part_scale,
+                sp_box["pts"], d_last / 2.0 + le_c, SPIRAL_PLANK_THICK * part_scale,
                 SPIRAL_PLANK_OVERLAP * part_scale)
 
         box = make_box(cq, width, length, height,
@@ -2053,14 +2124,22 @@ def main():
             rmax,
             "The turbine (%s across at its widest)" % _mm(2 * rmax),
             "Increase B Kammer or Length, move the axis with B1 / LT, or lower "
-            "Part scale, Runner case \u00d8 or Guide vanes \u00d8.")
+            + ("Part scale, Runner case \u00d8, Guide vanes \u00d8 or Cone chamfer size."
+               if le_c else "Part scale, Runner case \u00d8 or Guide vanes \u00d8."))
+
+        # The feet legs keep their clearance from the runner case, from the LE part
+        # widened by the Cone chamfer and, with guide vanes, from the distributor /
+        # ledge at LE \u00d8/2 when the runner case is smaller (WS-A v2) (d_feet: the
+        # diameter they anchor from); the planks still weld onto the LE part at LE \u00d8/2.
+        d_feet = (max(d_first, d_last + 2 * le_c) if (le_c or guide_vanes)
+                  else d_first)
 
         if feet_enabled:
             # Exact swung plan of the four legs, mirroring make_feet (the planks
             # stay inside the leg tips + the cylinder wall, so the leg hexagon
             # corners bound the whole foot footprint).
             _hw = FOOT_WIDTH * part_scale / 2
-            _r_in = d_first / 2 + FOOT_CLEARANCE * part_scale + _hw
+            _r_in = d_feet / 2 + FOOT_CLEARANCE * part_scale + _hw
             _r_out = _r_in + FOOT_LENGTH * part_scale
             _tap = FOOT_TAPER * part_scale
             _chf = FOOT_CHAMFER * part_scale
@@ -2102,7 +2181,7 @@ def main():
         if feet_enabled:
             feet, foot_r_outer = make_feet(
                 cq, target_x, target_y, z_floor, z_last_base,
-                d_last / 2, d_first, foot_angle_deg=foot_angle,
+                d_last / 2, d_feet, foot_angle_deg=foot_angle,
                 width=FOOT_WIDTH * part_scale, length=FOOT_LENGTH * part_scale,
                 taper=FOOT_TAPER * part_scale, chamfer=FOOT_CHAMFER * part_scale,
                 plank_thick=FOOT_PLANK_THICK * part_scale,
@@ -2248,6 +2327,8 @@ def main():
             # z_mid_top so the throat->roof corner is preserved (see _hub_core_solid).
             _hub_throat = trimesh.util.concatenate(
                 [vane_patches["hub_throat"], _hub_ext])
+            z_ledge = None            # WS-A v2 ledge height (set with the casing)
+            _ledge_cut_prof = None    # fluid annulus under the ledge (clips the prisms)
             if vane_patches.get("hub_profile") is not None:
                 # Analytic core: revolve the closed hub silhouette (duct bottom ->
                 # rim -> P1 -> P2 -> P3) capped flat at z_mid_top from P3 in to the
@@ -2268,11 +2349,37 @@ def main():
                 # -> inner wall down (closed by revolve).
                 _sp = vane_patches["shroud_profile"]
                 _rin, _rout = float(_sp[0, 0]), float(_sp[-1, 0])
-                _cas_prof = ([(_rin, z_duct_bottom), (_rout, z_duct_bottom)]
-                             + [(float(r), float(z)) for r, z in _sp[::-1]]
-                             + [(_rin, z_duct_bottom)])   # close the annular loop (first==last)
+                if runner_case_ledge:
+                    # WS-A v2 ledge: the casing keeps r < d_first/2 from the duct
+                    # bottom up to z_ledge, then the full annulus out to LE/2 (no
+                    # overshoot here: _rout == LE/2) up to the shroud floor; the fluid
+                    # wraps under the ledge. z_ledge = LEDGE_GAP under the brim, or
+                    # under the shroud floor at the runner-case radius when that radius
+                    # is still on the fillet (the floor there is below the brim).
+                    _r_rc = d_first / 2.0
+                    _floor_rc = float(np.interp(_r_rc, _sp[:, 0], _sp[:, 1]))
+                    z_ledge = min(float(_sp[-1, 1]), _floor_rc) - LEDGE_GAP * part_scale
+                    _cas_prof = ([(_rin, z_duct_bottom), (_r_rc, z_duct_bottom),
+                                  (_r_rc, z_ledge), (_rout, z_ledge)]
+                                 + [(float(r), float(z)) for r, z in _sp[::-1]]
+                                 + [(_rin, z_duct_bottom)])
+                    # The fluid annulus under the ledge, pushed 1 mm into the casing
+                    # (inside and above) so clipping the vane prisms with it leaves
+                    # no coincident face: blades whose outline passes over the
+                    # runner-case radius must not hang down into it as pillars.
+                    _ledge_cut_prof = [(_r_rc - 1e-3, z_duct_bottom - FLOOR_OVERCUT),
+                                       (_rout + 0.05, z_duct_bottom - FLOOR_OVERCUT),
+                                       (_rout + 0.05, z_ledge + 1e-3),
+                                       (_r_rc - 1e-3, z_ledge + 1e-3),
+                                       (_r_rc - 1e-3, z_duct_bottom - FLOOR_OVERCUT)]
+                else:
+                    _cas_prof = ([(_rin, z_duct_bottom), (_rout, z_duct_bottom)]
+                                 + [(float(r), float(z)) for r, z in _sp[::-1]]
+                                 + [(_rin, z_duct_bottom)])   # close the annular loop (first==last)
                 _casing = _revolve_profile(np, trimesh, _densify(np, _cas_prof),
                                            target_x, target_y)
+            elif runner_case_ledge:
+                raise RuntimeError("the runner case ledge needs the analytic shroud profile")
             else:
                 _casing = _shroud_casing_solid(np, trimesh, vane_patches["shroud"],
                                                target_x, target_y, d_last,
@@ -2301,6 +2408,11 @@ def main():
                     "least %s is needed). Increase the Vane angle%s."
                     % (vane_count, vane_angle, _mm(_gap), _mm(VANE_MIN_GAP),
                        " or set Guide vane count to 16" if vane_count != 16 else ""))
+            if _ledge_cut_prof is not None:
+                _ledge_cut = _revolve_profile(np, trimesh, _densify(np, _ledge_cut_prof),
+                                              target_x, target_y)
+                _prisms = [trimesh.boolean.difference([_p, _ledge_cut], engine="manifold")
+                           for _p in _prisms]
             _solid = trimesh.boolean.union([_core, _casing] + _prisms, engine="manifold")
             _fd, _tmp_stl = tempfile.mkstemp(suffix=".stl")
             os.close(_fd)
@@ -2412,8 +2524,18 @@ def main():
                 return _names.index(nm)
             _cwi, _wli = _idx("cylinder_walls"), _idx("walls")
             _band = (_fz > _z_brim - 2e-3) & (_fz < z_mid_base + 2e-3)
-            # the runner-case wall (vertical, below the ring top)
-            _who[_vert & (np.abs(_fr - _r_case) < 3e-3) & (_fz < z_mid_base)] = _cwi
+            # the runner-case wall (vertical, below the ring top; below the ledge
+            # when the runner case is smaller than LE)
+            _who[_vert & (np.abs(_fr - _r_case) < 3e-3)
+                 & (_fz < (z_ledge if runner_case_ledge else z_mid_base))] = _cwi
+            if runner_case_ledge:
+                # WS-A v2 (spec 2026-09-29-runner-case-below-le §4): the ledge
+                # underside -> cylinder_walls, the band at LE/2 between the ledge
+                # and the brim (the distributor casing) -> shroud.
+                _who[_hor & (np.abs(_fz - z_ledge) < 2e-3)
+                     & (_fr > _r_case - 1e-3) & (_fr < _r_env + 1e-3)] = _cwi
+                _who[_vert & (np.abs(_fr - _r_env) < 3e-3)
+                     & (_fz > z_ledge - 1e-3) & (_fz < _z_brim + 1e-3)] = _si
             # between the brim and the ring top: ring top -> cylinder_walls, brim -> shroud
             _who[_hor & _band & (_fr > _r_env + 1e-3) & (_fr < _r_case + 3e-3)] = _cwi
             _who[_hor & _band & (_fr > vane_outlet_ro + 3e-3) & (_fr < _r_env - 1e-3)] = _si
@@ -2425,6 +2547,14 @@ def main():
             # the box floor outside the outlet and the runner case
             _who[_hor & (np.abs(_fz - z_box_floor) < 2e-3)
                  & (_fr > max(vane_outlet_ro, _r_case) + 1e-3)] = _wli
+            # Cone chamfer: its 45 deg foot face starts on the hub roof's outer
+            # edge (LE Ø/2 at LEB), where nearest-source can hand its lowest
+            # triangles to hub. The face is cylinder_walls (spec 2026-09-29-cone-
+            # foot-chamfer): assign the sloped faces of that band exactly.
+            if le_c:
+                _slope = (np.abs(_fnz) > 0.5) & (np.abs(_fnz) < 0.9)
+                _who[_slope & (_fr > _r_env - 2e-3) & (_fr < _r_env + le_c + 2e-3)
+                     & (_fz > z_mid_top - 2e-3) & (_fz < z_mid_top + le_c + 2e-3)] = _cwi
             # The BLADE SKIN, assigned exactly (last, so no other override can
             # touch it): the prisms are strict vertical extrusions, so a wetted
             # face lies on a blade wall iff its centroid sits on a blade outline
@@ -2596,7 +2726,7 @@ def main():
                         cq, np, trimesh, result, _core_prof_ref, _cas_prof_ref, airfoil,
                         vane_patches["guide_vanes"], target_x, target_y,
                         z_duct_bottom, z_mid_top + 2.0 * FLOOR_OVERCUT,
-                        float(fluid_F.volume))
+                        float(fluid_F.volume), ledge_cut_prof=_ledge_cut_prof)
                 except Exception as _step_exc:  # noqa: BLE001
                     sys.stderr.write("WARN: OCC vane STEP reconstruction failed: %s\n" % _step_exc)
             if occ_fluid is not None:

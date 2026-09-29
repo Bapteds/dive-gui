@@ -347,9 +347,11 @@ def test_stepped_overflow_is_refused(build):
 
 # --- guide-vane pocket vs Runner case Ø (spec 2026-09-29, WS-A) ---------------
 # With guide vanes the whole disk r < LE Ø/2 is carved out of the runner case and
-# the distributor sits inside it, so Runner case Ø must be at least LE Ø: below
-# it (by more than 5 mm) the build is refused, within 5 mm it is snapped flush
-# (WARNING), and a thin ring keeps clean runner-case labels.
+# the distributor sits inside it. Within 5 mm of LE Ø the runner case is snapped
+# flush (WARNING) and a thin ring keeps clean runner-case labels. Further below LE
+# Ø (WS-A v2, spec 2026-09-29-runner-case-below-le) the runner case wall stops
+# 20 mm under the shroud brim and a ledge runs out to LE Ø/2; below Runner Ø
+# (X1) + 20 mm the build is refused.
 
 RUNNER_CASE_FIXTURES = ["hollow-vanes-overrides", "stepped-vanes"]
 
@@ -384,21 +386,122 @@ def _junction_faces(result, name, d_first):
 
 
 @pytest.mark.parametrize("name", RUNNER_CASE_FIXTURES)
-def test_runner_case_below_le_is_refused_with_guide_vanes(build, name):
-    """Runner case Ø 50 mm below LE Ø: the runner case used to be silently
-    erased (and feet cut the blades). Now the build is refused with the levers."""
+def test_runner_case_too_close_to_the_outlet_is_refused(build, name):
+    """Runner case Ø = Runner Ø (X1) + 10 mm: the runner case wall would sit 5 mm
+    outside the outlet passage. Refused with the levers (spec
+    2026-09-29-runner-case-below-le, WS-A v2)."""
     p = _fixture_params(name)
-    d_first = p["dLast"] - 0.05
+    x1 = p["outletOuterD"]
+    d_first = x1 + 0.01
     result = build(name, params_override={"dFirst": d_first})
     assert result.exit_code == 1
-    assert "KO:" in result.stderr
     expected = (
-        "With guide vanes the distributor sits inside the runner case: "
-        "Runner case Ø (%d mm) must be at least LE Ø (%d mm). Increase "
-        "Runner case Ø, clear it (auto ≈ %d mm), or turn Guide vanes off."
-        % (round(d_first * 1000), round(p["dLast"] * 1000),
+        "KO: With guide vanes the runner case must clear the outlet: Runner case Ø "
+        "(%d mm) must be at least Runner Ø + 20 mm (%d mm). Increase Runner case Ø, "
+        "clear it (auto ≈ %d mm), or turn Guide vanes off."
+        % (round(d_first * 1000), round((x1 + 0.02) * 1000),
            round(p["dLast"] * 1.14703 * 1000)))
     assert expected in result.stderr
+
+
+def _ledge(build, name):
+    """The LE Ø - 100 mm build and its junction: (result, faces, r_le, r_case,
+    z_ledge, z_brim, z_floor)."""
+    p = _fixture_params(name)
+    d_first = p["dLast"] - 0.1
+    result = build(name, params_override={"dFirst": d_first})
+    assert result.exit_code == 0, f"builder failed:\n{result.stderr}"
+    faces, r_le, r_case, _z_mid_base = _junction_faces(result, name, d_first)
+    z_brim = float(_patch_mesh(result, "shroud").vertices[:, 2].max())
+    z_ledge = z_brim - 0.02 * p.get("partScale", 1)
+    return result, faces, r_le, r_case, z_ledge, z_brim, -p["height"] / 2
+
+
+@pytest.mark.parametrize("name", RUNNER_CASE_FIXTURES)
+def test_runner_case_below_le_builds_a_ledge(build, name):
+    """LE Ø - 100 mm with guide vanes (used to be refused): builds, watertight,
+    same patches; just below the ledge the section shows the runner case circle
+    at its typed radius with fluid wrapping under the ledge; above the ledge the
+    distributor envelope (LE Ø/2) is unchanged."""
+    result, _f, r_le, r_case, z_ledge, z_brim, _z0 = _ledge(build, name)
+    import numpy as np
+
+    assert "built flush" not in result.stdout
+    assert tuple(pt["name"] for pt in result.manifest) == VANE_PATCHES
+    stl = result.load_stl()
+    assert stl.is_watertight
+    axis = _patch_mesh(result, "outlet").vertices.mean(axis=0)[:2]
+    dirs = [np.array([np.cos(a), np.sin(a)]) for a in np.radians([45, 135, 225, 315])]
+    z = z_ledge - 0.005
+    assert _fluid_mask(stl, [axis + (r_case - 0.004) * d for d in dirs], z) == [False] * 4
+    assert _fluid_mask(stl, [axis + (r_case + 0.004) * d for d in dirs], z) == [True] * 4
+    assert _fluid_mask(stl, [axis + (r_le - 0.004) * d for d in dirs], z) == [True] * 4
+    # between the ledge and the brim: solid out to LE Ø/2, fluid beyond
+    z = 0.5 * (z_ledge + z_brim)
+    assert _fluid_mask(stl, [axis + (r_le - 0.004) * d for d in dirs], z) == [False] * 4
+    assert _fluid_mask(stl, [axis + (r_le + 0.004) * d for d in dirs], z) == [True] * 4
+
+
+@pytest.mark.parametrize("name", RUNNER_CASE_FIXTURES)
+def test_runner_case_ledge_labels(build, name):
+    """Runner case wall and ledge underside -> cylinder_walls, the 20 mm band at
+    LE Ø/2 -> shroud, the floor outside the runner case -> walls."""
+    import numpy as np
+
+    result, faces, r_le, r_case, z_ledge, z_brim, z0 = _ledge(build, name)
+
+    def area_by_patch(sel_fn):
+        out = {}
+        for pname, (r, z, nz, a) in faces.items():
+            sel = sel_fn(r, z, nz)
+            if sel.any():
+                out[pname] = float(a[sel].sum())
+        return out
+
+    wall = area_by_patch(lambda r, z, nz: (nz < 0.5) & (np.abs(r - r_case) < 2e-3)
+                         & (z > z0 + 2e-3) & (z < z_ledge - 2e-3))
+    assert set(wall) == {"cylinder_walls"}, wall
+    assert wall["cylinder_walls"] == pytest.approx(2 * np.pi * r_case * (z_ledge - z0), rel=0.05)
+    ledge = area_by_patch(lambda r, z, nz: (nz > 0.9) & (np.abs(z - z_ledge) < 2e-3)
+                          & (r > r_case + 3e-3) & (r < r_le - 3e-3))
+    assert set(ledge) == {"cylinder_walls"}, ledge
+    # the selection trims 3 mm at both edges (face centroids)
+    trimmed = np.pi * ((r_le - 3e-3) ** 2 - (r_case + 3e-3) ** 2)
+    assert ledge["cylinder_walls"] == pytest.approx(trimmed, rel=0.1)
+    band = area_by_patch(lambda r, z, nz: (nz < 0.5) & (np.abs(r - r_le) < 2e-3)
+                         & (z > z_ledge + 2e-3) & (z < z_brim - 2e-3))
+    assert set(band) == {"shroud"}, band
+    floor = area_by_patch(lambda r, z, nz: (nz > 0.9) & (np.abs(z - z0) < 2e-3)
+                          & (r > r_case + 3e-3) & (r < r_le + 0.05))
+    # (big floor triangles may put no centroid in this narrow ring)
+    assert set(floor) <= {"walls"}, floor
+
+
+@pytest.mark.parametrize("name", RUNNER_CASE_FIXTURES)
+def test_runner_case_ledge_keeps_every_guide_vane_triangle(build, name):
+    result = _ledge(build, name)[0]
+    plain = build(name)
+    gv, gv0 = _patch_mesh(result, "guide_vanes"), _patch_mesh(plain, "guide_vanes")
+    assert len(_vane_components(result)) == 16
+    assert gv.area == pytest.approx(gv0.area, rel=2e-3)
+
+
+def test_deep_runner_case_ledge_clips_the_vane_prisms(build):
+    """Runner case Ø = LE Ø - 400 mm on stepped-vanes: the runner case wall now
+    passes under the blades (their outlines reach ~LE Ø/2 - 56 mm). The vane
+    prisms must not hang down into the fluid under the ledge as pillars: the
+    guide_vanes patch keeps the plain build's skin."""
+    p = _fixture_params("stepped-vanes")
+    result = build("stepped-vanes", params_override={"dFirst": p["dLast"] - 0.4})
+    assert result.exit_code == 0, f"builder failed:\n{result.stderr}"
+    assert result.load_stl().is_watertight
+    assert tuple(pt["name"] for pt in result.manifest) == VANE_PATCHES
+    plain = _patch_mesh(build("stepped-vanes"), "guide_vanes")
+    gv = _patch_mesh(result, "guide_vanes")
+    assert len(_vane_components(result)) == 16
+    assert gv.area == pytest.approx(plain.area, rel=2e-3)
+    assert float(gv.vertices[:, 2].min()) == pytest.approx(float(plain.vertices[:, 2].min()),
+                                                           abs=2e-3)
 
 
 @pytest.mark.parametrize("name", RUNNER_CASE_FIXTURES)
@@ -708,33 +811,40 @@ def test_vane_count_outside_16_or_18_is_refused(build):
     assert "Guide vane count must be 16 or 18 (got 17)." in result.stderr
 
 
-# --- cone chamfer (With cone) --------------------------------------------------
-# An optional 45 deg chamfer on the INNER top edge of the cone wall, so the mouth
-# flares outward (spec 2026-09-29-cone-chamfer). It only removes cup material, so
-# the fluid gains a ring of right-isosceles section (legs c): the tests assert the
-# volume DELTA against the plain fixture, not a new GOLDEN.
+# --- cone chamfer: 45 deg foot on the LE part (both designs) --------------------
+# The LE part (the Closed-generator last cylinder, the With cone outer wall) is
+# widened by c above LEB + c, with a 45 deg frustum from LE Ø/2 at LEB (the joint
+# with the distributor does not move) out to LE Ø/2 + c (spec
+# 2026-09-29-cone-foot-chamfer). It only adds part material, so the tests assert
+# the volume DELTA against the plain fixture, not a new GOLDEN.
 
-CONE_CHAMFER_25 = {"coneChamferEnabled": True, "coneChamferSize": 0.025}
+CONE_CHAMFER_50 = {"coneChamferEnabled": True, "coneChamferSize": 0.05}
+CONE_CHAMFER_FIXTURES = ["stepped-vanes", "hollow-vanes"]
 
 
-def _cone_geometry(name="hollow-vanes"):
-    """(R_in, z_top, ps) of the fixture's cone, scaled, in the builder's frame."""
+def _le_foot(name):
+    """(r_le, z_leb, H, c) of the fixture, scaled, in the builder's frame: the LE
+    radius, the LEB height, the LE part height inside the box above LEB (to the
+    ceiling for Closed generator, the cone length for With cone) and the 50 mm
+    chamfer x Part scale."""
     p = _fixture_params(name)
-    ps = p["partScale"]
-    r_in = (p["dLast"] / 2 - p["wallThickness"]) * ps
-    # The part's base sits FLOOR_OVERCUT under the box floor (box spans -H/2..+H/2).
-    z_top = -p["height"] / 2 - 0.01 + ps * (p["hMiddlePlusFirst"] + p["hollowLength"])
-    return r_in, z_top, ps
+    s = p.get("partScale", 1)
+    z_leb = -p["height"] / 2 - 0.01 + p["hMiddlePlusFirst"] * s
+    if p["variant"] == "hollow":
+        h = p["hollowLength"] * s
+    else:
+        h = p["height"] / 2 - z_leb
+    return p["dLast"] * s / 2, z_leb, h, 0.05 * s
 
 
-def _cone_chamfer_faces(result, r_in, z_top, c, tol=0.002):
+def _foot_faces(result, patches, r_le, z_leb, c, tol=0.002):
     """{patch: count} of 45 deg triangles (|nz| and |n.r| ~ 0.707) in the band of
-    the chamfer ring: R_in - tol <= r <= R_in + c + tol, z_top - c - tol <= z <= z_top + tol."""
+    the foot chamfer: r_le - tol <= r <= r_le + c + tol, z_leb - tol <= z <= z_leb + c + tol."""
     import numpy as np
 
     axis = _patch_mesh(result, "outlet").vertices.mean(axis=0)
     counts = {}
-    for pname in VANE_PATCHES:
+    for pname in patches:
         m = _patch_mesh(result, pname)
         fc = m.vertices[m.faces].mean(axis=1)
         n = m.face_normals
@@ -742,73 +852,142 @@ def _cone_chamfer_faces(result, r_in, z_top, c, tol=0.002):
         r = np.hypot(dx, dy)
         nr = (n[:, 0] * dx + n[:, 1] * dy) / np.maximum(r, 1e-9)
         sel = ((np.abs(np.abs(n[:, 2]) - 0.7071) < 0.08) & (np.abs(np.abs(nr) - 0.7071) < 0.08)
-               & (r >= r_in - tol) & (r <= r_in + c + tol)
-               & (fc[:, 2] >= z_top - c - tol) & (fc[:, 2] <= z_top + tol))
+               & (r >= r_le - tol) & (r <= r_le + c + tol)
+               & (fc[:, 2] >= z_leb - tol) & (fc[:, 2] <= z_leb + c + tol))
         counts[pname] = int(sel.sum())
     return counts
 
 
-def test_cone_chamfer_adds_the_flare_volume(build):
+@pytest.mark.parametrize("name", CONE_CHAMFER_FIXTURES)
+def test_cone_foot_chamfer_widens_the_le_part(build, name):
+    """Builds, watertight, same patches; the fluid loses the widening ring minus
+    the triangle under the 45 deg foot (Pappus): pi H (2 r c + c^2) - pi c^2 (r + 2c/3)."""
     import math
 
-    plain = build("hollow-vanes")
-    chamfered = build("hollow-vanes", params_override=CONE_CHAMFER_25)
+    plain = build(name)
+    chamfered = build(name, params_override=CONE_CHAMFER_50)
     assert chamfered.exit_code == 0, f"builder failed:\n{chamfered.stderr}"
     stl = chamfered.load_stl()
     assert stl.is_watertight
     assert tuple(p["name"] for p in chamfered.manifest) == VANE_PATCHES
 
-    r_in, _z_top, ps = _cone_geometry()
-    c = 0.025 * ps
-    expected = math.pi * c * c * (r_in + c / 3.0)
-    delta = stl.volume - plain.load_stl().volume
+    r, _z, h, c = _le_foot(name)
+    expected = math.pi * h * (2 * r * c + c * c) - math.pi * c * c * (r + 2 * c / 3.0)
+    delta = plain.load_stl().volume - stl.volume
+    # the feet planks already occupy a sliver of the ring (< 2 %)
     assert delta == pytest.approx(expected, rel=0.03)
 
 
-def test_cone_chamfer_face_is_cylinder_walls(build):
-    r_in, z_top, ps = _cone_geometry()
-    c = 0.025 * ps
-    counts = _cone_chamfer_faces(build("hollow-vanes", params_override=CONE_CHAMFER_25),
-                                 r_in, z_top, c)
+@pytest.mark.parametrize("name", CONE_CHAMFER_FIXTURES)
+def test_cone_foot_chamfer_section_shows_the_sloped_wall(build, name):
+    """At LEB + 0.6 c (above the vane prisms) the part wall sits at r_le + 0.6 c:
+    solid just inside, fluid just outside; the plain build is fluid there. Probed
+    between the feet (45 deg + k x 90 deg)."""
+    import numpy as np
+
+    r, z_leb, _h, c = _le_foot(name)
+    z = z_leb + 0.6 * c
+    r_wall = r + 0.6 * c
+    chamfered = build(name, params_override=CONE_CHAMFER_50)
+    assert chamfered.exit_code == 0, f"builder failed:\n{chamfered.stderr}"
+    axis = _patch_mesh(chamfered, "outlet").vertices.mean(axis=0)[:2]
+    dirs = [np.array([np.cos(a), np.sin(a)]) for a in np.radians([45, 135, 225, 315])]
+    inside = [axis + (r_wall - 0.004) * d for d in dirs]
+    outside = [axis + (r_wall + 0.004) * d for d in dirs]
+    stl = chamfered.load_stl()
+    assert _fluid_mask(stl, inside, z) == [False] * 4
+    assert _fluid_mask(stl, outside, z) == [True] * 4
+    assert _fluid_mask(build(name).load_stl(), inside, z) == [True] * 4
+
+
+@pytest.mark.parametrize("name", CONE_CHAMFER_FIXTURES)
+def test_cone_foot_chamfer_face_is_cylinder_walls(build, name):
+    r, z_leb, _h, c = _le_foot(name)
+    counts = _foot_faces(build(name, params_override=CONE_CHAMFER_50), VANE_PATCHES,
+                         r, z_leb, c)
     assert counts["cylinder_walls"] > 0, counts
     assert all(v == 0 for k, v in counts.items() if k != "cylinder_walls"), counts
     # The plain fixture has no 45 deg face in that band.
-    plain = _cone_chamfer_faces(build("hollow-vanes"), r_in, z_top, c)
+    plain = _foot_faces(build(name), VANE_PATCHES, r, z_leb, c)
     assert sum(plain.values()) == 0, plain
 
 
-def test_cone_chamfer_equal_to_the_wall_builds(build):
-    """Size = Wall thickness: the flat rim vanishes into a knife edge (allowed, spec
-    decision Q1 = a)."""
-    result = build("hollow-vanes",
-                   params_override={"coneChamferEnabled": True, "coneChamferSize": 0.05})
+def test_cone_foot_chamfer_on_closed_generator_without_vanes(build):
+    """The BREP path (no guide vanes): same four patches, the outlet is still the
+    middle cylinder and the foot face lands in cylinder_walls."""
+    result = build("stepped", params_override=CONE_CHAMFER_50)
     assert result.exit_code == 0, f"builder failed:\n{result.stderr}"
     assert result.load_stl().is_watertight
+    assert tuple(p["name"] for p in result.manifest) == STEPPED_PATCHES
+    assert result.load_stl().volume < build("stepped").load_stl().volume
+    r, z_leb, _h, c = _le_foot("stepped")
+    counts = _foot_faces(result, STEPPED_PATCHES, r, z_leb, c)
+    assert counts["cylinder_walls"] > 0, counts
+    assert all(v == 0 for k, v in counts.items() if k != "cylinder_walls"), counts
 
 
-def test_cone_chamfer_wider_than_the_wall_is_refused(build):
-    result = build("hollow-vanes",
-                   params_override={"coneChamferEnabled": True, "coneChamferSize": 0.06})
-    assert result.exit_code == 1
-    assert "KO:" in result.stderr
-    assert ("Cone chamfer size (60 mm) is larger than the Wall thickness (50 mm)"
-            in result.stderr)
-
-
-def test_cone_chamfer_deeper_than_the_cone_is_refused(build):
+def test_cone_foot_chamfer_taller_than_the_cone_is_refused(build):
     result = build("hollow-vanes", params_override={
-        "hollowLength": 0.08, "coneChamferEnabled": True, "coneChamferSize": 0.04})
+        "coneChamferEnabled": True, "coneChamferSize": 0.6})
     assert result.exit_code == 1
-    assert "KO:" in result.stderr
-    assert "is deeper than the inside of the cone" in result.stderr
-    assert "leaves 30 mm" in result.stderr
+    assert ("KO: Cone chamfer size (600 mm) is taller than the cone: Cone length 600 mm "
+            "minus Wall thickness 50 mm leaves 550 mm. Lower the Cone chamfer size to "
+            "550 mm or less, or lengthen the Cone length.") in result.stderr
 
 
-def test_cone_chamfer_is_ignored_on_closed_generator(build):
-    plain = build("stepped")
-    flagged = build("stepped", params_override=CONE_CHAMFER_25)
-    assert flagged.exit_code == 0, f"builder failed:\n{flagged.stderr}"
-    assert flagged.load_stl().volume == pytest.approx(plain.load_stl().volume, rel=1e-6)
+def test_cone_foot_chamfer_taller_than_the_generator_is_refused(build):
+    to_top = build("stepped", params_override={
+        "coneChamferEnabled": True, "coneChamferSize": 3.0})
+    assert to_top.exit_code == 1
+    assert ("KO: Cone chamfer size (3000 mm) is taller than the generator: the generator "
+            "rises only 2714 mm above LEB up to the chamber top. Lower the Cone chamfer "
+            "size to 2714 mm or less, or increase H Kammer.") in to_top.stderr
+    closed = build("stepped", params_override={
+        "coneChamferEnabled": True, "coneChamferSize": 0.6, "centralHeight": 0.5})
+    assert closed.exit_code == 1
+    assert ("KO: Cone chamfer size (600 mm) is taller than the generator: the Generator "
+            "height is only 500 mm. Lower the Cone chamfer size to 500 mm or less, or "
+            "raise the Generator height.") in closed.stderr
+
+
+def test_cone_foot_chamfer_non_positive_size_is_refused(build):
+    result = build("stepped", params_override={
+        "coneChamferEnabled": True, "coneChamferSize": 0.0})
+    assert result.exit_code == 1
+    assert "KO: Cone chamfer size must be greater than 0 mm." in result.stderr
+
+
+def test_cone_foot_chamfer_counts_in_the_chamber_fit(build):
+    """Runner case flush with LE (typed) and the axis 1250 mm from the side wall:
+    the plain part (1211 mm radius) fits, the widened one (1261 mm) does not."""
+    p = _fixture_params("stepped")
+    over = {"dFirst": p["dLast"], "distFromSideChamfer1": 1.25, "feetEnabled": False}
+    assert build("stepped", params_override=over).exit_code == 0
+    result = build("stepped", params_override={**over, **CONE_CHAMFER_50})
+    assert result.exit_code == 1
+    assert "The turbine (2521 mm across at its widest) would stick out" in result.stderr
+    assert "Guide vanes Ø or Cone chamfer size." in result.stderr
+
+
+def test_cone_foot_chamfer_widens_the_spiral_plank_target(build):
+    """Semi-spiral: the plank runs tangent to the WIDENED LE part (r_le + c).
+    The fixture's auto runner case stays the widest part, so its frozen spiral
+    still matches the machine."""
+    import numpy as np
+
+    name = "stepped-spiral"
+    result = build(name, params_override=CONE_CHAMFER_50)
+    assert result.exit_code == 0, result.stderr
+    p, V, axis, _r, s, z_leb, _W, _L = _spiral_frame(name)
+    stl = result.load_stl()
+    P, T = _plank_segment(np, V, axis, p["dLast"] * s / 2.0 + 0.05 * s)
+    d = (T - P) / float(np.linalg.norm(T - P))
+    n = np.array([-d[1], d[0]])
+    mid = P + 0.5 * (T - P)
+    h = 0.025 * s
+    z_high = z_leb + 0.5 * (p["height"] / 2.0 - z_leb)
+    assert _fluid_mask(stl, [mid + (h - 0.002) * n, mid - (h - 0.002) * n], z_high) == [False, False]
+    assert _fluid_mask(stl, [mid + (h + 0.002) * n, mid - (h + 0.002) * n], z_high) == [True, True]
 
 
 # --- mirrored STEP ("Change rotational direction") ----------------------------
