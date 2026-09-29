@@ -2880,31 +2880,43 @@ export function nonPositiveChamberFinals(outputs: ChamberOutput[]): ChamberOutpu
 }
 
 /**
- * Closed generator with a BLANK generator height: the generator runs through
- * the chamber top, so the builder alone accepts any H Kammer above the
- * shoulder. Its minimum height is the Gen Dim v3 height (the generator model,
+ * A BLANK generator height in Closed generator, or in With cone + Simplify
+ * generator: the generator runs through the chamber top, so the builder alone
+ * accepts any H Kammer above the shoulder (+ cone) and silently shortens the
+ * generator. Its minimum height is the Gen Dim v3 height (the generator model,
  * the same value as the form hint): refuse when partScale x (LEB + that
- * height) exceeds H Kammer. Returns the refusal message, else null. A typed
- * height (and the With cone designs) are checked on the real geometry by the
- * builder.
+ * height) exceeds H Kammer. In With cone the generator rises from the same
+ * base as the cone: a cone at least as tall is left to the builder's cone
+ * check (the generator then fits inside its height). Returns the refusal
+ * message, else null. A typed height and the domed With cone design are
+ * checked on the real geometry by the builder.
  */
-export function closedGeneratorHeightRefusal(
+export function blankGeneratorHeightRefusal(
   input: ChamberInput,
   outputs: ChamberOutput[],
 ): string | null {
-  if ((input.variant ?? 'stepped') !== 'stepped' || input.centralHeight != null) return null;
+  const variant = input.variant ?? 'stepped';
+  const toTop = variant === 'stepped' || input.simplifyGenerator === true;
+  if (!toTop || input.centralHeight != null) return null;
   const final = (k: ChamberOutputKey) => outputs.find((o) => o.key === k)!.final;
   const genH = computeChamberGeneratorDims(input).resolved.centralHeight;
+  const cone = variant === 'hollow' ? (input.hollowLength ?? 0) : 0;
+  if (cone >= genH) return null;
   const s = input.partScale ?? 1;
   const leb = final('hMiddlePlusFirst');
   const h = final('height');
   const required = s * (leb + genH);
   if (!Number.isFinite(required) || required <= h + 1e-3) return null;
-  const scaled = Math.abs(s - 1) > 1e-9 ? ` × Part scale ${s}` : '';
+  const mm = (v: number) => `${Math.round(v)} mm`;
+  const scaled = Math.abs(s - 1) > 1e-9 ? ` at Part scale ${s}` : '';
+  const aboveCone = cone > 0 ? `, which rises above the ${mm(cone)} cone` : '';
+  const fitScale = Math.floor((h / (leb + genH)) * 100) / 100;
+  const minH = Math.ceil(required / 50) * 50;
   return (
-    `Cannot build: H Kammer = ${Math.round(h)} mm is too low for the closed generator: ` +
-    `LEB ${Math.round(leb)} mm + minimum generator height ${Math.round(genH)} mm (Gen Dim model)${scaled} ` +
-    `= ${Math.round(required)} mm. Increase H Kammer, type a lower Generator height, or lower HLE / Part scale.`
+    `Cannot build the chamber. H Kammer (${mm(h)}) is too low for the generator: ` +
+    `LEB ${mm(leb)} + generator minimum height ${mm(genH)} (Gen Dim model${aboveCone}) ` +
+    `= ${mm(required)}${scaled}. Increase H Kammer to at least ${mm(minH)}, ` +
+    `type a lower Generator height, set Part scale to ${fitScale.toFixed(2)} or less, or lower HLE.`
   );
 }
 

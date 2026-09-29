@@ -80,7 +80,7 @@ The geometric options (§3.7) **never** influence the 12 outputs. A chamber too 
 ### 3.3 Min / Max / Exact constraints and statuses
 - `ChamberConstraint { min?, max?, exact? }` per output; each value must be `> 0` and `≤ CHAMBER_DIMENSION_MAX_MM` (100,000 mm). In the table, `NumCell` only accepts `0 < v ≤ 100,000`; any other entry clears the constraint.
 - Precedence: **Exact** wins (`set exact`); otherwise Min > Max gives `! min>max` and keeps the model value; otherwise clipping (`capped at max`, `raised to min`); otherwise `within range` (fit) or `from relation` (with `relationLabel`).
-- `! min>max` **refuses** the build: on the web before any call (red panel + toast), on the API as 422 `VALIDATION_ERROR` ("Cannot build: inverted constraint range on B Kammer: Min 5000 > Max 4000…").
+- `! min>max` **refuses** the build: on the web before any call (red panel + toast), on the API as 422 `VALIDATION_ERROR` ("Cannot build the chamber. The Min is larger than the Max for B Kammer: Min 5000 > Max 4000. Swap or clear…").
 
 ### 3.4 50 mm rounding (manufacturing grid)
 `CHAMBER_GRID_MM = 50`, `snapToChamberGrid(v) = round(v / 50) · 50`. Rule (spec `2026-09-01-empirical-50mm-rounding-design.md`):
@@ -123,7 +123,7 @@ All in mm, optional; empty = auto (`setValueAs: numOrUndef`, `placeholder="auto"
 | `wallThickness` | Wall thickness (mm) | `CHAMBER_WALL_THICKNESS_MM` = 50 | With cone |
 | `x4` | Power (kW) | Gen Dim v3 | With cone |
 | `centralDiameter` | Generator Ø (mm) | Gen Dim v3 | With cone |
-| `centralHeight` | Generator height (mm) | With cone: Gen Dim v3. Closed generator and Simplify generator: blank = through the chamber top (hint "≈ (H Kammer − Part scale × LEB) / Part scale"); a value = flat-topped cylinder closed below the top (a top within 1 mm of the chamber top is pinned like blank; taller than H Kammer allows = refusal "closed generator stack") | both designs (since 2026-09-28) |
+| `centralHeight` | Generator height (mm) | With cone: Gen Dim v3. Closed generator and Simplify generator: blank = through the chamber top (hint "≈ (H Kammer − Part scale × LEB) / Part scale"); a value = flat-topped cylinder closed below the top (a top within 1 mm of the chamber top is pinned like blank; taller than H Kammer allows = refusal "The generator does not fit under the chamber top") | both designs (since 2026-09-28) |
 | `domeHeight` | Dome height (mm) | Gen Dim v3; ignored if Simplify generator | With cone |
 
 - `dFirst`/`dMiddle` are sent to the builder **unscaled** (m): the builder multiplies them by `partScale`; without an override it applies its own copies of the ratios to the already scaled `dLast`. The ratios therefore exist twice (TS and Python): keep them in sync.
@@ -148,22 +148,22 @@ All of them enter the build hash (unless stated) and never affect the 12 outputs
 ### 3.8 Refusals and warnings
 **API refusals before any build** (422 `VALIDATION_ERROR`, CadQuery never started):
 - zod schema: X1..X3 out of range, dimensions ≤ 0 or > 100,000, `x4` outside ]0, 100,000], `footAngleDeg` outside [0, 180], `vaneAngleDeg` outside [45, 55], `outletRatio` outside [0.35, 0.50], `partScale` outside ]0, 5], With cone without `hollowLength`;
-- Final ≤ 0 (`nonPositiveChamberFinals`, except `noEffect`; the 4 chamfers LF1/BF1/LF2/BF2 are exempt if `chamferEnabled === false`, LT and B1 always count): message starting with "Cannot build: H Kammer = … mm", which lists each offending dimension and the levers (Runner Ø / Head / Q_max, relations, constraints);
+- Final ≤ 0 (`nonPositiveChamberFinals`, except `noEffect`; the 4 chamfers LF1/BF1/LF2/BF2 are exempt if `chamferEnabled === false`, LT and B1 always count): message "Cannot build the chamber. These dimensions come out at 0 mm or below: H Kammer = … mm", with the levers (Runner Ø / Head / Q_max, relations, Min / Exact in the Parameters table);
 - Min > Max (§3.3).
-- **Closed generator, blank Generator height: H Kammer below LEB + the Gen Dim v3 height** (since 2026-09-28, `closedGeneratorHeightRefusal`): the generator runs through the top, so without this check any H Kammer above the shoulder built. Minimum = `computeChamberGeneratorDims(input).resolved.centralHeight` × Part scale (the form hint shows "min ≈ N mm"). A typed height and the With cone designs are checked on the real geometry by the builder.
+- **Blank Generator height (Closed generator, and With cone + Simplify generator since 2026-09-29): H Kammer below LEB + the Gen Dim v3 height** (`blankGeneratorHeightRefusal`): the generator runs through the top, so without this check any H Kammer above the shoulder (+ cone) built with a cut-down generator. Minimum = `computeChamberGeneratorDims(input).resolved.centralHeight` × Part scale (the form hint shows "min ≈ N mm" in both designs). In With cone it only fires when that height exceeds the Cone length (a taller cone is the builder's cone check). The message gives the H Kammer to reach (next 50 mm) and the Part scale that would fit. A typed height and the domed With cone design are checked on the real geometry by the builder.
 
-**Builder refusals** (`ValueError`/`RuntimeError` ⇒ `KO:` + exit code 1 ⇒ API 502 `CHAMBER_BUILD_FAILED` with the tail of stderr, shown as is in "Build errors"):
+**Builder refusals** (`ValueError` ⇒ `KO:` + exit code 1 ⇒ API 502 `CHAMBER_BUILD_FAILED`; `summarizeFailure` shows the `KO:` text alone, prefixed "Cannot build the chamber.", in "Build errors"; any other exception becomes "The geometry engine failed on these inputs (Type: reason)…"; a failure without `KO:` keeps the exit code + a "Technical details" tail). Since 2026-09-29 the texts use the form's names (LEB, Cone length, Generator height, B1, LT, Runner case Ø…), lengths in whole mm, and name the levers:
 - base dimensions ≤ 0, `hFirst = LEB − HLE ≤ 0`, B1 outside ]0, width[, LT outside ]0, length[;
 - active chamfer with a setback ≤ 0 ("…disable the chamfer instead of zeroing it") or larger than the chamber;
 - `footAngleDeg` outside [0, 180], `partScale ≤ 0`, `vaneAngleDeg` outside 45..55;
 - invalid With cone parameters (`wallThickness` outside ]0, dLast/2[, `hollowLength ≤ wallThickness`, dimensions ≤ 0);
-- **height overflow**: stepped, the shoulder (runner case + middle cylinder, = 2 × HLE) must leave at least `MIN_LAST_CYL_H` (50 mm) of last cylinder ("the cylinder shoulder … but H Kammer only allows …"); With cone, `first + middle + max(cone, generator + dome)` must fit under H Kammer, and the message gives the `Part scale ≤ X` that would pass ("H Kammer only allows … reduce Part scale to <= …"); in Simplify generator only the runner case + middle + cone stack counts ("the hollow cone stack …");
-- axis in a chamfered corner ("lies inside the … corner cut");
-- part too wide: `max(dFirst, dMiddle, dLast)/2` compared with the four walls (B1, B Kammer − B1, LT, Length − LT) and the two chamfer faces ("… so it would stick out of the box" / "… would stick out through the … chamfer face");
-- foot outside the chamber, tested on the exact rotated footprint ("a torque foot reaches (x, y) m, outside the …");
-- vane distributor outside the chamber, tested on the actual radial reach of the vane + hub + shroud meshes ("the guide-vane distributor (blades + shroud) …");
-- impossible gusset ("footAngleDeg … cannot form the triangular gusset");
-- internal: `could not find the inlet (min-Y) face`, `expected >=N cylindrical faces`, `no patches produced`.
+- **height overflow**: stepped, the shoulder (runner case + middle cylinder, = 2 × HLE) must leave at least `MIN_LAST_CYL_H` (50 mm) of last cylinder ("H Kammer (…) is too low: LEB … leaves less than 50 mm above it for the generator"); With cone, `first + middle + max(cone, generator + dome)` must fit under H Kammer, and the message names the part that sets the top and gives the Part scale that would pass ("The cone does not fit under the chamber top: LEB … + Cone length … = …, but H Kammer is only …. Set Part scale to 0.79 or less, …"); in Simplify generator the builder counts the cone (or a typed generator height), the blank generator's minimum is the API check above;
+- axis in a chamfered corner ("The turbine axis (placed by B1 and LT) lies inside the cut corner of corner chamfer N …");
+- part too wide: `max(dFirst, dMiddle, dLast)/2` compared with the four walls (B1, B Kammer − B1, LT, Length − LT) and the two chamfer faces ("The turbine (… across at its widest) would stick out of the chamber: it reaches … from the turbine axis, but the … wall is only … away" / "… through corner chamfer N (LFN × BFN)");
+- foot outside the chamber, tested on the exact rotated footprint ("A torque foot would stick out of the chamber through …");
+- vane distributor outside the chamber, tested on the actual radial reach of the vane + hub + shroud meshes ("The guide-vane distributor (blades + shroud) would stick out …");
+- impossible gusset ("Foot angle …° cannot shape the torque feet …");
+- internal (reported as "The geometry engine failed on these inputs (RuntimeError: …)"): `could not find the inlet (min-Y) face`, `expected >=N cylindrical faces`, `no patches produced`.
 
 **Warnings** (build delivered; `WARNING:` lines on stdout and `WARN:` on stderr, collected by `^WARN(?:ING)?:\s*(.+)$`, stderr first, persisted in `warnings.json`, shown in "Build warnings" and returned on every cache hit):
 - `outlet outer radius … clamped to … (Runner Ø too large for this vane/d_last combination)`: outlet radius capped at `0.97 × R_anchor`;

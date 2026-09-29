@@ -7,7 +7,7 @@ import {
   CHAMBER_GENERATOR_FRAME_DIAMETERS_MM,
   CHAMBER_GRID_MM,
   computeChamberGeneratorDims,
-  closedGeneratorHeightRefusal,
+  blankGeneratorHeightRefusal,
   computeChamberOutputs,
   nonPositiveChamberFinals,
   snapToChamberGrid,
@@ -403,32 +403,41 @@ describe('computeChamberGeneratorDims', () => {
   });
 });
 
-describe('closedGeneratorHeightRefusal (Closed generator, blank height)', () => {
+describe('blankGeneratorHeightRefusal (blank generator height)', () => {
   // BASE finals: LEB 1200; Gen Dim v3 height ≈ 1077 at X1 1450 / X2 7.85 / X3 8.
   const H = (exact: number) => ({ constraints: { height: { exact } } });
-  const refusal = (input: Parameters<typeof closedGeneratorHeightRefusal>[0]) =>
-    closedGeneratorHeightRefusal(input, computeChamberOutputs(input));
+  const refusal = (input: Parameters<typeof blankGeneratorHeightRefusal>[0]) =>
+    blankGeneratorHeightRefusal(input, computeChamberOutputs(input));
+  const SIMPLIFY = { variant: 'hollow' as const, simplifyGenerator: true };
 
   it('accepts an H Kammer that holds LEB + the Gen Dim height', () => {
     expect(refusal({ ...BASE })).toBeNull();
     expect(refusal({ ...BASE, ...H(2300) })).toBeNull(); // 1200 + 1077 = 2277
+    expect(refusal({ ...BASE, ...H(2300), ...SIMPLIFY, hollowLength: 200 })).toBeNull();
   });
 
-  it('refuses a lower H Kammer and names the Gen Dim minimum', () => {
+  it('refuses a lower H Kammer in Closed generator and names the fix', () => {
     const msg = refusal({ ...BASE, ...H(1800) });
-    expect(msg).toContain('H Kammer = 1800 mm is too low for the closed generator');
-    expect(msg).toContain('minimum generator height 1077 mm (Gen Dim model)');
+    expect(msg).toContain('H Kammer (1800 mm) is too low for the generator');
+    expect(msg).toContain('LEB 1200 mm + generator minimum height 1077 mm (Gen Dim model) = 2277 mm');
+    expect(msg).toContain('Increase H Kammer to at least 2300 mm');
+    expect(msg).toContain('set Part scale to 0.79 or less');
+  });
+
+  it('refuses With cone + Simplify generator when the generator rises above the cone', () => {
+    const msg = refusal({ ...BASE, ...H(1800), ...SIMPLIFY, hollowLength: 200 });
+    expect(msg).toContain('generator minimum height 1077 mm (Gen Dim model, which rises above the 200 mm cone)');
+    expect(msg).toContain('= 2277 mm');
   });
 
   it('scales with Part scale', () => {
-    expect(refusal({ ...BASE, ...H(2300), partScale: 1.1 })).toContain('× Part scale 1.1');
+    expect(refusal({ ...BASE, ...H(2300), partScale: 1.1 })).toContain('at Part scale 1.1');
   });
 
-  it('leaves a typed height and the With cone designs to the builder', () => {
+  it('leaves a typed height, a taller cone and the domed design to the builder', () => {
     expect(refusal({ ...BASE, ...H(1800), centralHeight: 500 })).toBeNull();
+    expect(refusal({ ...BASE, ...H(1800), ...SIMPLIFY, hollowLength: 200, centralHeight: 500 })).toBeNull();
+    expect(refusal({ ...BASE, ...H(1800), ...SIMPLIFY, hollowLength: 1500 })).toBeNull();
     expect(refusal({ ...BASE, ...H(1800), variant: 'hollow', hollowLength: 200 })).toBeNull();
-    expect(
-      refusal({ ...BASE, ...H(1800), variant: 'hollow', hollowLength: 200, simplifyGenerator: true }),
-    ).toBeNull();
   });
 });

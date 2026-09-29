@@ -15,7 +15,7 @@ import path from 'node:path';
 import {
   CHAMBER_OUTPUT_KEYS,
   CHAMBER_WALL_THICKNESS_MM,
-  closedGeneratorHeightRefusal,
+  blankGeneratorHeightRefusal,
   computeChamberGeneratorDims,
   computeChamberOutputs,
   nonPositiveChamberFinals,
@@ -130,12 +130,25 @@ function tail(text: string): string {
   return text.length <= 4000 ? text : `…(truncated)\n${text.slice(text.length - 4000)}`;
 }
 
-/** Build a concise failure message from a command result. */
-function summarizeFailure(result: CommandResult): string {
-  if (result.spawnError) return `Could not start the chamber builder: ${result.spawnError}`;
-  if (result.timedOut) return 'The chamber builder timed out.';
+/**
+ * Build the user-facing failure message from a command result. A `KO:` line is
+ * the tool's own refusal, already worded for the user: it is shown alone. Any
+ * other failure keeps the exit code and the output tail for debugging.
+ */
+function summarizeFailure(result: CommandResult, action = 'build the chamber'): string {
+  if (result.spawnError) {
+    return `Could not start the chamber builder (${result.spawnError}). Check CHAMBER_PYTHON_BIN on the server.`;
+  }
+  if (result.timedOut) {
+    return 'The chamber build took too long and was stopped. Try again; if it keeps timing out, lower Part scale or ask an admin to raise CHAMBER_BUILD_TIMEOUT_MS.';
+  }
+  const ko = /^KO:\s*(.+)$/m.exec(result.stderr || '')?.[1]?.trim();
+  if (ko) return `Cannot ${action}. ${ko.charAt(0).toUpperCase()}${ko.slice(1)}`;
+  if (result.exitCode === 0) {
+    return 'The chamber builder finished without writing its output files. Try again; if it keeps failing, report it.';
+  }
   const detail = tail(result.stderr || result.stdout || '');
-  return `The chamber builder exited with code ${result.exitCode ?? 'null'}.${detail ? `\n${detail}` : ''}`;
+  return `The chamber builder stopped unexpectedly (exit code ${result.exitCode ?? 'none'}).${detail ? `\nTechnical details:\n${detail}` : ''}`;
 }
 
 /** The final (post-clamp) value of one output parameter, or 0 if absent. */
@@ -265,7 +278,7 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
     throw new AppError(
       422,
       'VALIDATION_ERROR',
-      `Cannot build: ${list} — every dimension must be positive. Adjust Runner Ø / Head / Q_max, the structural relations, or the Min/Max/Exact constraints.`,
+      `Cannot build the chamber. These dimensions come out at 0 mm or below: ${list}. Change Runner Ø, Head or Q_max, turn the matching relation back on, or give them a Min or Exact value in the Parameters table.`,
     );
   }
 
@@ -282,13 +295,14 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
     throw new AppError(
       422,
       'VALIDATION_ERROR',
-      `Cannot build: inverted constraint range on ${list}. Fix or clear those Min/Max values.`,
+      `Cannot build the chamber. The Min is larger than the Max for ${list}. Swap or clear those values in the Parameters table.`,
     );
   }
 
-  // Closed generator, blank height: the generator runs through the chamber top,
-  // so only this check stops H Kammer from shrinking it below its Gen Dim height.
-  const generatorRefusal = closedGeneratorHeightRefusal(input, outputs);
+  // Blank generator height (Closed generator, With cone + Simplify generator):
+  // the generator runs through the chamber top, so only this check stops
+  // H Kammer from shrinking it below its Gen Dim height.
+  const generatorRefusal = blankGeneratorHeightRefusal(input, outputs);
   if (generatorRefusal) throw new AppError(422, 'VALIDATION_ERROR', generatorRefusal);
 
   const params = resolveGeometryParams(input, outputs);
@@ -409,7 +423,11 @@ async function generateStep(hash: string): Promise<void> {
     result.exitCode !== 0 ||
     !(await pathExists(stepPath))
   ) {
-    throw new AppError(502, 'CHAMBER_BUILD_FAILED', summarizeFailure(result));
+    throw new AppError(
+      502,
+      'CHAMBER_BUILD_FAILED',
+      summarizeFailure(result, 'generate the STEP file'),
+    );
   }
 
   // The --step run can surface NEW warnings the original build could not know
@@ -466,7 +484,11 @@ async function generateMirroredStep(hash: string): Promise<void> {
     timeoutMs: env.CHAMBER_BUILD_TIMEOUT_MS,
   });
   if (result.spawnError || result.timedOut || result.exitCode !== 0 || !(await pathExists(dst))) {
-    throw new AppError(502, 'CHAMBER_BUILD_FAILED', summarizeFailure(result));
+    throw new AppError(
+      502,
+      'CHAMBER_BUILD_FAILED',
+      summarizeFailure(result, 'generate the mirrored STEP file'),
+    );
   }
 }
 

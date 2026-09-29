@@ -146,8 +146,8 @@ def test_hollow_overflow_is_refused(build):
     result = build("hollow-vanes", params_override={"partScale": 1})
     assert result.exit_code == 1
     assert "KO:" in result.stderr
-    assert "H Kammer only allows" in result.stderr
-    assert "reduce Part scale to <= 0.79" in result.stderr
+    assert "but H Kammer is only" in result.stderr
+    assert "Set Part scale to 0.79 or less" in result.stderr
 
 
 def _section_loop_count(stl, z):
@@ -195,9 +195,9 @@ def test_simplify_generator_overflow_names_the_cone_stack(build):
     })
     assert result.exit_code == 1
     assert "KO:" in result.stderr
-    assert "hollow cone stack" in result.stderr
-    assert "H Kammer only allows" in result.stderr
-    assert "generator + dome" not in result.stderr
+    assert "The cone does not fit under the chamber top" in result.stderr
+    assert "but H Kammer is only" in result.stderr
+    assert "Dome height" not in result.stderr
 
 
 def test_closed_generator_height_closes_the_last_cylinder(build):
@@ -230,8 +230,8 @@ def test_closed_generator_reaching_the_top_is_pinned(build):
 def test_closed_generator_taller_than_the_box_is_refused(build):
     result = build("stepped", params_override={"centralHeight": 5.0})
     assert result.exit_code == 1
-    assert "closed generator stack" in result.stderr
-    assert "H Kammer only allows" in result.stderr
+    assert "The generator does not fit under the chamber top" in result.stderr
+    assert "but H Kammer is only" in result.stderr
 
 
 def test_simplify_generator_with_a_height_is_closed(build):
@@ -253,8 +253,8 @@ def test_part_wider_than_box_is_refused(build):
     result = build("stepped", params_override={"dFirst": 8.0})
     assert result.exit_code == 1
     assert "KO:" in result.stderr
-    assert "stick out of the box" in result.stderr
-    assert "reduce Part scale / the diameter overrides" in result.stderr
+    assert "would stick out of the chamber" in result.stderr
+    assert "Runner case Ø or Guide vanes Ø" in result.stderr
 
 
 def test_feet_outside_the_box_are_refused(build):
@@ -269,7 +269,7 @@ def test_feet_outside_the_box_are_refused(build):
     })
     assert result.exit_code == 1
     assert "KO:" in result.stderr
-    assert "a torque foot reaches" in result.stderr
+    assert "A torque foot would stick out of the chamber" in result.stderr
     # Same params with the feet disabled must build fine (the cylinders fit).
     ok = build("stepped", params_override={
         "partScale": 2.3, "width": 7.0, "length": 14.0, "height": 4.0,
@@ -284,7 +284,7 @@ def test_zero_chamfer_setback_is_refused(build):
     result = build("stepped", params_override={"chamferWidth1": 0.0})
     assert result.exit_code == 1
     assert "KO:" in result.stderr
-    assert "chamfer 1 (LF1/BF1) setbacks must be > 0" in result.stderr
+    assert "Corner chamfer 1 needs LF1 and BF1 greater than 0 mm" in result.stderr
 
 
 def test_axis_inside_chamfer_corner_is_refused(build):
@@ -298,8 +298,7 @@ def test_axis_inside_chamfer_corner_is_refused(build):
     })
     assert result.exit_code == 1
     assert "KO:" in result.stderr
-    assert "lies inside" in result.stderr
-    assert "corner cut" in result.stderr
+    assert "lies inside the cut corner" in result.stderr
 
 
 def test_vane_distributor_outside_box_is_refused(build):
@@ -324,8 +323,8 @@ def test_stepped_overflow_is_refused(build):
     result = build("stepped", params_override={"partScale": 5})
     assert result.exit_code == 1
     assert "KO:" in result.stderr
-    assert "H Kammer only allows" in result.stderr
-    assert "reduce Part scale" in result.stderr
+    assert "is too low" in result.stderr
+    assert "Lower HLE, Part scale" in result.stderr
 
 
 # --- guide-vane trailing-edge rounding ---------------------------------------

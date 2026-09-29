@@ -2,11 +2,11 @@
 
 > Snapshot to read at the start of a session. **Rewrite it** (do not stack) as soon as the state changes: branch, work in progress, verification, open threads.
 > Detailed history: `brain/changelog/`. Bugs and debt: `brain/known-issues.md`.
-> Last updated: 2026-09-28.
+> Last updated: 2026-09-29.
 
 ## 1. Where we are
 
-- **Last change** (2026-09-28): editable generator height in Closed generator / Simplify generator (merged `322f5bc`). The automatic chamber enlargement merged with it was **removed** the same day at the user's request (branch `fix/revert-chamber-fit`): a chamber too small for its parts is refused again, by design. Still to do: browser check, and **purge `/var/lib/dive/storage/chamber/*` when deploying** (`buildChamber.py` changed).
+- **Last change** (2026-09-29, branch `fix/chamber-error-messages`): With cone + Simplify generator now refuses an H Kammer below LEB + the Gen Dim generator height (blank height), and every Chamber Creation error was rewritten in plain English (form names, mm, levers). Before that (2026-09-28): editable generator height, chamber enlargement removed (a chamber too small for its parts is refused, by design), Closed generator minimum height. Still to do: browser check, and **purge `/var/lib/dive/storage/chamber/*` when deploying** (`buildChamber.py` changed).
 - **Branch**: `main`, which now contains the merge of `docs/brain` (brain reorganization, 2026-09-28) on top of `d43a6ce` (merge of PR #3 `feat/chamber-ui-feedback`). No known open PR.
 - **Version**: 1.0.x (v1.0.1 audit fixes included: every CRITICAL and HIGH finding).
 - **Last delivered work** (PR #3, 2026-08-31 → 2026-09-04): Chamber Creation.

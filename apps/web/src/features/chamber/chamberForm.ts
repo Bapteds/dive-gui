@@ -73,12 +73,18 @@ const optionalPositive = z
   .max(CHAMBER_DIMENSION_MAX_MM, `Max ${CHAMBER_DIMENSION_MAX_MM.toLocaleString('en-US')} mm`)
   .optional();
 
+/** A model input (Runner Ø / Head / Q_max): the empirical fits only hold inside their range. */
+const modelRange = ({ min, max }: { min: number; max: number }, unit: string) => {
+  const msg = `Must be between ${min.toLocaleString('en-US')} and ${max.toLocaleString('en-US')} ${unit} (the range the model was fitted on)`;
+  return z.number({ invalid_type_error: 'Enter a number' }).min(min, msg).max(max, msg);
+};
+
 /** Range-validated schema; hollowLength is required for the hollow variant. */
 export const chamberFormSchema = z
   .object({
-    x1: z.number({ invalid_type_error: 'Enter a number' }).min(r.x1.min).max(r.x1.max),
-    x2: z.number({ invalid_type_error: 'Enter a number' }).min(r.x2.min).max(r.x2.max),
-    x3: z.number({ invalid_type_error: 'Enter a number' }).min(r.x3.min).max(r.x3.max),
+    x1: modelRange(r.x1, 'mm'),
+    x2: modelRange(r.x2, 'm'),
+    x3: modelRange(r.x3, 'm³/s'),
     variant: z.enum(CHAMBER_VARIANTS),
     relationsMaster: z.boolean(),
     relations: z.record(z.boolean()),
@@ -121,7 +127,7 @@ export const chamberFormSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['hollowLength'],
-        message: 'A cone length is required for this variant.',
+        message: 'Enter a cone length: the With cone design needs one.',
       });
     }
   });

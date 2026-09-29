@@ -30,7 +30,7 @@ describe('chamberFormSchema', () => {
     expect(hollow.success).toBe(false);
     if (!hollow.success) {
       const issue = hollow.error.issues.find((i) => i.path.join('.') === 'hollowLength');
-      expect(issue?.message).toBe('A cone length is required for this variant.');
+      expect(issue?.message).toBe('Enter a cone length: the With cone design needs one.');
     }
     // The same blank is fine on stepped (the field is unused there).
     expect(parse({ ...CHAMBER_FORM_DEFAULTS, variant: 'stepped', hollowLength: undefined }).success).toBe(
