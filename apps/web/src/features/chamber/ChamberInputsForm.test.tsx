@@ -49,6 +49,7 @@ function Harness({
       isBuilding={false}
       variant={variant ?? values.variant}
       simplifyGenerator={values.simplifyGenerator}
+      coneChamferEnabled={values.coneChamferEnabled}
       autoLengthMm={8889}
       autoDims={AUTO_DIMS}
       relationsMaster={relationsMaster}
@@ -218,6 +219,42 @@ describe('ChamberInputsForm', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
     await waitFor(() => expect(onValid).toHaveBeenCalledTimes(1));
     expect((onValid.mock.calls[0][0] as ChamberFormValues).simplifyGenerator).toBe(true);
+  });
+
+  it('offers Cone chamfer in With cone only, with its size field only when ticked', () => {
+    const { rerender } = render(<Harness onValid={() => {}} />);
+    // Closed generator: no cone, so no Cone chamfer at all.
+    expect(screen.queryByLabelText(/Cone chamfer/)).not.toBeInTheDocument();
+
+    rerender(<Harness onValid={() => {}} variant="hollow" defaults={{ variant: 'hollow' }} />);
+    const box = screen.getByRole('checkbox', { name: /Cone chamfer/ });
+    expect(box).not.toBeChecked();
+    expect(screen.queryByLabelText('Cone chamfer size (mm)')).not.toBeInTheDocument();
+
+    rerender(
+      <Harness
+        onValid={() => {}}
+        variant="hollow"
+        defaults={{ variant: 'hollow', coneChamferEnabled: true }}
+      />,
+    );
+    expect(screen.getByLabelText('Cone chamfer size (mm)')).toBeInTheDocument();
+  });
+
+  it('submits the cone chamfer flag and its default 50 mm size', async () => {
+    const onValid = vi.fn();
+    render(
+      <Harness
+        onValid={onValid}
+        variant="hollow"
+        defaults={{ variant: 'hollow', coneChamferEnabled: true }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
+    await waitFor(() => expect(onValid).toHaveBeenCalledTimes(1));
+    const submitted = onValid.mock.calls[0][0] as ChamberFormValues;
+    expect(submitted.coneChamferEnabled).toBe(true);
+    expect(submitted.coneChamferSize).toBe(50);
   });
 
   it.each(['stepped', 'hollow'] as const)(

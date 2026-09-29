@@ -47,6 +47,7 @@ describe('chamber saves', () => {
       guideVanes: false,
       vaneAngleDeg: 50,
       vaneCount: 16,
+      coneChamferEnabled: false,
     });
 
     const list = await request(app)
