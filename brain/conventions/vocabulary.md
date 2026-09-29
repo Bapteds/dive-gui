@@ -43,6 +43,7 @@
 | **Hub / shroud** | Inner and outer surfaces of the guide vane channel; separate OpenFOAM patches `hub` and `shroud`. |
 | **Torque feet** | Torque feet (leg + gusset plank), can be disabled. |
 | **Chamfer** | Chamfer of the chamber, can be disabled without touching the rest of the geometry. |
+| **Semi-spiral casing** | Option (both designs, `semiSpiral`): the chamber footprint follows the optimised semi-spiral outline. Its parts: the **spiral** (6 lines L1..L6), the **nose** (3-line tongue tip L7..L9, 200 mm from the widest part), the **plank** (50 mm slab from the nose tip, tangent to the generator / cone). Nose + plank = the **`tongue`** patch (internal name, never renamed). "Casing flow velocity" = `spiralFlowVelocity` (the tool's `c_flow`). Status of the derived rows: `from spiral`. |
 | **Cone chamfer** | Option (With cone only, `coneChamferEnabled` / `coneChamferSize`): 45° chamfer on the inner top edge of the cone wall, so the cone mouth flares outward. Never call it just "Chamfer": that is the chamber's corner chamfer (`chamferEnabled`). |
 | **partScale** | Uniform scale of the inner assembly (chamber and axis fixed). |
 | **Structural relations** | Toggleable empirical identities (H Kammer = LEB + LEOW, LEB = 2 × HLE, P11 = 2 × P10…) with Min/Max/Exact constraints. Original German labels: H Kammer (chamber height), LEB, LEOW, HLE. |
