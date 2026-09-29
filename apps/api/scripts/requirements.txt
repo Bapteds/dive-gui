@@ -30,3 +30,8 @@ cadquery>=2.4
 manifold3d>=2.3
 networkx>=3.0
 shapely>=2.0
+# scipy: the guide-vane patch split (cKDTree in buildChamber.py) and the
+# semi-spiral casing designer (designSemiSpiral.py: differential evolution +
+# L-BFGS-B), both under CHAMBER_PYTHON_BIN. A scipy upgrade can move the spiral
+# vertices (plateaus): purge <STORAGE_DIR>/chamber-spiral/ after one.
+scipy>=1.10
