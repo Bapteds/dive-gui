@@ -347,9 +347,11 @@ def test_stepped_overflow_is_refused(build):
 
 # --- guide-vane pocket vs Runner case Ø (spec 2026-09-29, WS-A) ---------------
 # With guide vanes the whole disk r < LE Ø/2 is carved out of the runner case and
-# the distributor sits inside it, so Runner case Ø must be at least LE Ø: below
-# it (by more than 5 mm) the build is refused, within 5 mm it is snapped flush
-# (WARNING), and a thin ring keeps clean runner-case labels.
+# the distributor sits inside it. Within 5 mm of LE Ø the runner case is snapped
+# flush (WARNING) and a thin ring keeps clean runner-case labels. Further below LE
+# Ø (WS-A v2, spec 2026-09-29-runner-case-below-le) the runner case wall stops
+# 20 mm under the shroud brim and a ledge runs out to LE Ø/2; below Runner Ø
+# (X1) + 20 mm the build is refused.
 
 RUNNER_CASE_FIXTURES = ["hollow-vanes-overrides", "stepped-vanes"]
 
@@ -384,21 +386,119 @@ def _junction_faces(result, name, d_first):
 
 
 @pytest.mark.parametrize("name", RUNNER_CASE_FIXTURES)
-def test_runner_case_below_le_is_refused_with_guide_vanes(build, name):
-    """Runner case Ø 50 mm below LE Ø: the runner case used to be silently
-    erased (and feet cut the blades). Now the build is refused with the levers."""
+def test_runner_case_too_close_to_the_outlet_is_refused(build, name):
+    """Runner case Ø = Runner Ø (X1) + 10 mm: the runner case wall would sit 5 mm
+    outside the outlet passage. Refused with the levers (spec
+    2026-09-29-runner-case-below-le, WS-A v2)."""
     p = _fixture_params(name)
-    d_first = p["dLast"] - 0.05
+    x1 = p["outletOuterD"]
+    d_first = x1 + 0.01
     result = build(name, params_override={"dFirst": d_first})
     assert result.exit_code == 1
-    assert "KO:" in result.stderr
     expected = (
-        "With guide vanes the distributor sits inside the runner case: "
-        "Runner case Ø (%d mm) must be at least LE Ø (%d mm). Increase "
-        "Runner case Ø, clear it (auto ≈ %d mm), or turn Guide vanes off."
-        % (round(d_first * 1000), round(p["dLast"] * 1000),
+        "KO: With guide vanes the runner case must clear the outlet: Runner case Ø "
+        "(%d mm) must be at least Runner Ø + 20 mm (%d mm). Increase Runner case Ø, "
+        "clear it (auto ≈ %d mm), or turn Guide vanes off."
+        % (round(d_first * 1000), round((x1 + 0.02) * 1000),
            round(p["dLast"] * 1.14703 * 1000)))
     assert expected in result.stderr
+
+
+def _ledge(build, name):
+    """The LE Ø - 100 mm build and its junction: (result, faces, r_le, r_case,
+    z_ledge, z_brim, z_floor)."""
+    p = _fixture_params(name)
+    d_first = p["dLast"] - 0.1
+    result = build(name, params_override={"dFirst": d_first})
+    assert result.exit_code == 0, f"builder failed:\n{result.stderr}"
+    faces, r_le, r_case, _z_mid_base = _junction_faces(result, name, d_first)
+    z_brim = float(_patch_mesh(result, "shroud").vertices[:, 2].max())
+    z_ledge = z_brim - 0.02 * p.get("partScale", 1)
+    return result, faces, r_le, r_case, z_ledge, z_brim, -p["height"] / 2
+
+
+@pytest.mark.parametrize("name", RUNNER_CASE_FIXTURES)
+def test_runner_case_below_le_builds_a_ledge(build, name):
+    """LE Ø - 100 mm with guide vanes (used to be refused): builds, watertight,
+    same patches; just below the ledge the section shows the runner case circle
+    at its typed radius with fluid wrapping under the ledge; above the ledge the
+    distributor envelope (LE Ø/2) is unchanged."""
+    result, _f, r_le, r_case, z_ledge, z_brim, _z0 = _ledge(build, name)
+    import numpy as np
+
+    assert "built flush" not in result.stdout
+    assert tuple(pt["name"] for pt in result.manifest) == VANE_PATCHES
+    stl = result.load_stl()
+    assert stl.is_watertight
+    axis = _patch_mesh(result, "outlet").vertices.mean(axis=0)[:2]
+    dirs = [np.array([np.cos(a), np.sin(a)]) for a in np.radians([45, 135, 225, 315])]
+    z = z_ledge - 0.005
+    assert _fluid_mask(stl, [axis + (r_case - 0.004) * d for d in dirs], z) == [False] * 4
+    assert _fluid_mask(stl, [axis + (r_case + 0.004) * d for d in dirs], z) == [True] * 4
+    assert _fluid_mask(stl, [axis + (r_le - 0.004) * d for d in dirs], z) == [True] * 4
+    # between the ledge and the brim: solid out to LE Ø/2, fluid beyond
+    z = 0.5 * (z_ledge + z_brim)
+    assert _fluid_mask(stl, [axis + (r_le - 0.004) * d for d in dirs], z) == [False] * 4
+    assert _fluid_mask(stl, [axis + (r_le + 0.004) * d for d in dirs], z) == [True] * 4
+
+
+@pytest.mark.parametrize("name", RUNNER_CASE_FIXTURES)
+def test_runner_case_ledge_labels(build, name):
+    """Runner case wall and ledge underside -> cylinder_walls, the 20 mm band at
+    LE Ø/2 -> shroud, the floor outside the runner case -> walls."""
+    import numpy as np
+
+    result, faces, r_le, r_case, z_ledge, z_brim, z0 = _ledge(build, name)
+
+    def area_by_patch(sel_fn):
+        out = {}
+        for pname, (r, z, nz, a) in faces.items():
+            sel = sel_fn(r, z, nz)
+            if sel.any():
+                out[pname] = float(a[sel].sum())
+        return out
+
+    wall = area_by_patch(lambda r, z, nz: (nz < 0.5) & (np.abs(r - r_case) < 2e-3)
+                         & (z > z0 + 2e-3) & (z < z_ledge - 2e-3))
+    assert set(wall) == {"cylinder_walls"}, wall
+    assert wall["cylinder_walls"] == pytest.approx(2 * np.pi * r_case * (z_ledge - z0), rel=0.05)
+    ledge = area_by_patch(lambda r, z, nz: (nz > 0.9) & (np.abs(z - z_ledge) < 2e-3)
+                          & (r > r_case + 3e-3) & (r < r_le - 3e-3))
+    assert set(ledge) == {"cylinder_walls"}, ledge
+    assert ledge["cylinder_walls"] == pytest.approx(np.pi * (r_le ** 2 - r_case ** 2), rel=0.05)
+    band = area_by_patch(lambda r, z, nz: (nz < 0.5) & (np.abs(r - r_le) < 2e-3)
+                         & (z > z_ledge + 2e-3) & (z < z_brim - 2e-3))
+    assert set(band) == {"shroud"}, band
+    floor = area_by_patch(lambda r, z, nz: (nz > 0.9) & (np.abs(z - z0) < 2e-3)
+                          & (r > r_case + 3e-3) & (r < r_le + 0.05))
+    assert set(floor) == {"walls"}, floor
+
+
+@pytest.mark.parametrize("name", RUNNER_CASE_FIXTURES)
+def test_runner_case_ledge_keeps_every_guide_vane_triangle(build, name):
+    result = _ledge(build, name)[0]
+    plain = build(name)
+    gv, gv0 = _patch_mesh(result, "guide_vanes"), _patch_mesh(plain, "guide_vanes")
+    assert len(_vane_components(result)) == 16
+    assert gv.area == pytest.approx(gv0.area, rel=2e-3)
+
+
+def test_deep_runner_case_ledge_clips_the_vane_prisms(build):
+    """Runner case Ø = LE Ø - 400 mm on stepped-vanes: the runner case wall now
+    passes under the blades (their outlines reach ~LE Ø/2 - 56 mm). The vane
+    prisms must not hang down into the fluid under the ledge as pillars: the
+    guide_vanes patch keeps the plain build's skin."""
+    p = _fixture_params("stepped-vanes")
+    result = build("stepped-vanes", params_override={"dFirst": p["dLast"] - 0.4})
+    assert result.exit_code == 0, f"builder failed:\n{result.stderr}"
+    assert result.load_stl().is_watertight
+    assert tuple(pt["name"] for pt in result.manifest) == VANE_PATCHES
+    plain = _patch_mesh(build("stepped-vanes"), "guide_vanes")
+    gv = _patch_mesh(result, "guide_vanes")
+    assert len(_vane_components(result)) == 16
+    assert gv.area == pytest.approx(plain.area, rel=2e-3)
+    assert float(gv.vertices[:, 2].min()) == pytest.approx(float(plain.vertices[:, 2].min()),
+                                                           abs=2e-3)
 
 
 @pytest.mark.parametrize("name", RUNNER_CASE_FIXTURES)

@@ -16,7 +16,7 @@ import {
   CHAMBER_GRID_MM,
   computeChamberGeneratorDims,
   blankGeneratorHeightRefusal,
-  runnerCaseBelowLeRefusal,
+  runnerCaseClearanceRefusal,
   computeChamberOutputs,
   nonPositiveChamberFinals,
   snapToChamberGrid,
@@ -456,31 +456,40 @@ describe('blankGeneratorHeightRefusal (blank generator height)', () => {
   });
 });
 
-describe('runnerCaseBelowLeRefusal (Runner case Ø below LE Ø with guide vanes)', () => {
+describe('runnerCaseClearanceRefusal (Runner case Ø vs the outlet with guide vanes)', () => {
+  // Spec 2026-09-29-runner-case-below-le (WS-A v2): below LE Ø the runner case
+  // gets a 20 mm ledge; only Runner case Ø < Runner Ø (X1 = 1450) + 20 mm is refused.
   const LE = { constraints: { dLast: { exact: 1600 } } };
   const VANES = { guideVanes: true };
-  const refusal = (input: Parameters<typeof runnerCaseBelowLeRefusal>[0]) =>
-    runnerCaseBelowLeRefusal(input, computeChamberOutputs(input));
+  const refusal = (input: Parameters<typeof runnerCaseClearanceRefusal>[0]) =>
+    runnerCaseClearanceRefusal(input, computeChamberOutputs(input));
 
-  it('refuses a typed Runner case Ø below LE Ø and names the three levers', () => {
-    const msg = refusal({ ...BASE, ...LE, ...VANES, dFirst: 1450 });
+  it('refuses a Runner case Ø below Runner Ø + 20 mm and names the three levers', () => {
+    const msg = refusal({ ...BASE, ...LE, ...VANES, dFirst: 1460 });
     expect(msg).toBe(
-      'With guide vanes the distributor sits inside the runner case: Runner case Ø (1450 mm) ' +
-        'must be at least LE Ø (1600 mm). Increase Runner case Ø, clear it ' +
+      'With guide vanes the runner case must clear the outlet: Runner case Ø (1460 mm) ' +
+        'must be at least Runner Ø + 20 mm (1470 mm). Increase Runner case Ø, clear it ' +
         '(auto ≈ 1835 mm), or turn Guide vanes off.',
     );
   });
 
-  it('accepts a Runner case Ø within 5 mm below LE Ø (the builder snaps it flush)', () => {
+  it('accepts a Runner case Ø below LE Ø from Runner Ø + 20 mm up (ledge or snap)', () => {
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1469 })).not.toBeNull();
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1470 })).toBeNull();
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1500 })).toBeNull();
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1550 })).toBeNull();
     expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1595 })).toBeNull();
     expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1600 })).toBeNull();
-    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1594 })).not.toBeNull();
   });
 
-  it('compares on the scaled diameters (the builder tolerance is in real mm)', () => {
-    // 4 mm below at scale 1 is snapped; at Part scale 2 it is 8 mm below.
-    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1596 })).toBeNull();
-    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1596, partScale: 2 })).not.toBeNull();
+  it('compares the scaled Runner case Ø with the real (unscaled) Runner Ø', () => {
+    // The outlet follows X1 directly; the runner case scales with Part scale.
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1400, partScale: 1.1 })).toBeNull();
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1600, partScale: 0.9 })).toBe(
+      'With guide vanes the runner case must clear the outlet: Runner case Ø (1600 mm, ' +
+        '1440 mm at Part scale 0.9) must be at least Runner Ø + 20 mm (1470 mm). Increase ' +
+        'Runner case Ø, clear it (auto ≈ 1835 mm), or turn Guide vanes off.',
+    );
   });
 
   it('leaves the auto Runner case Ø and vane-less builds alone', () => {

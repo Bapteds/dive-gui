@@ -562,7 +562,7 @@ describe('Chamber Creation', () => {
     expect(res.body.error.message).toContain('is too low for the generator');
   });
 
-  it('refuses a Runner case Ø below LE Ø with guide vanes, before any builder run', async () => {
+  it('refuses a Runner case Ø below Runner Ø + 20 mm with guide vanes, before any builder run', async () => {
     let calls = 0;
     setCommandRunner(async (spec) => {
       calls += 1;
@@ -572,14 +572,30 @@ describe('Chamber Creation', () => {
     const res = await request(app)
       .post('/api/v1/chamber/build')
       .set('Authorization', auth)
-      .send({ ...BUILD, guideVanes: true, dFirst: 1450, constraints: { dLast: { exact: 1600 } } })
+      .send({ ...BUILD, guideVanes: true, dFirst: 1460, constraints: { dLast: { exact: 1600 } } })
       .expect(422);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
     expect(res.body.error.message).toContain(
-      'Runner case Ø (1450 mm) must be at least LE Ø (1600 mm)',
+      'Runner case Ø (1460 mm) must be at least Runner Ø + 20 mm (1470 mm)',
     );
     expect(res.body.error.message).toContain('or turn Guide vanes off.');
     expect(calls).toBe(0);
+  });
+
+  it('builds a Runner case Ø below LE Ø with guide vanes (the builder adds the ledge)', async () => {
+    const seen: Record<string, unknown>[] = [];
+    setCommandRunner(async (spec) => {
+      seen.push(JSON.parse(await fs.readFile(spec.args[1], 'utf8')));
+      return successRunner(spec);
+    });
+    const auth = authHeader(await createTestUser());
+    await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, guideVanes: true, dFirst: 1550, constraints: { dLast: { exact: 1600 } } })
+      .expect(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].dFirst).toBeCloseTo(1.55, 12);
   });
 
   it('refuses an inverted Min>Max constraint range, before any builder run', async () => {
