@@ -327,6 +327,115 @@ def test_stepped_overflow_is_refused(build):
     assert "Lower HLE, Part scale" in result.stderr
 
 
+# --- guide-vane pocket vs Runner case Ø (spec 2026-09-29, WS-A) ---------------
+# With guide vanes the whole disk r < LE Ø/2 is carved out of the runner case and
+# the distributor sits inside it, so Runner case Ø must be at least LE Ø: below
+# it (by more than 5 mm) the build is refused, within 5 mm it is snapped flush
+# (WARNING), and a thin ring keeps clean runner-case labels.
+
+RUNNER_CASE_FIXTURES = ["hollow-vanes-overrides", "stepped-vanes"]
+
+
+def _fixture_params(name):
+    with open(os.path.join(HERE, "params", f"{name}.json")) as fh:
+        return json.load(fh)
+
+
+def _junction_faces(result, name, d_first):
+    """Per-patch (r, z, |nz|) of every wetted face about the part axis, plus the
+    resolved radii / heights of the junction (metres, scaled)."""
+    import numpy as np
+    import trimesh
+
+    p = _fixture_params(name)
+    s = p.get("partScale", 1)
+    h_first = (p["hMiddlePlusFirst"] - p["hMiddle"]) * s
+    z_mid_base = -p["height"] / 2 - 0.01 + h_first
+    r_env = p["dLast"] * s / 2
+    r_case = d_first * s / 2
+    with zipfile.ZipFile(result.export_path("trisurface.zip")) as zf:
+        meshes = {n[:-4]: trimesh.load(io.BytesIO(zf.read(n)), file_type="stl")
+                  for n in zf.namelist() if n != "domain.stl"}
+    axis = meshes["outlet"].vertices.mean(axis=0)
+    faces = {}
+    for pname, m in meshes.items():
+        fc = m.vertices[m.faces].mean(axis=1)
+        faces[pname] = (np.hypot(fc[:, 0] - axis[0], fc[:, 1] - axis[1]), fc[:, 2],
+                        np.abs(m.face_normals[:, 2]), m.area_faces)
+    return faces, r_env, r_case, z_mid_base
+
+
+@pytest.mark.parametrize("name", RUNNER_CASE_FIXTURES)
+def test_runner_case_below_le_is_refused_with_guide_vanes(build, name):
+    """Runner case Ø 50 mm below LE Ø: the runner case used to be silently
+    erased (and feet cut the blades). Now the build is refused with the levers."""
+    p = _fixture_params(name)
+    d_first = p["dLast"] - 0.05
+    result = build(name, params_override={"dFirst": d_first})
+    assert result.exit_code == 1
+    assert "KO:" in result.stderr
+    expected = (
+        "With guide vanes the distributor sits inside the runner case: "
+        "Runner case Ø (%d mm) must be at least LE Ø (%d mm). Increase "
+        "Runner case Ø, clear it (auto ≈ %d mm), or turn Guide vanes off."
+        % (round(d_first * 1000), round(p["dLast"] * 1000),
+           round(p["dLast"] * 1.14703 * 1000)))
+    assert expected in result.stderr
+
+
+@pytest.mark.parametrize("name", RUNNER_CASE_FIXTURES)
+def test_runner_case_within_5_mm_of_le_is_built_flush(build, name):
+    """LE Ø + 2 mm: snapped flush with LE Ø (WARNING). The casing overshoot
+    used to poke out of the 1 mm ring and its wall was split between
+    cylinder_walls, shroud and walls."""
+    import numpy as np
+
+    p = _fixture_params(name)
+    d_first = p["dLast"] + 0.002
+    result = build(name, params_override={"dFirst": d_first})
+    assert result.exit_code == 0, f"builder failed:\n{result.stderr}"
+    assert ("WARNING: Runner case Ø %d mm is within 5 mm of LE Ø %d mm: "
+            "built flush with it." % (round(d_first * 1000), round(p["dLast"] * 1000))
+            ) in result.stdout
+    assert tuple(pt["name"] for pt in result.manifest) == VANE_PATCHES
+    assert result.load_stl().is_watertight
+
+    faces, r_env, _r_case, z_mid_base = _junction_faces(result, name, d_first)
+    r, _z, _nz, _a = faces["shroud"]
+    assert int((r > r_env + 1e-3).sum()) == 0, "shroud faces outside LE Ø/2"
+    for pname in ("shroud", "walls"):
+        r, z, nz, _a = faces[pname]
+        on_wall = (nz < 0.5) & (np.abs(r - r_env) < 3e-3) & (z < z_mid_base)
+        assert int(on_wall.sum()) == 0, f"{pname} faces on the runner-case wall"
+
+
+@pytest.mark.parametrize("name", RUNNER_CASE_FIXTURES)
+def test_thin_runner_case_ring_keeps_clean_labels(build, name):
+    """LE Ø + 12 mm (a 6 mm ring): the casing overshoot (10 mm) used to poke
+    out of the ring and become a wetted wall labelled shroud / walls. Every
+    vertical wetted face just outside LE Ø/2 must now be the runner case."""
+    import numpy as np
+
+    p = _fixture_params(name)
+    d_first = p["dLast"] + 0.012
+    result = build(name, params_override={"dFirst": d_first})
+    assert result.exit_code == 0, f"builder failed:\n{result.stderr}"
+    assert "built flush" not in result.stdout
+    assert tuple(pt["name"] for pt in result.manifest) == VANE_PATCHES
+    assert result.load_stl().is_watertight
+
+    faces, r_env, r_case, z_mid_base = _junction_faces(result, name, d_first)
+    band = {}
+    for pname, (r, z, nz, a) in faces.items():
+        sel = (nz < 0.5) & (r > r_env + 1e-3) & (r < r_case + 0.015) & (z < z_mid_base)
+        if sel.any():
+            band[pname] = float(a[sel].sum())
+    assert set(band) == {"cylinder_walls"}, band
+    # The runner-case wall is there, whole, at its typed radius.
+    expected = 2 * np.pi * r_case * (z_mid_base + p["height"] / 2)
+    assert band["cylinder_walls"] == pytest.approx(expected, rel=0.05)
+
+
 # --- guide-vane trailing-edge rounding ---------------------------------------
 # The CAD blade has a BLUNT trailing edge (a flat base with two sharp corners);
 # the builder rounds it with a tangent arc so the mesher never sees the corners
