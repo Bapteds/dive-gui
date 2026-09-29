@@ -65,6 +65,9 @@ Nothing under `STORAGE_DIR` is purged by a periodic job: deletion is always trig
     ├── warnings.json                     builder warnings
     ├── build-meta.json                   { stepHasVanes }
     └── exports/{chamber.stl, chamber.step, chamber-mirrored.step, trisurface.zip}
+└── chamber-spiral/<spiralHash16>/       semi-spiral casing results (chamberStorage, since 2026-09-29)
+    ├── in.json                           the 7 tool inputs (m)
+    └── spiral.json                       designSemiSpiral.py result (vertices, quality, warnings)
 ```
 
 The folder names `viz`, `runs`, `export`, `chamber` come from shared constants (`VIZ_DIRNAME`, `RUN_DIRNAME`, `EXPORT_DIRNAME`, `CHAMBER_DIRNAME` in `packages/shared/src/index.ts`); `case`, `cgns`, `meshes`, `backups`, `templates`, `meshing`, `.work`, `.src`, `.viz` are hardcoded in the storage modules.
@@ -145,6 +148,12 @@ The folder names `viz`, `runs`, `export`, `chamber` come from shared constants (
 - **Read by**: `chamber.service` (`chamberGlbExists` as the cache test, `readChamber*`), `meshing.service` (chamber to meshing transfer: reads `exports/trisurface.zip` via `readChamberExport`).
 - **Lock**: `withChamberLock(hash)` in `chamber.service`, a promise chain per hash: the cache test and the build happen under the lock, so two identical builds cannot write the same folder in parallel; on-demand STEP generation rechecks under the lock. Reads are lock-free.
 - **Lifecycle**: no purge in the code read; the cache grows with each distinct parameter set (to verify whether a purge exists elsewhere).
+
+### `chamber-spiral/<spiralHash>/`
+- **Key**: SHA-1 of `{algorithm: 'ref-2026-09-22-seed5', inputs: sorted [key, value] pairs}`, 16 hex (`spiralHash` in `chamber.service.ts`). The folder name is hardcoded in `chamberStorage.ts` (`CHAMBER_SPIRAL_DIRNAME`).
+- **Written by**: `writeChamberSpiralInput` (`in.json`) then `CHAMBER_PYTHON_BIN designSemiSpiral.py in.json spiral.json` (the script writes `spiral.json.tmp` then renames), under `withChamberLock('spiral:' + hash)`.
+- **Read by**: `designSpiral` in `chamber.service` (cache test = a valid `spiral.json`); its vertices are copied into the build's `params.json`, so the chamber build never reads this folder.
+- **Lifecycle**: purge it whenever `designSemiSpiral.py` or scipy changes (the vertices are only reproducible on one scipy version); no purge in the code.
 
 ## Path safety rules
 

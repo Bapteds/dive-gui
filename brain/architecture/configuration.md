@@ -107,6 +107,7 @@ snappy parallelism reuses `MPI_BIN`, `MPI_RUN_FLAGS`, `DECOMPOSE_METHOD` and `SO
 | `BUILD_CHAMBER_SCRIPT` | `''` | absent | Builder path. | Missing on disk: 500 `SCRIPT_MISSING`. | chamber |
 | `MIRROR_STEP_SCRIPT` | `''` | absent | Path of the mirrored STEP generator. | | chamber |
 | `CHAMBER_BUILD_TIMEOUT_MS` | `600000` | absent | Timeout of a build, a STEP generation or a mirror. | | chamber |
+| `CHAMBER_SPIRAL_TIMEOUT_MS` | `300000` | `300000` | Timeout of one semi-spiral casing optimisation (`designSemiSpiral.py`, 30 to 90 s, same interpreter as the builder); a timeout is a 502 `CHAMBER_BUILD_FAILED` naming the variable. | since 2026-09-29 | chamber |
 
 ## API: CFD-Post export (OpenFOAM to CGNS)
 

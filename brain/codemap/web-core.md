@@ -333,6 +333,7 @@ Exports `getDashboard(): Promise<DashboardData>` (`GET /dashboard`, server metri
 **Notes**: imports the `UploadFile` type from `@/features/files/folderImport`: an inverted `lib` to `features` dependency.
 
 ## `apps/web/src/lib/api/types.ts`
+**Semi-spiral (2026-09-29)**: `ChamberBuildResponse.spiral?: ChamberSpiralSummary | null` (re-exported from `@dive/shared`).
 **Role**: typed contract of the `/api/v1` API consumed by the whole front end. A mix of local interfaces (response envelopes, request bodies) and re-exports from `@dive/shared` (types and a few runtime values).
 **Exports** (by group):
 - Users and errors: `Role` (re-export), `User` (`id`, `email`, `fullName`, `role`, `isProtected`, `isActive`, `lastLoginAt`, `createdAt`, `updatedAt`), `ApiErrorBody`, `ApiErrorCode` = `ServerErrorCode | 'UNAUTHORIZED' | 'NETWORK_ERROR' | 'UNKNOWN'`.
@@ -370,6 +371,7 @@ Exports `cn(...inputs: ClassValue[]): string` = `twMerge(clsx(inputs))`: class m
 **Depends on**: `features/admin/*`, `useAuth`. **Notes**: single orange CTA "Add user" in the header (reused in the empty state).
 
 ## `apps/web/src/pages/ChamberPage.tsx`
+**Semi-spiral (2026-09-29)**: keeps the last build's `spiral` (`lastSpiral`); the live outputs use `chamberSpiralModelInput` and, with the spiral ticked, `applyChamberSpiralToOutputs` filled from the last spiral only while the inputs still match that build (`lastBuildMatches`, also behind `isStale`); `onSemiSpiralChange` unticks Feet and Chamfer; `FIELD_LABELS` gain `feetEnabled` and `spiralFlowVelocity`; the table gets `spiral={{ on, summary }}`.
 **Role**: Chamber Creation tool (`/chamber`): input form, live computation of the 12 outputs, CadQuery generation, 3D preview, exports, send to Meshing, saves.
 **Exports**: `ChamberPage()` (named + `default`).
 **Depends on**: `react-hook-form` + `zodResolver(chamberFormSchema)` (`mode: 'onChange'`), `computeChamberOutputs` from `@dive/shared` (client-side computation), `features/chamber/*` (`ChamberInputsForm`, `chamberForm` helpers, `ChamberSavesMenu`, `ChamberOutputsTable`, `ChamberBuildWarnings`, `ChamberExportButtons`, `SendToMeshingDialog`, `useBuildChamber`), `buildChamber` directly, `ChamberViewer` as `lazy` (three.js).

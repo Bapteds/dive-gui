@@ -1,7 +1,7 @@
 # Semi-spiral casing option (Chamber Creation) — design
 
 **Date:** 2026-09-29
-**Status:** approved (2026-09-29), implementation after WS-A, WS-B, WS-C
+**Status:** implemented (2026-09-29, WS-E). Handedness check: the spiral is mirrored (tool x → builder −X). Deviations noted in `brain/decisions.md` (plank back extension, ignored derived-row constraints, read-only Length row).
 **Source material:** `documents/Semi-spiral-creation/SEMI_SPIRAL_TOOL_SPEC.md` (approved tool spec, 2026-09-22),
 `documents/Semi-spiral-creation/reference_semi_spiral.py` (reference implementation).
 **Related:** `brain/features/chamber-creation.md` (§3.6 to §3.9, §4.3, §5.1), `brain/playbooks/change-chamber-geometry.md`,

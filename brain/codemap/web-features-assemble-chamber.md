@@ -121,6 +121,7 @@ Two independent frontend features.
 PNG 1319 × 511 (≈ 390 KB): annotated CAD drawings (plan view B Kammer, B1, BF1/BF2, LF1/LF2, LT; section H Kammer, LEB, LEOW, HLE, LE Ø), imported by `ChamberOutputsTable` for the "Dimension reference" legend.
 
 ## `apps/web/src/features/chamber/ChamberBuildWarnings.test.tsx`
+**Since 2026-09-29** the warning list also carries the semi-spiral width-limit note.
 **Covers**: nothing is rendered for a clean build; errors appear in a "Build errors" block; errors and warnings coexist in two blocks; each warning becomes a `listitem` under "Build warnings".
 **Technique**: direct render, queries by `alert` role and by text.
 **Notable cases**: realistic builder messages (2 × HLE shoulder too high, clamped outlet radius, vane-less STEP fallback).
@@ -142,10 +143,12 @@ PNG 1319 × 511 (≈ 390 KB): annotated CAD drawings (plan view B Kammer, B1, BF
 **Notes**: with `offerMirror` (vaned build whose STEP actually carries the vanes), the STEP button becomes a menu; vaned builds defer the STEP export on the server side, hence the `info` toast "Preparing the STEP export…" on the first download of each kind. `onDownloaded` lets `ChamberPage` silently re-POST the body (cache hit) to fetch new warnings, and collapse the menu if the STEP is a vane-less fallback (`stepHasVanes === false`). The object URL is revoked immediately after `click()`.
 
 ## `apps/web/src/features/chamber/ChamberInputsForm.test.tsx`
+**Semi-spiral (2026-09-29)**: the harness wires `semiSpiral` (watch) and `onSemiSpiralChange` (unticks Feet and Chamfer, as `ChamberPage`); checkbox in both designs, Feet / Chamfer unticked and disabled with the reason, Length hidden, velocity shown, submitted body.
 **Covers**: "hollow" fields visible only for `variant: 'hollow'`; rounded hints (`Blank = auto ≈ 2778 mm`, `Blank = 2 × width ≈ 8889 mm`); submission of the defaults with `undefined` overrides; typed override → number, cleared → `undefined`; hollow blocked without a cone length; out-of-range X1 blocked (`role="alert"`); relations counter and "Configure" disabled when the master is off; `Power (kW)` field and its formula in hollow only; "Simplify generator" hides height and dome; submission of `simplifyGenerator` and `x4`; "Cone chamfer" checkbox in With cone only, "Cone chamfer size (mm)" only when ticked, submission `coneChamferEnabled: true, coneChamferSize: 50`; "Guide vane count" select (options 16/18, default 16) in both designs, choosing 18 submits the number 18.
 **Technique**: `Harness` that wires `useForm` + `zodResolver(chamberFormSchema)` like `ChamberPage`; fixed `AUTO_DIMS`; `rerender` to change variant (the `defaultValues` are only read on mount, hence fresh mounts when the submitted value matters).
 
 ## `apps/web/src/features/chamber/ChamberInputsForm.tsx`
+**Semi-spiral (2026-09-29)**: props `semiSpiral?`, `onSemiSpiralChange?`; "Semi-spiral casing" checkbox card after Guide vanes (both designs, `register('semiSpiral', { onChange })`); while ticked, Chamfer and Feet are `disabled` with their reason shown in place of the description, and "Casing flow velocity (m/s)" (`inputMode="decimal"`, 0.3–3) replaces Length.
 **Role**: presentational form for the chamber inputs. The parent owns the react-hook-form instance (so that the parameter table recomputes live on the same values) and passes `register`, `errors`, the current variant and the auto values.
 **Exports**:
 - `ChamberInputsForm({ register, errors, onSubmit, isBuilding, variant, simplifyGenerator, autoLengthMm, autoDims, relationsMaster, relations, onRelationChange })` (+ default). Submit button "Generate chamber" (`loading={isBuilding}`).
@@ -158,10 +161,12 @@ PNG 1319 × 511 (≈ 390 KB): annotated CAD drawings (plan view B Kammer, B1, BF
 - Relations: one `DropdownMenuCheckboxItem` per relation (`onSelect` with `preventDefault` to keep the menu open), counter `(n/total on)` forced to 0 if the master is off, trigger disabled.
 
 ## `apps/web/src/features/chamber/ChamberOutputsTable.test.tsx`
+**Semi-spiral (2026-09-29)**: 7 `from spiral` cells and no B1 / LT inputs before Generate, values + Length + quality note after, nothing while off.
 **Covers**: prompt when `outputs === null`; collapsed "Dimension reference" legend (`aria-expanded`, image shown/hidden); one row per output with status and relation labels (`= LEB + LEOW`, `= LF1 + LF2`); Min edit → `onConstraintChange('width', 'min', 4000)`; Exact editable on an identity output (`height`); "no effect" tag on LEOW when H Kammer is fixed as Exact, and absent otherwise; confidence pill `Low · 38.9%` visible; 50 mm grid hint; final ≤ 0 flagged "not buildable"; negative input or > 100,000 turned into `undefined`; cleared cell → `undefined`.
 **Technique**: real outputs via `computeChamberOutputs` from `@dive/shared` (no mock).
 
 ## `apps/web/src/features/chamber/ChamberOutputsTable.tsx`
+**Semi-spiral (2026-09-29)**: optional prop `spiral { on, summary }`; rows with status `from spiral` render read-only (`ReadOnlyCell`, sr-only "read-only, from the spiral"; Model and Confidence "-", Final "-" while NaN); a read-only Length row after B Kammer and a `SpiralNote` (`role="status"`: "fill in after Generate" or width, B Kammer limit, worst cross-section error and angle).
 **Role**: table of the twelve computed parameters (mm) with Min / Max / Exact constraints editable inline. Columns: Parameter, Model (raw regression), Min, Max, Exact, Final (after clamp), Status, Confidence (leave-one-out cross-validation error). Live recomputation by the parent.
 **Exports**: `ChamberOutputsTable({ outputs, constraints, onConstraintChange })` (+ default). Local state `legendOpen`. Internal `NumCell`: `type="number"`, accepts only `0 < v ≤ CHAMBER_DIMENSION_MAX_MM`, otherwise reports `undefined`.
 **Depends on**: `CHAMBER_DIMENSION_MAX_MM` (`@dive/shared`), types `ChamberOutput`, `ChamberConstraint`, `ChamberOutputKey`, `ChamberStatus`, `ChamberConfidence`, PNG asset. **Used by**: `ChamberPage`.
@@ -194,11 +199,13 @@ PNG 1319 × 511 (≈ 390 KB): annotated CAD drawings (plan view B Kammer, B1, BF
 **Notes**: in `new` mode, a cleared name is sent as is (`''`) without client validation. Engine labels: `snappyHexMesh` / `cfMesh`. Displayed note: patches with the same name replace the existing surfaces, the others are kept.
 
 ## `apps/web/src/features/chamber/chamberForm.test.ts`
+**Semi-spiral (2026-09-29)**: defaults, velocity bounds, Feet refused with the spiral, old-save fallbacks and round trip.
 **Covers**: valid defaults; cone length required in hollow only; range guards (`footAngleDeg` 0..180, `partScale` ]0,5], `vaneAngleDeg` 45..55, `outletRatio` 0.35..0.50, `vaneCount` 16/18 with "Choose 16 or 18 vanes"); overrides optional but positive; `chamberInputToFormValues` round-trip (complete incl. `vaneCount: 18`, sparse, partial relations, old save without `vaneCount` → 16); `x4` (> 0, ≤ ceiling, `100_001` rejected); `simplifyGenerator`; cone chamfer (defaults off / 50, old saves off / 50, round trip, `superRefine` "Must be at most the Wall thickness (50 mm)" and "… inside depth of the cone (… = 30 mm)", size = wall accepted, ignored when off or in Closed generator, 0 refused); `chamberBodyKey` insensitive to key order, `undefined` ≡ omitted key, real drift detected (value, nested relation, constraint); `computeChamberAutoDims` (ratios `1.14703` and `0.8` × dLast, `x4 ≈ 618.03` for X2=7, X3=10, generator Ø `1242`, cascade from a typed Ø to height/dome, `x4 = 2000` → Ø `2225`, generator hints `null` if X1..X3 are not finite).
 **Technique**: pure Vitest tests on the zod schema and the shared functions of `@dive/shared`.
 **Notable cases**: the `chamberBodyKey` block guards against the regression of the "Inputs changed since this build" banner stuck after Generate.
 
 ## `apps/web/src/features/chamber/chamberForm.ts`
+**Semi-spiral (2026-09-29)**: `semiSpiral` / `spiralFlowVelocity` in values, schema (0.3..3; `superRefine` refuses Feet on with the spiral), defaults (false / 0.922) and `chamberInputToFormValues` fallbacks (old saves load off / 0.922).
 **Role**: form contract of the chamber inputs, separated from the component for fast-refresh. Consumed by `ChamberPage` (useForm + zodResolver, stale build detection, loading of saves, hints) and `ChamberInputsForm`.
 **Exports**:
 - `ChamberFormValues` (interface): `x1`, `x2`, `x3`, `variant`, `relationsMaster`, `relations`, `footAngleDeg`, `partScale`, `guideVanes`, `chamferEnabled`, `feetEnabled`, `vaneAngleDeg`, `vaneCount` (`ChamberVaneCount`), `outletRatio`, `simplifyGenerator`, `coneChamferEnabled`, and optional overrides `lengthOverride`, `hollowLength`, `wallThickness`, `dFirst`, `dMiddle`, `x4`, `centralDiameter`, `centralHeight`, `domeHeight`, `coneChamferSize`.

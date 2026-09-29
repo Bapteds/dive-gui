@@ -1,0 +1,80 @@
+{
+ "scipy": [
+  "1.18.0",
+  "1.18.1"
+ ],
+ "note": "Reference tool output, 2026-09-29, C:/cqv (scipy 1.18.1, numpy 2.5.3); identical with scipy 1.18.0 + numpy 2.5.0. Vertices only reproduce on the listed scipy versions (plateaus, spec section 2).",
+ "inputs": {
+  "D_LE": 3.074,
+  "H_ch": 2.97,
+  "Q": 12,
+  "c_flow": 0.922,
+  "clearance": 0.2,
+  "max_width": 6.15,
+  "phi_start": 160
+ },
+ "vertices": [
+  {
+   "id": "V0",
+   "x": -4.05,
+   "y": -1.938178
+  },
+  {
+   "id": "V1",
+   "x": -4.05,
+   "y": 0.95
+  },
+  {
+   "id": "V2",
+   "x": -2.05,
+   "y": 3.0
+  },
+  {
+   "id": "V3",
+   "x": 0.6,
+   "y": 3.0
+  },
+  {
+   "id": "V4",
+   "x": 2.0,
+   "y": 1.5
+  },
+  {
+   "id": "V5",
+   "x": 2.0,
+   "y": -0.15
+  },
+  {
+   "id": "V6",
+   "x": 1.632246,
+   "y": -0.594089
+  },
+  {
+   "id": "V7",
+   "x": 1.632246,
+   "y": -1.044089
+  },
+  {
+   "id": "V8",
+   "x": 2.0,
+   "y": -1.488178
+  },
+  {
+   "id": "V9",
+   "x": 2.0,
+   "y": -1.938178
+  }
+ ],
+ "dimensions": {
+  "foot_y": -1.938178,
+  "height": 2.97,
+  "max_x": 2.0,
+  "min_x": -4.05,
+  "width": 6.05
+ },
+ "quality": {
+  "at_phi_deg": 237.5,
+  "width_binding": false,
+  "worst_area_error_m2": 0.4613
+ }
+}

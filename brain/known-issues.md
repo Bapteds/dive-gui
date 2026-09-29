@@ -114,7 +114,7 @@ Implement nothing without an explicit request from the user.
 - **Feet at small Runner Ø** (found 2026-09-28 sweep, not fixed): at Runner Ø 700 mm the fixed-size torque feet cannot form the gusset at the default 40° angle ("footAngleDeg 40.0 cannot form the triangular gusset") for most Head / Q_max. Workarounds: another foot angle, Part scale, or Feet off. Proposal (not requested): scale the feet with dFirst.
 - **With cone without vanes: non-watertight STL** (found 2026-09-28, not fixed): the OCC tessellation of the dome leaves one degenerate sliver triangle at its apex (1 open edge; default inputs). Vane builds already drop such slivers; the vane-less STL export does not.
 - **Guide-vane pocket vs Runner case Ø**: fixed 2026-09-29 (spec `2026-09-29-vane-pocket-runner-case-design.md`): a typed Runner case Ø below LE Ø used to erase the runner case silently (and the feet cut the blades), a thin ring (< 10 mm) let the shroud casing poke out and split its wall between `cylinder_walls`, `shroud` and `walls`. Now refused below LE Ø − 5 mm, snapped flush within 5 mm (warning), casing overshoot capped at half the ring, deterministic junction labels.
-- **Semi-spiral tool**: approved spec and reference implementation in `documents/Semi-spiral-creation/` (added on 2026-09-22), not yet integrated into the application.
+- ✅ **Semi-spiral tool**: integrated on 2026-09-29 as the Chamber Creation option "Semi-spiral casing" (spec `2026-09-29-semi-spiral-casing-design.md`). Still open: legs / torque feet with the spiral (refused), a browser pass of both designs, and the degenerate-spiral refusal is unreachable with legal inputs (kept as a guard).
 
 - **Stop during run setup (to verify)**: while writing the WS-F tests (2026-09-29, native Windows), a Stop sent right after a meshing run started, before its first tool was live, seemed to be lost and the run hung. Not reproduced with the existing meshing tests; the stop logic reads correct. To verify on the Debian server.
 
@@ -132,7 +132,7 @@ Noted while reading the entire code base to build the codemaps. **None has been 
 - ⬜ **K7** JSDoc/code gaps: `startRunSchema` (`solver` override actually ignored, see L6), `editPatchesSchema` (cites `MESH_PATCH_TYPES`, validates `MESH_PATCH_SETTINGS`), patch name message (does not announce that the hyphen is accepted), `meshes.service` header (describes `createNonConformalCouples` whereas the code retypes to non-conformal `cyclicAMI`; `STITCH_TOL` unused), `readArtifacts` (the CGNS download serves `out.cgns` first).
 
 ### Python
-- ⬜ **K8** `requirements.txt` does not include `scipy`, imported by every build with guide vanes (present only in `requirements-geometry.txt`).
+- ✅ **K8** `requirements.txt` does not include `scipy`: fixed 2026-09-29 (`scipy>=1.10`, needed by vaned builds and `designSemiSpiral.py`).
 - ⬜ **K9** `FoamToCgns.py`: the docstring announces ADF CGNS whereas the code writes HDF5; `fields` argument ignored (see L21).
 - ⬜ **K10** Scripts outside the `OK:`/`KO:` contract: `mirrorStep.py` (usage ⇒ exit 1), `bakeVaneBladeProfile.py` (`OK:` on stderr), `csv_to_boundaryData.py` (no `OK:`), `CgnsMergeTime.py` (checks h5py before argc).
 - ⬜ **K11** `buildChamber.py --step` without `outletOuterD`/`outletRatio` always produces a STEP without vanes (`NameError` guard); comments still say "no boolean"; references to `prepare_openfoam.py`, `_diag_*.py`, which are absent from the repository.

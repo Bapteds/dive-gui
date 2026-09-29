@@ -1,6 +1,6 @@
 # Index of every repository file
 
-> One line per file (556 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
+> One line per file (563 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
 
 Detail of a code file: open the sheet shown and search for the `## path/to/file` section. Documents: the description is their title and introduction line.
 
@@ -99,6 +99,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/scripts/bakeVaneBladeProfile.py` : offline (one-time) tool that extracts the clean NURBS vane profile from the SolidWorks STEP and writes it to `assets/guideVanes_blade_profile.json`, registered onto the mid-height section of `guideVanes_blade.stl`. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/buildChamber.py` : "one-shot" geometry builder of the Chamber Creation feature. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/csv_to_boundaryData.py` : converts a velocity profile CSV (ParaView / CFX-Post export at the runner outlet) into the `constant/boundaryData/<patch>/` format read by `timeVaryingMappedFixedValue`. · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/designSemiSpiral.py` : semi-spiral casing designer (spec `brain/specs/2026-09-29-semi-spiral-casing-design.md` §8): a numpy + scipy port of `documents/Semi-spiral-creation/reference_semi_spiral.py`. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/extractPatches.py` : reads the boundary patches of an OpenFOAM case and produces a compact GLB + JSON manifest + `edges.bin` for the three.js viewer. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/mirrorStep.py` : produces the mirrored STEP of a chamber (YZ plane, x to -x, then translation by `xmin + xmax`) for the "Change rotational direction" action: same bounding box, only the chirality changes. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/preprocessVanes.py` : offline (one-time) tool that splits `GuideVanes50DegOpen.stl` (17 components: 16 blades + 1 shell) into committed assets. · [api-scripts](codemap/api-scripts.md)
@@ -117,15 +118,24 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 
 - `apps/api/scripts/tests/conftest.py` : infrastructure of the real geometry suite (no mocks). · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/tests/test_build_chamber.py` : the guarantees of `buildChamber.py` the API depends on: output contract (last stdout line `OK:`; `KO:` + exit code 1), watertight STL, golden volume (`GOLDEN`, tolerance `VOL_RTOL = 5e-3`), names and order of the manifes … · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/tests/test_design_semi_spiral.py` : `designSemiSpiral.py` with numpy + scipy only (runs without CadQuery: `conftest.py` skips only the builder tests). · [api-scripts](codemap/api-scripts.md)
 
 ## `apps/api/scripts/tests/params`
 
 - `apps/api/scripts/tests/params/hollow-vanes-overrides.json` : Real parameters (`hollow` variant, `guideVanes: true`, `feetEnabled: false`, `partScale` 1, overrides `dFirst` 2.92 / `dMiddle` 2.23126, `outletOuterD` 1.68, `outletRatio` 0.45, `simplifyGenerator: false`). · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/tests/params/hollow-vanes-spiral.json` : `hollow-vanes.json` (partScale 0.7944) with the same flags and a frozen spiral (Q 8, 0.922 m/s, H 2.7, D_LE 2.4419, max_width 6.1; width 4.75, 0.3004 m² at 193.8°). · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/tests/params/hollow-vanes.json` : Vaned `hollow` variant, feet enabled, `partScale` 0.7944 (the maximum that fits in `height` 2.7; at 1 the build is refused), `outletOuterD` 1.68, `outletRatio` 0.45. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/tests/params/stepped-feet-off.json` : Identical to `stepped.json` with `feetEnabled: false` (used for the feet volume delta). · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/tests/params/stepped-spiral.json` : `stepped-vanes.json` with `feetEnabled: false`, `semiSpiral: true` and `spiral` = frozen tool result (`inputs` Q 8 m3/s, 0.922 m/s, H 3.954, D_LE 2.7771 (= 1.14703 × dLast), max_width 4.4444; `vertices` V0..V9 in the too … · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/tests/params/stepped-vanes-18.json` : `stepped-vanes.json` + `"vaneCount": 18` (spec 2026-09-29-guide-vane-count): 18 blades, chord × 16/18. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/tests/params/stepped-vanes.json` : `stepped` variant with `guideVanes: true`; asymmetric chamfer 2 (`chamferLength2` 0.90435, `chamferWidth2` 0.63466) and `distFromEnd` 2.19593. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/tests/params/stepped.json` : Reference `stepped` configuration (no vanes, feet at 40°, symmetric chamfers 1.29158). · [api-scripts](codemap/api-scripts.md)
+
+## `apps/api/scripts/tests/spiral_golden`
+
+- `apps/api/scripts/tests/spiral_golden/case_A.json` : Golden output of the semi-spiral tool for tool-spec acceptance case A (160°, width 6.05, 0.4613 m² at 237.5°): `scipy` (versions that reproduce it: 1.18.0, 1.18.1), `inputs`, `vertices` (id, x, y), `dimensions` … · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/tests/spiral_golden/case_B.json` : Same for case B (150°, width 6.15 width-bound, 0.5741 m² at 150°). · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/tests/spiral_golden/case_C.json` : Same for case C (Ø 2.92, c_flow 0.66, width 6.90 width-bound, 0.6267 m² at 160°). · [api-scripts](codemap/api-scripts.md)
 
 ## `apps/api/src`
 

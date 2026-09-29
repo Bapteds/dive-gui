@@ -37,10 +37,11 @@ function Harness({
   relationsMaster?: boolean;
 }) {
   const values: ChamberFormValues = { ...CHAMBER_FORM_DEFAULTS, ...defaults };
-  const { register, handleSubmit, formState } = useForm<ChamberFormValues>({
+  const { register, handleSubmit, formState, setValue, watch } = useForm<ChamberFormValues>({
     resolver: zodResolver(chamberFormSchema),
     defaultValues: values,
   });
+  const semiSpiral = watch('semiSpiral');
   return (
     <ChamberInputsForm
       register={register}
@@ -50,6 +51,14 @@ function Harness({
       variant={variant ?? values.variant}
       simplifyGenerator={values.simplifyGenerator}
       coneChamferEnabled={values.coneChamferEnabled}
+      semiSpiral={semiSpiral}
+      onSemiSpiralChange={(on) => {
+        // As ChamberPage: the spiral needs Feet off, and its L2/L4 are the chamfers.
+        if (on) {
+          setValue('feetEnabled', false);
+          setValue('chamferEnabled', false);
+        }
+      }}
       autoLengthMm={8889}
       autoDims={AUTO_DIMS}
       relationsMaster={relationsMaster}
@@ -66,9 +75,7 @@ describe('ChamberInputsForm', () => {
     expect(screen.queryByLabelText('Generator Ø (mm)')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Dome height (mm)')).not.toBeInTheDocument();
 
-    rerender(
-      <Harness onValid={() => {}} variant="hollow" defaults={{ variant: 'hollow' }} />,
-    );
+    rerender(<Harness onValid={() => {}} variant="hollow" defaults={{ variant: 'hollow' }} />);
     expect(screen.getByLabelText('Cone length (mm)')).toBeInTheDocument();
     expect(screen.getByLabelText('Wall thickness (mm)')).toBeInTheDocument();
     expect(screen.getByLabelText('Generator Ø (mm)')).toBeInTheDocument();
@@ -141,7 +148,9 @@ describe('ChamberInputsForm', () => {
     const { rerender } = render(<Harness onValid={() => {}} />);
     const defaultOn = CHAMBER_RELATIONS.filter((rel) => rel.defaultOn).length;
     expect(
-      screen.getByRole('button', { name: new RegExp(`\\(${defaultOn}/${CHAMBER_RELATIONS.length} on\\)`) }),
+      screen.getByRole('button', {
+        name: new RegExp(`\\(${defaultOn}/${CHAMBER_RELATIONS.length} on\\)`),
+      }),
     ).toBeEnabled();
 
     rerender(<Harness onValid={() => {}} relationsMaster={false} />);
@@ -166,7 +175,9 @@ describe('ChamberInputsForm', () => {
     render(<Harness onValid={onValid} />);
     expect(screen.getByLabelText('Generator height (mm)')).toBeInTheDocument();
     expect(
-      screen.getByText('Blank = through the chamber top ≈ 2700 mm (min ≈ 1446 + dome 289 = 1736 mm); a value closes it below'),
+      screen.getByText(
+        'Blank = through the chamber top ≈ 2700 mm (min ≈ 1446 + dome 289 = 1736 mm); a value closes it below',
+      ),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
@@ -199,7 +210,9 @@ describe('ChamberInputsForm', () => {
     );
     expect(screen.getByLabelText('Generator height (mm)')).toBeInTheDocument();
     expect(
-      screen.getByText(/Blank = through the chamber top ≈ 2700 mm \(min ≈ 1446 \+ dome 289 = 1736 mm\)/),
+      screen.getByText(
+        /Blank = through the chamber top ≈ 2700 mm \(min ≈ 1446 \+ dome 289 = 1736 mm\)/,
+      ),
     ).toBeInTheDocument();
     expect(screen.queryByLabelText('Dome height (mm)')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Generator Ø (mm)')).toBeInTheDocument();
@@ -288,5 +301,46 @@ describe('ChamberInputsForm', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
     await waitFor(() => expect(onValid).toHaveBeenCalledTimes(2));
     expect((onValid.mock.calls[1][0] as ChamberFormValues).x4).toBe(2000);
+  });
+
+  describe('semi-spiral casing', () => {
+    it('offers the checkbox in both designs', () => {
+      const { rerender } = render(<Harness onValid={() => {}} />);
+      expect(screen.getByLabelText(/Semi-spiral casing/)).toBeInTheDocument();
+      rerender(<Harness onValid={() => {}} variant="hollow" defaults={{ variant: 'hollow' }} />);
+      expect(screen.getByLabelText(/Semi-spiral casing/)).toBeInTheDocument();
+    });
+
+    it('unchecks and disables Feet and Chamfer, hides Length and shows the casing flow velocity', async () => {
+      render(<Harness onValid={() => {}} />);
+      expect(screen.getByLabelText('Length (mm)')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Casing flow velocity (m/s)')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByLabelText(/Semi-spiral casing/));
+      await waitFor(() =>
+        expect(screen.getByLabelText('Casing flow velocity (m/s)')).toBeInTheDocument(),
+      );
+      const feet = screen.getByLabelText(/^Feet/) as HTMLInputElement;
+      const chamfer = screen.getByLabelText(/^Chamfer/) as HTMLInputElement;
+      expect(feet).toBeDisabled();
+      expect(feet.checked).toBe(false);
+      expect(chamfer).toBeDisabled();
+      expect(chamfer.checked).toBe(false);
+      expect(screen.queryByLabelText('Length (mm)')).not.toBeInTheDocument();
+      expect(screen.getByText(/Off while Semi-spiral casing is on/)).toBeInTheDocument();
+    });
+
+    it('submits the flag, Feet off and the velocity', async () => {
+      const onValid = vi.fn();
+      render(<Harness onValid={onValid} />);
+      fireEvent.click(screen.getByLabelText(/Semi-spiral casing/));
+      const velocity = await screen.findByLabelText('Casing flow velocity (m/s)');
+      fireEvent.change(velocity, { target: { value: '0.8' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
+      await waitFor(() => expect(onValid).toHaveBeenCalledTimes(1));
+      const submitted = onValid.mock.calls[0][0] as ChamberFormValues;
+      expect(submitted.semiSpiral).toBe(true);
+      expect(submitted.feetEnabled).toBe(false);
+      expect(submitted.spiralFlowVelocity).toBe(0.8);
+    });
   });
 });

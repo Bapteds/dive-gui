@@ -18,6 +18,7 @@ import type {
   ChamberSaveSummary,
   ChamberOutput,
   ChamberOutputKey,
+  ChamberSpiralSummary,
   ChamberStatus,
   ExportStep,
   ExportStepId,
@@ -601,6 +602,7 @@ export type {
   ChamberOutputKey,
   ChamberConstraint,
   ChamberStatus,
+  ChamberSpiralSummary,
   ChamberConfidence,
   ChamberSaveOwner,
   ChamberSaveSummary,
@@ -617,6 +619,8 @@ export interface ChamberBuildResponse {
    * (unlocks "Change rotational direction"), false = vane-less fallback,
    * null = not a guide-vane build. */
   stepHasVanes: boolean | null;
+  /** Semi-spiral quality + the derived box values (mm); null when the spiral is off. */
+  spiral?: ChamberSpiralSummary | null;
 }
 
 /**

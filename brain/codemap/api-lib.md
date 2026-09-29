@@ -78,6 +78,7 @@ Single operational error class of the API. `AppError(status, code, message, deta
 **Notes**: `listCgnsFiles` has the same name as an export of `exportStorage` with different semantics (see that section).
 
 ## `apps/api/src/lib/chamberStorage.ts`
+**Semi-spiral (2026-09-29)**: `ChamberParams = Record<string, unknown>` (params may hold the nested `spiral`; `chamberHash` / `writeChamberParams` take it); `chamberSpiralPaths(spiralHash)` → `{dir, input: in.json, result: spiral.json}` under `<STORAGE_DIR>/chamber-spiral/` (`assertSafeId` + `confineJoin`), `readChamberSpiral` (parsed JSON or null), `writeChamberSpiralInput`.
 **Role**: global cache (not tied to a project) of the chamber generator's artifacts, under `<STORAGE_DIR>/chamber/<hash>/`. The key is a content hash of the resolved geometric parameters: same inputs, same build; new parameters, new folder; no mtime-based staleness handling.
 **Exports**:
 - `CHAMBER_EXPORT_FILES`. `{ stl: 'chamber.stl', step: 'chamber.step', stepMirrored: 'chamber-mirrored.step', trisurface: 'trisurface.zip' }`; `ChamberExportKind` = keys.

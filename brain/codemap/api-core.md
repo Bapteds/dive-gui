@@ -55,6 +55,7 @@ Prisma lock: `provider = "sqlite"`.
 **Depends on**: `src/config/env`, `src/lib/password`, `src/lib/prisma`, `src/lib/logger`. **Used by**: `npm run db:seed` (`tsx prisma/seed.ts`).
 
 ## `apps/api/src/config/env.ts`
+**Semi-spiral (2026-09-29)**: `CHAMBER_SPIRAL_TIMEOUT_MS` (default 300000) bounds one `designSemiSpiral.py` run.
 **Role**: validated configuration for the whole API. Loads `.env` via `dotenv/config` (without overwriting variables already present, which vitest relies on), validates `process.env` with a zod schema, throws an `Error` listing every invalid variable, then exports a frozen object.
 **Exports**:
 - `Env`: type inferred from the schema.
@@ -155,6 +156,7 @@ Exports `chamberSaveCreateSchema` (`name` trim 1..`CHAMBER_SAVE_NAME_MAX`, `snap
 **Depends on**: `lib/prisma`, `@dive/shared` (types). **Used by**: `chamber-saves.controller`.
 
 ## `apps/api/src/modules/chamber/chamber.controller.ts`
+**Semi-spiral (2026-09-29)**: the build response also carries `spiral` (`ChamberSpiralSummary | null`).
 **Role**: adapters for the chamber generator.
 **Exports**:
 - `buildChamberController`: `200 { hash, outputs, warnings, stepHasVanes }`.
@@ -167,6 +169,7 @@ Exports `chamberSaveCreateSchema` (`name` trim 1..`CHAMBER_SAVE_NAME_MAX`, `snap
 Exports `createChamberRouter(): Router`, mounted on `/api/v1/chamber`, entirely behind `requireAuth`. `POST /build`, then the `/saves` routes (GET, POST, PUT `/:id`, DELETE `/:id`) declared before the `/:hash` routes so that `saves` is never captured as a hash, then `GET /:hash/manifest`, `/:hash/geometry`, `/:hash/edges` and `/:hash/export/:kind`.
 
 ## `apps/api/src/modules/chamber/chamber.schemas.ts`
+**Semi-spiral (2026-09-29)**: `semiSpiral` (default false) and `spiralFlowVelocity` (`CHAMBER_SPIRAL_FLOW_RANGE` 0.3..3, default 0.922); `superRefine` refuses `semiSpiral` with `feetEnabled` ("The semi-spiral casing needs Feet off for now. …", path `feetEnabled`; the API default for Feet is on).
 **Role**: zod schemas for the chamber routes: build body (inputs X1..X4, constraints, relations, geometric options) and hash and export parameters.
 **Exports**:
 - `chamberBuildSchema`. x1/x2/x3 bounded by `CHAMBER_INPUT_RANGES`; `constraints` and `relations` as `z.record` keyed by `CHAMBER_OUTPUT_KEYS`; dimensions in positive mm bounded by `CHAMBER_DIMENSION_MAX_MM`; defaults: `relationsMaster` true, `footAngleDeg` 40, `variant` stepped, `guideVanes` false, `chamferEnabled` true, `feetEnabled` true, `vaneAngleDeg` 50 (45..55), `vaneCount` 16 (literal 16 or 18, from `CHAMBER_VANE_COUNTS`), `outletRatio` 0.45 (0.35..0.5), `partScale` 1 (> 0, ≤ 5), `simplifyGenerator` false, `coneChamferEnabled` false (+ optional `coneChamferSize` in positive mm; its bounds are the builder's and the form's, not the API's); `x4` positive ≤ `CHAMBER_X4_MAX`. `superRefine`: `hollowLength` required if `variant === 'hollow'`.
@@ -174,6 +177,7 @@ Exports `createChamberRouter(): Router`, mounted on `/api/v1/chamber`, entirely 
 **Notes**: the `footAngleDeg` default is 40 here and in the service, whereas the `ChamberInput` documentation in `@dive/shared` says 45.
 
 ## `apps/api/src/modules/chamber/chamber.service.ts`
+**Semi-spiral (2026-09-29)**: `buildChamber` computes the outputs on `chamberSpiralModelInput(input)` and, when `semiSpiral`, overlays `applyChamberSpiralToOutputs(…, null)` before the refusals (derived rows exempt); then `designSpiral(chamberSpiralInputs(…))` (internal: `spiralHash` = SHA-1 of the sorted inputs + `SPIRAL_ALGORITHM`, lock `spiral:<hash>`, cache `readChamberSpiral`, run `designSemiSpiral.py` with `CHAMBER_SPIRAL_TIMEOUT_MS`, `summarizeSpiralFailure`, `parseSpiralResult` validates 10 vertices + quality and builds the mm summary) runs BEFORE hashing; `resolveGeometryParams(input, outputs, spiral)` adds `semiSpiral` + `spiral {inputs, vertices, quality}` and leaves out `length`, B1, LT, the four chamfers and `chamferEnabled`. Spiral warnings come first in `warnings.json`; `ChamberBuildResult.spiral` = summary or null.
 **Role**: evaluates the empirical model (`@dive/shared`) then delegates geometry to `scripts/buildChamber.py` (CadQuery). Builds are keyed by a parameter hash, stored under `<STORAGE_DIR>/chamber/<hash>` and shared by the whole team.
 **Exports**:
 - `ChamberBuildResult` (`hash`, `outputs`, `warnings`, `stepHasVanes: boolean | null`).
@@ -288,6 +292,7 @@ Global augmentation of `Express.Request`: `user?: PublicUser & { role: Role }` (
 **Depends on**: `app`, `config/env`, `lib/logger`, `projects/runs.service`, `meshing/meshing.service`, `projects/terminal.gateway`.
 
 ## `apps/api/.env.example`
+**Since 2026-09-29**: a `Chamber Creation` block documents `CHAMBER_SPIRAL_TIMEOUT_MS=300000` (the other chamber variables are still missing, K33).
 Template of the API environment variables, grouped by feature with operational comments (target Debian, OpenFOAM ESI, xvfb for pvbatch, OpenMPI flags, terminal disabled by default, `TRUST_PROXY`, seed). Eleven schema variables are missing from it (`MAX_UPLOAD_TOTAL_MB`, `MAX_ARCHIVE_UNCOMPRESSED_MB`, `BLOCK_MESH_BIN`, `SURFACE_FEATURE_BIN`, `SNAPPY_HEX_MESH_BIN`, `SNAPPY_STEP_TIMEOUT_MS`, `CHAMBER_PYTHON_BIN`, `BUILD_CHAMBER_SCRIPT`, `MIRROR_STEP_SCRIPT`, `CHAMBER_BUILD_TIMEOUT_MS`, `SOLVER_DECOMPOSE_TIMEOUT_MS`), despite the "Keep this in sync" instruction in `env.ts`. The `NCC_COUPLE_BIN` comment still describes the OpenFOAM.org v12 utility, whereas the current coupling is a textual cyclicAMI retyping.
 
 ## `apps/api/package.json`
