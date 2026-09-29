@@ -43,7 +43,7 @@ Full details in `brain/changelog/2026-07.md` (entries dated 2026-07-10 carrying 
 
 ## 3. Open: MEDIUM
 
-- **M1**: no "active run" guard on destructive case mutations (reset, merge restore/promote, restore backup, autoPatch, patch editing, CGNS convert, file move/delete). The solver dies, or a parallel run's `reconstructPar` runs on the NEW mesh (corrupted case). Areas: `files.service.ts`, `meshes.service.ts`, `mesh.service.ts`.
+- **M1**: no "active run" guard on destructive case mutations (reset, merge restore/promote, restore backup, autoPatch, patch editing, CGNS convert, file move/delete). The solver dies, or a parallel run's `reconstructPar` runs on the NEW mesh (corrupted case). Areas: `files.service.ts`, `meshes.service.ts`, `mesh.service.ts`. Partially addressed on 2026-09-29: `POST /projects/:id/mesh/from-meshing` (case target) refuses with 409 `RUN_IN_PROGRESS` while a run is queued/running; every other route is still unguarded.
 - **M2**: a failed re-merge silently reinstates the applied assembly (backup restored BEFORE staging) while the API answers "case untouched" and `assembly.json` still claims an assembly is applied (`meshes.service.ts`).
 - **M4**: single-slot mesh backup: destroy-before-replace + stale `meta.json` ⇒ `backupExists()` lies and `restoreBackup` wipes the case before copying an empty slot (`meshBackupStorage.ts`).
 - **M5**: meshers killed at 16 MB of output (`maxBuffer`) and reported as "binary not found" (`commandRunner.ts`).

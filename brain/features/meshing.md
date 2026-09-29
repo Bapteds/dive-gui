@@ -1,7 +1,7 @@
 # Feature · Meshing (snappyHexMesh / cfMesh)
 
-> **Status**: in production · **Updated**: 2026-09-28
-> **Specs**: `brain/specs/2026-08-11-per-patch-feature-edges-design.md`, `brain/specs/2026-08-11-per-patch-layers-design.md`, `brain/specs/2026-08-11-per-patch-toggles-design.md`, `brain/specs/2026-08-17-cfmesh-per-patch-refinement-and-layers-design.md`, `brain/specs/2026-08-11-chamber-to-meshing-transfer-design.md` · **Codemaps**: `brain/codemap/web-features-meshing-solver.md` (section `features/meshing`), `brain/codemap/web-core.md` (`MeshingPage.tsx`, `MeshingSessionPage.tsx`), `brain/codemap/api-core.md` (`meshing` module), `brain/codemap/api-lib.md` (`meshingStorage`, `meshingVizStorage`, `snappyDicts`, `snappyPipeline`, `cfMeshDicts`, `cfMeshPipeline`, `meshPipelineRun`, `stlBounds`, `stlMerge`, `cores`), `brain/codemap/root-shared-mcp.md` (meshing sessions)
+> **Status**: in production · **Updated**: 2026-09-29
+> **Specs**: `brain/specs/2026-08-11-per-patch-feature-edges-design.md`, `brain/specs/2026-08-11-per-patch-layers-design.md`, `brain/specs/2026-08-11-per-patch-toggles-design.md`, `brain/specs/2026-08-17-cfmesh-per-patch-refinement-and-layers-design.md`, `brain/specs/2026-08-11-chamber-to-meshing-transfer-design.md`, `brain/specs/2026-09-29-meshing-to-project-design.md` · **Codemaps**: `brain/codemap/web-features-meshing-solver.md` (section `features/meshing`), `brain/codemap/web-core.md` (`MeshingPage.tsx`, `MeshingSessionPage.tsx`), `brain/codemap/api-core.md` (`meshing` module), `brain/codemap/api-lib.md` (`meshingStorage`, `meshingVizStorage`, `snappyDicts`, `snappyPipeline`, `cfMeshDicts`, `cfMeshPipeline`, `meshPipelineRun`, `stlBounds`, `stlMerge`, `cores`), `brain/codemap/root-shared-mcp.md` (meshing sessions)
 
 ## 1. Purpose
 
@@ -14,7 +14,8 @@ Turn STL surfaces (or a `.fms` for cfMesh) into an OpenFOAM `constant/polyMesh` 
 - **Transfer from Chamber**: `Send to Meshing` button in `ChamberPage` (existing build), `SendToMeshingDialog` dialog with three modes: new session (name + engine), existing session, copy of a session's setup with the geometry injected. On success, navigation to `/meshing/:id`. Displayed note: a patch with the same name replaces the existing surface, the other surfaces stay.
 
 ### Detail (`/meshing/:id`)
-- Header: name, engine, number of surfaces, "mesh ready" / "not meshed yet"; `Download case` (if meshed) and `Delete` (`AlertDialog` confirmation).
+- Header: name, engine, number of surfaces, "mesh ready" / "not meshed yet"; `Download case` and `Send to project` (both if meshed, secondary) and `Delete` (`AlertDialog` confirmation). `Send to project` is `aria-disabled` with the tooltip "Wait for the mesh run to finish." while a run is active.
+- **Send to project** (`SendToProjectDialog`, WS-F): pick a visible project, then `Case mesh` (default: replaces the project's case mesh, the original case is backed up once, BCs of same-name patches kept) or `Mesh library part` (name prefilled with the session name, required). Errors inline (`MESHING_NOT_MESHED`, `MESH_IN_PROGRESS`, `RUN_IN_PROGRESS`, `NOT_FOUND`). Success: toast "Mesh sent to <project>." then `/projects/:id?view=visualize`.
 - **Surfaces** (`StlManager`): add via a file picker (`.stl`, and `.fms` in cfMesh), delete per row, toasts "Surface added." / "N surfaces added.".
 - **Preview**: `StlViewer` (client-side three.js, no OpenFOAM) before meshing, `MeshResultViewer` (server rendering of the patches, `PatchTable` + scene shared with Visualize) after.
 - **Configuration**: `SnappyConfigForm` or `CfMeshConfigForm`, seeded only once at mount from the autosaved config, otherwise from the last run's config, then debounced 800 ms autosave (silent failure). Single orange CTA `Generate mesh`.
@@ -48,7 +49,7 @@ Turn STL surfaces (or a `.fms` for cfMesh) into an OpenFOAM `constant/polyMesh` 
 - **Session deletion**: an active run is first killed with SIGKILL, then `rm -rf`.
 - **Duplication** (`copySessionSetup`): same engine, copy of `constant/triSurface/` and `config.json`; never the mesh, `system/`, `run.json`, the log, the status or the render.
 - **Transfer from Chamber**: reads the build's `exports/trisurface.zip` (409 `CHAMBER_NOT_BUILT` if missing), extracts one STL per patch **excluding `domain.stl`** (422 `INVALID_STL` if none), then goes through `addStlFiles` (same rules as the upload, overwrite by name, surfaces with other names kept).
-- **No direct bridge to a project**: no route sends a session's mesh into a project. The handover is manual with `Download case` (zip of the whole session folder) then an import into the project (case files or mesh library); the import's behavior with the extra files in the zip (`meta.json`, `mesh.log`, `.viz/`…) is to verify.
+- **Bridge to a project** (WS-F, 2026-09-29): `POST /api/v1/projects/:id/mesh/from-meshing` `{ sessionId, target: 'case' | 'library', name? }` copies ONLY the session's `constant/polyMesh/**` (never `system/`, `0/`, `.viz/`, logs). Gate: project Visible (404 first, so sessions are not probed through a foreign project), session exists (404), no run in progress (registry or `status.json` `running`, 409 `MESH_IN_PROGRESS`), complete polyMesh incl. `neighbour` (`hasCompleteResultMesh`, 409 `MESHING_NOT_MESHED`), and for `case` no queued/running solver run (409 `RUN_IN_PROGRESS`). Both targets drop a zero-face `domainBoundary` (and only that name); `case` forces the chamber patch types (`CHAMBER_PATCH_TYPES`: `inlet`/`outlet` `patch`, the walls `wall`, constraint types never overwritten). Project side: `brain/features/mesh-library-and-conversion.md`; full contract in the spec. `Download case` stays available.
 
 ## 4. Technical flow
 
@@ -76,6 +77,9 @@ Autosave: `useSaveMeshingConfig` → `PUT /:id/config` (`meshingConfigSchema`, d
 
 ### Result viewer
 `MeshResultViewer` → `useMeshingManifestQuery` (`GET /:id/mesh/manifest`, builds the render on demand: `MESH_PYTHON_BIN extractPatches.py <caseDir> <glb> <manifest>` if `meshingVizIsStale`) then, if the manifest is OK and WebGL is present, `useMeshingGeometryQuery` (`GET /:id/mesh/geometry`, GLB) and `useMeshingEdgesQuery` (`GET /:id/mesh/edges`, 204 if absent). Errors: 409 `NO_MESH`, 500 `SCRIPT_MISSING`, 502 `MESH_BUILD_FAILED`, 409 `MESH_NOT_BUILT`. Caches `staleTime`/`gcTime` 5 min, `retry: false`.
+
+### Send to project
+`SendToProjectDialog` → `useImportMeshFromMeshing` (`features/projects/useMeshes.ts`) → `importMeshFromMeshing` (`lib/api/projects.ts`) → `POST /projects/:id/mesh/from-meshing` → `mesh.service.importMeshFromMeshing` (session gate `meshing.service.requireMeshedSession`; staging under `meshes/.work/from-meshing-*`; case: `ensureOriginalBackup`, `caseStorage.replaceCasePolyMesh`, `clearAppliedAssembly`, `scaffoldCase` if no `system/controlDict`, `syncBoundaryFields` merge; library: `meshes.service.addMeshingPartToLibrary`). Web cache: H6 purge (`manifest`/`glb`/`edges` removed; `files` set; `meshes`, `assembly`, `mergePlan`, `runnable`, `mesh/backup` invalidated) or library list set.
 
 ### Download
 `getSessionZip` → `GET /:id/download` → `downloadSessionZip` (`zipTreeAt` over the whole session folder) → file `meshing-<name>.zip` (`blob:` anchor).
@@ -107,7 +111,9 @@ No Prisma model: everything lives under `STORAGE_DIR/meshing/<sessionId>/` (see 
 - `apps/api/tests/cfMeshDicts.test.ts`, `stlMerge.test.ts`, `stlBounds.test.ts`: `meshDict` (`renameBoundary`, `localRefinement`, `patchBoundaryLayers`, `noLayerPatches` as `nLayers 0`), STL merge, bbox.
 - `apps/web/src/features/meshing/CfMeshConfigForm.perPatch.test.tsx`: tri-state layers, live mirror, `Customize` / `Reset to global`, local refinement per patch.
 - `apps/web/src/features/chamber/SendToMeshingDialog.test.tsx`: transfer dialog.
-- Not covered: `SnappyConfigForm`, `MeshingSessionPage`, `MeshResultViewer`.
+- `apps/api/tests/meshFromMeshing.test.ts` (14): the session -> project hand-off (access, guards, case and library targets, patch retyping, `domainBoundary`). `apps/api/tests/chamberPatchTypes.test.ts`: `CHAMBER_PATCH_TYPES` parity with `buildChamber.py`. `meshingStorage.test.ts`: `hasCompleteResultMesh`.
+- `apps/web/src/features/meshing/SendToProjectDialog.test.tsx` (9), `apps/web/src/features/projects/useMeshes.fromMeshing.test.tsx` (2).
+- Not covered: `SnappyConfigForm`, `MeshingSessionPage` (the header button included), `MeshResultViewer`.
 
 ## 8. History
 
@@ -118,6 +124,7 @@ No Prisma model: everything lives under `STORAGE_DIR/meshing/<sessionId>/` (see 
 - 2026-08-12: live log and Stop button (background job persisted to file).
 - 2026-08-17: cfMesh, local refinement per patch and tri-state layers.
 - 2026-08-31: atomic write and read of `status.json` (CI "idle" flake).
+- 2026-09-29: `Send to project` (WS-F): session polyMesh into a project's case or mesh library (`brain/changelog/2026-09.md`).
 
 ## 9. Known limits and bugs
 

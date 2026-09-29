@@ -32,7 +32,7 @@ Nothing under `STORAGE_DIR` is purged by a periodic job: deletion is always trig
 │   │   │   └── .viz/{patches.glb, manifest.json, edges.bin}   render (meshSourceVizStorage)
 │   │   ├── merge.json                    last MergePlan
 │   │   ├── assembly.json                 AppliedAssembly (applied assembly)
-│   │   └── .work/                        transient merge workspace
+│   │   └── .work/                        transient merge workspace (+ from-meshing-<ts>-<rand>/ staging)
 │   ├── runs/<runId>/solver.log           solver log (runStorage)
 │   ├── viz/{patches.glb, manifest.json, edges.bin}   case render (vizStorage)
 │   ├── export/                           CFD-Post export (exportStorage)
@@ -94,6 +94,7 @@ The folder names `viz`, `runs`, `export`, `chamber` come from shared constants (
 - **Lifecycle**:
   - `.src/` is deleted after a successful conversion; on failure, the whole source is deleted (`deleteMeshSource`).
   - `.work/` is purged and recreated at the start of each merge (`resetMeshWork`), then serves as a staging area (one case copy per part, points transformed by `meshTransform`).
+  - `.work/from-meshing-<ts>-<rand>/constant/polyMesh` stages a meshing session's mesh sent to the project (`mesh.service.importMeshFromMeshing`): the `boundary` is edited there, then the polyMesh is copied into `case/` (`replaceCasePolyMesh`) or renamed into `meshes/<slug>/` (kind `meshing`, `meta.json` `origin.sessionId`); the staging dir is removed in a `finally`. A merge starting at the same time would purge it (no lock, single user assumed).
   - `assembly.json` is written only after a successful merge promotion, and cleared (`clearAppliedAssembly`) when the backup is restored.
   - `.viz/` lives in the source folder and disappears with it; only `constant/polyMesh` is copied during staging.
 - **Pitfalls**: `uniqueMeshId` reads the folder then picks a free slug, without a lock: two simultaneous imports with the same name can collide. The id is the folder name and is never renamed.
@@ -182,7 +183,7 @@ Deviations to know: `exportStorage` uses only `assertSafeId` (fixed file names, 
 | `chamber/<hash>/` | `withChamberLock` (promise chain per hash) | API process |
 | Solver run start | `runExclusive('startRun')` + `handles` / `stopRequested` | API process |
 | Meshing run | `activeMeshRuns` (Map per session) + atomic `status.json` | API process; reconciled at boot |
-| `meshes/.work/` | purge at merge start, no lock | none |
+| `meshes/.work/` | purge at merge start, no lock; `from-meshing-*` staging has a unique name | none |
 | `backups/` | none | none |
 | Slug ids (`meshes/<id>`, `meshing/<id>`) | read then pick, no lock | none |
 

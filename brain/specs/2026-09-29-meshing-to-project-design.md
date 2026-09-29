@@ -1,7 +1,7 @@
 # Meshing session → project mesh transfer (WS-F) — design
 
 **Date:** 2026-09-29
-**Status:** approved (2026-09-29)
+**Status:** implemented (2026-09-29)
 **Feature:** Meshing → Projects hand-off (closes the "no direct bridge to a project" gap of `brain/features/meshing.md` §3)
 **Scope:** shared types + API (projects module, one new route) + web (dialog on `/meshing/:id`, `?view=` initial tab on `/projects/:id`) + tests. **No change** to the meshing pipelines, to `buildChamber.py`, to the BC presets or to the solver.
 **Related:** `brain/specs/2026-08-11-chamber-to-meshing-transfer-design.md` (same "building block used by the UI and by the future optimisation loop" philosophy), WS-H `2026-09-29-optimisation-loop-design.md` (consumer).

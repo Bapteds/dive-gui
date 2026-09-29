@@ -1,6 +1,6 @@
 # Feature · Mesh library, conversion and 3D viewer
 
-> **Status**: in production · **Updated**: 2026-09-28
+> **Status**: in production · **Updated**: 2026-09-29
 > **Specs**: no dedicated spec · **Codemaps**: `brain/codemap/api-projects.md` (`conversion.*`, `mesh.*`, `meshes.*`), `brain/codemap/api-lib.md` (`meshImport`, `meshStorage`, `cgnsStorage`, `vizStorage`, `meshSourceVizStorage`, `meshBackupStorage`, `openfoamCase` § rewrites), `brain/codemap/api-scripts.md` (`CgnsToVtk.py`, `extractPatches.py`), `brain/codemap/web-features-projects.md` (`ConvertToFoamFlow`, `ImportReport`, `useConversion`, `useMeshes`), `brain/codemap/web-features-platform.md` (`features/visualize/`)
 
 ## 1. Purpose
@@ -36,6 +36,7 @@ Access: any member who can see the project; no action reserved to the owner.
 - **Library import**: priority `meshFile` (`.cgns` / `.msh`), then `archive` (zip), then `files` (folder); nothing → 400 `NO_FILES_UPLOADED`. Name = `name` field, otherwise the file name without extension, the zip's name or the root folder's name (excluding `polyMesh`), default "Imported mesh".
 - **Slug**: `slugifyMeshName` (NFKD, without diacritics, lowercase, non-alphanumerics to `-`, fallback `mesh`), uniqueness via suffix `-2`, `-3`. The id is the folder name and never changes (part renaming does not exist).
 - **Validity**: folder or zip without `constant/polyMesh/boundary` → source deleted and 400 `NO_MESH`. Converted file: the source is kept only if all steps succeed AND `boundary` exists; otherwise it is deleted and the report is returned (200). Unsupported format → 400 `NO_MESH`.
+- **From a meshing session** (WS-F, `POST /projects/:id/mesh/from-meshing`, Visible access): `target: 'library'` adds a part of kind `meshing` (`meta.json` `origin.sessionId`), name = `name` or the session name, same slug rules; the mesher's patch types are kept, only a zero-face `domainBoundary` is dropped. `target: 'case'` (default) replaces the case mesh: `original` backup if the case is not empty, chamber patch types forced (`CHAMBER_PATCH_TYPES`), zero-face `domainBoundary` dropped, applied assembly cleared, minimal `system/` + `0/U`, `0/p` scaffolded when there is no `system/controlDict`, `0/` fields realigned in `merge` mode (BCs of surviving patches kept). 409 `RUN_IN_PROGRESS` on `case` while a solver run is queued/running; 409 `MESH_IN_PROGRESS` / `MESHING_NOT_MESHED` for a busy or unmeshed session. Details: `brain/features/meshing.md` §3.
 - **Source normalization**: every path is brought back under `constant/polyMesh/` (after the last `polyMesh` segment). A part's `0/` is not kept.
 - **Patch names**: regex `^[A-Za-z_][A-Za-z0-9_-]*$` (dash accepted for Fluent zones; 80 characters max on the case's single-patch route `patches/rename`); collision → 409 `PATCH_EXISTS`; unknown name → 404.
 - **Case editing**: renaming carried over into `boundary` and into the `boundaryField` of every file ≤ 2 MB. Retyping: an `inlet` / `outlet` role keeps the geometric type `patch` and sets a generic preset in the `0/` fields; `wall` sets `noSlip` and the turbulence model's wall functions; a constraint type is copied as is; going back to `patch` restores `zeroGradient`. Bulk editing is all-or-nothing, renames without intermediate collision (swapping two names is possible).
@@ -60,6 +61,8 @@ Access: any member who can see the project; no action reserved to the owner.
 - folder / zip: `meshStorage.importMeshFolder` / `importMeshArchive` (normalized tree + `meta.json`), then check of the `boundary`.
 - file: `importMeshFromFile` → `uniqueMeshId`, upload to `.src/source.<ext>`, `meshImport.convertMeshFileToCase`: minimal `system/` trio, then `.cgns` = `CgnsToVtk.py` + `vtkUnstructuredToFoam` + `checkMesh`, `.msh` = `FLUENT_TO_FOAM_BIN <msh> -case <dir> [-scale s]` + `checkMesh`. Success: `.src/` deleted, `meta.json` written.
 - Response `{ mesh?, meshes, conversion? }`; the hook writes `['projects', id, 'meshes']`.
+- Meshing session: see `brain/features/meshing.md` §4 (Send to project); staging under `meshes/.work/from-meshing-<ts>-<rand>/`, removed in a `finally`; the case is replaced through `caseStorage.replaceCasePolyMesh` (shared with the merge promote).
+- `MeshSource.kind` (`folder` | `zip` | `cgns` | `msh` | `meshing`) is now on the wire (`GET /meshes`); the web does not display it yet.
 - Others: `GET /meshes`, `DELETE /meshes/:meshId`, `GET /meshes/:meshId/patches`, `POST /meshes/:meshId/auto-patch` (temporary `system/` trio written then deleted), `POST /meshes/:meshId/patches/rename`, `PUT /meshes/:meshId/patches` (bulk edit).
 
 ### Case viewer
@@ -76,7 +79,7 @@ Backup: `GET|POST /mesh/backup`, `POST /mesh/backup/restore` (`restoreBackup`, `
 ## 5. Data and storage
 Under `<STORAGE_DIR>/projects/<id>/` (details: `brain/architecture/storage-layout.md`):
 - `cgns/<name>.cgns` (+ hidden intermediate `.vtk`); `case/constant/polyMesh/` (case mesh);
-- `meshes/<slug>/{meta.json, constant/polyMesh/, system/?, .src/?, .viz/}`;
+- `meshes/<slug>/{meta.json, constant/polyMesh/, system/?, .src/?, .viz/}`; `meshes/.work/from-meshing-*` (transient staging of the meshing hand-off);
 - `viz/{patches.glb, manifest.json, edges.bin}` (case render, survives the reset);
 - `backups/{case/, mesh-backup.json}` (single slot, not atomic).
 No Prisma model. TanStack caches (`retry: false`, `staleTime` / `gcTime` 5 min): `['projects', id, 'mesh', 'manifest' | 'glb' | 'edges' | 'backup']`, `['projects', id, 'meshSource', meshId, 'manifest' | 'glb' | 'edges']`, `['projects', id, 'meshes']`, `['projects', id, 'cgns']`. The pattern is to remove (`removeQueries`) manifest, GLB and edges after any change to the mesh.
@@ -91,7 +94,8 @@ No Prisma model. TanStack caches (`retry: false`, `staleTime` / `gcTime` 5 min):
 - API `conversion.test.ts`: CGNS upload / list / deletion, 3-step pipeline, template note, scaffold if there is no `controlDict`, short-circuit, missing binary, 404, super-admin.
 - API `mesh.test.ts`: manifest (409, on-demand build, corrected type, cache, 502, 404), geometry / edges, rebuild, rename, type (constraint, `wall` + wall functions, roles), auto-patch (argv, collapse, restore, `0/` realignment, out-of-range angle 422), bulk edit (name swap, 409, 422), backup and restore.
 - API `meshes.test.ts`: folder import (slug, 400 `NO_MESH`), `.cgns` / `.msh` import (`rotor`, `rotor-2`, failure without source), auto-patch and rename of a source, retyping of a source, per-source render (geometry before manifest, 204 on edges).
-- API `openfoamCase.test.ts` (`collapseBoundaryToSinglePatch`, `removeEmptyBoundaryPatches`, `fieldBcBody`).
+- API `openfoamCase.test.ts` (`collapseBoundaryToSinglePatch`, `removeEmptyBoundaryPatches` incl. the `only` filter, `forceChamberPatchTypes`, `fieldBcBody`).
+- API `meshFromMeshing.test.ts`: the meshing -> project hand-off (both targets).
 - Web `ConvertToFoamFlow.test.tsx`, `MergeMeshesFlow.test.tsx` (import with name, conversion report, split and rename), `VisualizePanel.test.tsx` (case / source target, edit and auto-patch routed to the right API, C4), `PatchTable.test.tsx`.
 - `conversion.test.ts` and `meshes.test.ts` fail locally if `.env` defines `OPENFOAM_BASHRC` (see `known-issues.md` § 8); green in CI.
 
@@ -103,6 +107,7 @@ No Prisma model. TanStack caches (`retry: false`, `staleTime` / `gcTime` 5 min):
 - 2026-07-01: source geometry built on demand; library parts visible and retypable in Visualize (`2026-07.md`).
 - 2026-07-03: dashed names accepted, `?` types corrected from `boundary`, inlet / outlet roles (`2026-07.md`).
 - 2026-07-10: H6 (3D caches after merge / convert / reset) (`2026-07.md`).
+- 2026-09-29: meshing session -> project (case or library part, kind `meshing`) (`2026-09.md`).
 
 ## 9. Known limits and bugs
 - M1: no "active run" guard on conversion, autoPatch, patch editing, restore.

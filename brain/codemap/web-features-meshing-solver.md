@@ -38,6 +38,15 @@ Case file edits go through `features/projects/useCaseFiles` + `features/projects
 **Depends on**: `useMeshing` (hooks + keys), `@/features/visualize/MeshViewer` (`MeshScene`), `@/features/visualize/PatchTable`, `Diamond`, `ApiError`. **Used by**: `pages/MeshingSessionPage.tsx`.
 **Notes**: `rebuild` resets `selected` to null and runs `removeQueries` on the manifest / glb / edges keys, which restarts the whole chain (including the server rebuild). The doc comment wording mentions snappyHexMesh but the viewer also serves cfMesh sessions.
 
+## `apps/web/src/features/meshing/SendToProjectDialog.test.tsx`
+**Covers**: 9 tests: visible projects listed, `Case mesh` default with its warning, case body + navigation to `/projects/:id?view=visualize`, "Choose a project." without a pick, library target (name prefilled with the session name, blank refused, trimmed name sent), `MESHING_NOT_MESHED` / `MESH_IN_PROGRESS` / `RUN_IN_PROGRESS` / `NOT_FOUND` mapped to an inline `role="alert"` (dialog stays open), empty state with a `Go to Projects` link.
+**Technique**: `@/lib/api/projects` mocked (`listProjects`, `importMeshFromMeshing`), `useNavigate` spied, `MemoryRouter` + `QueryClient`.
+
+## `apps/web/src/features/meshing/SendToProjectDialog.tsx`
+**Role**: dialog of the meshing session page that sends the session's polyMesh into a project (WS-F). Mirrors `features/chamber/SendToMeshingDialog.tsx`.
+**Exports**: `SendToProjectDialog({ sessionId, sessionName, open, onOpenChange })` (named + `default`). Project `NativeSelect` fed by `useProjectsQuery` (skeleton while loading, error line, empty state linking to `/projects`), `SegmentedRadioGroup` "Send as" `Case mesh` (default, warning line) / `Mesh library part` (`Part name` field prefilled, required, 120 max), inline API error (`errorMessage` maps `MESHING_NOT_MESHED`, `MESH_IN_PROGRESS`, `RUN_IN_PROGRESS`, `NOT_FOUND`), one primary CTA `Send to project`. Success: toast "Mesh sent to <title>.", close, `navigate('/projects/:id?view=visualize')`. Form reset at each open.
+**Depends on**: `useImportMeshFromMeshing` (`features/projects/useMeshes`), `useProjectsQuery`, `components/ui/{dialog,button,field,input,native-select,segmented,skeleton,sonner}`, `ApiError`. **Used by**: `pages/MeshingSessionPage.tsx`.
+
 ## `apps/web/src/features/meshing/SnappyConfigForm.tsx`
 **Role**: form for the snappyHexMesh parameters of a session. Per-STL surface refinement, Advanced disclosure (background padding, per-surface sharp edges, MPI cores, keep-point, per-surface prism layers). Seeded from `initialConfig` (autosaved config, otherwise last run) on mount only; debounced autosave.
 **Exports**:

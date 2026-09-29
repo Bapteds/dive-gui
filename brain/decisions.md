@@ -36,6 +36,8 @@
 | 2026-07-06 | BC contract: `p0 = 9.81·H`, **single pressure anchor at the outlet**; boundaries synced in `merge` mode | Validated with the user; preserves existing BCs. |
 | 2026-07-08 | cfMesh: **internal STL merge** (no more `surfaceAdd`), cores mapped to `OMP_NUM_THREADS` | `surfaceAdd` broken on the ESI build; cfMesh is OpenMP, not MPI. |
 | 2026-07-10 | **In-process** lock (`runExclusive`) to start a run | The runs subsystem is already single-process; implies **a single API instance**. |
+| 2026-09-29 | Meshing session → project (WS-F): **Visible access may write** (owner, collaborators, super-admin); an invisible project answers 404 before the session is even looked up | Consistent with merge, BC, autoPatch and convert, which are all Visible case mutations. |
+| 2026-09-29 | Meshing session → project, `case` target: **force the chamber patch types** (`CHAMBER_PATCH_TYPES`, mirror of `buildChamber.py` `PATCH_TYPES`: `inlet`/`outlet` `patch`, the walls `wall`); other names untouched, constraint types never overwritten; the `library` target keeps the mesher's types. A zero-face `domainBoundary` is dropped on both targets | The meshers type every surface `wall` by default and the BC preset does not retype inlet/outlet; user choice (spec `2026-09-29-meshing-to-project-design.md` §3). |
 
 ## Templates, export
 
