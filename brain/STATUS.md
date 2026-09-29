@@ -8,9 +8,9 @@
 
 - **Work in progress: branch `feat/chamber-v2-cfd-loop`** (off `main` at `5638b42`, 2026-09-29). **Do not merge into `main` until the user says so** (user instruction). Work order "Chamber Creation v2 + CFD loop", workstreams WS-A to WS-I:
   - **Done on the branch** (each with its approved spec in `brain/specs/2026-09-29-*`, tests and brain update):
-    - WS-A guide-vane pocket vs Runner case Ø (refusal below LE Ø − 5 mm, 5 mm snap with warning, junction labels);
+    - WS-A guide-vane pocket vs Runner case Ø (5 mm snap with warning, junction labels) + WS-A v2: Runner case Ø below LE Ø builds a 20 mm ledge under the shroud brim, refused only below Runner Ø + 20 mm;
     - WS-B Guide vane count 16 or 18 (chord × 16/18, same pivot radius);
-    - WS-C Cone chamfer (With cone, 45° inner top edge, size ≤ Wall thickness);
+    - WS-C v2 Cone chamfer: 45° foot chamfer on the LE part in both designs, part widened by the chamfer size above it (the first top-rim version was removed at the user's request);
     - WS-E Semi-spiral casing (cached `designSemiSpiral.py` step, nose + plank = new `tongue` patch, Feet off; unticking it restores Chamfer);
     - WS-F Meshing session → project (`POST /projects/:id/mesh/from-meshing`, "Send to project" dialog, chamber patch types forced).
   - **Decided, no code**: WS-D hub shoulder: keep the current rule (the small-Ø fold is logged in `known-issues.md`).
@@ -24,9 +24,9 @@
 
 Branch `feat/chamber-v2-cfd-loop`, 2026-09-29, Baptiste's Windows workstation (CadQuery venv `C:/cqv`), last results reported per workstream:
 
-- real geometry suite (`pytest`, CadQuery 2.8.0): 93/93 after WS-E (67 builder + 26 spiral-module tests, ~13 min); existing GOLDEN volumes unchanged;
-- API: `chamber` + `chamberModel` + `chamberSaves` + `chamberPatchTypes` 120/120; `meshFromMeshing` green; `meshing.test.ts` has 2 Stop tests flaky on native Windows, also on `main` (`known-issues.md` §6);
-- web chamber 111/111; WS-F dialog and project page tests green; typecheck clean; lint 0 errors (7 pre-existing warnings);
+- real geometry suite (`pytest`, CadQuery 2.8.0): 106/106 after WS-C v2 + WS-A v2 (80 builder + 26 spiral-module tests); existing GOLDEN volumes unchanged;
+- API: `chamber` + `chamberModel` + `chamberSaves` + `chamberPatchTypes` 123/123; `meshFromMeshing` green; `meshing.test.ts` has 2 Stop tests flaky on native Windows, also on `main` (`known-issues.md` §6);
+- web chamber 113/113; WS-F dialog and project page tests green; typecheck clean; lint 0 errors (7 pre-existing warnings);
 - no local chamber cache existed, nothing purged; CI and browser not run.
 
 ## 3. Development environments
