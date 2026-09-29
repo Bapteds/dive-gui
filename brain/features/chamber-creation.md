@@ -1,6 +1,6 @@
 # Feature · Chamber Creation
 
-> **Status**: in production · **Updated**: 2026-09-28 (generator height in both designs)
+> **Status**: in production · **Updated**: 2026-09-29 (generator minimum with dome in Closed / Simplify generator, readable error messages)
 > **Specs**: `brain/specs/2026-08-03-guide-vane-throat-design.md`, `2026-08-06-outlet-x1-ratio-design.md`, `2026-08-10-hub-shroud-x1-adaptation-design.md`, `2026-08-11-chamfer-disable-toggle-design.md`, `2026-08-11-stepped-last-cylinder-through-top-design.md`, `2026-08-11-chamber-to-meshing-transfer-design.md`, `2026-08-13-guide-vane-step-export-design.md`, `2026-08-31-chamber-fullwidth-and-saved-builds-design.md`, `2026-08-31-part-fit-refusals-design.md`, `2026-08-31-vane-te-rounding-design.md`, `2026-09-01-chamber-cache-integrity-design.md`, `2026-09-01-chamber-input-floors-design.md`, `2026-09-01-chamber-minor-polish-design.md`, `2026-09-01-chamber-ux-consistency-design.md`, `2026-09-01-deferred-vane-step-design.md`, `2026-09-01-empirical-50mm-rounding-design.md`, `2026-09-01-mirrored-step-download-design.md`, `2026-09-02-chamber-vocabulary-design.md`, `2026-09-02-generator-dimensions-design.md`, `2026-09-02-physical-input-names-design.md`, `2026-09-02-simplify-generator-design.md` (all under `brain/specs/`) · related plans under `brain/plans/`
 > **Codemaps**: `brain/codemap/root-shared-mcp.md` (model, Gen Dim v3, `ChamberInput`), `brain/codemap/api-core.md` (`chamber` module, saves, Prisma), `brain/codemap/api-lib.md` (`chamberStorage`), `brain/codemap/api-scripts.md` (`buildChamber.py`, `mirrorStep.py`, assets, pytest), `brain/codemap/api-tests.md` (`chamber*.test.ts`, `meshing.test.ts`), `brain/codemap/web-features-assemble-chamber.md` (`features/chamber/*`), `brain/codemap/web-core.md` (`pages/ChamberPage.tsx`, `lib/api/chamber*.ts`)
 > **Other references**: `brain/conventions/vocabulary.md` (naming rules, read it BEFORE touching a label), `brain/assets/chamber-parameter-map.html` (map of the 12 parameters and their relations, "model v2" state of 2026-08-04: covers neither Gen Dim v3 nor the geometric options), `brain/architecture/storage-layout.md`.
@@ -48,7 +48,7 @@ See also `brain/conventions/vocabulary.md` §1: **renames = display only**, inte
 | `x3` | Q_max (m³/s) | m³/s | 1 to 23 | 8 | Input of the empirical model and of Gen Dim v3. |
 | `x4` | Power (kW) | kW | > 0, ≤ `CHAMBER_X4_MAX` (100,000); optional | empty (auto) | **Gen Dim v3 only** (With cone variant). Empty = `0.9 · 9.81 · Head · Q_max`. **Never** passed to the builder or to the hash. Field shown only in With cone. |
 
-The X1..X3 bounds are the training range of the regressions; the server (zod `chamberBuildSchema`) and the form (`chamberFormSchema`) both enforce them.
+The X1..X3 bounds are the training range of the regressions; the server (zod `chamberBuildSchema`) and the form (`chamberFormSchema`) both enforce them. Form message: "Must be between 700 and 2,420 mm (the range the model was fitted on)".
 
 ### 3.2 The 12 derived dimensions (empirical model)
 Single source: `CHAMBER_OUTPUT_SPECS` in `packages/shared/src/index.ts` (full-precision coefficients, complete table in `brain/codemap/root-shared-mcp.md`). Each output has its own X1..X3 fit (`linear`: a + b·X1 + c·X2 + d·X3, or `power`: k·X1^e1·X2^e2·X3^e3) and possibly a toggleable **structural relation**.
@@ -154,7 +154,7 @@ All of them enter the build hash (unless stated) and never affect the 12 outputs
 
 **Builder refusals** (`ValueError` ⇒ `KO:` + exit code 1 ⇒ API 502 `CHAMBER_BUILD_FAILED`; `summarizeFailure` shows the `KO:` text alone, prefixed "Cannot build the chamber.", in "Build errors"; any other exception becomes "The geometry engine failed on these inputs (Type: reason)…"; a failure without `KO:` keeps the exit code + a "Technical details" tail). Since 2026-09-29 the texts use the form's names (LEB, Cone length, Generator height, B1, LT, Runner case Ø…), lengths in whole mm, and name the levers:
 - base dimensions ≤ 0, `hFirst = LEB − HLE ≤ 0`, B1 outside ]0, width[, LT outside ]0, length[;
-- active chamfer with a setback ≤ 0 ("…disable the chamfer instead of zeroing it") or larger than the chamber;
+- active chamfer with a setback ≤ 0 ("Corner chamfer N needs LFN and BFN greater than 0 mm … turn the chamfer off instead of setting it to 0") or larger than the chamber;
 - `footAngleDeg` outside [0, 180], `partScale ≤ 0`, `vaneAngleDeg` outside 45..55;
 - invalid With cone parameters (`wallThickness` outside ]0, dLast/2[, `hollowLength ≤ wallThickness`, dimensions ≤ 0);
 - **height overflow**: stepped, the shoulder (runner case + middle cylinder, = 2 × HLE) must leave at least `MIN_LAST_CYL_H` (50 mm) of last cylinder ("H Kammer (…) is too low: LEB … leaves less than 50 mm above it for the generator"); With cone, `first + middle + max(cone, generator + dome)` must fit under H Kammer, and the message names the part that sets the top and gives the Part scale that would pass ("The cone does not fit under the chamber top: LEB … + Cone length … = …, but H Kammer is only …. Set Part scale to 0.79 or less, …"); in Simplify generator the builder counts the cone (or a typed generator height), the blank generator's minimum is the API check above;
@@ -172,7 +172,7 @@ All of them enter the build hash (unless stated) and never affect the 12 outputs
 - `could not write edges.bin`;
 - `OCC vane STEP reconstruction failed` and `chamber.step falls back to the vane-less solid (no vanes carved)` (only during a `--step` pass, merged into `warnings.json`).
 
-The builder texts still use "box" and "cylinder shoulder" (vocabulary not swept, locked by the pytest assertions).
+The builder texts were swept on 2026-09-29 (no more "box" or "cylinder shoulder"); they stay locked by the pytest assertions (§10).
 
 ### 3.9 Patches produced (exact list)
 | Configuration | Patches, in emission order | Source |
@@ -195,10 +195,10 @@ The builder texts still use "box" and "cylinder shoulder" (vocabulary not swept,
 ### 4.2 Build: web → API → builder
 1. `onGenerate` (`handleSubmit`): local Min > Max check, then `useBuildChamber().mutate({ ...values, constraints })` → `buildChamber` (`lib/api/chamber.ts`) → `POST /api/v1/chamber/build` (`requireAuth`, `validate(chamberBuildSchema)`).
 2. `buildChamberController` → `chamber.service.buildChamber(input)`:
-   - `computeChamberOutputs(input)`; non-positive and Min > Max refusals (§3.8);
+   - `computeChamberOutputs(input)`; non-positive, Min > Max and blank-generator minimum (`blankGeneratorHeightRefusal`) refusals (§3.8);
    - `resolveGeometryParams(input, outputs)`: parameters **in meters** (§5.1); for `hollow`, `computeChamberGeneratorDims(...).resolved`;
    - `hash = chamberHash(params)`;
-   - under `withChamberLock(hash)`: if `chamber.glb` exists, **cache hit** (returns `warnings.json` and `build-meta.json`); otherwise checks the script (500 `SCRIPT_MISSING`), writes `params.json`, runs `CHAMBER_PYTHON_BIN buildChamber.py <params.json> <dir>` (cwd = build folder, timeout `CHAMBER_BUILD_TIMEOUT_MS`); failure, timeout, missing binary or no GLB ⇒ 502 `CHAMBER_BUILD_FAILED`; otherwise extracts and persists the warnings.
+   - under `withChamberLock(hash)`: if `chamber.glb` exists, **cache hit** (returns `warnings.json` and `build-meta.json`); otherwise checks the script (500 `SCRIPT_MISSING`), writes `params.json`, runs `CHAMBER_PYTHON_BIN buildChamber.py <params.json> <dir>` (cwd = build folder, timeout `CHAMBER_BUILD_TIMEOUT_MS`); failure, timeout, missing binary or no GLB ⇒ 502 `CHAMBER_BUILD_FAILED` with the message of `summarizeFailure(result, action)` (the builder's `KO:` text alone, "Cannot build the chamber. …"); otherwise extracts and persists the warnings.
    - Response `200 { hash, outputs, warnings, stepHasVanes }` (`stepHasVanes`: `true`/`false` if a STEP with vanes has already been generated, `null` otherwise).
 3. Web: `setHash`, `setLastBuildInput(body)`, `setBuildWarnings`, `offerMirror = guideVanes && stepHasVanes !== false`.
 
@@ -279,13 +279,13 @@ Prisma model `ChamberSave` (migration `20260831142110_chamber_saves`): `id` (cui
 
 ## 7. Tests
 - **API** (`apps/api/tests/`, builder and mirrorer simulated by fake runners, they never run CadQuery):
-  - `chamber.test.ts`: build (401, hash + 12 outputs, manifest, GLB, STL `immutable`), `WARN:`/`WARNING:` warnings persisted and replayed on cache hit, deferred STEP (`--step` on the first download then served from disk), mirrored STEP (generates the STEP then mirrors, once), 409 for fallback or vane-less build, 502 then recovery, per-hash lock (concurrent builds, STEPs and mirrors = one execution), 422 refusals (Final ≤ 0, Min > Max, zod bounds, `x4`, `outletRatio`, `footAngleDeg`, hollow without `hollowLength`), cache keys (each flag and override re-keys without changing the outputs; `x4` and `simplifyGenerator` without effect in stepped; hidden heights out of the key in Simplify; explicit auto values = same hash), constraints and refinement.
-  - `chamberModel.test.ts`: 12 fits, 50 mm rounding, relations and statuses, `userDriven`, `noEffect`, `nonPositiveChamberFinals`, Gen Dim v3 parity (frames, length code, cascade).
+  - `chamber.test.ts`: build (401, hash + 12 outputs, manifest, GLB, STL `immutable`), `WARN:`/`WARNING:` warnings persisted and replayed on cache hit, deferred STEP (`--step` on the first download then served from disk), mirrored STEP (generates the STEP then mirrors, once), 409 for fallback or vane-less build, 502 then recovery, per-hash lock (concurrent builds, STEPs and mirrors = one execution), 422 refusals (Final ≤ 0, Min > Max, Closed generator H Kammer below the generator minimum, zod bounds, `x4`, `outletRatio`, `footAngleDeg`, hollow without `hollowLength`), cache keys (each flag and override re-keys without changing the outputs; `x4` and `simplifyGenerator` without effect in stepped; hidden heights out of the key in Simplify; explicit auto values = same hash), constraints and refinement.
+  - `chamberModel.test.ts`: 12 fits, 50 mm rounding, relations and statuses, `userDriven`, `noEffect`, `nonPositiveChamberFinals`, Gen Dim v3 parity (frames, length code, cascade), `blankGeneratorHeightRefusal` (generator + dome minimum, Simplify generator above the cone, Part scale, cases left to the builder).
   - `chamberSaves.test.ts`: CRUD, 401/403/404/409/422, super-admin, normalized snapshot.
   - `meshing.test.ts`: `from-chamber` transfer (new, existing, copyFrom), exclusion of `domain.stl`, 409 `CHAMBER_NOT_BUILT`.
 - **Real geometry** (`apps/api/scripts/tests/test_build_chamber.py`, pytest, CI job `geometry` = authority; skipped without CadQuery): 5 fixtures (`stepped`, `stepped-feet-off`, `stepped-vanes`, `hollow-vanes`, `hollow-vanes-overrides`) with golden volumes (`VOL_RTOL` 5e-3) and exact patch lists; `OK:`/`KO:` contract, watertight STL, zip content, `edges.bin`, absence of STEP and `build-meta.json` without `--step` for vanes, `stepHasVanes: true` with `--step`, no leftover `*.tmp`, refusals (height, width, feet, zero chamfer, axis in a corner, distributor), Simplify generator (section below the ceiling: 2 loops versus 1), trailing edge rounding, vane skin exclusively in `guide_vanes`, mirror (volume, box, reflected center of mass). **No With cone fixture without vanes.**
 - **Web** (`apps/web/src/features/chamber/*.test.ts(x)`): `chamberForm` (schema, defaults, snapshot round-trip, `chamberBodyKey`, `computeChamberAutoDims`), `ChamberInputsForm`, `ChamberOutputsTable`, `ChamberBuildWarnings`, `ChamberExportButtons`, `ChamberSavesMenu`, `SendToMeshingDialog`. No test for `ChamberPage` (stale state, silent refresh, reset on load checked manually).
-- Last known state (2026-09-04, `brain/STATUS.md`): pytest 29/29; API `chamber` 36, `chamberModel` 43, `chamberSaves` 8; web chamber 79/79. Not rechecked since the merge.
+- Last known state (2026-09-29, Windows workstation, CadQuery venv `C:/cqv`): pytest 33/33 (run before the dome change, which does not touch the builder); API `chamber` + `chamberModel` + `chamberSaves` 94/94; web chamber 84/84; typecheck clean. Browser check of the new messages and hint not done.
 
 ## 8. History
 - **2026-07-30**: creation of the standalone `/chamber` page (model X1..X3 → 12 parameters in `@dive/shared`, pure CadQuery builder, patches `inlet/outlet/cylinder_walls/walls`, STL/STEP/triSurface exports); length = 2 × width; `hollow` variant; 4 torque feet. `brain/changelog/2026-07.md`.
@@ -299,17 +299,17 @@ Prisma model `ChamberSave` (migration `20260831142110_chamber_saves`): `id` (cui
 - **2026-09-01**: 50 mm rounding; mirrored STEP; deferred STEP; guide vanes checked by default; cache integrity (atomic writes, lock); input floors; UX consistency (STEP warnings, stale state, Min > Max). `2026-09.md`.
 - **2026-09-02/03**: polish (saves, AA, exports); **Gen Dim v3** + `x4`; physical names X1..X4; **Simplify Generator**; unified vocabulary then "outlet" correction; fix of the "Inputs changed" banner. `2026-09.md`.
 - **2026-09-04**: exact assignment of the vane skin (`49ab0d7`). `2026-09.md`.
-- **2026-09-22**: spec + reference implementation of the semi-spiral tool (not integrated). **2026-09-28**: merge of PR #3 into `main` (`d43a6ce`). `2026-09.md`.
+- **2026-09-22**: spec + reference implementation of the semi-spiral tool (not integrated). **2026-09-28**: merge of PR #3 into `main` (`d43a6ce`); editable generator height in both designs; automatic chamber enlargement added then removed (refusal kept, by design); Closed generator minimum height (Gen Dim). **2026-09-29**: same minimum in With cone + Simplify generator, dome counted in it; every error of the page reworded (form names, mm, levers; `KO:` text shown alone). `2026-09.md`.
 
 ## 9. Known limits and bugs
 See `brain/known-issues.md`:
-- §6 (open threads, nothing requested): hub shoulder monotonicity (warning only); builder texts in the old vocabulary; visual pass of Simplify Generator never done in the browser; inverted STL normals (deprioritized); save cascade on owner deletion (product decision); single-instance build lock; integration of the semi-spiral tool.
+- §6 (open threads, nothing requested): hub shoulder monotonicity (warning only); visual pass of Simplify Generator never done in the browser; inverted STL normals (deprioritized); save cascade on owner deletion (product decision); single-instance build lock; integration of the semi-spiral tool.
 - §7: **K8** (`scipy` missing from `requirements.txt`), **K10** (`mirrorStep.py`: usage error with exit code 1), **K11** (`--step` without `outletOuterD`/`outletRatio` = STEP without vanes; stale "no OCC boolean" comments), **K12** (`_test_hub_shroud_math.py` outside pytest), **K13** (heterogeneous `nFaces`, empty `edges.bin` with vanes), **K20** (hidden fields sent, `SendToMeshingDialog` accepts `name: ''`, a failed save deletion closes the confirmation), **K25** (`helpId` not wired to `aria-describedby`), **K29** (cache never purged by the code), **K30** (chamber test hygiene), **K31** (in-memory locks: single API instance).
 
 Answer to K20 (code reading): the server does ignore the fields of the unselected variant (`wallThickness`, `hollowLength`, generator, `simplifyGenerator` are only read in hollow; `x4` never passed on). However `vaneAngleDeg` and `outletRatio` enter the hash even without vanes (§5.1).
 
 **Doc/code discrepancies found while writing this sheet (2026-09-28, code reading, not fixed)**:
-1. **Part scale in With cone**: the UI helper ("with cone: scaled down to fit"), the JSDoc of `ChamberInput.partScale`, the comment of `chamberBuildSchema`, the one of `resolveGeometryParams` ("The builder clamps up-scaling") and a comment in `buildChamber.py` still describe a shrinking; the builder has **refused** since 2026-08-31.
+1. **Part scale in With cone**: the UI helper and the JSDoc of `ChamberInput.partScale` were fixed on 2026-09-28; the comment of `chamberBuildSchema` ("scaled down to fit"), the one of `resolveGeometryParams` ("The builder clamps up-scaling") and a comment in `buildChamber.py` ("Up-scaling is clamped below") still describe a shrinking; the builder has **refused** since 2026-08-31 (rechecked 2026-09-29).
 2. **Stepped "outlet"**: `vocabulary.md` says that the outlet is never the middle cylinder and sits "further downstream" in a vane-less build; yet `classify` names `outlet` the side face of the median-z cylinder (the middle cylinder) in stepped without vanes. To clarify with the user (display rule only, or patch to revisit).
 3. **With cone without vanes: no `outlet` patch** (only 3 patches), and no pytest fixture covers this case.
 4. `ChamberInput.footAngleDeg` documented as "Default 45"; actual default 40 (schema, service, builder, form).
