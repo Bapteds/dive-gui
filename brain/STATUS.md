@@ -52,7 +52,7 @@ On a workstation without OpenFOAM, ParaView or CadQuery, CFD actions answer "not
 
 ## 4. Open threads (nothing is requested)
 
-See `brain/known-issues.md` §6 and §7: hub shoulder monotonicity, vocabulary sweep of the builder texts, visual pass of Simplify Generator, STL normals, saves cascade, multi-instance build lock, semi-spiral tool integration. Audit side: 22 MEDIUM and 21 LOW open, and product decision C2 (shared projects of a deleted account).
+See `brain/known-issues.md` §6 and §7: hub shoulder monotonicity, visual pass of Simplify Generator, STL normals, saves cascade, multi-instance build lock, semi-spiral tool integration. Audit side: 22 MEDIUM and 21 LOW open, and product decision C2 (shared projects of a deleted account).
 
 **Questions waiting for a user decision** (raised on 2026-09-28):
 - Name of the `outlet` patch placed on the middle cylinder in Closed generator without guide vanes (`known-issues.md` §6).
