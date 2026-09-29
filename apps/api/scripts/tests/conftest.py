@@ -90,6 +90,7 @@ def run_builder(params_path: str, out_dir: str, name: str, step: bool = False) -
         argv,
         capture_output=True,
         text=True,
+        encoding="utf-8",  # the builder writes UTF-8 (form labels: Ø, °)
         timeout=BUILD_TIMEOUT_S,
     )
     return BuildResult(

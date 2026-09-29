@@ -381,7 +381,9 @@ describe('Chamber Creation', () => {
         .get(`/api/v1/chamber/${built.body.hash}/export/stepMirrored`)
         .set('Authorization', auth)
         .expect(502);
-      expect(failed.body.error.message).toContain('KO: no solids');
+      expect(failed.body.error.message).toBe(
+        'Cannot generate the mirrored STEP file. No solids found in chamber.step',
+      );
 
       // The failure left no half-written file: a later attempt regenerates.
       setCommandRunner(withMirrorRunner(vaneRunner(true), mirrorSuccessRunner));
@@ -489,7 +491,7 @@ describe('Chamber Creation', () => {
       .send({ x1: 700, x2: 1.8, x3: 23, relationsMaster: false })
       .expect(422);
     expect(res.body.error.message).toContain('H Kammer');
-    expect(res.body.error.message).toContain('must be positive');
+    expect(res.body.error.message).toContain('come out at 0 mm or below');
   });
 
   it('refuses a Closed generator H Kammer below LEB + the Gen Dim height, before any builder run', async () => {
@@ -500,7 +502,7 @@ describe('Chamber Creation', () => {
       .set('Authorization', auth)
       .send({ ...BUILD, constraints: { height: { exact: 1800 } } })
       .expect(422);
-    expect(res.body.error.message).toContain('too low for the closed generator');
+    expect(res.body.error.message).toContain('is too low for the generator');
   });
 
   it('refuses an inverted Min>Max constraint range, before any builder run', async () => {

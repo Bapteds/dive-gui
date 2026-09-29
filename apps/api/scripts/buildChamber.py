@@ -191,6 +191,11 @@ def make_dome(cq, radius, height, z_apex_base):
     return cq.Solid(ellipsoid).translate((0, 0, z_apex_base))
 
 
+def _mm(metres):
+    """A length in metres as the form shows it: whole millimetres ("1100 mm")."""
+    return "%d mm" % round(metres * 1000.0)
+
+
 def make_part_hollow(cq, d_first, h_first, d_middle, h_middle, d_last,
                      wall, hollow_len, c_dia, c_h, dome_h, omit_middle=False):
     """The 'hollow' variant (base of the FIRST at z = 0), a union of:
@@ -312,9 +317,10 @@ def make_feet(cq, cx, cy, z0, z_top, r_cyl, d_first, foot_angle_deg=FOOT_ANGLE_D
             c_axis = (t_in[0] + s * dx, t_in[1] + s * dy)
     if c_axis is None or math.hypot(c_axis[0] - c_out[0], c_axis[1] - c_out[1]) < gusset_min_base:
         raise ValueError(
-            "footAngleDeg %.1f cannot form the triangular gusset (near tangential "
-            "0/180 the tip line misses the cylinder; near radial 90 the base "
-            "collapses). Use an intermediate angle." % foot_angle_deg)
+            "Foot angle %.0f\u00b0 cannot shape the torque feet: close to 0\u00b0 or "
+            "180\u00b0 a foot misses the runner case, close to 90\u00b0 its top plate "
+            "has no width. Pick an angle in between, or turn the feet off."
+            % foot_angle_deg)
     # gusset: apex at the far tip; one edge is the tip-to-tip line extended to the
     # cylinder (c_axis, through the inner tip), the other the far tip's
     # perpendicular foot (c_out); base is the chord c_axis..c_out on the cylinder.
@@ -1296,6 +1302,11 @@ def write_ascii_solid(fh, name, tri):
 
 
 def main():
+    # Messages quote the form's labels (Ø, °, ×): emit UTF-8 whatever the
+    # locale (a Windows console would otherwise encode them as cp1252).
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8")
     if len(sys.argv) not in (3, 4) or (len(sys.argv) == 4 and sys.argv[3] != "--step"):
         sys.stderr.write("usage: python buildChamber.py <paramsJson> <outDir> [--step]\n")
         sys.exit(2)
@@ -1352,7 +1363,9 @@ def main():
         gen_h_typed = num_opt("centralHeight") if (
             variant == "stepped" or simplify_generator) else None
         if gen_h_typed is not None and gen_h_typed <= 0:
-            raise ValueError("generator height must be > 0")
+            raise ValueError(
+                "Generator height must be greater than 0 mm. Leave it blank to "
+                "run the generator up through the chamber top.")
         # Absolute guide-vane open angle (deg). The asset is baked at
         # VANE_BASE_ANGLE_DEG (50); each blade swings about its own spindle by
         # (vane_angle - VANE_BASE_ANGLE_DEG) to reach the requested angle. Range is
@@ -1370,45 +1383,52 @@ def main():
 
         # --- common validation (on the UNSCALED model values) ---------------
         if min(width, height, length, d_last, h_middle) <= 0:
-            raise ValueError("width/height/length/dLast/hMiddle must be > 0")
+            raise ValueError(
+                "B Kammer, H Kammer, Length, LE (Durchmesser) and HLE must all be "
+                "greater than 0 mm.")
         if h_first <= 0:
             raise ValueError(
-                "hFirst = hMiddlePlusFirst - hMiddle = %.4f must be > 0" % h_first)
+                "LEB (%s) must be taller than HLE (%s): the runner case under the "
+                "guide vanes would have no height. Raise LEB or lower HLE."
+                % (_mm(h_first + h_middle), _mm(h_middle)))
         if not 0 < dist_c1 < width:
             raise ValueError(
-                "distFromSideChamfer1 %.4f must be between 0 and width %.4f"
-                % (dist_c1, width))
+                "B1 (%s) places the turbine axis outside the chamber: it must be "
+                "between 0 and B Kammer (%s)." % (_mm(dist_c1), _mm(width)))
         if not 0 < dist_from_end < length:
             raise ValueError(
-                "distFromEnd %.4f must be between 0 and length %.4f"
-                % (dist_from_end, length))
+                "LT (%s) places the turbine axis outside the chamber: it must be "
+                "between 0 and Length (%s)." % (_mm(dist_from_end), _mm(length)))
         if chamfer_enabled:
             # The corner cuts eat (length-wise, width-wise) into the box; a
             # non-positive setback makes a degenerate zero-area prism (cryptic
             # OCC failure), one beyond the box is geometric nonsense.
-            for _cnm, (_cl, _cw) in (("chamfer 1 (LF1/BF1)", ch_big),
-                                     ("chamfer 2 (LF2/BF2)", ch_small)):
+            for _n, (_cl, _cw) in (("1", ch_big), ("2", ch_small)):
                 if _cl <= 0 or _cw <= 0:
                     raise ValueError(
-                        "%s setbacks must be > 0 (got length %.4f, width %.4f); "
-                        "disable the chamfer instead of zeroing it" % (_cnm, _cl, _cw))
+                        "Corner chamfer %s needs LF%s and BF%s greater than 0 mm "
+                        "(got LF%s = %s, BF%s = %s). To remove the corner cut, turn "
+                        "the chamfer off instead of setting it to 0."
+                        % (_n, _n, _n, _n, _mm(_cl), _n, _mm(_cw)))
                 if _cl >= length or _cw >= width:
                     raise ValueError(
-                        "%s (length %.4f, width %.4f) must be smaller than the "
-                        "box (Length %.4f, B Kammer %.4f)"
-                        % (_cnm, _cl, _cw, length, width))
+                        "Corner chamfer %s is as large as the chamber: LF%s (%s) "
+                        "must be shorter than Length (%s) and BF%s (%s) narrower "
+                        "than B Kammer (%s)."
+                        % (_n, _n, _mm(_cl), _mm(length), _n, _mm(_cw), _mm(width)))
         if not 0.0 <= foot_angle <= 180.0:
             raise ValueError(
-                "footAngleDeg %.3f must be between 0 and 180 "
-                "(0/180 = tangential either way, 90 = radial)" % foot_angle)
+                "Foot angle must be between 0\u00b0 and 180\u00b0 (0\u00b0 and 180\u00b0 = "
+                "tangential, 90\u00b0 = pointing at the axis); got %.1f\u00b0."
+                % foot_angle)
         if part_scale <= 0:
-            raise ValueError("partScale %.4f must be > 0" % part_scale)
+            raise ValueError("Part scale must be greater than 0 (got %g)." % part_scale)
         if not VANE_BASE_ANGLE_DEG - 5.0 <= vane_angle <= VANE_BASE_ANGLE_DEG + 5.0:
             raise ValueError(
-                "vaneAngleDeg %.3f must be within +-5 deg of the base open angle "
-                "%.1f (i.e. %.1f..%.1f)" % (
-                    vane_angle, VANE_BASE_ANGLE_DEG,
-                    VANE_BASE_ANGLE_DEG - 5.0, VANE_BASE_ANGLE_DEG + 5.0))
+                "Vane angle must be between %.0f\u00b0 and %.0f\u00b0 (the %.0f\u00b0 "
+                "base opening \u00b1 5\u00b0); got %.1f\u00b0." % (
+                    VANE_BASE_ANGLE_DEG - 5.0, VANE_BASE_ANGLE_DEG + 5.0,
+                    VANE_BASE_ANGLE_DEG, vane_angle))
 
         # --- read the per-variant stack dims (UNSCALED) up front, so we can
         #     size the uniform scale against the box BEFORE building ----------
@@ -1423,14 +1443,23 @@ def main():
                 c_h = num("centralHeight")
                 dome_h = num("domeHeight")
             if not 0 < wall < d_last / 2:
-                raise ValueError("wallThickness must be in (0, dLast/2)")
+                raise ValueError(
+                    "Wall thickness (%s) must be greater than 0 and less than half "
+                    "of LE (Durchmesser) (%s), or the cone would have no inside."
+                    % (_mm(wall), _mm(d_last)))
             if simplify_generator:
                 if min(hollow_len, c_dia) <= 0:
-                    raise ValueError("hollow params (length/central dia) must be > 0")
+                    raise ValueError(
+                        "Cone length and Generator \u00d8 must be greater than 0 mm.")
             elif min(hollow_len, c_dia, c_h, dome_h) <= 0:
-                raise ValueError("hollow params (length/central dia+height/dome) must be > 0")
+                raise ValueError(
+                    "Cone length, Generator \u00d8, Generator height and Dome height "
+                    "must all be greater than 0 mm.")
             if hollow_len <= wall:
-                raise ValueError("hollowLength must exceed the wall thickness (open-top cup)")
+                raise ValueError(
+                    "Cone length (%s) must be longer than the Wall thickness (%s): "
+                    "the cone is an open cup whose bottom is one wall thick."
+                    % (_mm(hollow_len), _mm(wall)))
             # With Simplify Generator the central cylinder is pinned to the box
             # top (it always fits) unless its height is typed; then it counts.
             if simplify_generator:
@@ -1469,35 +1498,51 @@ def main():
             clamp_basis = unscaled_shoulder
             clamp_limit = height + 2 * FLOOR_OVERCUT - MIN_LAST_CYL_H
         if clamp_basis > 0 and part_scale * clamp_basis > clamp_limit + 1e-6:
+            # The messages quote the UNSCALED heights and the scaled total, in
+            # the form's words (LEB, Cone length, Generator height...).
+            scaled_note = ("" if abs(part_scale - 1.0) < 1e-9
+                           else " at Part scale %g" % part_scale)
+            leb = h_first + h_middle
             if variant == "stepped" and unscaled_stack is not None:
                 raise ValueError(
-                    "the closed generator stack (first + middle + generator height) "
-                    "is %.4f m tall but H Kammer only allows %.4f m. To fit, lower "
-                    "the generator height, HLE or Part scale, or increase H Kammer."
-                    % (part_scale * clamp_basis, clamp_limit))
+                    "The generator does not fit under the chamber top: LEB %s + "
+                    "Generator height %s = %s%s, but H Kammer is only %s. Lower the "
+                    "Generator height, HLE or Part scale, or increase H Kammer."
+                    % (_mm(leb), _mm(gen_h_typed), _mm(part_scale * clamp_basis),
+                       scaled_note, _mm(clamp_limit)))
             if variant == "hollow":
                 fit_scale = clamp_limit / clamp_basis
+                # Name the part that sets the top of the stack (with its verb).
                 if simplify_generator:
-                    raise ValueError(
-                        "the hollow cone stack (first + middle + cone) is %.4f m "
-                        "tall but H Kammer only allows %.4f m. To fit, reduce Part "
-                        "scale to <= %.4f, lower the cone height or HLE, or "
-                        "increase H Kammer."
-                        % (part_scale * clamp_basis, clamp_limit, fit_scale))
+                    if c_h is not None and c_h > hollow_len:
+                        what, top_desc = "generator does", "Generator height %s" % _mm(c_h)
+                        levers = "lower the Generator height or HLE"
+                    else:
+                        what, top_desc = "cone does", "Cone length %s" % _mm(hollow_len)
+                        levers = "shorten the Cone length or lower HLE"
+                elif hollow_len >= c_h + dome_h:
+                    what, top_desc = "cone does", "Cone length %s" % _mm(hollow_len)
+                    levers = "shorten the Cone length or lower HLE"
+                else:
+                    what = "generator and its dome do"
+                    top_desc = "Generator height %s + Dome height %s" % (
+                        _mm(c_h), _mm(dome_h))
+                    levers = ("lower the Generator height, Dome height or HLE "
+                              "(or tick Simplify generator)")
                 raise ValueError(
-                    "the hollow stack (first + middle + max(cone, generator + dome)) "
-                    "is %.4f m tall but H Kammer only allows %.4f m. To fit, reduce "
-                    "Part scale to <= %.4f, lower the cone / generator / dome heights "
-                    "or HLE, or increase H Kammer."
-                    % (part_scale * clamp_basis, clamp_limit, fit_scale))
+                    "The %s not fit under the chamber top: LEB %s + %s = %s%s, "
+                    "but H Kammer is only %s. Set Part scale to %.2f or less, %s, "
+                    "or increase H Kammer."
+                    % (what, _mm(leb), top_desc, _mm(part_scale * clamp_basis),
+                       scaled_note, _mm(clamp_limit), math.floor(fit_scale * 100) / 100,
+                       levers))
             else:
-                scaled = part_scale * clamp_basis
-                scale_note = "" if abs(part_scale - 1.0) < 1e-9 else (" (scaled x %.4g)" % part_scale)
-                part_lever = "" if abs(part_scale - 1.0) < 1e-9 else " / reduce Part scale"
+                part_lever = "" if abs(part_scale - 1.0) < 1e-9 else ", Part scale"
                 raise ValueError(
-                    "the cylinder shoulder (first + middle height, i.e. 2 x HLE) is %.4f m "
-                    "tall%s but H Kammer only allows %.4f m. To fit, lower HLE%s, or "
-                    "increase H Kammer." % (scaled, scale_note, clamp_limit, part_lever))
+                    "H Kammer (%s) is too low: LEB %s%s leaves less than %s above it "
+                    "for the generator. Lower HLE%s, or increase H Kammer."
+                    % (_mm(height), _mm(part_scale * clamp_basis), scaled_note,
+                       _mm(MIN_LAST_CYL_H), part_lever))
 
         # Manual diameter overrides (metres, UNSCALED) for the runner case (first
         # cylinder) and the guide-vanes/middle cylinder. None => use the D_last ratio.
@@ -1576,16 +1621,20 @@ def main():
             if simplify_generator:
                 if c_h <= 0:
                     raise ValueError(
-                        "generator height %.4f <= 0 (shoulder above the box top)"
-                        % c_h)
+                        "H Kammer (%s) is lower than LEB (%s): there is no room "
+                        "left for the generator. Increase H Kammer, or lower HLE "
+                        "or Part scale." % (_mm(height), _mm(h_first + h_middle)))
             elif part_height > height + 1e-6:
                 raise ValueError(
-                    "part height %.4f exceeds box height %.4f" % (part_height, height))
+                    "The turbine is %s tall but H Kammer is only %s. Increase "
+                    "H Kammer, or lower HLE or Part scale."
+                    % (_mm(part_height), _mm(height)))
         else:
             if last_h_local <= 0:
                 raise ValueError(
-                    "last cylinder height %.4f <= 0 (shoulder above the box top)"
-                    % last_h_local)
+                    "H Kammer (%s) is lower than LEB (%s): there is no room left "
+                    "for the generator. Increase H Kammer, or lower HLE or Part "
+                    "scale." % (_mm(height), _mm(h_first + h_middle)))
 
         box = make_box(cq, width, length, height,
                        CHAMFER_END, BIG_CORNER_SIDE, ch_big, ch_small,
@@ -1611,10 +1660,10 @@ def main():
         #     that actually fits.
         half_w, half_l = width / 2, length / 2
         clearances = [
-            (dist_c1, "chamfer-side wall (B1)"),
-            (width - dist_c1, "far side wall (B Kammer - B1)"),
-            (dist_from_end, "chamfered end (LT)"),
-            (length - dist_from_end, "inlet end (Length - LT)"),
+            (dist_c1, "side wall on the chamfer side (distance B1)"),
+            (width - dist_c1, "opposite side wall (distance B Kammer - B1)"),
+            (dist_from_end, "chamfered end wall (distance LT)"),
+            (length - dist_from_end, "inlet end wall (distance Length - LT)"),
         ]
         gap, wall_name = min(clearances, key=lambda c: c[0])
 
@@ -1624,8 +1673,8 @@ def main():
         chamfer_tris = []
         if chamfer_enabled:
             for _sx, (_len_set, _wid_set), _nm in (
-                    (big_sx, ch_big, "big-corner chamfer face"),
-                    (-big_sx, ch_small, "small-corner chamfer face")):
+                    (big_sx, ch_big, "corner chamfer 1 (LF1 \u00d7 BF1)"),
+                    (-big_sx, ch_small, "corner chamfer 2 (LF2 \u00d7 BF2)")):
                 chamfer_tris.append((
                     (_sx * half_w, end_sy * half_l),
                     (_sx * (half_w - _wid_set), end_sy * half_l),
@@ -1652,29 +1701,30 @@ def main():
         for _ta, _tb, _tc, _nm in chamfer_tris:
             if _in_tri(target_x, target_y, _ta, _tb, _tc):
                 raise ValueError(
-                    "the part axis (positioned by B1 / LT) lies inside the %s "
-                    "corner cut. Move the axis (B1 / LT) or reduce that "
-                    "chamfer." % _nm)
+                    "The turbine axis (placed by B1 and LT) lies inside the cut "
+                    "corner of %s. Move the axis with B1 / LT, or make that "
+                    "chamfer smaller." % _nm)
 
         def _refuse_radial(r_check, what, levers):
             """Refuse when a circle of radius r_check about the part axis pokes
             through a straight wall or a chamfer corner face."""
             if r_check > gap + 1e-6:
                 raise ValueError(
-                    "%s reaches %.4f m from the axis but the axis sits only "
-                    "%.4f m from the %s, so it would stick out of the box. %s"
-                    % (what, r_check, gap, wall_name, levers))
+                    "%s would stick out of the chamber: it reaches %s from the "
+                    "turbine axis, but the %s is only %s away. %s"
+                    % (what, _mm(r_check), wall_name, _mm(gap), levers))
             for _ta, _tb, _tc, _nm in chamfer_tris:
                 if min(_seg_dist(target_x, target_y, p, q)
                        for p, q in ((_ta, _tb), (_tb, _tc), (_tc, _ta))) < r_check - 1e-6:
                     raise ValueError(
-                        "%s would stick out through the %s. %s" % (what, _nm, levers))
+                        "%s would stick out of the chamber through %s. %s"
+                        % (what, _nm, levers))
 
         _refuse_radial(
             rmax,
-            "the part is %.4f m wide (radius %.4f m): it" % (2 * rmax, rmax),
-            "Increase B Kammer / Length or move the axis (B1 / LT), or reduce "
-            "Part scale / the diameter overrides.")
+            "The turbine (%s across at its widest)" % _mm(2 * rmax),
+            "Increase B Kammer or Length, move the axis with B1 / LT, or lower "
+            "Part scale, Runner case \u00d8 or Guide vanes \u00d8.")
 
         if feet_enabled:
             # Exact swung plan of the four legs, mirroring make_feet (the planks
@@ -1701,10 +1751,11 @@ def main():
                                      if _in_tri(_px, _py, _ta, _tb, _tc)), None)
                     if abs(_px) > half_w + 1e-6 or abs(_py) > half_l + 1e-6 or _through:
                         raise ValueError(
-                            "a torque foot reaches (%.3f, %.3f) m, outside the %s. "
-                            "Increase B Kammer / Length or move the axis (B1 / LT), "
-                            "reduce Part scale, or disable the feet."
-                            % (_px, _py, _through if _through else "box walls"))
+                            "A torque foot would stick out of the chamber through "
+                            "%s. Increase B Kammer or Length, move the axis with "
+                            "B1 / LT, change the Foot angle, lower Part scale, or "
+                            "turn the feet off."
+                            % (_through if _through else "a side or end wall"))
 
         # four torque-foot voids (both variants), centred on the part axis. Each
         # leg runs from the floor up to the BASE of the last/hollow cylinder, with
@@ -1796,9 +1847,9 @@ def main():
                           vane_patches["shroud"]))
             _refuse_radial(
                 _dist_r,
-                "the guide-vane distributor (blades + shroud)",
-                "Increase B Kammer / Length or move the axis (B1 / LT), or "
-                "reduce Part scale / the Guide vanes Ø (dMiddle).")
+                "The guide-vane distributor (blades + shroud)",
+                "Increase B Kammer or Length, move the axis with B1 / LT, or "
+                "lower Part scale or Guide vanes \u00d8.")
             # The hub and shroud are the FULL true surfaces and continue straight down
             # from their natural passage bottom as mesh DUCTS (open cylinders at the
             # hub-inner rim vane_outlet_ri and the shroud-outer rim vane_outlet_ro). The
@@ -2171,8 +2222,17 @@ def main():
 
     except SystemExit:
         raise
-    except Exception as exc:  # noqa: BLE001 - one-shot CLI, report and fail.
+    except ValueError as exc:
+        # Input refusals: already worded for the user (form names, mm, levers).
         sys.stderr.write("KO: %s\n" % exc)
+        sys.exit(1)
+    except Exception as exc:  # noqa: BLE001 - one-shot CLI, report and fail.
+        # A geometry-kernel or internal failure: say so plainly, keep the raw
+        # reason for whoever debugs it.
+        sys.stderr.write(
+            "KO: The geometry engine failed on these inputs (%s: %s). Try "
+            "slightly different values; if it keeps failing, save the build "
+            "and report it.\n" % (type(exc).__name__, exc))
         sys.exit(1)
 
 

@@ -122,7 +122,7 @@ describe('ChamberInputsForm', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
     expect(
-      await screen.findByText('A cone length is required for this variant.'),
+      await screen.findByText('Enter a cone length: the With cone design needs one.'),
     ).toBeInTheDocument();
     expect(onValid).not.toHaveBeenCalled();
   });
@@ -197,7 +197,9 @@ describe('ChamberInputsForm', () => {
       />,
     );
     expect(screen.getByLabelText('Generator height (mm)')).toBeInTheDocument();
-    expect(screen.getByText(/Blank = through the chamber top ≈ 2700 mm/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Blank = through the chamber top ≈ 2700 mm \(min ≈ \d+ mm\)/),
+    ).toBeInTheDocument();
     expect(screen.queryByLabelText('Dome height (mm)')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Generator Ø (mm)')).toBeInTheDocument();
     expect(screen.getByLabelText('Power (kW)')).toBeInTheDocument();
