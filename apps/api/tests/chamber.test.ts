@@ -1202,7 +1202,7 @@ describe('Chamber Creation', () => {
       const lt = outputs.find((o) => o.key === 'distFromEnd')!;
       expect(lt.status).toBe('from spiral');
       expect(lt.final).toBeCloseTo(2200, 6);
-      expect(outputs.find((o) => o.key === 'chamferWidth2')!.final).toBeCloseTo(1400, 6);
+      expect(outputs.find((o) => o.key === 'chamferWidth2')!.final).toBeCloseTo(1150, 6);
       expect(outputs.find((o) => o.key === 'width')!.status).not.toBe('from spiral');
       expect(res.body.warnings).toEqual([]);
 

@@ -519,16 +519,18 @@ describe('semi-spiral casing helpers (spec 2026-09-29-semi-spiral-casing)', () =
     ]);
   });
 
-  it('derives the doubly chamfered box from the spiral vertices (spec section 3)', () => {
+  it('derives the doubly chamfered box from the spiral vertices, mirrored like the builder', () => {
+    // The builder mirrors the tool frame (x -> -X) so the spiral turns with the
+    // guide vanes: B1 is measured to L1 and chamfer 1 is L2 (spec section 5.5).
     const box = chamberSpiralBoxDims(VERTICES);
     expect(box.width).toBeCloseTo(4.4, 9); // x4 - x_in
     expect(box.length).toBeCloseTo(2.2 + 2.13664, 9); // y_top - foot_y
-    expect(box.distFromSideChamfer1).toBeCloseTo(1.7, 9); // x4
+    expect(box.distFromSideChamfer1).toBeCloseTo(2.7, 9); // -x_in
     expect(box.distFromEnd).toBeCloseTo(2.2, 9); // y_top
-    expect(box.chamferLength1).toBeCloseTo(1.2, 9); // y_top - y4
-    expect(box.chamferWidth1).toBeCloseTo(1.15, 9); // x4 - x3
-    expect(box.chamferLength2).toBeCloseTo(1.45, 9); // y_top - y1
-    expect(box.chamferWidth2).toBeCloseTo(1.4, 9); // x2 - x_in
+    expect(box.chamferLength1).toBeCloseTo(1.45, 9); // y_top - y1
+    expect(box.chamferWidth1).toBeCloseTo(1.4, 9); // x2 - x_in
+    expect(box.chamferLength2).toBeCloseTo(1.2, 9); // y_top - y4
+    expect(box.chamferWidth2).toBeCloseTo(1.15, 9); // x4 - x3
   });
 
   it('maps the chamber to the tool inputs in metres (spec section 4)', () => {

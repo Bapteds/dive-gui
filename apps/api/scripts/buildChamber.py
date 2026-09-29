@@ -21,9 +21,13 @@ Geometry (originally prototyped standalone, since folded in here):
   * the result split into four named patches: inlet (far -Y end plane), outlet
     (middle cylinder wall), cylinder_walls (first+last walls, shoulders, cap),
     walls (the box's own faces).
+  * semi-spiral casing (params.spiral, spec 2026-09-29-semi-spiral-casing): the
+    box is derived from the frozen spiral outline (mirrored, see SPIRAL_MIRROR_X),
+    a nose prism and a tangent plank are cut from the fluid, and both form the
+    `tongue` patch. Guide-vane builds add hub / shroud / outlet / guide_vanes.
 
 CLI usage:
-    python buildChamber.py <paramsJson> <outDir>
+    python buildChamber.py <paramsJson> <outDir> [--step]
 
 Outputs written under <outDir>:
     chamber.glb            binary glTF, one named node per patch
@@ -128,7 +132,27 @@ VANE_P3_RATIO = 0.93840              # P3 r / outletOuterR: P3 tracks R_shroud (
 VANE_SHROUD_ELL_A = 0.160
 VANE_SHROUD_ELL_B = 0.119
 
-PATCH_ORDER = ("inlet", "outlet", "cylinder_walls", "walls")
+# --- semi-spiral casing (spec 2026-09-29-semi-spiral-casing) -----------------
+# The outline comes FROZEN in params.spiral (designSemiSpiral.py, run by the API
+# in its own cached step); the builder never optimises. Tool frame: origin = the
+# turbine axis, metres.
+SPIRAL_CLEARANCE = 0.2        # nose tip -> widest part of the machine (m, NOT scaled).
+                              # Mirrors CHAMBER_SPIRAL_CLEARANCE_M of @dive/shared.
+SPIRAL_TIP_TOL = 1e-3         # |V6| must equal rmax + SPIRAL_CLEARANCE within this (m)
+SPIRAL_PLANK_THICK = 0.05     # plank thickness (m) x partScale
+SPIRAL_PLANK_OVERLAP = 0.02   # plank extension (m) x partScale into the nose and the
+                              # target part so the booleans fuse (FOOT_PLANK_OVERLAP idea)
+# Handedness (spec section 5.5, checked 2026-09-29): the tool frame turns the flow
+# CLOCKWISE seen from +Z, but the guide-vane asset turns it COUNTER-clockwise (its
+# outer leading edge -> inner trailing edge chord). The builder therefore mirrors
+# the spiral (tool x -> builder -X, so the chamfer 1/2 roles swap), never the
+# vanes. Locked by test_spiral_turns_with_the_guide_vanes. Mirrored by
+# chamberSpiralBoxDims in @dive/shared (the table's derived values).
+SPIRAL_MIRROR_X = True
+SPIRAL_FEET_REFUSAL = ("The semi-spiral casing needs Feet off for now. Uncheck Feet, "
+                       "or uncheck Semi-spiral casing.")
+
+PATCH_ORDER = ("inlet", "outlet", "cylinder_walls", "walls", "tongue")
 # Keep aligned with CHAMBER_PATCH_TYPES in packages/shared (the Meshing -> project
 # hand-off forces these types; apps/api/tests/chamberPatchTypes.test.ts checks parity).
 PATCH_TYPES = {
@@ -139,6 +163,7 @@ PATCH_TYPES = {
     "hub": "wall",
     "shroud": "wall",
     "guide_vanes": "wall",
+    "tongue": "wall",
 }
 
 
@@ -374,6 +399,132 @@ def make_feet(cq, cx, cy, z0, z_top, r_cyl, d_first, foot_angle_deg=FOOT_ANGLE_D
         f = foot0.rotate((0, 0, 0), (0, 0, 1), a)
         feet = f if feet is None else feet.union(f)
     return feet.translate((cx, cy, 0)), r_outer
+
+
+# --- semi-spiral casing (pure geometry, no CadQuery) ---------------------------
+def spiral_box(vertices, mirror=SPIRAL_MIRROR_X):
+    """The doubly chamfered box that carries a spiral outline (spec section 3),
+    from the tool vertices V0..V9 (metres, axis at the origin). L1/L5 are the
+    side walls, L3 the chamfered end, L2/L4 the corner cuts and V0 -> V9 the flat
+    inlet end. Returns a dict with width, length, dist_c1 (B1: axis to the +X
+    wall), dist_from_end (LT), ch_big (+X corner) / ch_small (-X corner) as
+    (length_setback, width_setback), and `pts` = {id: (X, Y)} in BUILDER axes
+    relative to the axis. With `mirror` the tool x becomes builder -X (so the
+    +X wall is L1 and chamfer 1 is L2)."""
+    raw = {}
+    for v in vertices:
+        raw[str(v["id"])] = (float(v["x"]), float(v["y"]))
+    missing = [k for k in ("V%d" % i for i in range(10)) if k not in raw]
+    if missing:
+        raise ValueError("The semi-spiral outline is incomplete (missing %s). Generate "
+                         "again to redesign the spiral." % ", ".join(missing))
+    x_in, foot_y = raw["V0"]
+    y1 = raw["V1"][1]
+    x2, y_top = raw["V2"]
+    x3 = raw["V3"][0]
+    x4, y4 = raw["V4"]
+    sx = -1.0 if mirror else 1.0
+    box = {
+        "width": x4 - x_in,
+        "length": y_top - foot_y,
+        "dist_from_end": y_top,
+        "pts": {k: (sx * x, y) for k, (x, y) in raw.items()},
+    }
+    if mirror:
+        box["dist_c1"] = -x_in
+        box["ch_big"] = (y_top - y1, x2 - x_in)
+        box["ch_small"] = (y_top - y4, x4 - x3)
+    else:
+        box["dist_c1"] = x4
+        box["ch_big"] = (y_top - y4, x4 - x3)
+        box["ch_small"] = (y_top - y1, x2 - x_in)
+    return box
+
+
+def _point_in_polygon(px, py, poly):
+    """Even-odd ray test of one point against a closed polygon [(x, y), ...]."""
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        (x1, y1), (x2, y2) = poly[i], poly[(i + 1) % n]
+        if (y1 > py) != (y2 > py):
+            xc = x1 + (py - y1) * (x2 - x1) / (y2 - y1)
+            if px < xc:
+                inside = not inside
+    return inside
+
+
+def _dist_to_polygon(px, py, poly):
+    """Distance from a point to a closed polygon's boundary."""
+    best = float("inf")
+    n = len(poly)
+    for i in range(n):
+        (ax, ay), (bx, by) = poly[i], poly[(i + 1) % n]
+        vx, vy = bx - ax, by - ay
+        t = max(0.0, min(1.0, ((px - ax) * vx + (py - ay) * vy) / (vx * vx + vy * vy)))
+        best = min(best, math.hypot(px - (ax + t * vx), py - (ay + t * vy)))
+    return best
+
+
+def spiral_plank(pts, r_t, thick, overlap):
+    """The plank footprint (spec section 5.3), relative to the axis: a rectangle
+    `thick` wide centred on the segment from the nose tip P = V6 to the tangent
+    point T on the target circle (radius r_t), the tangent that continues the
+    nose (largest dot product with L6 = V5 -> V6). Extended by `overlap` past T
+    into the target part, and past P into the nose far enough that BOTH back
+    corners sit inside the nose (at least `overlap`): at the tip the plank leaves
+    L6 at ~40 deg, so a short extension would leave a few-mm step of plank corner
+    proud of L6. Returns (P, T, rectangle corners)."""
+    px, py = pts["V6"]
+    r_in = math.hypot(px, py)
+    if r_t >= r_in - 1e-9:
+        raise ValueError(
+            "The semi-spiral plank has no tangent: the generator / cone (%s across) "
+            "reaches the nose tip (%s from the axis)." % (_mm(2 * r_t), _mm(r_in)))
+    a = math.acos(r_t / r_in)
+    ux, uy = px / r_in, py / r_in
+    l6x, l6y = px - pts["V5"][0], py - pts["V5"][1]
+    l6n = math.hypot(l6x, l6y)
+    best = None
+    for t in (a, -a):
+        tx = r_t * (ux * math.cos(t) - uy * math.sin(t))
+        ty = r_t * (ux * math.sin(t) + uy * math.cos(t))
+        dl = math.hypot(tx - px, ty - py)
+        score = ((tx - px) * l6x + (ty - py) * l6y) / (dl * l6n)
+        if best is None or score > best[0]:
+            best = (score, (tx, ty), dl)
+    _, (tx, ty), dl = best
+    dx, dy = (tx - px) / dl, (ty - py) / dl
+    nx, ny = -dy, dx
+    h = thick / 2.0
+    nose = [pts["V5"], pts["V6"], pts["V7"], pts["V8"]]
+    back = overlap
+    for _ in range(40):
+        corners_back = [(px - back * dx + s * h * nx, py - back * dy + s * h * ny) for s in (1, -1)]
+        if all(_point_in_polygon(cx_, cy_, nose) for cx_, cy_ in corners_back):
+            break
+        back += overlap / 2.0
+    fx, fy = tx + overlap * dx, ty + overlap * dy
+    bx, by = px - back * dx, py - back * dy
+    rect = [(bx + h * nx, by + h * ny), (fx + h * nx, fy + h * ny),
+            (fx - h * nx, fy - h * ny), (bx - h * nx, by - h * ny)]
+    return (px, py), (tx, ty), rect
+
+
+def spiral_tongue_test(nose, rect, z_leb, tol=PLANE_TOL):
+    """Predicate (x, y, z, nz) -> is this wetted face part of the tongue? Its
+    centroid lies in the XY footprint of the nose polygon, or of the plank
+    rectangle above LEB (within `tol`), and it is not horizontal (|nz| < 0.5):
+    the plank underside and ceiling faces stay walls."""
+    def test(x, y, z, nz):
+        if abs(nz) >= 0.5:
+            return False
+        if _point_in_polygon(x, y, nose) or _dist_to_polygon(x, y, nose) <= tol:
+            return True
+        if z < z_leb - tol:
+            return False
+        return _point_in_polygon(x, y, rect) or _dist_to_polygon(x, y, rect) <= tol
+    return test
 
 
 # --- guide-vane throat (mesh patches, no OCC boolean) -----------------------
@@ -1253,14 +1404,28 @@ def _horiz_extent(f, ax, ay):
                for cx in (bb.xmin, bb.xmax) for cy in (bb.ymin, bb.ymax))
 
 
-def classify(faces, adaptor, geomabs, variant, pocket_radius, guide_vanes=False):
-    """Return {patch: [face,...]} for inlet / outlet / cylinder_walls / walls.
-    A face is a pocket (cavity/feet) surface when its vertices lie within
-    `pocket_radius` of the part axis; box faces reach far beyond it. With
+def classify(faces, adaptor, geomabs, variant, pocket_radius, guide_vanes=False,
+             tongue_test=None):
+    """Return {patch: [face,...]} for inlet / outlet / cylinder_walls / walls
+    (+ tongue). A face is a pocket (cavity/feet) surface when its vertices lie
+    within `pocket_radius` of the part axis; box faces reach far beyond it. With
     guide_vanes the middle cylinder is omitted (only first/last remain) and the
     outlet comes from the vane mesh, so fewer cylinders are expected and no BREP
-    outlet is chosen."""
+    outlet is chosen. `tongue_test` (semi-spiral builds, see spiral_tongue_test)
+    claims the nose + plank faces first, before the pocket split; the nose and
+    plank faces are all planar."""
     ymin = min(f.BoundingBox().ymin for f in faces)
+    tongue = []
+    if tongue_test is not None:
+        for f in faces:
+            if _face_kind(f, adaptor, geomabs)[0] != "plane":
+                continue
+            c = f.Center()
+            n = f.normalAt(c)
+            if tongue_test(c.x, c.y, c.z, n.z):
+                tongue.append(f)
+    tongue_ids = {id(f) for f in tongue}
+    faces = [f for f in faces if id(f) not in tongue_ids]
 
     inlet, cyls = None, []
     for f in faces:
@@ -1304,6 +1469,7 @@ def classify(faces, adaptor, geomabs, variant, pocket_radius, guide_vanes=False)
         "cylinder_walls": [f for f in pocket if id(f) not in outlet_ids],
         "walls": [f for f in faces
                   if id(f) != id(inlet) and id(f) not in pocket_ids],
+        "tongue": tongue,
     }
 
 
@@ -1407,13 +1573,25 @@ def main():
             return float(v) if v is not None else None
 
         # resolved geometry params (metres)
-        width = num("width")
+        # Semi-spiral casing (spec 2026-09-29-semi-spiral-casing): params.spiral
+        # carries the frozen outline; the box (length, B1, LT, the four chamfer
+        # values) is DERIVED from it and the API leaves those keys out. `width`
+        # is then only the spiral's width limit (B Kammer). Old params.json files
+        # have no `spiral`: the box path below is unchanged for them.
+        spiral = P.get("spiral")
         height = num("height")
-        length = num("length")
-        dist_c1 = num("distFromSideChamfer1")
-        ch_big = (num("chamferLength1"), num("chamferWidth1"))
-        ch_small = (num("chamferLength2"), num("chamferWidth2"))
-        dist_from_end = num("distFromEnd")
+        if spiral is None:
+            width = num("width")
+            length = num("length")
+            dist_c1 = num("distFromSideChamfer1")
+            ch_big = (num("chamferLength1"), num("chamferWidth1"))
+            ch_small = (num("chamferLength2"), num("chamferWidth2"))
+            dist_from_end = num("distFromEnd")
+        else:
+            sp_box = spiral_box(spiral.get("vertices", []))
+            width, length = sp_box["width"], sp_box["length"]
+            dist_c1, dist_from_end = sp_box["dist_c1"], sp_box["dist_from_end"]
+            ch_big, ch_small = sp_box["ch_big"], sp_box["ch_small"]
         d_last = num("dLast")
         h_middle = num("hMiddle")
         h_first = num("hMiddlePlusFirst") - h_middle
@@ -1422,6 +1600,12 @@ def main():
         guide_vanes = bool(P.get("guideVanes", False))
         chamfer_enabled = bool(P.get("chamferEnabled", True))
         feet_enabled = bool(P.get("feetEnabled", True))
+        if spiral is not None:
+            # The spiral's L2/L4 ARE the corner cuts (the Chamfer flag is ignored),
+            # and legs are not designed for the spiral yet (refused, spec section 10).
+            chamfer_enabled = True
+            if feet_enabled:
+                raise ValueError(SPIRAL_FEET_REFUSAL)
         # Simplify Generator (hollow only): no dome, and the central cylinder is
         # pinned THROUGH the box top (stepped-style) unless the API passes a
         # typed centralHeight (then a closed cylinder); domeHeight is omitted.
@@ -1765,6 +1949,22 @@ def main():
                     "for the generator. Increase H Kammer, or lower HLE or Part "
                     "scale." % (_mm(height), _mm(h_first + h_middle)))
 
+        # Semi-spiral: the frozen outline must belong to THIS machine (its nose tip
+        # 200 mm from the widest part, rmax) - a stale or hand-edited spiral is
+        # refused before any boolean. r_t is the target circle of the plank: the
+        # Closed-generator last cylinder / the cone outer wall (both d_last/2).
+        if spiral is not None:
+            _tip = math.hypot(*sp_box["pts"]["V6"])
+            if abs(_tip - (rmax + SPIRAL_CLEARANCE)) > SPIRAL_TIP_TOL:
+                raise ValueError(
+                    "The semi-spiral outline was designed for another machine: its nose "
+                    "tip sits %s from the axis, but the widest part (%s across) needs "
+                    "%s. Generate again to redesign the spiral."
+                    % (_mm(_tip), _mm(2 * rmax), _mm(rmax + SPIRAL_CLEARANCE)))
+            sp_tip, sp_tan, sp_rect = spiral_plank(
+                sp_box["pts"], d_last / 2.0, SPIRAL_PLANK_THICK * part_scale,
+                SPIRAL_PLANK_OVERLAP * part_scale)
+
         box = make_box(cq, width, length, height,
                        CHAMFER_END, BIG_CORNER_SIDE, ch_big, ch_small,
                        enabled=chamfer_enabled)
@@ -1941,11 +2141,36 @@ def main():
         if feet is not None:
             result = result.cut(feet)
 
+        # --- semi-spiral tongue: the nose and the plank (spec section 5) -----
+        # Nose: prism V5 -> V6 -> V7 -> V8 over the full height, closed OUTSIDE
+        # the wall (pushed FLOOR_OVERCUT past it, so no face is coplanar with the
+        # box wall). Plank: the tangent slab, from LEB (top of the distributor)
+        # up through the ceiling; above a typed generator height or the cone top
+        # it simply ends as a free edge in the fluid.
+        tongue_test = None
+        if spiral is not None:
+            def _abs(pt):
+                return (target_x + pt[0], target_y + pt[1])
+            _pts = sp_box["pts"]
+            _out = -FLOOR_OVERCUT if SPIRAL_MIRROR_X else FLOOR_OVERCUT
+            nose_poly = [_abs(_pts[k]) for k in ("V5", "V6", "V7", "V8")]
+            nose_cut = nose_poly + [(nose_poly[3][0] + _out, nose_poly[3][1]),
+                                    (nose_poly[0][0] + _out, nose_poly[0][1])]
+            _z0, _z1 = -height / 2 - FLOOR_OVERCUT, height / 2 + FLOOR_OVERCUT
+            nose = (cq.Workplane("XY", origin=(0, 0, _z0))
+                    .polyline(nose_cut).close().extrude(_z1 - _z0))
+            plank_rect = [_abs(p) for p in sp_rect]
+            z_leb = z_last_base
+            plank = (cq.Workplane("XY", origin=(0, 0, z_leb))
+                     .polyline(plank_rect).close().extrude(_z1 - z_leb))
+            result = result.cut(nose).cut(plank)
+            tongue_test = spiral_tongue_test(nose_poly, plank_rect, z_leb)
+
         # --- split into patches --------------------------------------------
         faces = result.faces().vals()
         pocket_radius = max(rmax, foot_r_outer) + 0.1
         patches = classify(faces, BRepAdaptor_Surface, geomabs, variant, pocket_radius,
-                           guide_vanes=guide_vanes)
+                           guide_vanes=guide_vanes, tongue_test=tongue_test)
 
         # --- guide-vane throat: extra MESH patches in the middle band -------
         # The vanes ride as triSurfaces + GLB nodes (no OCC boolean). z is the
@@ -2008,6 +2233,8 @@ def main():
             patches["outlet"] = []
             emit_order = ["inlet", "cylinder_walls", "walls",
                           "hub", "shroud", "outlet", "guide_vanes"]
+            if tongue_test is not None:
+                emit_order.insert(3, "tongue")     # semi-spiral: after walls
 
             # --- boolean distributor: remove the non-wetted regions --------
             # Build the distributor SOLID = hub CORE (u) shroud CASING (u) vane PRISMS,
@@ -2107,7 +2334,7 @@ def main():
             # and the vote then leaks skin onto the hub roof (sparser) or steals
             # shroud-floor rings around the blade roots (denser). Both happened.
             _sources = []
-            for _nm in ("inlet", "walls", "cylinder_walls"):
+            for _nm in ("inlet", "walls", "cylinder_walls", "tongue"):
                 _sm = patch_trimesh(trimesh, np, patches.get(_nm, []))
                 if _sm is None:
                     continue
@@ -2208,6 +2435,19 @@ def main():
             # There is no other fluid at blade XY anywhere along z (casing below
             # the floor, hub core / upper cylinder above the roof), so no z
             # guard is needed.
+            # Semi-spiral tongue (nose + plank), assigned by the exact footprint
+            # rule of classify() (spec section 7) after every other override but
+            # before the vane skin (still last). Candidates are pre-filtered on
+            # |nz| and the footprint's bounding box.
+            if tongue_test is not None:
+                _ti = _idx("tongue")
+                _fp = np.array(nose_poly + plank_rect)
+                _lo, _hi = _fp.min(axis=0) - 1e-3, _fp.max(axis=0) + 1e-3
+                _cand = np.where(_vert & (_fc[:, 0] >= _lo[0]) & (_fc[:, 0] <= _hi[0])
+                                 & (_fc[:, 1] >= _lo[1]) & (_fc[:, 1] <= _hi[1]))[0]
+                for _f in _cand:
+                    if tongue_test(_fc[_f, 0], _fc[_f, 1], _fc[_f, 2], _fnz[_f]):
+                        _who[_f] = _ti
             _names.append("guide_vanes")
             _skin = (_blade_skin_mask(np, _fc[:, :2], _blade_outlines, VANE_SKIN_TOL)
                      & (np.abs(_fnz) < 0.5))

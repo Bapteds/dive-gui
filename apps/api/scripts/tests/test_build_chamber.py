@@ -51,8 +51,8 @@ GOLDEN = {
     # Semi-spiral casing, frozen vertices in params.spiral (computed 2026-09-29
     # with the reference tool, Q = 8 m3/s, 0.922 m/s): copies of stepped-vanes /
     # hollow-vanes with Feet off and the spiral on (the API leaves the box keys out).
-    "stepped-spiral": (0.0, SPIRAL_VANE_PATCHES),
-    "hollow-vanes-spiral": (0.0, SPIRAL_VANE_PATCHES),
+    "stepped-spiral": (51.657323, SPIRAL_VANE_PATCHES),
+    "hollow-vanes-spiral": (47.762966, SPIRAL_VANE_PATCHES),
 }
 WALL_TYPES = {"cylinder_walls", "walls", "hub", "shroud", "guide_vanes", "tongue"}
 
@@ -148,7 +148,7 @@ def test_step_export_vane_policy(build):
     used to fall back vane-less: its OCC boolean self-overlapped at the blunt
     TE corners; the tangent TE rounding fixed the overlap, so both variants now
     pass the round-trip volume gate.)"""
-    for name in ("stepped-vanes", "hollow-vanes", "stepped-vanes-18"):
+    for name in ("stepped-vanes", "hollow-vanes", "stepped-vanes-18", "stepped-spiral"):
         result = build(name, step=True)
         assert result.exit_code == 0, result.stderr
         assert os.path.getsize(result.export_path("chamber.step")) > 0, name

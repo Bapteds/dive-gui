@@ -3135,9 +3135,15 @@ export interface ChamberSpiralBoxDims {
 }
 
 /**
- * The eight box values of a spiral outline, in the vertices' unit: L1/L5 are the
- * side walls, L3 the chamfered end, L2/L4 the corner chamfers, V0 -> V9 the flat
- * inlet end (axis at the origin). Mirrors the builder's own derivation.
+ * The eight box values of a spiral outline (tool frame vertices, axis at the
+ * origin), in the vertices' unit: L1/L5 are the side walls, L3 the chamfered
+ * end, L2/L4 the corner chamfers, V0 -> V9 the flat inlet end.
+ *
+ * The builder MIRRORS the tool frame (tool x -> builder -X) so the spiral turns
+ * the flow the same way as the guide vanes (counter-clockwise seen from +Z; spec
+ * section 5.5, checked 2026-09-29). So B1 is measured to the L1 wall and chamfer
+ * 1 (the +X corner) is L2, chamfer 2 is L4. Mirrors `spiral_box` of
+ * buildChamber.py (SPIRAL_MIRROR_X): change both together.
  */
 export function chamberSpiralBoxDims(
   vertices: readonly ChamberSpiralVertex[],
@@ -3154,12 +3160,12 @@ export function chamberSpiralBoxDims(
   return {
     width: x4 - xIn,
     length: yTop - footY,
-    distFromSideChamfer1: x4,
+    distFromSideChamfer1: -xIn,
     distFromEnd: yTop,
-    chamferLength1: yTop - v('V4').y,
-    chamferWidth1: x4 - v('V3').x,
-    chamferLength2: yTop - v('V1').y,
-    chamferWidth2: v('V2').x - xIn,
+    chamferLength1: yTop - v('V1').y,
+    chamferWidth1: v('V2').x - xIn,
+    chamferLength2: yTop - v('V4').y,
+    chamferWidth2: x4 - v('V3').x,
   };
 }
 
