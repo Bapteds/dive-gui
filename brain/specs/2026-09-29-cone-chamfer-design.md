@@ -1,6 +1,6 @@
 # Cone chamfer (With cone) — design
 
-> **Status**: implemented (2026-09-29, WS-C; approved the same day with every OPEN question resolved with its recommended option, see the decision note at the end) · **Date**: 2026-09-29 · **Workstream**: WS-C (Chamber Creation v2, branch `feat/chamber-v2-cfd-loop`)
+> **Status**: superseded (2026-09-29) by `2026-09-29-cone-foot-chamfer-design.md`: the user wants the chamfer on the lower edge; the top-rim implementation is removed
 > **Area**: shared, backend, python (`apps/api/scripts/buildChamber.py`), frontend, tests
 > **Related**: `brain/features/chamber-creation.md` §3.6, §3.7, §3.8, §3.9, §4.3, §5.1; `brain/playbooks/add-chamber-input-or-parameter.md`; `brain/playbooks/change-chamber-geometry.md`; `brain/specs/2026-08-11-chamfer-disable-toggle-design.md` (the corner Chamfer, a different feature); semi-spiral spec `2026-09-29-semi-spiral-casing-design.md` (its plank is tangent to the cone's outer circle, which this change does not touch).
 
