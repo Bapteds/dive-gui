@@ -641,6 +641,8 @@ export const CHAMBER_PATCH_TYPES: Readonly<Record<string, 'patch' | 'wall'>> = {
   hub: 'wall',
   shroud: 'wall',
   guide_vanes: 'wall',
+  // Semi-spiral casing builds only: the nose + the plank (spec 2026-09-29-semi-spiral-casing).
+  tongue: 'wall',
 };
 
 /** Body of `POST /projects/:id/mesh/from-meshing`. */
@@ -2750,6 +2752,23 @@ export interface ChamberInput {
    * variant only. Geometry-only. Default false.
    */
   simplifyGenerator?: boolean;
+  /**
+   * Semi-spiral casing (both designs; spec 2026-09-29-semi-spiral-casing): the
+   * footprint becomes the semi-spiral outline (6 spiral lines + the 3-line
+   * nose) computed by apps/api/scripts/designSemiSpiral.py, plus a plank from
+   * the nose tip tangent to the generator / cone circle; nose + plank form the
+   * `tongue` patch. B Kammer becomes the spiral's width LIMIT; Length, B1, LT and
+   * the four chamfer values are derived from the spiral (status 'from spiral'),
+   * lengthOverride and chamferEnabled are ignored, and Feet must be off.
+   * Geometry-only. Default false.
+   */
+  semiSpiral?: boolean;
+  /**
+   * Casing flow velocity (m/s) of the semi-spiral design (the tool's c_flow),
+   * CHAMBER_SPIRAL_FLOW_RANGE (0.3 to 3, default 0.922). Read only while
+   * semiSpiral is on, and then only through the spiral inputs of the build key.
+   */
+  spiralFlowVelocity?: number;
 }
 
 /** Longest allowed saved-chamber-build name (trimmed). */
@@ -2785,7 +2804,8 @@ export type ChamberStatus =
   | 'raised to min'
   | 'set exact'
   | '! min>max'
-  | 'from relation';
+  | 'from relation'
+  | 'from spiral';
 
 /** One computed output: the raw model value, the clamped FINAL, and metadata. */
 export interface ChamberOutput {
@@ -3064,6 +3084,166 @@ export function runnerCaseBelowLeRefusal(
     `Runner case Ø (${mm(input.dFirst)}) must be at least LE Ø (${mm(dLast)}). ` +
     `Increase Runner case Ø, clear it (auto ≈ ${mm(CHAMBER_D_FIRST_OVER_LAST * dLast)}), ` +
     `or turn Guide vanes off.`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Semi-spiral casing (spec brain/specs/2026-09-29-semi-spiral-casing-design.md).
+// The spiral itself is optimised by apps/api/scripts/designSemiSpiral.py in a
+// cached API step; these helpers map the chamber to the tool inputs and the
+// tool's vertices back to the box values the Parameters table shows.
+// ---------------------------------------------------------------------------
+
+/** Casing flow velocity (m/s): the tool's c_flow. Form and API default 0.922. */
+export const CHAMBER_SPIRAL_FLOW_RANGE = { min: 0.3, max: 3, default: 0.922 } as const;
+/** Radial gap (m) from the widest part of the machine to the nose tip. NOT scaled by Part scale. */
+export const CHAMBER_SPIRAL_CLEARANCE_M = 0.2;
+/** Fixed spiral start angle (deg), not exposed. */
+export const CHAMBER_SPIRAL_PHI_START_DEG = 160;
+
+/**
+ * The outputs the spiral derives while it is on (with Length, which is not an
+ * output): read-only in the table, status 'from spiral', left out of the build
+ * key and exempt from the non-positive and Min > Max refusals.
+ */
+export const CHAMBER_SPIRAL_DERIVED_KEYS: readonly ChamberOutputKey[] = [
+  'distFromSideChamfer1',
+  'chamferLength1',
+  'chamferWidth1',
+  'chamferLength2',
+  'chamferWidth2',
+  'distFromEnd',
+];
+
+/** One vertex of the spiral outline (tool frame = axis frame; metres). */
+export interface ChamberSpiralVertex {
+  id: string;
+  x: number;
+  y: number;
+}
+
+/** The doubly chamfered box that carries the spiral (spec section 3). */
+export interface ChamberSpiralBoxDims {
+  width: number;
+  length: number;
+  distFromSideChamfer1: number;
+  distFromEnd: number;
+  chamferLength1: number;
+  chamferWidth1: number;
+  chamferLength2: number;
+  chamferWidth2: number;
+}
+
+/**
+ * The eight box values of a spiral outline, in the vertices' unit: L1/L5 are the
+ * side walls, L3 the chamfered end, L2/L4 the corner chamfers, V0 -> V9 the flat
+ * inlet end (axis at the origin). Mirrors the builder's own derivation.
+ */
+export function chamberSpiralBoxDims(
+  vertices: readonly ChamberSpiralVertex[],
+): ChamberSpiralBoxDims {
+  const v = (id: string) => {
+    const found = vertices.find((p) => p.id === id);
+    if (!found) throw new Error(`spiral vertex ${id} missing`);
+    return found;
+  };
+  const xIn = v('V0').x;
+  const footY = v('V0').y;
+  const x4 = v('V4').x;
+  const yTop = v('V2').y;
+  return {
+    width: x4 - xIn,
+    length: yTop - footY,
+    distFromSideChamfer1: x4,
+    distFromEnd: yTop,
+    chamferLength1: yTop - v('V4').y,
+    chamferWidth1: x4 - v('V3').x,
+    chamferLength2: yTop - v('V1').y,
+    chamferWidth2: v('V2').x - xIn,
+  };
+}
+
+/** The spiral quality + derived box the build response carries (mm unless noted). */
+export interface ChamberSpiralSummary {
+  /** Actual spiral width (mm); B Kammer is only its limit. */
+  widthMm: number;
+  worstAreaErrorM2: number;
+  atPhiDeg: number;
+  /** True when B Kammer holds the spiral back (the build then carries a warning). */
+  widthBinding: boolean;
+  /** The eight box values (mm) that fill the read-only rows. */
+  boxMm: ChamberSpiralBoxDims;
+}
+
+/** The semi-spiral tool inputs (m, m³/s, m/s, deg), as designSemiSpiral.py reads them. */
+export interface ChamberSpiralInputs {
+  Q: number;
+  c_flow: number;
+  H_ch: number;
+  D_LE: number;
+  clearance: number;
+  max_width: number;
+  phi_start: number;
+}
+
+/**
+ * Map the chamber to the spiral tool inputs (spec section 4). D_LE is twice the
+ * widest part of the machine, max(Runner case Ø, Guide vanes Ø, LE Ø) × Part
+ * scale (the builder's rmax), so the nose tip lands CHAMBER_SPIRAL_CLEARANCE_M
+ * from it; H_ch is H Kammer and max_width B Kammer (Finals, mm -> m).
+ */
+export function chamberSpiralInputs(
+  input: ChamberInput,
+  outputs: ChamberOutput[],
+): ChamberSpiralInputs {
+  const final = (k: ChamberOutputKey) => outputs.find((o) => o.key === k)!.final;
+  const dLast = final('dLast');
+  const dFirst = input.dFirst ?? CHAMBER_D_FIRST_OVER_LAST * dLast;
+  const dMiddle = input.dMiddle ?? CHAMBER_D_MIDDLE_OVER_LAST * dLast;
+  const s = input.partScale ?? 1;
+  return {
+    Q: input.x3,
+    c_flow: input.spiralFlowVelocity ?? CHAMBER_SPIRAL_FLOW_RANGE.default,
+    H_ch: final('height') / 1000,
+    D_LE: (Math.max(dFirst, dMiddle, dLast) * s) / 1000,
+    clearance: CHAMBER_SPIRAL_CLEARANCE_M,
+    max_width: final('width') / 1000,
+    phi_start: CHAMBER_SPIRAL_PHI_START_DEG,
+  };
+}
+
+/**
+ * The model input with the semi-spiral on: Min / Max / Exact values left on the
+ * derived rows are ignored (the rows are read-only while the spiral is on), so
+ * a hidden B1 Exact can no longer refine B Kammer (the spiral's width limit).
+ * Returned unchanged when the spiral is off.
+ */
+export function chamberSpiralModelInput<T extends ChamberInput>(input: T): T {
+  if (input.semiSpiral !== true || !input.constraints) return input;
+  const constraints = { ...input.constraints };
+  for (const key of CHAMBER_SPIRAL_DERIVED_KEYS) delete constraints[key];
+  return { ...input, constraints };
+}
+
+/**
+ * The outputs as the table shows them with the semi-spiral on: the derived rows
+ * read 'from spiral' with the spiral's value (mm), or NaN (no value yet) before
+ * the first spiral build. The other rows are returned unchanged.
+ */
+export function applyChamberSpiralToOutputs(
+  outputs: ChamberOutput[],
+  boxMm: ChamberSpiralBoxDims | null,
+): ChamberOutput[] {
+  return outputs.map((o) =>
+    CHAMBER_SPIRAL_DERIVED_KEYS.includes(o.key)
+      ? {
+          ...o,
+          final: boxMm ? boxMm[o.key as keyof ChamberSpiralBoxDims] : Number.NaN,
+          status: 'from spiral',
+          relationLabel: undefined,
+          userDriven: true,
+        }
+      : o,
   );
 }
 

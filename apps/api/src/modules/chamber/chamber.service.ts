@@ -10,14 +10,20 @@
 //
 // Not project-scoped: a build is keyed by a content hash of its params under
 // <STORAGE_DIR>/chamber/<hash>, shared across the team behind requireAuth.
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
   CHAMBER_CONE_CHAMFER_SIZE_MM,
   CHAMBER_OUTPUT_KEYS,
+  CHAMBER_SPIRAL_DERIVED_KEYS,
   CHAMBER_VANE_COUNT_DEFAULT,
   CHAMBER_WALL_THICKNESS_MM,
+  applyChamberSpiralToOutputs,
   blankGeneratorHeightRefusal,
+  chamberSpiralBoxDims,
+  chamberSpiralInputs,
+  chamberSpiralModelInput,
   runnerCaseBelowLeRefusal,
   computeChamberGeneratorDims,
   computeChamberOutputs,
@@ -25,6 +31,10 @@ import {
   type ChamberInput,
   type ChamberOutput,
   type ChamberOutputKey,
+  type ChamberSpiralBoxDims,
+  type ChamberSpiralInputs,
+  type ChamberSpiralSummary,
+  type ChamberSpiralVertex,
   type MeshManifest,
 } from '@dive/shared';
 import { env } from '../../config/env';
@@ -35,15 +45,19 @@ import {
   chamberGlbExists,
   chamberHash,
   chamberPaths,
+  chamberSpiralPaths,
   readChamberBuildMeta,
   readChamberEdges,
   readChamberExport,
   readChamberGlb,
   readChamberManifest,
+  readChamberSpiral,
   readChamberWarnings,
   writeChamberParams,
+  writeChamberSpiralInput,
   writeChamberWarnings,
   type ChamberExportKind,
+  type ChamberParams,
 } from '../../lib/chamberStorage';
 
 /** Sheet/model values are millimetres; the builder works in metres. */
@@ -84,6 +98,8 @@ export interface ChamberBuildResult {
   outputs: ChamberOutput[];
   warnings: string[];
   stepHasVanes: boolean | null;
+  /** Semi-spiral quality + derived box (mm); null when the spiral is off. */
+  spiral: ChamberSpiralSummary | null;
 }
 
 /**
@@ -116,6 +132,11 @@ function mirrorStepScript(): string {
   const configured = env.MIRROR_STEP_SCRIPT.trim();
   if (configured) return configured;
   return path.resolve(__dirname, '../../../scripts/mirrorStep.py');
+}
+
+/** The bundled semi-spiral casing designer (numpy + scipy, CHAMBER_PYTHON_BIN). */
+function designSemiSpiralScript(): string {
+  return path.resolve(__dirname, '../../../scripts/designSemiSpiral.py');
 }
 
 /** Does an absolute path exist on disk? */
@@ -154,6 +175,147 @@ function summarizeFailure(result: CommandResult, action = 'build the chamber'): 
   return `The chamber builder stopped unexpectedly (exit code ${result.exitCode ?? 'none'}).${detail ? `\nTechnical details:\n${detail}` : ''}`;
 }
 
+/**
+ * Tag of the spiral method + settings, folded into the spiral cache key. Mirrors
+ * ALGORITHM in scripts/designSemiSpiral.py: change both when the method changes.
+ */
+const SPIRAL_ALGORITHM = 'ref-2026-09-22-seed5';
+
+/** A designed semi-spiral: what the builder params carry, plus the page's summary. */
+interface DesignedSpiral {
+  inputs: ChamberSpiralInputs;
+  /** V0..V9 in metres, axis frame (frame x = builder X, frame y = builder Y). */
+  vertices: ChamberSpiralVertex[];
+  quality: { worst_area_error_m2: number; at_phi_deg: number; width_binding: boolean };
+  /** The designer's warnings (the width-limit note), persisted with the build. */
+  warnings: string[];
+  summary: ChamberSpiralSummary;
+}
+
+/** Metres to millimetres, rounded to the micrometre (the tool rounds to 1e-6 m). */
+const toMm = (m: number) => Math.round(m * 1e6) / 1e3;
+
+/**
+ * Validate a designSemiSpiral.py result read from disk and shape it for the
+ * build. Returns null when it is not a complete result (never trusted blindly:
+ * it becomes part of a build key and of the builder input).
+ */
+function parseSpiralResult(raw: unknown, inputs: ChamberSpiralInputs): DesignedSpiral | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as {
+    vertices?: unknown;
+    quality?: { worst_area_error_m2?: unknown; at_phi_deg?: unknown; width_binding?: unknown };
+    warnings?: unknown;
+  };
+  if (!Array.isArray(r.vertices) || r.vertices.length !== 10) return null;
+  const vertices: ChamberSpiralVertex[] = [];
+  for (const [i, v] of (r.vertices as { id?: unknown; x?: unknown; y?: unknown }[]).entries()) {
+    if (v?.id !== `V${i}` || typeof v.x !== 'number' || typeof v.y !== 'number') return null;
+    if (!Number.isFinite(v.x) || !Number.isFinite(v.y)) return null;
+    vertices.push({ id: v.id, x: v.x, y: v.y });
+  }
+  const q = r.quality;
+  if (
+    typeof q?.worst_area_error_m2 !== 'number' ||
+    typeof q.at_phi_deg !== 'number' ||
+    typeof q.width_binding !== 'boolean'
+  ) {
+    return null;
+  }
+  const quality = {
+    worst_area_error_m2: q.worst_area_error_m2,
+    at_phi_deg: q.at_phi_deg,
+    width_binding: q.width_binding,
+  };
+  const box = chamberSpiralBoxDims(vertices);
+  const boxMm = Object.fromEntries(
+    Object.entries(box).map(([k, v]) => [k, toMm(v)]),
+  ) as unknown as ChamberSpiralBoxDims;
+  return {
+    inputs,
+    vertices,
+    quality,
+    warnings: Array.isArray(r.warnings)
+      ? r.warnings.filter((w): w is string => typeof w === 'string')
+      : [],
+    summary: {
+      widthMm: boxMm.width,
+      worstAreaErrorM2: quality.worst_area_error_m2,
+      atPhiDeg: quality.at_phi_deg,
+      widthBinding: quality.width_binding,
+      boxMm,
+    },
+  };
+}
+
+/** Stable 16-hex key of a set of spiral inputs + the algorithm tag. */
+function spiralHash(inputs: ChamberSpiralInputs): string {
+  const canonical = JSON.stringify({
+    algorithm: SPIRAL_ALGORITHM,
+    inputs: Object.keys(inputs)
+      .sort()
+      .map((k) => [k, inputs[k as keyof ChamberSpiralInputs]]),
+  });
+  return createHash('sha1').update(canonical).digest('hex').slice(0, 16);
+}
+
+/** The user-facing message of a failed spiral run (a KO: line is shown alone). */
+function summarizeSpiralFailure(result: CommandResult): string {
+  if (result.spawnError) {
+    return `Could not start the semi-spiral casing designer (${result.spawnError}). Check CHAMBER_PYTHON_BIN on the server.`;
+  }
+  if (result.timedOut) {
+    return 'The semi-spiral casing design took too long and was stopped. Try again; if it keeps timing out, ask an admin to raise CHAMBER_SPIRAL_TIMEOUT_MS.';
+  }
+  const ko = /^KO:\s*(.+)$/m.exec(result.stderr || '')?.[1]?.trim();
+  if (ko) return `Cannot build the chamber. ${ko.charAt(0).toUpperCase()}${ko.slice(1)}`;
+  const detail = tail(result.stderr || result.stdout || '');
+  return `The semi-spiral casing designer stopped unexpectedly (exit code ${result.exitCode ?? 'none'}).${detail ? `\nTechnical details:\n${detail}` : ''}`;
+}
+
+/**
+ * The semi-spiral step (spec section 8): read the cached result for these
+ * inputs, or run designSemiSpiral.py once (30 to 90 s) under a per-spiral lock
+ * so concurrent builds sharing a spiral optimise it once. The builder never
+ * optimises; it gets the frozen vertices through the build params.
+ *
+ * @throws 500 SCRIPT_MISSING / 502 CHAMBER_BUILD_FAILED on tooling failures.
+ */
+async function designSpiral(inputs: ChamberSpiralInputs): Promise<DesignedSpiral> {
+  const key = spiralHash(inputs);
+  return withChamberLock(`spiral:${key}`, async () => {
+    const cached = parseSpiralResult(await readChamberSpiral(key), inputs);
+    if (cached) return cached;
+
+    const script = designSemiSpiralScript();
+    if (!(await pathExists(script))) {
+      throw new AppError(500, 'SCRIPT_MISSING', `Semi-spiral designer not found at ${script}.`);
+    }
+    const paths = chamberSpiralPaths(key);
+    await writeChamberSpiralInput(key, inputs);
+    // The script writes the result atomically (<result>.tmp then rename).
+    const result = await runCommand({
+      command: env.CHAMBER_PYTHON_BIN,
+      args: [script, paths.input, paths.result],
+      cwd: paths.dir,
+      env: process.env,
+      timeoutMs: env.CHAMBER_SPIRAL_TIMEOUT_MS,
+    });
+    if (result.spawnError || result.timedOut || result.exitCode !== 0) {
+      throw new AppError(502, 'CHAMBER_BUILD_FAILED', summarizeSpiralFailure(result));
+    }
+    const designed = parseSpiralResult(await readChamberSpiral(key), inputs);
+    if (!designed) {
+      throw new AppError(
+        502,
+        'CHAMBER_BUILD_FAILED',
+        'The semi-spiral casing designer finished without a usable result. Try again; if it keeps failing, report it.',
+      );
+    }
+    return designed;
+  });
+}
+
 /** The final (post-clamp) value of one output parameter, or 0 if absent. */
 function outputFinal(outputs: ChamberOutput[], key: string): number {
   return outputs.find((o) => o.key === key)?.final ?? 0;
@@ -167,7 +329,8 @@ function outputFinal(outputs: ChamberOutput[], key: string): number {
 function resolveGeometryParams(
   input: ChamberInput,
   outputs: ChamberOutput[],
-): Record<string, number | string | boolean> {
+  spiral: DesignedSpiral | null = null,
+): ChamberParams {
   const widthMm = outputFinal(outputs, 'width');
   // Default: length = 2 x width — a true identity, so it inherits width's grid
   // snap (an empirical width is already on the 50 mm grid) or propagates a
@@ -175,7 +338,22 @@ function resolveGeometryParams(
   const lengthMm = input.lengthOverride ?? 2 * widthMm;
   const variant = input.variant ?? 'stepped';
 
-  const params: Record<string, number | string | boolean> = { length: lengthMm * MM_TO_M, variant };
+  const params: ChamberParams = { variant };
+  // Semi-spiral casing: the spiral derives the box (length, B1, LT, the four
+  // chamfer values) and its L2/L4 are the corner cuts, so those keys and
+  // chamferEnabled are left out: only the spiral (inputs + frozen vertices)
+  // keys the geometry. B Kammer stays in as the spiral's width limit. Off adds
+  // nothing, so every existing build keeps its key.
+  if (spiral) {
+    params.semiSpiral = true;
+    params.spiral = {
+      inputs: spiral.inputs,
+      vertices: spiral.vertices,
+      quality: spiral.quality,
+    };
+  } else {
+    params.length = lengthMm * MM_TO_M;
+  }
   // Torque-foot orientation is an angle (degrees), not a length — passed as-is.
   // Default 40° (an intermediate angle where the triangular gusset can form).
   params.footAngleDeg = input.footAngleDeg ?? 40;
@@ -185,7 +363,7 @@ function resolveGeometryParams(
   // chamfer's own model values (chamferLength1/2 etc., in the loop below) are
   // computed unconditionally either way, and only this flag decides whether
   // make_box() actually cuts them. Default true (today's always-on behaviour).
-  params.chamferEnabled = input.chamferEnabled ?? true;
+  if (!spiral) params.chamferEnabled = input.chamferEnabled ?? true;
   // Whether the four torque-foot voids are cut. Geometry-only (footAngleDeg is
   // still validated either way); this flag decides whether make_feet() runs and
   // its result is cut. Part of the cache key, so a flip => a different build.
@@ -214,6 +392,7 @@ function resolveGeometryParams(
   if (input.dFirst != null) params.dFirst = input.dFirst * MM_TO_M;
   if (input.dMiddle != null) params.dMiddle = input.dMiddle * MM_TO_M;
   for (const key of CHAMBER_OUTPUT_KEYS) {
+    if (spiral && CHAMBER_SPIRAL_DERIVED_KEYS.includes(key)) continue;
     params[key] = outputFinal(outputs, key) * MM_TO_M;
   }
   // Closed generator: a typed generator height closes the last cylinder under
@@ -270,7 +449,11 @@ function resolveGeometryParams(
  * @throws 502 CHAMBER_BUILD_FAILED if the run errors or produces no GLB.
  */
 export async function buildChamber(input: ChamberInput): Promise<ChamberBuildResult> {
-  const outputs = computeChamberOutputs(input);
+  // Semi-spiral casing: the rows the spiral derives read 'from spiral' (no
+  // value until it is designed), so they are exempt from the refusals below.
+  const spiralOn = input.semiSpiral === true;
+  const modelOutputs = computeChamberOutputs(chamberSpiralModelInput(input));
+  const outputs = spiralOn ? applyChamberSpiralToOutputs(modelOutputs, null) : modelOutputs;
 
   // The fits can go non-positive on legal inputs (esp. with relations off) —
   // refuse before hashing/building instead of handing CadQuery a negative
@@ -322,7 +505,13 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
   const runnerCaseRefusal = runnerCaseBelowLeRefusal(input, outputs);
   if (runnerCaseRefusal) throw new AppError(422, 'VALIDATION_ERROR', runnerCaseRefusal);
 
-  const params = resolveGeometryParams(input, outputs);
+  // The spiral step runs BEFORE hashing, so the build key covers the actual
+  // geometry (the frozen vertices), not just the inputs that produced them.
+  const spiral = spiralOn ? await designSpiral(chamberSpiralInputs(input, outputs)) : null;
+  const responseOutputs = spiral
+    ? applyChamberSpiralToOutputs(modelOutputs, spiral.summary.boxMm)
+    : outputs;
+  const params = resolveGeometryParams(input, outputs, spiral);
   const hash = chamberHash(params);
 
   // The cache check runs INSIDE the per-hash lock: a second identical build
@@ -333,9 +522,10 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
     if (await chamberGlbExists(hash)) {
       return {
         hash,
-        outputs,
+        outputs: responseOutputs,
         warnings: await readChamberWarnings(hash),
         stepHasVanes: (await readChamberBuildMeta(hash)).stepHasVanes,
+        spiral: spiral?.summary ?? null,
       };
     }
 
@@ -368,13 +558,18 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
 
     // Surface the builder's clamp/fallback warnings and persist them alongside
     // the build so cache hits keep reporting them.
-    const warnings = extractBuilderWarnings(result.stderr, result.stdout);
+    // The spiral step's own notes (the width-limit warning) come first.
+    const warnings = [
+      ...(spiral?.warnings ?? []),
+      ...extractBuilderWarnings(result.stderr, result.stdout),
+    ];
     await writeChamberWarnings(hash, warnings);
     return {
       hash,
-      outputs,
+      outputs: responseOutputs,
       warnings,
       stepHasVanes: (await readChamberBuildMeta(hash)).stepHasVanes,
+      spiral: spiral?.summary ?? null,
     };
   });
 }

@@ -5,6 +5,8 @@
 //                                     .../manifest.json   (bare MeshPatch[])
 //                                     .../edges.bin        (float32 edge segments)
 //                                     .../exports/{chamber.stl, chamber.step, trisurface.zip}
+//          <STORAGE_DIR>/chamber-spiral/<spiralHash>/in.json    (semi-spiral tool inputs)
+//                                              .../spiral.json (designSemiSpiral.py result)
 //
 // Global, NOT project-scoped (mirrors meshingStorage): the chamber generator is a
 // standalone tool. The cache key is a content hash of the resolved geometry
@@ -24,6 +26,13 @@ const PARAMS_NAME = 'params.json';
 const WARNINGS_NAME = 'warnings.json';
 const BUILD_META_NAME = 'build-meta.json';
 const EXPORTS_DIRNAME = 'exports';
+/** Semi-spiral casing results, keyed by a hash of the spiral inputs (spec 2026-09-29). */
+const CHAMBER_SPIRAL_DIRNAME = 'chamber-spiral';
+const SPIRAL_INPUT_NAME = 'in.json';
+const SPIRAL_RESULT_NAME = 'spiral.json';
+
+/** The resolved builder params: numbers, strings, flags and the nested `spiral`. */
+export type ChamberParams = Record<string, unknown>;
 
 /** A chamber export artifact kind and its download file. stepMirrored is the
  * z-y-plane-mirrored STEP ("Change rotational direction"), generated on demand
@@ -55,7 +64,7 @@ function chamberRoot(): string {
  * Stable 16-hex content hash of the resolved geometry params (order-independent),
  * used as the build's directory name / cache key.
  */
-export function chamberHash(params: Record<string, number | string | boolean>): string {
+export function chamberHash(params: ChamberParams): string {
   const canonical = JSON.stringify(
     Object.keys(params)
       .sort()
@@ -93,10 +102,7 @@ export async function chamberGlbExists(hash: string): Promise<boolean> {
 }
 
 /** Write the resolved params JSON (the buildChamber.py input) into the build dir. */
-export async function writeChamberParams(
-  hash: string,
-  params: Record<string, number | string | boolean>,
-): Promise<void> {
+export async function writeChamberParams(hash: string, params: ChamberParams): Promise<void> {
   const paths = chamberPaths(hash);
   await fs.mkdir(paths.dir, { recursive: true });
   await fs.writeFile(paths.params, JSON.stringify(params), 'utf8');
@@ -189,4 +195,38 @@ export async function readChamberExport(
   } catch {
     return null;
   }
+}
+
+/** Absolute paths of one semi-spiral result (hash validated + confined). */
+export interface ChamberSpiralPaths {
+  dir: string;
+  input: string;
+  result: string;
+}
+
+/** Paths for a spiral hash under <STORAGE_DIR>/chamber-spiral/ (dir may not exist). */
+export function chamberSpiralPaths(spiralHash: string): ChamberSpiralPaths {
+  assertSafeId(spiralHash);
+  const dir = confineJoin(path.join(storageRoot(), CHAMBER_SPIRAL_DIRNAME), spiralHash);
+  return {
+    dir,
+    input: path.join(dir, SPIRAL_INPUT_NAME),
+    result: path.join(dir, SPIRAL_RESULT_NAME),
+  };
+}
+
+/** Read a cached spiral result (parsed JSON), or null when absent or unreadable. */
+export async function readChamberSpiral(spiralHash: string): Promise<unknown | null> {
+  try {
+    return JSON.parse(await fs.readFile(chamberSpiralPaths(spiralHash).result, 'utf8')) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+/** Write the spiral tool inputs next to its future result (the script's argv[1]). */
+export async function writeChamberSpiralInput(spiralHash: string, inputs: object): Promise<void> {
+  const paths = chamberSpiralPaths(spiralHash);
+  await fs.mkdir(paths.dir, { recursive: true });
+  await fs.writeFile(paths.input, JSON.stringify(inputs), 'utf8');
 }

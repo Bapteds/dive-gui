@@ -7,6 +7,7 @@ import {
   CHAMBER_DIMENSION_MAX_MM,
   CHAMBER_INPUT_RANGES,
   CHAMBER_OUTPUT_KEYS,
+  CHAMBER_SPIRAL_FLOW_RANGE,
   CHAMBER_VANE_COUNT_DEFAULT,
   CHAMBER_VANE_COUNTS,
   CHAMBER_VARIANTS,
@@ -84,6 +85,18 @@ export const chamberBuildSchema = z
     // box top (stepped-style) with no dome; centralHeight/domeHeight are
     // ignored while on. A different flag => a different cached build.
     simplifyGenerator: z.boolean().default(false),
+    // Semi-spiral casing (both designs; spec 2026-09-29-semi-spiral-casing): the
+    // footprint becomes the optimised semi-spiral outline plus the tongue (nose +
+    // plank). Needs Feet off (refused below). Off never adds a build-key entry.
+    semiSpiral: z.boolean().default(false),
+    // Casing flow velocity (m/s), the spiral tool's c_flow. Read only while
+    // semiSpiral is on, and then only through the spiral inputs of the key.
+    spiralFlowVelocity: z
+      .number()
+      .finite()
+      .min(CHAMBER_SPIRAL_FLOW_RANGE.min)
+      .max(CHAMBER_SPIRAL_FLOW_RANGE.max)
+      .default(CHAMBER_SPIRAL_FLOW_RANGE.default),
     lengthOverride: dimensionMm.optional(),
     hollowLength: dimensionMm.optional(),
     wallThickness: dimensionMm.optional(),
@@ -110,6 +123,16 @@ export const chamberBuildSchema = z
         code: z.ZodIssueCode.custom,
         path: ['hollowLength'],
         message: 'A hollow length is required for the hollow variant.',
+      });
+    }
+    // Legs are not designed for the spiral yet (spec section 10). feetEnabled
+    // defaults to true, so direct API callers must send false.
+    if (v.semiSpiral && v.feetEnabled) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['feetEnabled'],
+        message:
+          'The semi-spiral casing needs Feet off for now. Uncheck Feet, or uncheck Semi-spiral casing.',
       });
     }
   });
