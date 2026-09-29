@@ -555,6 +555,31 @@ describe('semi-spiral casing helpers (spec 2026-09-29-semi-spiral-casing)', () =
     expect(chamberSpiralInputs({ ...BASE, semiSpiral: true }, outputs).c_flow).toBe(0.922);
   });
 
+  it('counts the cone chamfer widening in the widest part (spec 2026-09-29-cone-foot-chamfer)', () => {
+    const input = { ...BASE, semiSpiral: true, partScale: 1.1 };
+    const outputs = computeChamberOutputs(input);
+    const dLast = outputs.find((o) => o.key === 'dLast')!.final;
+    // Runner case flush with LE: the widened LE part (LE Ø + 2 x size) is the widest.
+    const flush = { ...input, dFirst: dLast };
+    expect(chamberSpiralInputs(flush, outputs).D_LE).toBeCloseTo((dLast * 1.1) / 1000, 12);
+    expect(
+      chamberSpiralInputs({ ...flush, coneChamferEnabled: true }, outputs).D_LE,
+    ).toBeCloseTo(((dLast + 100) * 1.1) / 1000, 12);
+    expect(
+      chamberSpiralInputs({ ...flush, coneChamferEnabled: true, coneChamferSize: 30 }, outputs)
+        .D_LE,
+    ).toBeCloseTo(((dLast + 60) * 1.1) / 1000, 12);
+    // Off: the size is ignored.
+    expect(
+      chamberSpiralInputs({ ...flush, coneChamferEnabled: false, coneChamferSize: 30 }, outputs)
+        .D_LE,
+    ).toBeCloseTo((dLast * 1.1) / 1000, 12);
+    // The auto runner case (1.147 x LE) still wins over a 50 mm widening.
+    expect(
+      chamberSpiralInputs({ ...input, coneChamferEnabled: true }, outputs).D_LE,
+    ).toBeCloseTo((1.14703 * dLast * 1.1) / 1000, 12);
+  });
+
   it('ignores constraints left on the derived rows while the spiral is on', () => {
     // A B1 Exact refines B Kammer (the spiral's width limit): not while B1 is derived.
     const input = {

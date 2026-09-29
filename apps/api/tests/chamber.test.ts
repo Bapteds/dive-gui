@@ -950,68 +950,62 @@ describe('Chamber Creation', () => {
     expect(steppedFlag.body.hash).toBe(stepped.body.hash);
   });
 
-  it('keys the With cone build on the cone chamfer only when it is on', async () => {
-    const seen: Record<string, unknown>[] = [];
-    setCommandRunner(async (spec) => {
-      seen.push(JSON.parse(await fs.readFile(spec.args[1], 'utf8')));
-      return successRunner(spec);
-    });
-    const auth = authHeader(await createTestUser());
-    const hollow = { ...BUILD, variant: 'hollow', hollowLength: 2000 };
-    const build = (body: object) =>
-      request(app).post('/api/v1/chamber/build').set('Authorization', auth).send(body).expect(200);
+  // Cone chamfer (spec 2026-09-29-cone-foot-chamfer): a 45° foot chamfer on the
+  // lower outer edge of the LE part, in BOTH designs.
+  const CHAMFER_DESIGNS = [
+    ['Closed generator', { ...BUILD }],
+    ['With cone', { ...BUILD, variant: 'hollow', hollowLength: 2000 }],
+  ] as const;
 
-    const plain = await build(hollow);
-    // Off (any size): no key added, so no existing With cone build is rebuilt.
-    const off = await build({ ...hollow, coneChamferEnabled: false, coneChamferSize: 80 });
-    expect(off.body.hash).toBe(plain.body.hash);
+  it.each(CHAMFER_DESIGNS)(
+    'keys the %s build on the cone chamfer only when it is on',
+    async (_design, base) => {
+      const seen: Record<string, unknown>[] = [];
+      setCommandRunner(async (spec) => {
+        seen.push(JSON.parse(await fs.readFile(spec.args[1], 'utf8')));
+        return successRunner(spec);
+      });
+      const auth = authHeader(await createTestUser());
+      const build = (body: object) =>
+        request(app).post('/api/v1/chamber/build').set('Authorization', auth).send(body).expect(200);
 
-    const on50 = await build({ ...hollow, coneChamferEnabled: true, coneChamferSize: 50 });
-    expect(on50.body.hash).not.toBe(plain.body.hash);
-    expect(on50.body.outputs).toEqual(plain.body.outputs);
-    expect(on50.body.outputs).toHaveLength(12);
-    // Only plain and on50 reached the builder; the off request was a cache hit.
-    expect(seen).toHaveLength(2);
-    expect(seen[0]).not.toHaveProperty('coneChamferEnabled');
-    expect(seen[0]).not.toHaveProperty('coneChamferSize');
-    expect(seen[1].coneChamferEnabled).toBe(true);
-    expect(seen[1].coneChamferSize).toBeCloseTo(0.05, 12);
+      const plain = await build(base);
+      // Off (any size): no key added, so no existing build is rebuilt.
+      const off = await build({ ...base, coneChamferEnabled: false, coneChamferSize: 80 });
+      expect(off.body.hash).toBe(plain.body.hash);
 
-    // Enabled with a blank size = enabled at the default 50 mm.
-    const onBlank = await build({ ...hollow, coneChamferEnabled: true });
-    expect(onBlank.body.hash).toBe(on50.body.hash);
-    // A different size is a different build.
-    const on30 = await build({ ...hollow, coneChamferEnabled: true, coneChamferSize: 30 });
-    expect(on30.body.hash).not.toBe(on50.body.hash);
-  });
+      const on50 = await build({ ...base, coneChamferEnabled: true, coneChamferSize: 50 });
+      expect(on50.body.hash).not.toBe(plain.body.hash);
+      expect(on50.body.outputs).toEqual(plain.body.outputs);
+      expect(on50.body.outputs).toHaveLength(12);
+      // Only plain and on50 reached the builder; the off request was a cache hit.
+      expect(seen).toHaveLength(2);
+      expect(seen[0]).not.toHaveProperty('coneChamferEnabled');
+      expect(seen[0]).not.toHaveProperty('coneChamferSize');
+      expect(seen[1].coneChamferEnabled).toBe(true);
+      expect(seen[1].coneChamferSize).toBeCloseTo(0.05, 12);
 
-  it('ignores the cone chamfer on Closed generator', async () => {
-    setCommandRunner(successRunner);
-    const auth = authHeader(await createTestUser());
-    const stepped = await request(app).post('/api/v1/chamber/build').set('Authorization', auth).send(BUILD).expect(200);
-    const steppedOn = await request(app)
-      .post('/api/v1/chamber/build')
-      .set('Authorization', auth)
-      .send({ ...BUILD, coneChamferEnabled: true, coneChamferSize: 30 })
-      .expect(200);
-    expect(steppedOn.body.hash).toBe(stepped.body.hash);
-  });
+      // Enabled with a blank size = enabled at the default 50 mm.
+      const onBlank = await build({ ...base, coneChamferEnabled: true });
+      expect(onBlank.body.hash).toBe(on50.body.hash);
+      // A different size is a different build.
+      const on30 = await build({ ...base, coneChamferEnabled: true, coneChamferSize: 30 });
+      expect(on30.body.hash).not.toBe(on50.body.hash);
+    },
+  );
 
-  it('rejects a non-positive cone chamfer size', async () => {
-    const auth = authHeader(await createTestUser());
-    const res = await request(app)
-      .post('/api/v1/chamber/build')
-      .set('Authorization', auth)
-      .send({
-        ...BUILD,
-        variant: 'hollow',
-        hollowLength: 2000,
-        coneChamferEnabled: true,
-        coneChamferSize: 0,
-      })
-      .expect(422);
-    expect(res.body.error.code).toBe('VALIDATION_ERROR');
-  });
+  it.each(CHAMFER_DESIGNS)(
+    'rejects a non-positive cone chamfer size (%s)',
+    async (_design, base) => {
+      const auth = authHeader(await createTestUser());
+      const res = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send({ ...base, coneChamferEnabled: true, coneChamferSize: 0 })
+        .expect(422);
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    },
+  );
 
   it('passes a typed Closed generator height to the builder (blank keeps the old key)', async () => {
     const seen: Record<string, unknown>[] = [];

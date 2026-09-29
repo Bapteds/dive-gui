@@ -234,41 +234,47 @@ describe('ChamberInputsForm', () => {
     expect((onValid.mock.calls[0][0] as ChamberFormValues).simplifyGenerator).toBe(true);
   });
 
-  it('offers Cone chamfer in With cone only, with its size field only when ticked', () => {
-    const { rerender } = render(<Harness onValid={() => {}} />);
-    // Closed generator: no cone, so no Cone chamfer at all.
-    expect(screen.queryByLabelText(/Cone chamfer/)).not.toBeInTheDocument();
+  it.each(['stepped', 'hollow'] as const)(
+    'offers Cone chamfer in the %s design, with its size field only when ticked',
+    (variant) => {
+      const { unmount } = render(
+        <Harness onValid={() => {}} variant={variant} defaults={{ variant }} />,
+      );
+      const box = screen.getByRole('checkbox', { name: /Cone chamfer/ });
+      expect(box).not.toBeChecked();
+      expect(screen.queryByLabelText('Cone chamfer size (mm)')).not.toBeInTheDocument();
+      unmount();
 
-    rerender(<Harness onValid={() => {}} variant="hollow" defaults={{ variant: 'hollow' }} />);
-    const box = screen.getByRole('checkbox', { name: /Cone chamfer/ });
-    expect(box).not.toBeChecked();
-    expect(screen.queryByLabelText('Cone chamfer size (mm)')).not.toBeInTheDocument();
+      render(
+        <Harness
+          onValid={() => {}}
+          variant={variant}
+          defaults={{ variant, coneChamferEnabled: true }}
+        />,
+      );
+      expect(screen.getByLabelText('Cone chamfer size (mm)')).toBeInTheDocument();
+      expect(screen.getByText('Blank = 50 mm')).toBeInTheDocument();
+    },
+  );
 
-    rerender(
-      <Harness
-        onValid={() => {}}
-        variant="hollow"
-        defaults={{ variant: 'hollow', coneChamferEnabled: true }}
-      />,
-    );
-    expect(screen.getByLabelText('Cone chamfer size (mm)')).toBeInTheDocument();
-  });
-
-  it('submits the cone chamfer flag and its default 50 mm size', async () => {
-    const onValid = vi.fn();
-    render(
-      <Harness
-        onValid={onValid}
-        variant="hollow"
-        defaults={{ variant: 'hollow', coneChamferEnabled: true }}
-      />,
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
-    await waitFor(() => expect(onValid).toHaveBeenCalledTimes(1));
-    const submitted = onValid.mock.calls[0][0] as ChamberFormValues;
-    expect(submitted.coneChamferEnabled).toBe(true);
-    expect(submitted.coneChamferSize).toBe(50);
-  });
+  it.each(['stepped', 'hollow'] as const)(
+    'submits the cone chamfer flag and its default 50 mm size in the %s design',
+    async (variant) => {
+      const onValid = vi.fn();
+      render(
+        <Harness
+          onValid={onValid}
+          variant={variant}
+          defaults={{ variant, coneChamferEnabled: true }}
+        />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
+      await waitFor(() => expect(onValid).toHaveBeenCalledTimes(1));
+      const submitted = onValid.mock.calls[0][0] as ChamberFormValues;
+      expect(submitted.coneChamferEnabled).toBe(true);
+      expect(submitted.coneChamferSize).toBe(50);
+    },
+  );
 
   it.each(['stepped', 'hollow'] as const)(
     'offers a Guide vane count select (16 or 18) in the %s design',

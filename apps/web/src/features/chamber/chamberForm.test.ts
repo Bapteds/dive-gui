@@ -173,8 +173,9 @@ describe('simplifyGenerator (generator pinned to the chamber top)', () => {
   });
 });
 
-describe('cone chamfer (With cone: 45° flare on the inner top edge of the cone)', () => {
+describe('cone chamfer (45° foot chamfer on the lower outer edge of the LE part, both designs)', () => {
   const hollow: ChamberFormValues = { ...CHAMBER_FORM_DEFAULTS, variant: 'hollow' };
+  const stepped: ChamberFormValues = { ...CHAMBER_FORM_DEFAULTS, variant: 'stepped' };
 
   function issueOn(values: ChamberFormValues, key: string) {
     const res = parse(values);
@@ -186,10 +187,11 @@ describe('cone chamfer (With cone: 45° flare on the inner top edge of the cone)
     expect(CHAMBER_FORM_DEFAULTS.coneChamferEnabled).toBe(false);
     expect(CHAMBER_FORM_DEFAULTS.coneChamferSize).toBe(50);
     expect(parse({ ...hollow, coneChamferEnabled: true }).success).toBe(true);
+    expect(parse({ ...stepped, coneChamferEnabled: true }).success).toBe(true);
   });
 
   it('loads an old save as off / 50 and round-trips a saved chamfer', () => {
-    const base = { x1: 1450, x2: 7, x3: 10, variant: 'hollow' } as ChamberInput;
+    const base = { x1: 1450, x2: 7, x3: 10, variant: 'stepped' } as ChamberInput;
     const old = chamberInputToFormValues(base);
     expect(old.coneChamferEnabled).toBe(false);
     expect(old.coneChamferSize).toBe(50);
@@ -202,40 +204,49 @@ describe('cone chamfer (With cone: 45° flare on the inner top edge of the cone)
     expect(saved.coneChamferSize).toBe(30);
   });
 
-  /** With cone, Cone chamfer ticked, plus a patch. */
+  /** Cone chamfer ticked, plus a patch (With cone unless the patch says otherwise). */
   const on = (patch: Partial<ChamberFormValues>): ChamberFormValues => ({
     ...hollow,
     coneChamferEnabled: true,
     ...patch,
   });
 
-  it('refuses a size wider than the Wall thickness', () => {
-    const msg = 'Must be at most the Wall thickness (50 mm)';
-    expect(issueOn(on({ coneChamferSize: 60, wallThickness: 50 }), 'coneChamferSize')).toBe(msg);
-    // Blank wall thickness = the 50 mm default.
-    expect(issueOn(on({ coneChamferSize: 60, wallThickness: undefined }), 'coneChamferSize')).toBe(
-      msg,
-    );
-  });
-
-  it('refuses a size deeper than the inside of the cone', () => {
+  it('refuses a size taller than Cone length minus Wall thickness (With cone)', () => {
     const values = on({ coneChamferSize: 40, wallThickness: 50, hollowLength: 80 });
     expect(issueOn(values, 'coneChamferSize')).toBe(
-      'Must be at most the inside depth of the cone (Cone length minus Wall thickness = 30 mm)',
+      'Must be at most Cone length minus Wall thickness (30 mm)',
+    );
+    // Blank wall thickness = the 50 mm default.
+    expect(
+      issueOn(on({ coneChamferSize: 40, wallThickness: undefined, hollowLength: 80 }), 'coneChamferSize'),
+    ).toBe('Must be at most Cone length minus Wall thickness (30 mm)');
+    // Equal to the bound is allowed.
+    expect(parse(on({ coneChamferSize: 30, wallThickness: 50, hollowLength: 80 })).success).toBe(
+      true,
     );
   });
 
-  it('accepts a size equal to the Wall thickness (knife-edge rim)', () => {
-    expect(parse(on({ coneChamferSize: 50, wallThickness: 50 })).success).toBe(true);
+  it('allows a size above the Wall thickness (the part widens outward)', () => {
+    expect(parse(on({ coneChamferSize: 60, wallThickness: 50, hollowLength: 200 })).success).toBe(
+      true,
+    );
   });
 
-  it('ignores the size when the option is off or on Closed generator', () => {
-    expect(parse(on({ coneChamferEnabled: false, coneChamferSize: 60 })).success).toBe(true);
-    expect(parse(on({ variant: 'stepped', coneChamferSize: 60 })).success).toBe(true);
+  it('leaves the Closed generator bound to the builder (it depends on H Kammer)', () => {
+    expect(parse(on({ variant: 'stepped', coneChamferSize: 400, hollowLength: 80 })).success).toBe(
+      true,
+    );
   });
 
-  it('refuses a non-positive size', () => {
+  it('ignores the size when the option is off', () => {
+    expect(
+      parse(on({ coneChamferEnabled: false, coneChamferSize: 400, hollowLength: 80 })).success,
+    ).toBe(true);
+  });
+
+  it('refuses a non-positive size in both designs', () => {
     expect(parse(on({ coneChamferSize: 0 })).success).toBe(false);
+    expect(parse(on({ variant: 'stepped', coneChamferSize: 0 })).success).toBe(false);
   });
 });
 
