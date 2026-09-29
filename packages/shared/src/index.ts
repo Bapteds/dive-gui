@@ -591,16 +591,83 @@ export const MERGE_STEP_KINDS = [
 ] as const;
 export type MergeStepKind = (typeof MERGE_STEP_KINDS)[number];
 
+/**
+ * How a mesh-library source was imported: an uploaded polyMesh folder or .zip, a
+ * converted .cgns / .msh file, or a meshing session sent to the project
+ * (`POST /projects/:id/mesh/from-meshing`, target `library`).
+ */
+export const MESH_SOURCE_KINDS = ['folder', 'zip', 'cgns', 'msh', 'meshing'] as const;
+export type MeshSourceKind = (typeof MESH_SOURCE_KINDS)[number];
+
 /** One imported polyMesh source in a project's mesh library. */
 export interface MeshSource {
   /** Opaque id (also the source's directory name under meshes/). */
   id: string;
   /** Display name (defaults to the uploaded folder/zip name). */
   name: string;
+  /** How the source was imported (absent on payloads older than the field). */
+  kind?: MeshSourceKind;
   /** Boundary patches parsed from the source's constant/polyMesh/boundary. */
   patches: MeshPatch[];
   /** ISO 8601 import timestamp (drives the default merge order). */
   createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Meshing session -> project hand-off (WS-F, spec 2026-09-29-meshing-to-project).
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a meshing session's constant/polyMesh lands in a project: `case` replaces
+ * the project's case mesh (the default, first entry); `library` adds a new part to
+ * the project's mesh library (meshes/<slug>/).
+ */
+export const MESH_TO_PROJECT_TARGETS = ['case', 'library'] as const;
+export type MeshToProjectTarget = (typeof MESH_TO_PROJECT_TARGETS)[number];
+
+/**
+ * The chamber patch contract: the geometric type of every patch the chamber
+ * builder emits. MIRROR of `PATCH_TYPES` in `apps/api/scripts/buildChamber.py`
+ * (keep both aligned; `apps/api/tests/chamberPatchTypes.test.ts` compares them).
+ * Used to force the types of a meshed chamber sent to a project's case: the
+ * meshers type every surface `wall` by default, so `inlet` / `outlet` come back
+ * as walls. Internal patch names, never display labels.
+ */
+export const CHAMBER_PATCH_TYPES: Readonly<Record<string, 'patch' | 'wall'>> = {
+  inlet: 'patch',
+  outlet: 'patch',
+  cylinder_walls: 'wall',
+  walls: 'wall',
+  hub: 'wall',
+  shroud: 'wall',
+  guide_vanes: 'wall',
+};
+
+/** Body of `POST /projects/:id/mesh/from-meshing`. */
+export interface MeshFromMeshingRequest {
+  /** The meshing session whose constant/polyMesh is sent. */
+  sessionId: string;
+  /** Where it lands in the project (default `case`). */
+  target: MeshToProjectTarget;
+  /** Library part display name (library target only; defaults to the session name). */
+  name?: string;
+}
+
+/** Outcome of `POST /projects/:id/mesh/from-meshing` (wrapped as `{ result }`). */
+export interface MeshFromMeshingResult {
+  target: MeshToProjectTarget;
+  /** Refreshed case tree (case target only). */
+  entries?: Array<{ path: string; type: 'file' | 'directory'; size: number }>;
+  /** The new library part (library target only). */
+  mesh?: MeshSource;
+  /** The refreshed mesh library (library target only). */
+  meshes?: MeshSource[];
+  /** Human-readable notes (backup taken, patches kept / added, retyped, removed). */
+  notes: string[];
+  /** Patches whose geometric type was forced to the chamber contract (case target). */
+  retyped?: string[];
+  /** 0/ fields re-aligned to the new patch set (case target). */
+  syncedFields?: string[];
 }
 
 /**
@@ -2963,6 +3030,8 @@ export const SERVER_ERROR_CODES = [
   'BC_APPLY_FAILED',
   'NOT_RUNNABLE',
   'RUN_IN_PROGRESS',
+  'MESH_IN_PROGRESS',
+  'MESHING_NOT_MESHED',
   'RUN_NOT_FOUND',
   'NO_STL',
   'INVALID_STL',

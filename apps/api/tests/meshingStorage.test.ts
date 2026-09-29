@@ -6,11 +6,14 @@ import { describe, expect, it } from 'vitest';
 import {
   copySessionSetup,
   createSession,
+  hasCompleteResultMesh,
+  hasResultMesh,
   listStl,
   readConfig,
   readMeshStatus,
   sanitizeStlName,
   sessionDirAbsolute,
+  sessionPolyMeshDir,
   slugifySessionName,
   writeConfig,
   writeMeshStatus,
@@ -116,5 +119,21 @@ describe('copySessionSetup', () => {
     await expect(
       fs.stat(path.join(sessionDirAbsolute(copy.id), 'constant', 'polyMesh')),
     ).rejects.toThrow();
+  });
+});
+
+describe('hasCompleteResultMesh', () => {
+  it('requires neighbour on top of the core polyMesh files (solver gate parity)', async () => {
+    const session = await createSession('Complete mesh check', 'snappy');
+    const polyMesh = sessionPolyMeshDir(session.id);
+    await fs.mkdir(polyMesh, { recursive: true });
+    for (const file of ['points', 'faces', 'owner', 'boundary']) {
+      await fs.writeFile(path.join(polyMesh, file), `${file}-data`);
+    }
+    expect(await hasResultMesh(session.id)).toBe(true); // the render gate is looser
+    expect(await hasCompleteResultMesh(session.id)).toBe(false);
+
+    await fs.writeFile(path.join(polyMesh, 'neighbour'), 'neighbour-data');
+    expect(await hasCompleteResultMesh(session.id)).toBe(true);
   });
 });

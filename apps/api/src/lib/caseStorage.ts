@@ -172,6 +172,23 @@ export function removeProjectStorage(projectId: string): Promise<void> {
   return removeTreeAt(path.join(storageRoot(), 'projects', projectId));
 }
 
+/**
+ * Replace the project's case mesh (case/constant/polyMesh) with a copy of
+ * `srcPolyMeshDir` (an absolute constant/polyMesh directory the caller built, e.g.
+ * the merge work master or a staged meshing-session mesh). The old polyMesh is
+ * removed first so no stale file (a zone file the new mesh lacks) survives. The
+ * rest of the case (system/, 0/, constant/*) is untouched.
+ */
+export async function replaceCasePolyMesh(
+  projectId: string,
+  srcPolyMeshDir: string,
+): Promise<void> {
+  const destPolyMesh = path.join(caseRootFor(projectId), 'constant', 'polyMesh');
+  await fs.rm(destPolyMesh, { recursive: true, force: true });
+  await fs.mkdir(path.dirname(destPolyMesh), { recursive: true });
+  await fs.cp(srcPolyMeshDir, destPolyMesh, { recursive: true });
+}
+
 /** Remove all of a project's case files (the case dir is recreated on next import). */
 export function clearCase(projectId: string): Promise<void> {
   return clearTreeAt(caseRootFor(projectId));

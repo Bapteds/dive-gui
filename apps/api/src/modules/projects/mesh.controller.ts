@@ -11,6 +11,7 @@ import {
   getMeshEdges,
   getMeshGeometry,
   getMeshManifest,
+  importMeshFromMeshing,
   rebuildMesh,
   renameMeshPatch,
   restoreMeshBackup,
@@ -20,6 +21,7 @@ import {
 import type {
   AutoPatchInput,
   EditPatchesInput,
+  MeshFromMeshingInput,
   RenamePatchInput,
   SetPatchTypeInput,
 } from './mesh.schemas';
@@ -92,6 +94,19 @@ export async function editMeshPatchesController(req: Request, res: Response): Pr
   const { edits } = req.body as EditPatchesInput;
   const result = await editMeshPatches(requireViewer(req), req.params.id, edits);
   res.status(200).json(result);
+}
+
+/**
+ * POST /projects/:id/mesh/from-meshing — send a meshing session's polyMesh into
+ * the project (case mesh or mesh-library part). 200 `{ result }` for both targets.
+ */
+export async function meshFromMeshingController(req: Request, res: Response): Promise<void> {
+  const result = await importMeshFromMeshing(
+    requireViewer(req),
+    req.params.id,
+    req.body as MeshFromMeshingInput,
+  );
+  res.status(200).json({ result });
 }
 
 /** GET /projects/:id/mesh/backup — status of the single backup slot (or null). */

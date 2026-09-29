@@ -16,7 +16,8 @@
 // meshes root. Mirrors cgnsStorage.ts (the single-CGNS-source equivalent).
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { AppliedAssembly, MergePlan } from '@dive/shared';
+import type { AppliedAssembly, MergePlan, MeshSourceKind } from '@dive/shared';
+import { MESH_SOURCE_KINDS } from '@dive/shared';
 import {
   assertSafeId,
   confineJoin,
@@ -29,10 +30,8 @@ import {
   type RawUpload,
 } from './fileTreeStorage';
 
-/** How a mesh source was imported. */
-export type MeshSourceKind = 'folder' | 'zip' | 'cgns' | 'msh';
-
-const MESH_SOURCE_KINDS: readonly MeshSourceKind[] = ['folder', 'zip', 'cgns', 'msh'];
+/** How a mesh source was imported (shared contract; 'meshing' = sent from a meshing session). */
+export type { MeshSourceKind };
 
 /** Persisted metadata for one imported mesh source. */
 export interface MeshMeta {
@@ -41,6 +40,8 @@ export interface MeshMeta {
   kind: MeshSourceKind;
   /** ISO 8601 import timestamp. */
   createdAt: string;
+  /** Where the source came from, when it was not an upload (kind 'meshing'). */
+  origin?: { sessionId: string };
 }
 
 /** The workspace subdirectory name (hidden; never a valid mesh id collision). */
@@ -181,6 +182,9 @@ export async function readMeshMeta(projectId: string, meshId: string): Promise<M
         ? (parsed.kind as MeshSourceKind)
         : 'folder',
       createdAt: parsed.createdAt,
+      ...(parsed.origin && typeof parsed.origin.sessionId === 'string'
+        ? { origin: { sessionId: parsed.origin.sessionId } }
+        : {}),
     };
   } catch {
     return null;

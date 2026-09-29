@@ -23,6 +23,7 @@ import {
   MESH_FILES,
   collapseBoundaryToSinglePatch,
   fieldBcBody,
+  forceChamberPatchTypes,
   getFieldPatchType,
   isValidPatchName,
   parseBoundaryPatchDetails,
@@ -36,10 +37,13 @@ import {
   setFieldPatchType,
 } from '../../lib/openfoamCase';
 import {
+  ACTIVE_RUN_STATUSES,
+  CHAMBER_PATCH_TYPES,
   CONSTRAINT_PATCH_TYPES,
   MESH_PATCH_SETTINGS,
   isPatchRole,
   type MeshBackupInfo,
+  type MeshFromMeshingResult,
   type MeshManifest,
   type MeshPatchEdit,
   type MeshPatchSetting,
@@ -51,10 +55,17 @@ import { commandFailed, planOpenfoamCommand } from '../../lib/openfoamCommand';
 import {
   caseDirAbsolute,
   caseFileExists,
+  caseIsEmpty,
   listCaseTree,
   readCaseFile,
+  replaceCasePolyMesh,
   writeCaseFile,
 } from '../../lib/caseStorage';
+import { prisma } from '../../lib/prisma';
+import { sessionPolyMeshDir } from '../../lib/meshingStorage';
+import { requireMeshedSession } from '../meshing/meshing.service';
+import { addMeshingPartToLibrary } from './meshes.service';
+import type { MeshFromMeshingInput } from './mesh.schemas';
 import {
   readVizEdges,
   readVizGlb,
@@ -70,7 +81,7 @@ import {
   restoreBackup,
   writeBackup,
 } from '../../lib/meshBackupStorage';
-import { clearAppliedAssembly } from '../../lib/meshStorage';
+import { clearAppliedAssembly, meshWorkRoot } from '../../lib/meshStorage';
 import { assertProjectVisible, type Viewer } from './projects.service';
 import { scaffoldCase, syncBoundaryFields } from './files.service';
 
@@ -777,4 +788,147 @@ export async function autoPatchMesh(
     durationMs: result.durationMs,
     patches,
   };
+}
+
+// --------------------------------------------------------------------------
+// Meshing session -> project hand-off (WS-F).
+// --------------------------------------------------------------------------
+
+/** snappyHexMesh's leftover background-box patch (0 faces in internal mode). */
+const SNAPPY_LEFTOVER_PATCH = 'domainBoundary';
+
+/** How many patches of `next` already existed in `previous` (kept) vs are new. */
+function patchDelta(previous: string[], next: string[]): { kept: number; added: number } {
+  const before = new Set(previous);
+  const kept = next.filter((name) => before.has(name)).length;
+  return { kept, added: next.length - kept };
+}
+
+/**
+ * Send a meshing session's constant/polyMesh into a project (POST
+ * /projects/:id/mesh/from-meshing). `case` replaces the project's case mesh
+ * (backup of the original case once, chamber patch types forced, assembly record
+ * cleared, minimal system/ scaffolded on an empty project, 0/ fields re-aligned
+ * in merge mode so surviving patches keep their BCs); `library` adds a new
+ * mesh-library part of kind 'meshing' (mesher types kept). Both drop a zero-face
+ * `domainBoundary` left by snappy. Only constant/polyMesh/** is copied, never the
+ * session's system/, 0/, .viz/ or logs.
+ *
+ * The mesh is copied to a staging dir (meshes/.work/from-meshing-<ts>/) and its
+ * boundary edited there first, so a failed copy or edit never leaves a
+ * half-written case; the staging dir is always removed. No render work: the
+ * Visualize cache is stale by mtime (vizIsStale) and rebuilds on the next read.
+ *
+ * @throws 404 NOT_FOUND project not visible (checked first, so sessions are not
+ *         probed through a foreign project) or session absent;
+ *         409 MESH_IN_PROGRESS / MESHING_NOT_MESHED (session gate);
+ *         409 RUN_IN_PROGRESS case target while a solver run is queued/running.
+ */
+export async function importMeshFromMeshing(
+  viewer: Viewer,
+  projectId: string,
+  input: MeshFromMeshingInput,
+): Promise<MeshFromMeshingResult> {
+  await assertProjectVisible(viewer, projectId);
+  const session = await requireMeshedSession(input.sessionId);
+
+  if (input.target === 'case') {
+    const active = await prisma.run.count({
+      where: { projectId, status: { in: [...ACTIVE_RUN_STATUSES] } },
+    });
+    if (active > 0) {
+      throw new AppError(
+        409,
+        'RUN_IN_PROGRESS',
+        'A solver run is active for this project. Wait for it to finish or stop it before replacing the case mesh.',
+      );
+    }
+  }
+
+  const notes: string[] = [];
+  const stageRoot = path.join(
+    meshWorkRoot(projectId),
+    `from-meshing-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  );
+  const staged = path.join(stageRoot, 'constant', 'polyMesh');
+  try {
+    await fs.mkdir(path.dirname(staged), { recursive: true });
+    await fs.cp(sessionPolyMeshDir(session.id), staged, { recursive: true });
+
+    // Edit the STAGED boundary: drop snappy's empty leftover patch (both targets),
+    // then force the chamber patch contract (case target only).
+    const boundaryAbs = path.join(staged, 'boundary');
+    let boundary = await fs.readFile(boundaryAbs, 'utf8');
+    const cleaned = removeEmptyBoundaryPatches(boundary, { only: [SNAPPY_LEFTOVER_PATCH] });
+    if (cleaned !== boundary) {
+      notes.push(`Removed the empty ${SNAPPY_LEFTOVER_PATCH} patch left by snappyHexMesh.`);
+      boundary = cleaned;
+    }
+    let retyped: string[] = [];
+    if (input.target === 'case') {
+      const forced = forceChamberPatchTypes(boundary);
+      boundary = forced.content;
+      retyped = forced.retyped;
+      if (retyped.length > 0) {
+        const list = retyped.map((name) => `${name} is now ${CHAMBER_PATCH_TYPES[name]}`).join(', ');
+        notes.push(`Set the chamber patch types: ${list}.`);
+      }
+    }
+    await fs.writeFile(boundaryAbs, boundary, 'utf8');
+
+    if (input.target === 'library') {
+      const name = input.name?.trim() || session.name;
+      const { mesh, meshes } = await addMeshingPartToLibrary(projectId, staged, name, session.id);
+      notes.push(`Added "${mesh.name}" to the mesh library.`);
+      return { target: 'library', mesh, meshes, notes };
+    }
+
+    // --- case target: back up, replace, clear the assembly, scaffold, re-align.
+    if (!(await caseIsEmpty(projectId))) {
+      const hadBackup = await backupExists(projectId);
+      await ensureOriginalBackup(projectId);
+      if (!hadBackup) notes.push('Original case backed up (restore it from Visualize).');
+    }
+    const previousBoundary = await readCaseFile(projectId, BOUNDARY_FILE);
+    const previousPatches = previousBoundary
+      ? parseBoundaryPatches(previousBoundary.toString('utf8'))
+      : null;
+
+    await replaceCasePolyMesh(projectId, staged);
+    // The case mesh is no longer an applied assembly: Disassemble must not offer a
+    // stale plan.
+    await clearAppliedAssembly(projectId);
+
+    if (!(await caseFileExists(projectId, 'system/controlDict'))) {
+      await scaffoldCase(viewer, projectId);
+      notes.push('Created a minimal system/ so the Solver tab can take over.');
+    }
+
+    let syncedFields: string[] = [];
+    try {
+      const sync = await syncBoundaryFields(viewer, projectId, { mode: 'merge' });
+      syncedFields = sync.updated;
+      if (previousPatches && syncedFields.length > 0) {
+        const { kept, added } = patchDelta(
+          previousPatches,
+          sync.patches.map((p) => p.name),
+        );
+        notes.push(
+          `Kept boundary conditions for ${kept} patch(es); ${added} new patch(es) got defaults.`,
+        );
+      }
+    } catch {
+      // No 0/ fields yet: not a failure (the Solver tab scaffolds them).
+    }
+
+    return {
+      target: 'case',
+      entries: await listCaseTree(projectId),
+      notes,
+      retyped,
+      syncedFields,
+    };
+  } finally {
+    await fs.rm(stageRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
