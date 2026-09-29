@@ -1,6 +1,6 @@
 # Guide-vane pocket robust to Runner case Ø close to or below LE Ø
 
-> **Status**: approved · **Date**: 2026-09-29 · **Workstream**: WS-A (Chamber Creation v2)
+> **Status**: implemented (2026-09-29) · **Date**: 2026-09-29 · **Workstream**: WS-A (Chamber Creation v2)
 > **Area**: python (`apps/api/scripts/buildChamber.py`), shared + API (early refusal), tests
 > **Related**: `brain/features/chamber-creation.md` §3.6, §3.8, §3.9, §4.3, §4.4; `brain/playbooks/change-chamber-geometry.md`
 

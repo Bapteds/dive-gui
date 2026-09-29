@@ -8,6 +8,7 @@ import {
   CHAMBER_GRID_MM,
   computeChamberGeneratorDims,
   blankGeneratorHeightRefusal,
+  runnerCaseBelowLeRefusal,
   computeChamberOutputs,
   nonPositiveChamberFinals,
   snapToChamberGrid,
@@ -444,5 +445,39 @@ describe('blankGeneratorHeightRefusal (blank generator height)', () => {
     expect(refusal({ ...BASE, ...H(1800), ...SIMPLIFY, hollowLength: 200, centralHeight: 500 })).toBeNull();
     expect(refusal({ ...BASE, ...H(1800), ...SIMPLIFY, hollowLength: 1500 })).toBeNull();
     expect(refusal({ ...BASE, ...H(1800), variant: 'hollow', hollowLength: 200 })).toBeNull();
+  });
+});
+
+describe('runnerCaseBelowLeRefusal (Runner case Ø below LE Ø with guide vanes)', () => {
+  const LE = { constraints: { dLast: { exact: 1600 } } };
+  const VANES = { guideVanes: true };
+  const refusal = (input: Parameters<typeof runnerCaseBelowLeRefusal>[0]) =>
+    runnerCaseBelowLeRefusal(input, computeChamberOutputs(input));
+
+  it('refuses a typed Runner case Ø below LE Ø and names the three levers', () => {
+    const msg = refusal({ ...BASE, ...LE, ...VANES, dFirst: 1450 });
+    expect(msg).toBe(
+      'With guide vanes the distributor sits inside the runner case: Runner case Ø (1450 mm) ' +
+        'must be at least LE Ø (1600 mm). Increase Runner case Ø, clear it ' +
+        '(auto ≈ 1835 mm), or turn Guide vanes off.',
+    );
+  });
+
+  it('accepts a Runner case Ø within 5 mm below LE Ø (the builder snaps it flush)', () => {
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1595 })).toBeNull();
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1600 })).toBeNull();
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1594 })).not.toBeNull();
+  });
+
+  it('compares on the scaled diameters (the builder tolerance is in real mm)', () => {
+    // 4 mm below at scale 1 is snapped; at Part scale 2 it is 8 mm below.
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1596 })).toBeNull();
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1596, partScale: 2 })).not.toBeNull();
+  });
+
+  it('leaves the auto Runner case Ø and vane-less builds alone', () => {
+    expect(refusal({ ...BASE, ...LE, ...VANES })).toBeNull();
+    expect(refusal({ ...BASE, ...LE, dFirst: 1450 })).toBeNull();
+    expect(refusal({ ...BASE, ...LE, guideVanes: false, dFirst: 1450 })).toBeNull();
   });
 });

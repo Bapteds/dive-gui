@@ -16,6 +16,7 @@ import {
   CHAMBER_OUTPUT_KEYS,
   CHAMBER_WALL_THICKNESS_MM,
   blankGeneratorHeightRefusal,
+  runnerCaseBelowLeRefusal,
   computeChamberGeneratorDims,
   computeChamberOutputs,
   nonPositiveChamberFinals,
@@ -304,6 +305,11 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
   // H Kammer from shrinking it below its Gen Dim height.
   const generatorRefusal = blankGeneratorHeightRefusal(input, outputs);
   if (generatorRefusal) throw new AppError(422, 'VALIDATION_ERROR', generatorRefusal);
+
+  // Guide vanes carve r < LE Ø/2 out of the runner case: a typed Runner case Ø
+  // below LE Ø (beyond the builder's 5 mm snap) would erase it (spec 2026-09-29).
+  const runnerCaseRefusal = runnerCaseBelowLeRefusal(input, outputs);
+  if (runnerCaseRefusal) throw new AppError(422, 'VALIDATION_ERROR', runnerCaseRefusal);
 
   const params = resolveGeometryParams(input, outputs);
   const hash = chamberHash(params);

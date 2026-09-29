@@ -60,6 +60,10 @@ import zipfile
 RATIO_D_FIRST_OVER_LAST = 1.147030    # from the original Part.stl (2.81550/2.45460)
 RATIO_D_MIDDLE_OVER_LAST = 0.80       # middle = 0.80 x D_LAST (both variants)
 FLOOR_OVERCUT = 0.01                  # push the part below the floor so it opens
+SNAP_D_TOL = 0.005                    # guide vanes: a Runner case Ø within 5 mm (scaled
+                                      # diameters) of LE Ø is built flush with it; further
+                                      # below it is refused (spec 2026-09-29). Mirrors
+                                      # CHAMBER_RUNNER_CASE_SNAP_MM of @dive/shared.
 MIN_LAST_CYL_H = 0.05                 # stepped: min height kept for the last (top)
                                       # cylinder when up-scaling pushes the shoulder up
 CHAMFER_END = ">Y"                    # the chamfered end (a width-side)
@@ -475,7 +479,8 @@ def _revolve_open(np, trimesh, profile_rz, cx, cy, sections=128):
 
 
 def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_angle_deg=0.0,
-                       outlet_outer_d=None, outlet_ratio=None, d_ring=None):
+                       outlet_outer_d=None, outlet_ratio=None, d_ring=None,
+                       casing_overshoot=FLOOR_OVERCUT):
     """Return {patch_name: Trimesh} for the guide-vane throat: the SOLID vane
     surfaces (blades + contoured hub/shroud walls + the outlet annulus) that sit
     as obstacles in the fluid box, centred at (cx, cy).
@@ -680,7 +685,7 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
         # R_curve/(X1/2) is constant. The floor contour f(r) drives the blade drape.
         z_brim = _z(0.09850)                        # existing brim height (asset z ~ 0.0985)
         shroud_profile = _shroud_fillet_profile(np, ro_target, z_brim,
-                                                d_last / 2.0 + FLOOR_OVERCUT)
+                                                d_last / 2.0 + casing_overshoot)
         shroud_placed = _revolve_open(np, trimesh, _densify(np, shroud_profile), cx, cy)
         _rc_v, _zf_v = shroud_profile[:, 0], shroud_profile[:, 1]
     else:
@@ -1107,7 +1112,8 @@ def _vane_prisms(np, trimesh, blades_mesh, cx, cy, z0, z1):
     return prisms, outlines
 
 
-def _shroud_casing_solid(np, trimesh, shroud_mesh, cx, cy, d_last, nb=200, nfine=160):
+def _shroud_casing_solid(np, trimesh, shroud_mesh, cx, cy, d_last, nb=200, nfine=160,
+                         overshoot=FLOOR_OVERCUT):
     """The shroud CASING as an annular solid of revolution — the material below the
     shroud floor, from the inner duct rim (r_in) to the outer rim (r_out), down to
     the box floor. The top follows the shroud floor contour f(r); the annulus never
@@ -1146,7 +1152,7 @@ def _shroud_casing_solid(np, trimesh, shroud_mesh, cx, cy, d_last, nb=200, nfine
     z_fine = spl(r_fine)
     r_in, r_out = float(r_fine[0]), float(r_fine[-1])
     # push the outer wall past the box wall so the boolean leaves no sliver against it
-    r_out_wall = max(r_out, d_last / 2.0) + FLOOR_OVERCUT
+    r_out_wall = max(r_out, d_last / 2.0) + overshoot
     # closed loop: box floor -> outer wall up -> brim out to the wall -> smoothed floor
     # contour back in -> down
     prof = [(r_in, z0), (r_out_wall, z0), (r_out_wall, float(z_fine[-1]))]
@@ -1561,6 +1567,34 @@ def main():
         d_middle = (d_middle_override * part_scale
                     if d_middle_override is not None else d_last * RATIO_D_MIDDLE_OVER_LAST)
 
+        # Guide vanes carve the whole disk r < d_last/2 out of the runner case (first
+        # cylinder) and seat the distributor inside it, so the runner case only keeps
+        # its outer ring [d_last/2, d_first/2] (spec 2026-09-29). A typed Runner case
+        # below LE (beyond SNAP_D_TOL) used to be erased silently: refuse it. Within
+        # SNAP_D_TOL it is snapped flush with LE (no ring, no casing overshoot). The
+        # auto ratio is always larger. From here on d_first is the EFFECTIVE runner
+        # case (feet, fit check, pocket radius, junction labels).
+        runner_case_snapped = False
+        if guide_vanes and d_first_override is not None:
+            if d_first < d_last - SNAP_D_TOL - 1e-9:
+                raise ValueError(
+                    "With guide vanes the distributor sits inside the runner case: "
+                    "Runner case \u00d8 (%s) must be at least LE \u00d8 (%s). Increase "
+                    "Runner case \u00d8, clear it (auto \u2248 %s), or turn Guide vanes off."
+                    % (_mm(d_first_override), _mm(d_last / part_scale),
+                       _mm(d_last / part_scale * RATIO_D_FIRST_OVER_LAST)))
+            if abs(d_first - d_last) <= SNAP_D_TOL + 1e-9:
+                print("WARNING: Runner case \u00d8 %s is within 5 mm of LE \u00d8 %s: "
+                      "built flush with it." % (_mm(d_first_override),
+                                                _mm(d_last / part_scale)))
+                d_first = d_last
+                runner_case_snapped = True
+        # The shroud casing's outer wall is pushed past LE/2 so the boolean leaves no
+        # sliver against the runner-case ring; never by more than half the ring (a
+        # thin ring would otherwise let it poke out into the fluid), and not at all
+        # when the runner case is flush. Equals FLOOR_OVERCUT for rings >= 20 mm.
+        casing_overshoot = min(FLOOR_OVERCUT, max(0.0, d_first / 2.0 - d_last / 2.0) / 2.0)
+
         def _reaches_top(stack_local):
             """A typed generator whose top lands within 1 mm of the box top is
             the same fluid as one running through it: pin it (no sliver)."""
@@ -1800,6 +1834,10 @@ def main():
             # placed/pitched blade's own footprint (R_anchor) to clamp against, which
             # is not available until that call runs.)
             vane_ring_ri = d_last / 2.0
+            if runner_case_snapped:
+                # Flush runner case: remove the whole first cylinder (a coincident
+                # cavity would leave a sliver); the casing wall becomes its wall.
+                vane_ring_ri += FLOOR_OVERCUT
             _cavity = (cq.Workplane("XY", origin=(target_x, target_y, z_floor))
                        .circle(vane_ring_ri).extrude(h_first))
             part = part.cut(_cavity)
@@ -1829,7 +1867,8 @@ def main():
             vane_patches = make_vane_patches(
                 trimesh, np, target_x, target_y, z_mid_base, z_mid_top, d_last,
                 vane_angle_deg=vane_pitch, d_ring=d_middle,
-                outlet_outer_d=num_opt("outletOuterD"), outlet_ratio=num_opt("outletRatio"))
+                outlet_outer_d=num_opt("outletOuterD"), outlet_ratio=num_opt("outletRatio"),
+                casing_overshoot=casing_overshoot)
             vane_outlet_ri = vane_patches["outlet_ri"]
             vane_outlet_ro = vane_patches["outlet_ro"]
 
@@ -1914,7 +1953,8 @@ def main():
                                            target_x, target_y)
             else:
                 _casing = _shroud_casing_solid(np, trimesh, vane_patches["shroud"],
-                                               target_x, target_y, d_last)
+                                               target_x, target_y, d_last,
+                                               overshoot=casing_overshoot)
             # Prisms span below the shroud floor (z_duct_bottom) up past the hub roof
             # (z_mid_top) so they fully pierce both; the portion below the floor sits
             # inside the casing (absorbed by the union) and the portion above the roof
@@ -2018,6 +2058,36 @@ def main():
             _wall = (np.abs(_fnz) < 0.5) & (_fc[:, 2] < z_mid_base)
             _who[_wall & (np.abs(_fr - vane_outlet_ri) < 0.03)] = _hi
             _who[_wall & (np.abs(_fr - vane_outlet_ro) < 0.03)] = _si
+            # Deterministic labels at the runner-case / distributor junction (spec
+            # 2026-09-29): nearest-source splits these between cylinder_walls, shroud
+            # and walls when the ring is thin or the runner case is flush with LE.
+            # _r_env = LE/2 (distributor envelope), _r_case = the effective runner case.
+            _r_env = d_last / 2.0
+            _r_case = d_first / 2.0
+            _z_brim = float(vane_patches["shroud"].vertices[:, 2].max())
+            _fz = _fc[:, 2]
+            _vert = np.abs(_fnz) < 0.5
+            _hor = np.abs(_fnz) > 0.9
+
+            def _idx(nm):
+                if nm not in _names:
+                    _names.append(nm)
+                return _names.index(nm)
+            _cwi, _wli = _idx("cylinder_walls"), _idx("walls")
+            _band = (_fz > _z_brim - 2e-3) & (_fz < z_mid_base + 2e-3)
+            # the runner-case wall (vertical, below the ring top)
+            _who[_vert & (np.abs(_fr - _r_case) < 3e-3) & (_fz < z_mid_base)] = _cwi
+            # between the brim and the ring top: ring top -> cylinder_walls, brim -> shroud
+            _who[_hor & _band & (_fr > _r_env + 1e-3) & (_fr < _r_case + 3e-3)] = _cwi
+            _who[_hor & _band & (_fr > vane_outlet_ro + 3e-3) & (_fr < _r_env - 1e-3)] = _si
+            # the small step at LE/2 between the brim and the ring top (casing edge);
+            # a flush runner case has no ring, so no step
+            if not runner_case_snapped:
+                _who[_vert & (np.abs(_fr - _r_env) < 3e-3)
+                     & (_fz > _z_brim - 1e-3) & (_fz < z_mid_base + 1e-3)] = _si
+            # the box floor outside the outlet and the runner case
+            _who[_hor & (np.abs(_fz - z_box_floor) < 2e-3)
+                 & (_fr > max(vane_outlet_ro, _r_case) + 1e-3)] = _wli
             # The BLADE SKIN, assigned exactly (last, so no other override can
             # touch it): the prisms are strict vertical extrusions, so a wetted
             # face lies on a blade wall iff its centroid sits on a blade outline

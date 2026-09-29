@@ -2926,6 +2926,42 @@ export function blankGeneratorHeightRefusal(
   );
 }
 
+/**
+ * Tolerance (mm, on the SCALED diameters) within which a typed Runner case Ø
+ * counts as equal to LE Ø in a guide-vane build. Mirrors `SNAP_D_TOL` of
+ * buildChamber.py (0.005 m): within it the builder snaps the runner case flush
+ * with LE Ø and warns; further below it refuses.
+ */
+export const CHAMBER_RUNNER_CASE_SNAP_MM = 5;
+
+/**
+ * Guide vanes carve the whole disk r < LE Ø/2 out of the runner case (first
+ * cylinder) and place the distributor inside it, so a typed Runner case Ø
+ * (`dFirst`) below LE Ø would silently erase the runner case. Refuse when
+ * partScale x (LE Ø - dFirst) exceeds CHAMBER_RUNNER_CASE_SNAP_MM (the builder
+ * snaps smaller gaps). The auto Runner case Ø (CHAMBER_D_FIRST_OVER_LAST x LE Ø)
+ * is always larger, and vane-less builds keep a real first cylinder: both pass.
+ * Returns the refusal message, else null. Spec 2026-09-29 (WS-A).
+ */
+export function runnerCaseBelowLeRefusal(
+  input: ChamberInput,
+  outputs: ChamberOutput[],
+): string | null {
+  if (input.guideVanes !== true || input.dFirst == null) return null;
+  const dLast = outputs.find((o) => o.key === 'dLast')!.final;
+  const s = input.partScale ?? 1;
+  if (!Number.isFinite(dLast) || s * (dLast - input.dFirst) <= CHAMBER_RUNNER_CASE_SNAP_MM) {
+    return null;
+  }
+  const mm = (v: number) => `${Math.round(v)} mm`;
+  return (
+    `With guide vanes the distributor sits inside the runner case: ` +
+    `Runner case Ø (${mm(input.dFirst)}) must be at least LE Ø (${mm(dLast)}). ` +
+    `Increase Runner case Ø, clear it (auto ≈ ${mm(CHAMBER_D_FIRST_OVER_LAST * dLast)}), ` +
+    `or turn Guide vanes off.`
+  );
+}
+
 
 /**
  * Machine-readable error codes the API may emit in its `{ error: { code } }`

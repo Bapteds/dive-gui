@@ -505,6 +505,26 @@ describe('Chamber Creation', () => {
     expect(res.body.error.message).toContain('is too low for the generator');
   });
 
+  it('refuses a Runner case Ø below LE Ø with guide vanes, before any builder run', async () => {
+    let calls = 0;
+    setCommandRunner(async (spec) => {
+      calls += 1;
+      return notFoundRunner(spec);
+    });
+    const auth = authHeader(await createTestUser());
+    const res = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...BUILD, guideVanes: true, dFirst: 1450, constraints: { dLast: { exact: 1600 } } })
+      .expect(422);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error.message).toContain(
+      'Runner case Ø (1450 mm) must be at least LE Ø (1600 mm)',
+    );
+    expect(res.body.error.message).toContain('or turn Guide vanes off.');
+    expect(calls).toBe(0);
+  });
+
   it('refuses an inverted Min>Max constraint range, before any builder run', async () => {
     setCommandRunner(notFoundRunner);
     const auth = authHeader(await createTestUser());
