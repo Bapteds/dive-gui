@@ -33,9 +33,9 @@ describe('chamberFormSchema', () => {
       expect(issue?.message).toBe('Enter a cone length: the With cone design needs one.');
     }
     // The same blank is fine on stepped (the field is unused there).
-    expect(parse({ ...CHAMBER_FORM_DEFAULTS, variant: 'stepped', hollowLength: undefined }).success).toBe(
-      true,
-    );
+    expect(
+      parse({ ...CHAMBER_FORM_DEFAULTS, variant: 'stepped', hollowLength: undefined }).success,
+    ).toBe(true);
   });
 
   it.each([
@@ -65,9 +65,9 @@ describe('chamberFormSchema', () => {
   });
 
   it('keeps the five dimension overrides optional but positive', () => {
-    expect(
-      parse({ ...CHAMBER_FORM_DEFAULTS, dFirst: undefined, dMiddle: undefined }).success,
-    ).toBe(true);
+    expect(parse({ ...CHAMBER_FORM_DEFAULTS, dFirst: undefined, dMiddle: undefined }).success).toBe(
+      true,
+    );
     expect(parse({ ...CHAMBER_FORM_DEFAULTS, dFirst: 2800 }).success).toBe(true);
     expect(parse({ ...CHAMBER_FORM_DEFAULTS, dFirst: 0 }).success).toBe(false);
     expect(parse({ ...CHAMBER_FORM_DEFAULTS, dMiddle: -10 }).success).toBe(false);
@@ -109,7 +109,11 @@ describe('chamberInputToFormValues', () => {
 
   it('fills a sparse snapshot with the same defaults as a fresh form', () => {
     const loaded = chamberInputToFormValues({ x1: 1450, x2: 7.85, x3: 8 });
-    expect(loaded).toEqual({ ...CHAMBER_FORM_DEFAULTS, wallThickness: undefined, hollowLength: undefined });
+    expect(loaded).toEqual({
+      ...CHAMBER_FORM_DEFAULTS,
+      wallThickness: undefined,
+      hollowLength: undefined,
+    });
   });
 
   it('loads an old save without a vane count as 16 vanes', () => {
@@ -315,5 +319,38 @@ describe('computeChamberAutoDims', () => {
     expect(dims.centralHeight).toBeNull();
     expect(dims.domeHeight).toBeNull();
     expect(dims.dFirst).toBeCloseTo(1.14703 * 2400, 5); // dLast ratios don't need X1–X3
+  });
+});
+
+describe('semi-spiral casing (spec 2026-09-29-semi-spiral-casing)', () => {
+  it('ships off at 0.922 m/s and accepts 0.3 to 3 m/s', () => {
+    expect(CHAMBER_FORM_DEFAULTS.semiSpiral).toBe(false);
+    expect(CHAMBER_FORM_DEFAULTS.spiralFlowVelocity).toBe(0.922);
+    const on = { ...CHAMBER_FORM_DEFAULTS, semiSpiral: true, feetEnabled: false };
+    expect(parse({ ...on, spiralFlowVelocity: 0.3 }).success).toBe(true);
+    expect(parse({ ...on, spiralFlowVelocity: 3 }).success).toBe(true);
+    expect(parse({ ...on, spiralFlowVelocity: 0.29 }).success).toBe(false);
+    expect(parse({ ...on, spiralFlowVelocity: 3.1 }).success).toBe(false);
+  });
+
+  it('refuses Feet on with the spiral, on the Feet field', () => {
+    const res = parse({ ...CHAMBER_FORM_DEFAULTS, semiSpiral: true, feetEnabled: true });
+    expect(res.success).toBe(false);
+    expect(res.error?.issues.map((i) => i.path.join('.'))).toContain('feetEnabled');
+  });
+
+  it('loads old saves with the spiral off at 0.922 m/s and round-trips a saved spiral', () => {
+    const base = { x1: 1450, x2: 7, x3: 10 } as ChamberInput;
+    const old = chamberInputToFormValues(base);
+    expect(old.semiSpiral).toBe(false);
+    expect(old.spiralFlowVelocity).toBe(0.922);
+    const saved = chamberInputToFormValues({
+      ...base,
+      semiSpiral: true,
+      spiralFlowVelocity: 0.7,
+      feetEnabled: false,
+    });
+    expect(saved.semiSpiral).toBe(true);
+    expect(saved.spiralFlowVelocity).toBe(0.7);
   });
 });

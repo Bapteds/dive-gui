@@ -45,6 +45,7 @@ describe('ChamberBuildWarnings', () => {
     const warnings = [
       'outlet outer radius 0.8400 clamped to 0.6666 (Runner Ø too large for this vane/d_last combination)',
       'chamber.step falls back to the vane-less solid (no vanes carved)',
+      'The semi-spiral casing is limited by B Kammer (4450 mm): worst cross-section error 0.88 m² at 160°. Raise B Kammer to reduce it.',
     ];
     render(<ChamberBuildWarnings warnings={warnings} />);
     const alert = screen.getByRole('alert');
@@ -52,6 +53,6 @@ describe('ChamberBuildWarnings', () => {
     for (const warning of warnings) {
       expect(screen.getByText(warning)).toBeInTheDocument();
     }
-    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+    expect(screen.getAllByRole('listitem')).toHaveLength(3);
   });
 });
