@@ -6,8 +6,8 @@
 
 ## 1. Where we are
 
-- **Work in progress: branch `feat/chamber-v2-cfd-loop`** (off `main` at `5638b42`, 2026-09-29). **Do not merge into `main` until the user says so** (user instruction). Work order "Chamber Creation v2 + CFD loop", workstreams WS-A to WS-I:
-  - **Done on the branch** (each with its approved spec in `brain/specs/2026-09-29-*`, tests and brain update):
+- **Chamber Creation v2 + CFD loop merged into `main`** (2026-09-29, merge `9e92400` of `feat/chamber-v2-cfd-loop`, at the user's request). Work order WS-A to WS-I:
+  - **Done (on `main`)** (each with its approved spec in `brain/specs/2026-09-29-*`, tests and brain update):
     - WS-A guide-vane pocket vs Runner case Ø (5 mm snap with warning, junction labels) + WS-A v2: Runner case Ø below LE Ø builds a 20 mm ledge under the shroud brim, refused only below Runner Ø + 20 mm;
     - WS-B Guide vane count 16 or 18 (chord × 16/18, same pivot radius);
     - WS-C v2 Cone chamfer: 45° foot chamfer on the LE part in both designs, part widened by the chamfer size above it (the first top-rim version was removed at the user's request);
@@ -15,8 +15,8 @@
     - WS-F Meshing session → project (`POST /projects/:id/mesh/from-meshing`, "Send to project" dialog, chamber patch types forced).
   - **Decided, no code**: WS-D hub shoulder: keep the current rule (the small-Ø fold is logged in `known-issues.md`).
   - **Blocked**: WS-G convergence + vorticity criteria (waiting for the user's definitions; draft spec in the session scratchpad, not committed); WS-H optimisation loop (spec approved, `2026-09-29-optimisation-loop-design.md`; implementation after WS-G); WS-I free-surface tool (waiting for the user's tool).
-  - **Still to do before merge**: browser pass (A, B, C, E, F), CI run (geometry job), and at deploy **purge `$STORAGE_DIR/chamber/*`** (`buildChamber.py` changed; the live `.env` has `STORAGE_DIR="./storage"`, relative to the service working directory, so probably `/home/app/apps/api/storage/chamber/*`: to confirm) plus a real snappy chamber session sent to a project on the server.
-- **`main`**: last merge `5638b42` (brain chamber-sheet refresh); before it the 2026-09-28/29 chamber fixes (generator minimum with dome, readable errors). No known open PR.
+  - **Still to do (after the merge)**: browser pass (A, B, C, E, F), CI run (geometry job), and at deploy **purge `$STORAGE_DIR/chamber/*`** (`buildChamber.py` changed; the live `.env` has `STORAGE_DIR="./storage"`, relative to the service working directory, so probably `/home/app/apps/api/storage/chamber/*`: to confirm) plus a real snappy chamber session sent to a project on the server.
+- **Before it on `main`**: `5638b42` (brain chamber-sheet refresh) and the 2026-09-28/29 chamber fixes (generator minimum with dome, readable errors).
 - **Version**: 1.0.x (v1.0.1 audit fixes included: every CRITICAL and HIGH finding).
 - **Brain**: reorganized on 2026-09-28 (`brain/`, English, generated `INDEX.md`, playbooks, zone rules, `Stop` hook).
 
