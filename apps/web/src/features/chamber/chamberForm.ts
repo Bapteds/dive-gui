@@ -353,3 +353,30 @@ export function computeChamberAutoDims(
         : null,
   };
 }
+
+/**
+ * Side effects of ticking / unticking "Semi-spiral casing" on the other options.
+ * Ticked: Feet and Chamfer go off (the spiral needs Feet off and its cut sides
+ * are the corner chamfers, spec 2026-09-29-semi-spiral-casing sections 6 / 10),
+ * and the Chamfer state is remembered. Unticked: Chamfer gets that state back.
+ * Without a remembered state (a save loaded with the spiral on) Chamfer is left alone.
+ */
+export function semiSpiralToggle(
+  on: boolean,
+  current: Pick<ChamberFormValues, 'chamferEnabled'>,
+  savedChamfer: boolean | null,
+): {
+  set: Partial<Pick<ChamberFormValues, 'feetEnabled' | 'chamferEnabled'>>;
+  savedChamfer: boolean | null;
+} {
+  if (on) {
+    return {
+      set: { feetEnabled: false, chamferEnabled: false },
+      savedChamfer: current.chamferEnabled,
+    };
+  }
+  return {
+    set: savedChamfer === null ? {} : { chamferEnabled: savedChamfer },
+    savedChamfer: null,
+  };
+}

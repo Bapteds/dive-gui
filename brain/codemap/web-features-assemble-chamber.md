@@ -205,7 +205,7 @@ PNG 1319 × 511 (≈ 390 KB): annotated CAD drawings (plan view B Kammer, B1, BF
 **Notable cases**: the `chamberBodyKey` block guards against the regression of the "Inputs changed since this build" banner stuck after Generate.
 
 ## `apps/web/src/features/chamber/chamberForm.ts`
-**Semi-spiral (2026-09-29)**: `semiSpiral` / `spiralFlowVelocity` in values, schema (0.3..3; `superRefine` refuses Feet on with the spiral), defaults (false / 0.922) and `chamberInputToFormValues` fallbacks (old saves load off / 0.922).
+**Semi-spiral (2026-09-29)**: `semiSpiralToggle(on, current, savedChamfer)` (pure): ticked → `{ feetEnabled: false, chamferEnabled: false }` and remembers Chamfer; unticked → restores the remembered Chamfer (nothing when none, e.g. after loading a save); used by `ChamberPage` with a `useRef` reset on save load; tested in `chamberForm.test.ts`. `semiSpiral` / `spiralFlowVelocity` in values, schema (0.3..3; `superRefine` refuses Feet on with the spiral), defaults (false / 0.922) and `chamberInputToFormValues` fallbacks (old saves load off / 0.922).
 **Role**: form contract of the chamber inputs, separated from the component for fast-refresh. Consumed by `ChamberPage` (useForm + zodResolver, stale build detection, loading of saves, hints) and `ChamberInputsForm`.
 **Exports**:
 - `ChamberFormValues` (interface): `x1`, `x2`, `x3`, `variant`, `relationsMaster`, `relations`, `footAngleDeg`, `partScale`, `guideVanes`, `chamferEnabled`, `feetEnabled`, `vaneAngleDeg`, `vaneCount` (`ChamberVaneCount`), `outletRatio`, `simplifyGenerator`, `coneChamferEnabled`, and optional overrides `lengthOverride`, `hollowLength`, `wallThickness`, `dFirst`, `dMiddle`, `x4`, `centralDiameter`, `centralHeight`, `domeHeight`, `coneChamferSize`.

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useMemo, useState } from 'react';
+import { Suspense, lazy, useMemo, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader2, Send } from 'lucide-react';
@@ -25,6 +25,7 @@ import {
   chamberFormSchema,
   chamberInputToFormValues,
   computeChamberAutoDims,
+  semiSpiralToggle,
   type ChamberFormValues,
 } from '@/features/chamber/chamberForm';
 import { ChamberSavesMenu } from '@/features/chamber/ChamberSavesMenu';
@@ -82,6 +83,8 @@ export function ChamberPage() {
   // every error/warning surfaces in both places.
   const [buildErrors, setBuildErrors] = useState<string[]>([]);
   const [sendOpen, setSendOpen] = useState(false);
+  // Chamfer state before "Semi-spiral casing" was ticked (null = none saved).
+  const chamferBeforeSpiral = useRef<boolean | null>(null);
   // Semi-spiral quality + derived box of the LAST build (kept in step with `hash`).
   const [lastSpiral, setLastSpiral] = useState<ChamberSpiralSummary | null>(null);
   const build = useBuildChamber();
@@ -283,6 +286,7 @@ export function ChamberPage() {
               setOfferMirror(false);
               setLastBuildInput(null);
               setLastSpiral(null);
+              chamferBeforeSpiral.current = null;
               setBuildWarnings([]);
               setBuildErrors([]);
             }}
@@ -302,11 +306,17 @@ export function ChamberPage() {
             coneChamferEnabled={values.coneChamferEnabled}
             semiSpiral={values.semiSpiral}
             onSemiSpiralChange={(on) => {
-              // The spiral needs Feet off, and its L2/L4 are the corner chamfers
-              // (spec 2026-09-29-semi-spiral-casing section 6 / 10).
-              if (on) {
-                setValue('feetEnabled', false, { shouldValidate: true, shouldDirty: true });
-                setValue('chamferEnabled', false, { shouldDirty: true });
+              // Feet / Chamfer off with the spiral, Chamfer restored when it goes.
+              const next = semiSpiralToggle(on, values, chamferBeforeSpiral.current);
+              chamferBeforeSpiral.current = next.savedChamfer;
+              if (next.set.feetEnabled !== undefined) {
+                setValue('feetEnabled', next.set.feetEnabled, {
+                  shouldValidate: true,
+                  shouldDirty: true,
+                });
+              }
+              if (next.set.chamferEnabled !== undefined) {
+                setValue('chamferEnabled', next.set.chamferEnabled, { shouldDirty: true });
               }
             }}
             autoLengthMm={autoLengthMm}

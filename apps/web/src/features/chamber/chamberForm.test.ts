@@ -6,6 +6,7 @@ import {
   chamberFormSchema,
   chamberInputToFormValues,
   computeChamberAutoDims,
+  semiSpiralToggle,
   type ChamberFormValues,
 } from './chamberForm';
 
@@ -352,5 +353,32 @@ describe('semi-spiral casing (spec 2026-09-29-semi-spiral-casing)', () => {
     });
     expect(saved.semiSpiral).toBe(true);
     expect(saved.spiralFlowVelocity).toBe(0.7);
+  });
+});
+
+describe('semiSpiralToggle (Chamfer off with the spiral, restored when it goes)', () => {
+  it('turns Feet and Chamfer off when the spiral is ticked and remembers Chamfer', () => {
+    expect(semiSpiralToggle(true, { chamferEnabled: true }, null)).toEqual({
+      set: { feetEnabled: false, chamferEnabled: false },
+      savedChamfer: true,
+    });
+  });
+
+  it('restores the Chamfer state saved when the spiral was ticked', () => {
+    expect(semiSpiralToggle(false, { chamferEnabled: false }, true)).toEqual({
+      set: { chamferEnabled: true },
+      savedChamfer: null,
+    });
+    expect(semiSpiralToggle(false, { chamferEnabled: false }, false)).toEqual({
+      set: { chamferEnabled: false },
+      savedChamfer: null,
+    });
+  });
+
+  it('leaves Chamfer alone when nothing was saved (e.g. a save loaded with the spiral on)', () => {
+    expect(semiSpiralToggle(false, { chamferEnabled: false }, null)).toEqual({
+      set: {},
+      savedChamfer: null,
+    });
   });
 });
