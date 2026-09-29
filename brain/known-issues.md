@@ -116,6 +116,8 @@ Implement nothing without an explicit request from the user.
 - **Guide-vane pocket vs Runner case Ø**: fixed 2026-09-29 (spec `2026-09-29-vane-pocket-runner-case-design.md`): a typed Runner case Ø below LE Ø used to erase the runner case silently (and the feet cut the blades), a thin ring (< 10 mm) let the shroud casing poke out and split its wall between `cylinder_walls`, `shroud` and `walls`. Now refused below LE Ø − 5 mm, snapped flush within 5 mm (warning), casing overshoot capped at half the ring, deterministic junction labels.
 - **Semi-spiral tool**: approved spec and reference implementation in `documents/Semi-spiral-creation/` (added on 2026-09-22), not yet integrated into the application.
 
+- **Stop during run setup (to verify)**: while writing the WS-F tests (2026-09-29, native Windows), a Stop sent right after a meshing run started, before its first tool was live, seemed to be lost and the run hung. Not reproduced with the existing meshing tests; the stop logic reads correct. To verify on the Debian server.
+
 ## 7. Findings from the 2026-09-28 mapping (code reading, not reproduced)
 
 Noted while reading the entire code base to build the codemaps. **None has been verified at runtime**: confirm (red test) before fixing. Fix nothing without a request.

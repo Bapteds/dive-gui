@@ -125,6 +125,8 @@ VANE_SHROUD_ELL_A = 0.160
 VANE_SHROUD_ELL_B = 0.119
 
 PATCH_ORDER = ("inlet", "outlet", "cylinder_walls", "walls")
+# Keep aligned with CHAMBER_PATCH_TYPES in packages/shared (the Meshing -> project
+# hand-off forces these types; apps/api/tests/chamberPatchTypes.test.ts checks parity).
 PATCH_TYPES = {
     "inlet": "patch",
     "outlet": "patch",
