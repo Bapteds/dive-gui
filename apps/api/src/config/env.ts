@@ -201,6 +201,11 @@ const envSchema = z
     MIRROR_STEP_SCRIPT: z.string().default(''),
     // Wall-clock timeout (ms) for one chamber build (CadQuery boolean + tessellate).
     CHAMBER_BUILD_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
+    // Wall-clock timeout (ms) for one semi-spiral casing optimisation
+    // (scripts/designSemiSpiral.py, numpy + scipy, same interpreter as the
+    // builder). 30 to 90 s per run; the result is cached under
+    // <STORAGE_DIR>/chamber-spiral/, so only a new set of spiral inputs pays it.
+    CHAMBER_SPIRAL_TIMEOUT_MS: z.coerce.number().int().positive().default(300000),
     // --- Draft-tube inlet profile (boundary-condition overlay) ----------------
     // The DraftTube object type maps a runner-exit velocity profile onto its inlet
     // via timeVaryingMappedFixedValue, which reads constant/boundaryData (NOT a CSV

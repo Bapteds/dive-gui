@@ -37,10 +37,11 @@ function Harness({
   relationsMaster?: boolean;
 }) {
   const values: ChamberFormValues = { ...CHAMBER_FORM_DEFAULTS, ...defaults };
-  const { register, handleSubmit, formState } = useForm<ChamberFormValues>({
+  const { register, handleSubmit, formState, setValue, watch } = useForm<ChamberFormValues>({
     resolver: zodResolver(chamberFormSchema),
     defaultValues: values,
   });
+  const semiSpiral = watch('semiSpiral');
   return (
     <ChamberInputsForm
       register={register}
@@ -49,6 +50,15 @@ function Harness({
       isBuilding={false}
       variant={variant ?? values.variant}
       simplifyGenerator={values.simplifyGenerator}
+      coneChamferEnabled={values.coneChamferEnabled}
+      semiSpiral={semiSpiral}
+      onSemiSpiralChange={(on) => {
+        // As ChamberPage: the spiral needs Feet off, and its L2/L4 are the chamfers.
+        if (on) {
+          setValue('feetEnabled', false);
+          setValue('chamferEnabled', false);
+        }
+      }}
       autoLengthMm={8889}
       autoDims={AUTO_DIMS}
       relationsMaster={relationsMaster}
@@ -65,9 +75,7 @@ describe('ChamberInputsForm', () => {
     expect(screen.queryByLabelText('Generator Ø (mm)')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Dome height (mm)')).not.toBeInTheDocument();
 
-    rerender(
-      <Harness onValid={() => {}} variant="hollow" defaults={{ variant: 'hollow' }} />,
-    );
+    rerender(<Harness onValid={() => {}} variant="hollow" defaults={{ variant: 'hollow' }} />);
     expect(screen.getByLabelText('Cone length (mm)')).toBeInTheDocument();
     expect(screen.getByLabelText('Wall thickness (mm)')).toBeInTheDocument();
     expect(screen.getByLabelText('Generator Ø (mm)')).toBeInTheDocument();
@@ -140,7 +148,9 @@ describe('ChamberInputsForm', () => {
     const { rerender } = render(<Harness onValid={() => {}} />);
     const defaultOn = CHAMBER_RELATIONS.filter((rel) => rel.defaultOn).length;
     expect(
-      screen.getByRole('button', { name: new RegExp(`\\(${defaultOn}/${CHAMBER_RELATIONS.length} on\\)`) }),
+      screen.getByRole('button', {
+        name: new RegExp(`\\(${defaultOn}/${CHAMBER_RELATIONS.length} on\\)`),
+      }),
     ).toBeEnabled();
 
     rerender(<Harness onValid={() => {}} relationsMaster={false} />);
@@ -165,7 +175,9 @@ describe('ChamberInputsForm', () => {
     render(<Harness onValid={onValid} />);
     expect(screen.getByLabelText('Generator height (mm)')).toBeInTheDocument();
     expect(
-      screen.getByText('Blank = through the chamber top ≈ 2700 mm (min ≈ 1446 + dome 289 = 1736 mm); a value closes it below'),
+      screen.getByText(
+        'Blank = through the chamber top ≈ 2700 mm (min ≈ 1446 + dome 289 = 1736 mm); a value closes it below',
+      ),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
@@ -198,7 +210,9 @@ describe('ChamberInputsForm', () => {
     );
     expect(screen.getByLabelText('Generator height (mm)')).toBeInTheDocument();
     expect(
-      screen.getByText(/Blank = through the chamber top ≈ 2700 mm \(min ≈ 1446 \+ dome 289 = 1736 mm\)/),
+      screen.getByText(
+        /Blank = through the chamber top ≈ 2700 mm \(min ≈ 1446 \+ dome 289 = 1736 mm\)/,
+      ),
     ).toBeInTheDocument();
     expect(screen.queryByLabelText('Dome height (mm)')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Generator Ø (mm)')).toBeInTheDocument();
@@ -220,6 +234,68 @@ describe('ChamberInputsForm', () => {
     expect((onValid.mock.calls[0][0] as ChamberFormValues).simplifyGenerator).toBe(true);
   });
 
+  it.each(['stepped', 'hollow'] as const)(
+    'offers Cone chamfer in the %s design, with its size field only when ticked',
+    (variant) => {
+      const { unmount } = render(
+        <Harness onValid={() => {}} variant={variant} defaults={{ variant }} />,
+      );
+      const box = screen.getByRole('checkbox', { name: /Cone chamfer/ });
+      expect(box).not.toBeChecked();
+      expect(screen.queryByLabelText('Cone chamfer size (mm)')).not.toBeInTheDocument();
+      unmount();
+
+      render(
+        <Harness
+          onValid={() => {}}
+          variant={variant}
+          defaults={{ variant, coneChamferEnabled: true }}
+        />,
+      );
+      expect(screen.getByLabelText('Cone chamfer size (mm)')).toBeInTheDocument();
+      expect(screen.getByText('Blank = 50 mm')).toBeInTheDocument();
+    },
+  );
+
+  it.each(['stepped', 'hollow'] as const)(
+    'submits the cone chamfer flag and its default 50 mm size in the %s design',
+    async (variant) => {
+      const onValid = vi.fn();
+      render(
+        <Harness
+          onValid={onValid}
+          variant={variant}
+          defaults={{ variant, coneChamferEnabled: true }}
+        />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
+      await waitFor(() => expect(onValid).toHaveBeenCalledTimes(1));
+      const submitted = onValid.mock.calls[0][0] as ChamberFormValues;
+      expect(submitted.coneChamferEnabled).toBe(true);
+      expect(submitted.coneChamferSize).toBe(50);
+    },
+  );
+
+  it.each(['stepped', 'hollow'] as const)(
+    'offers a Guide vane count select (16 or 18) in the %s design',
+    (variant) => {
+      render(<Harness onValid={() => {}} variant={variant} defaults={{ variant }} />);
+      const select = screen.getByLabelText('Guide vane count') as HTMLSelectElement;
+      expect(select.tagName).toBe('SELECT');
+      expect(Array.from(select.options).map((o) => o.value)).toEqual(['16', '18']);
+      expect(select.value).toBe('16');
+    },
+  );
+
+  it('submits the chosen guide vane count as a number', async () => {
+    const onValid = vi.fn();
+    render(<Harness onValid={onValid} />);
+    fireEvent.change(screen.getByLabelText('Guide vane count'), { target: { value: '18' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
+    await waitFor(() => expect(onValid).toHaveBeenCalledTimes(1));
+    expect((onValid.mock.calls[0][0] as ChamberFormValues).vaneCount).toBe(18);
+  });
+
   it('submits a typed Power (x4) as a number and a blank one as undefined (auto)', async () => {
     const onValid = vi.fn();
     render(<Harness onValid={onValid} variant="hollow" defaults={{ variant: 'hollow' }} />);
@@ -231,5 +307,46 @@ describe('ChamberInputsForm', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
     await waitFor(() => expect(onValid).toHaveBeenCalledTimes(2));
     expect((onValid.mock.calls[1][0] as ChamberFormValues).x4).toBe(2000);
+  });
+
+  describe('semi-spiral casing', () => {
+    it('offers the checkbox in both designs', () => {
+      const { rerender } = render(<Harness onValid={() => {}} />);
+      expect(screen.getByLabelText(/Semi-spiral casing/)).toBeInTheDocument();
+      rerender(<Harness onValid={() => {}} variant="hollow" defaults={{ variant: 'hollow' }} />);
+      expect(screen.getByLabelText(/Semi-spiral casing/)).toBeInTheDocument();
+    });
+
+    it('unchecks and disables Feet and Chamfer, hides Length and shows the casing flow velocity', async () => {
+      render(<Harness onValid={() => {}} />);
+      expect(screen.getByLabelText('Length (mm)')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Casing flow velocity (m/s)')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByLabelText(/Semi-spiral casing/));
+      await waitFor(() =>
+        expect(screen.getByLabelText('Casing flow velocity (m/s)')).toBeInTheDocument(),
+      );
+      const feet = screen.getByLabelText(/^Feet/) as HTMLInputElement;
+      const chamfer = screen.getByLabelText(/^Chamfer/) as HTMLInputElement;
+      expect(feet).toBeDisabled();
+      expect(feet.checked).toBe(false);
+      expect(chamfer).toBeDisabled();
+      expect(chamfer.checked).toBe(false);
+      expect(screen.queryByLabelText('Length (mm)')).not.toBeInTheDocument();
+      expect(screen.getByText(/Off while Semi-spiral casing is on/)).toBeInTheDocument();
+    });
+
+    it('submits the flag, Feet off and the velocity', async () => {
+      const onValid = vi.fn();
+      render(<Harness onValid={onValid} />);
+      fireEvent.click(screen.getByLabelText(/Semi-spiral casing/));
+      const velocity = await screen.findByLabelText('Casing flow velocity (m/s)');
+      fireEvent.change(velocity, { target: { value: '0.8' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
+      await waitFor(() => expect(onValid).toHaveBeenCalledTimes(1));
+      const submitted = onValid.mock.calls[0][0] as ChamberFormValues;
+      expect(submitted.semiSpiral).toBe(true);
+      expect(submitted.feetEnabled).toBe(false);
+      expect(submitted.spiralFlowVelocity).toBe(0.8);
+    });
   });
 });

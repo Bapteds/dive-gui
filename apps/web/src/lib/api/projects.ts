@@ -25,6 +25,9 @@ import type {
   ListProjectsResponse,
   MeshBackupInfo,
   MeshBackupResponse,
+  MeshFromMeshingRequest,
+  MeshFromMeshingResponse,
+  MeshFromMeshingResult,
   MeshManifest,
   MeshManifestResponse,
   MeshPatchEdit,
@@ -290,6 +293,22 @@ export async function saveMeshBackup(id: string): Promise<MeshBackupInfo> {
 export async function restoreMeshBackup(id: string): Promise<MeshManifest> {
   const data = await apiClient.post<MeshManifestResponse>(`/projects/${id}/mesh/backup/restore`);
   return data.manifest;
+}
+
+/**
+ * Send a meshing session's polyMesh into a project: as the case mesh (`case`,
+ * replaces it, the original case is backed up once) or as a new mesh-library
+ * part (`library`). Unwraps the `{ result }` envelope.
+ */
+export async function importMeshFromMeshing(
+  id: string,
+  body: MeshFromMeshingRequest,
+): Promise<MeshFromMeshingResult> {
+  const data = await apiClient.post<MeshFromMeshingResponse>(
+    `/projects/${id}/mesh/from-meshing`,
+    body,
+  );
+  return data.result;
 }
 
 // ---- OpenFOAM -> CGNS export ("Export" tab) -------------------------------

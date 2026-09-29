@@ -1,16 +1,20 @@
 import { z } from 'zod';
 import {
+  CHAMBER_CONE_CHAMFER_SIZE_MM,
   CHAMBER_D_FIRST_OVER_LAST,
   CHAMBER_D_MIDDLE_OVER_LAST,
   CHAMBER_DIMENSION_MAX_MM,
   CHAMBER_INPUT_RANGES,
   CHAMBER_RELATIONS,
+  CHAMBER_SPIRAL_FLOW_RANGE,
+  CHAMBER_VANE_COUNT_DEFAULT,
+  CHAMBER_VANE_COUNTS,
   CHAMBER_VARIANTS,
   CHAMBER_WALL_THICKNESS_MM,
   CHAMBER_X4_MAX,
   computeChamberGeneratorDims,
 } from '@dive/shared';
-import type { ChamberInput, ChamberVariant } from '@dive/shared';
+import type { ChamberInput, ChamberVaneCount, ChamberVariant } from '@dive/shared';
 
 /**
  * Form contract for the chamber inputs, kept apart from the component file so
@@ -41,6 +45,8 @@ export interface ChamberFormValues {
   feetEnabled: boolean;
   /** Absolute guide-vane open angle (deg, 45..55; asset baked at 50°); each blade swings about its spindle. Guide-vane builds only. */
   vaneAngleDeg: number;
+  /** Number of guide vanes (16 or 18; 18 = chord x 16/18, same solidity). Guide-vane builds only. */
+  vaneCount: ChamberVaneCount;
   /** Outlet inner/outer diameter ratio (0.35..0.50, default 0.45). Guide-vane builds only. */
   outletRatio: number;
   /** Box length along Y (mm); blank => auto 2 x width. */
@@ -49,6 +55,10 @@ export interface ChamberFormValues {
   hollowLength?: number;
   /** Hollow wall thickness (mm); defaults to CHAMBER_WALL_THICKNESS_MM. */
   wallThickness?: number;
+  /** Cone chamfer: a 45° foot chamfer on the lower outer edge of the LE part, widened by the size above it. Both designs. */
+  coneChamferEnabled: boolean;
+  /** Cone chamfer size (mm, both legs = the widening; With cone: at most Cone length minus Wall thickness); blank => 50 on the server. */
+  coneChamferSize?: number;
   /** Runner case (first cylinder) Ø (mm); blank => auto from D_last. Both variants. */
   dFirst?: number;
   /** Guide vanes / middle cylinder Ø (mm); blank => auto from D_last. Both variants. */
@@ -63,6 +73,10 @@ export interface ChamberFormValues {
   centralHeight?: number;
   /** Dome height (mm); blank => Gen Dim fit from the resolved Ø. Hollow variant only. */
   domeHeight?: number;
+  /** Semi-spiral casing: the footprint follows the optimised spiral + tongue. Both designs; needs Feet off. */
+  semiSpiral: boolean;
+  /** Casing flow velocity (m/s, 0.3..3, default 0.922). Read only while semiSpiral is on. */
+  spiralFlowVelocity: number;
 }
 
 // A user-entered dimension (mm): strictly positive and bounded, mirroring the
@@ -103,6 +117,9 @@ export const chamberFormSchema = z
       .number({ invalid_type_error: 'Enter a number' })
       .min(45, 'Min 45°')
       .max(55, 'Max 55°'),
+    vaneCount: z.union([z.literal(CHAMBER_VANE_COUNTS[0]), z.literal(CHAMBER_VANE_COUNTS[1])], {
+      errorMap: () => ({ message: 'Choose 16 or 18 vanes' }),
+    }),
     outletRatio: z
       .number({ invalid_type_error: 'Enter a number' })
       .min(0.35, 'Min 0.35')
@@ -110,6 +127,8 @@ export const chamberFormSchema = z
     lengthOverride: optionalPositive,
     hollowLength: optionalPositive,
     wallThickness: optionalPositive,
+    coneChamferEnabled: z.boolean(),
+    coneChamferSize: optionalPositive,
     dFirst: optionalPositive,
     dMiddle: optionalPositive,
     simplifyGenerator: z.boolean(),
@@ -121,14 +140,47 @@ export const chamberFormSchema = z
     centralDiameter: optionalPositive,
     centralHeight: optionalPositive,
     domeHeight: optionalPositive,
+    semiSpiral: z.boolean(),
+    spiralFlowVelocity: z
+      .number({ invalid_type_error: 'Enter a number' })
+      .min(CHAMBER_SPIRAL_FLOW_RANGE.min, `Min ${CHAMBER_SPIRAL_FLOW_RANGE.min} m/s`)
+      .max(CHAMBER_SPIRAL_FLOW_RANGE.max, `Max ${CHAMBER_SPIRAL_FLOW_RANGE.max} m/s`),
   })
   .superRefine((v, ctx) => {
+    // Mirrors the API refusal (spec 2026-09-29-semi-spiral-casing): the form
+    // unticks Feet when the spiral is ticked, so this only guards a stale state.
+    if (v.semiSpiral && v.feetEnabled) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['feetEnabled'],
+        message: 'The semi-spiral casing needs Feet off for now.',
+      });
+    }
     if (v.variant === 'hollow' && v.hollowLength == null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['hollowLength'],
         message: 'Enter a cone length: the With cone design needs one.',
       });
+    }
+    // Cone chamfer (spec 2026-09-29-cone-foot-chamfer): the With cone bound
+    // (Cone length minus Wall thickness), for instant feedback. The Closed
+    // generator bound depends on H Kammer and LEB, so the builder alone checks it.
+    if (
+      v.variant === 'hollow' &&
+      v.coneChamferEnabled &&
+      v.coneChamferSize != null &&
+      v.hollowLength != null
+    ) {
+      const room = v.hollowLength - (v.wallThickness ?? CHAMBER_WALL_THICKNESS_MM);
+      // room <= 0 is the builder's own Cone length refusal.
+      if (room > 0 && v.coneChamferSize > room) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['coneChamferSize'],
+          message: `Must be at most Cone length minus Wall thickness (${Math.round(room)} mm)`,
+        });
+      }
     }
   });
 
@@ -148,10 +200,13 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   chamferEnabled: true,
   feetEnabled: true,
   vaneAngleDeg: 50,
+  vaneCount: CHAMBER_VANE_COUNT_DEFAULT,
   outletRatio: 0.45,
   lengthOverride: undefined,
   hollowLength: 200,
   wallThickness: CHAMBER_WALL_THICKNESS_MM,
+  coneChamferEnabled: false,
+  coneChamferSize: CHAMBER_CONE_CHAMFER_SIZE_MM,
   dFirst: undefined,
   dMiddle: undefined,
   simplifyGenerator: false,
@@ -159,6 +214,8 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   centralDiameter: undefined,
   centralHeight: undefined,
   domeHeight: undefined,
+  semiSpiral: false,
+  spiralFlowVelocity: CHAMBER_SPIRAL_FLOW_RANGE.default,
 };
 
 /** Recursively sort object keys so serialization ignores property order. */
@@ -208,10 +265,15 @@ export function chamberInputToFormValues(input: ChamberInput): ChamberFormValues
     chamferEnabled: input.chamferEnabled ?? CHAMBER_FORM_DEFAULTS.chamferEnabled,
     feetEnabled: input.feetEnabled ?? CHAMBER_FORM_DEFAULTS.feetEnabled,
     vaneAngleDeg: input.vaneAngleDeg ?? CHAMBER_FORM_DEFAULTS.vaneAngleDeg,
+    // Saves made before the vane count existed load as the asset's 16 vanes.
+    vaneCount: input.vaneCount ?? CHAMBER_FORM_DEFAULTS.vaneCount,
     outletRatio: input.outletRatio ?? CHAMBER_FORM_DEFAULTS.outletRatio,
     lengthOverride: input.lengthOverride,
     hollowLength: input.hollowLength,
     wallThickness: input.wallThickness,
+    // Saves made before the cone chamfer existed load with it off, at 50 mm.
+    coneChamferEnabled: input.coneChamferEnabled ?? CHAMBER_FORM_DEFAULTS.coneChamferEnabled,
+    coneChamferSize: input.coneChamferSize ?? CHAMBER_FORM_DEFAULTS.coneChamferSize,
     dFirst: input.dFirst,
     dMiddle: input.dMiddle,
     simplifyGenerator: input.simplifyGenerator ?? CHAMBER_FORM_DEFAULTS.simplifyGenerator,
@@ -219,6 +281,9 @@ export function chamberInputToFormValues(input: ChamberInput): ChamberFormValues
     centralDiameter: input.centralDiameter,
     centralHeight: input.centralHeight,
     domeHeight: input.domeHeight,
+    // Saves made before the semi-spiral casing existed load with it off.
+    semiSpiral: input.semiSpiral ?? CHAMBER_FORM_DEFAULTS.semiSpiral,
+    spiralFlowVelocity: input.spiralFlowVelocity ?? CHAMBER_FORM_DEFAULTS.spiralFlowVelocity,
   };
 }
 
@@ -284,5 +349,32 @@ export function computeChamberAutoDims(
       top && scale != null && top.heightFinal != null && top.lebFinal != null
         ? (top.heightFinal - scale * top.lebFinal) / scale
         : null,
+  };
+}
+
+/**
+ * Side effects of ticking / unticking "Semi-spiral casing" on the other options.
+ * Ticked: Feet and Chamfer go off (the spiral needs Feet off and its cut sides
+ * are the corner chamfers, spec 2026-09-29-semi-spiral-casing sections 6 / 10),
+ * and the Chamfer state is remembered. Unticked: Chamfer gets that state back.
+ * Without a remembered state (a save loaded with the spiral on) Chamfer is left alone.
+ */
+export function semiSpiralToggle(
+  on: boolean,
+  current: Pick<ChamberFormValues, 'chamferEnabled'>,
+  savedChamfer: boolean | null,
+): {
+  set: Partial<Pick<ChamberFormValues, 'feetEnabled' | 'chamferEnabled'>>;
+  savedChamfer: boolean | null;
+} {
+  if (on) {
+    return {
+      set: { feetEnabled: false, chamferEnabled: false },
+      savedChamfer: current.chamferEnabled,
+    };
+  }
+  return {
+    set: savedChamfer === null ? {} : { chamferEnabled: savedChamfer },
+    savedChamfer: null,
   };
 }

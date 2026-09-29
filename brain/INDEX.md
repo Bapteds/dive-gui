@@ -1,6 +1,6 @@
 # Index of every repository file
 
-> One line per file (544 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
+> One line per file (587 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
 
 Detail of a code file: open the sheet shown and search for the `## path/to/file` section. Documents: the description is their title and introduction line.
 
@@ -99,6 +99,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/scripts/bakeVaneBladeProfile.py` : offline (one-time) tool that extracts the clean NURBS vane profile from the SolidWorks STEP and writes it to `assets/guideVanes_blade_profile.json`, registered onto the mid-height section of `guideVanes_blade.stl`. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/buildChamber.py` : "one-shot" geometry builder of the Chamber Creation feature. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/csv_to_boundaryData.py` : converts a velocity profile CSV (ParaView / CFX-Post export at the runner outlet) into the `constant/boundaryData/<patch>/` format read by `timeVaryingMappedFixedValue`. · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/designSemiSpiral.py` : semi-spiral casing designer (spec `brain/specs/2026-09-29-semi-spiral-casing-design.md` §8): a numpy + scipy port of `documents/Semi-spiral-creation/reference_semi_spiral.py`. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/extractPatches.py` : reads the boundary patches of an OpenFOAM case and produces a compact GLB + JSON manifest + `edges.bin` for the three.js viewer. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/mirrorStep.py` : produces the mirrored STEP of a chamber (YZ plane, x to -x, then translation by `xmin + xmax`) for the "Change rotational direction" action: same bounding box, only the chirality changes. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/preprocessVanes.py` : offline (one-time) tool that splits `GuideVanes50DegOpen.stl` (17 components: 16 blades + 1 shell) into committed assets. · [api-scripts](codemap/api-scripts.md)
@@ -117,14 +118,24 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 
 - `apps/api/scripts/tests/conftest.py` : infrastructure of the real geometry suite (no mocks). · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/tests/test_build_chamber.py` : the guarantees of `buildChamber.py` the API depends on: output contract (last stdout line `OK:`; `KO:` + exit code 1), watertight STL, golden volume (`GOLDEN`, tolerance `VOL_RTOL = 5e-3`), names and order of the manifes … · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/tests/test_design_semi_spiral.py` : `designSemiSpiral.py` with numpy + scipy only (runs without CadQuery: `conftest.py` skips only the builder tests). · [api-scripts](codemap/api-scripts.md)
 
 ## `apps/api/scripts/tests/params`
 
 - `apps/api/scripts/tests/params/hollow-vanes-overrides.json` : Real parameters (`hollow` variant, `guideVanes: true`, `feetEnabled: false`, `partScale` 1, overrides `dFirst` 2.92 / `dMiddle` 2.23126, `outletOuterD` 1.68, `outletRatio` 0.45, `simplifyGenerator: false`). · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/tests/params/hollow-vanes-spiral.json` : `hollow-vanes.json` (partScale 0.7944) with the same flags and a frozen spiral (Q 8, 0.922 m/s, H 2.7, D_LE 2.4419, max_width 6.1; width 4.75, 0.3004 m² at 193.8°). · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/tests/params/hollow-vanes.json` : Vaned `hollow` variant, feet enabled, `partScale` 0.7944 (the maximum that fits in `height` 2.7; at 1 the build is refused), `outletOuterD` 1.68, `outletRatio` 0.45. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/tests/params/stepped-feet-off.json` : Identical to `stepped.json` with `feetEnabled: false` (used for the feet volume delta). · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/tests/params/stepped-spiral.json` : `stepped-vanes.json` with `feetEnabled: false`, `semiSpiral: true` and `spiral` = frozen tool result (`inputs` Q 8 m3/s, 0.922 m/s, H 3.954, D_LE 2.7771 (= 1.14703 × dLast), max_width 4.4444; `vertices` V0..V9 in the too … · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/tests/params/stepped-vanes-18.json` : `stepped-vanes.json` + `"vaneCount": 18` (spec 2026-09-29-guide-vane-count): 18 blades, chord × 16/18. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/tests/params/stepped-vanes.json` : `stepped` variant with `guideVanes: true`; asymmetric chamfer 2 (`chamferLength2` 0.90435, `chamferWidth2` 0.63466) and `distFromEnd` 2.19593. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/tests/params/stepped.json` : Reference `stepped` configuration (no vanes, feet at 40°, symmetric chamfers 1.29158). · [api-scripts](codemap/api-scripts.md)
+
+## `apps/api/scripts/tests/spiral_golden`
+
+- `apps/api/scripts/tests/spiral_golden/case_A.json` : Golden output of the semi-spiral tool for tool-spec acceptance case A (160°, width 6.05, 0.4613 m² at 237.5°): `scipy` (versions that reproduce it: 1.18.0, 1.18.1), `inputs`, `vertices` (id, x, y), `dimensions` … · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/tests/spiral_golden/case_B.json` : Same for case B (150°, width 6.15 width-bound, 0.5741 m² at 150°). · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/tests/spiral_golden/case_C.json` : Same for case C (Ø 2.92, c_flow 0.66, width 6.90 width-bound, 0.6267 m² at 160°). · [api-scripts](codemap/api-scripts.md)
 
 ## `apps/api/src`
 
@@ -282,6 +293,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/tests/cfMeshDicts.test.ts` : `resolveMaxCellSize` (configured size, otherwise bounds diagonal/40, `null` without size or bounds for an FMS input) and `renderMeshDict` from `src/lib/cfMeshDicts`: `surfaceFile` and `maxCellSize`, optional entries omit … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/chamber.test.ts` : Chamber Creation, `POST /api/v1/chamber/build` and the hash-based reads (`/chamber/:hash/manifest|geometry|edges|export/:kind`). · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/chamberModel.test.ts` : `computeChamberOutputs` (12 X1 to X3 fits with relations off, `linear`/`power` shapes, snap to the 50 mm `CHAMBER_GRID_MM` grid, default structural relations `height = LEB + LEOW`, `LEB = 2 × HLE`, chamfer chain … · [api-tests](codemap/api-tests.md)
+- `apps/api/tests/chamberPatchTypes.test.ts` : contract parity: `CHAMBER_PATCH_TYPES` (`@dive/shared`) equals the `PATCH_TYPES` dict of `apps/api/scripts/buildChamber.py`. · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/chamberSaves.test.ts` : `/api/v1/chamber/saves` (named, shared snapshots of the build body): 401 on read and create, creation with trimmed name and `owner { id, fullName }`, snapshot normalized by the schema (defaults `variant: 'stepped'` … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/conversion.test.ts` : CGNS upload (`POST/GET/DELETE /projects/:id/cgns`, 400 `INVALID_CGNS` for non-`.cgns`, 404 for an invisible project or a missing file) and the `POST /projects/:id/cgns/convert` pipeline: steps `cgnsToVtk` → `vtkToFoam` → … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/dashboard.test.ts` : `GET /api/v1/dashboard`: shape of server metrics (`cpuPercent` between 0 and 100, `cores > 0`, `memTotalBytes > 0`), `activeRuns` with `projectTitle`, `recentRuns`, grouped `runCounts`, `recentProjects` with per-project … · [api-tests](codemap/api-tests.md)
@@ -290,12 +302,13 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/tests/globalSetup.ts` : vitest `globalSetup`, executed once before the whole suite. · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/helpers.ts` : utilities shared by all integration tests: single app instance, database reset, user factories, tokens, and the `logicalCommand` tool for fake OpenFOAM runners. · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/mesh.test.ts` : project mesh viewer (Visualize tab) and editing of the case mesh. · [api-tests](codemap/api-tests.md)
+- `apps/api/tests/meshFromMeshing.test.ts` : `POST /projects/:id/mesh/from-meshing` (WS-F), 14 tests: 401; 404 for a stranger (case untouched), unknown session; 422 bad target, unsafe `sessionId`, blank name; super-admin allowed; 409 `MESH_IN_PROGRESS` via … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/meshPatches.test.ts` : Pure unit tests of `src/lib/meshPatches`: `parseFmsPatches` reads names and types from the FMS header (`[]` without a patch block); `parseStlSolidNames` lists the `solid`s of a multi-solid ASCII STL ( … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/meshTransform.test.ts` : `transformMeshPoints` and `isIdentityTransform` from `src/lib/meshTransform`, the server half of the parity proof with the three.js preview. · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/meshes.test.ts` : multi-mesh library and assembly pipeline (`/projects/:id/meshes/**`). · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/meshing.test.ts` : standalone Meshing (`/api/v1/meshing/**`, STL → snappyHexMesh or cfMesh → polyMesh). · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/meshingStorage.test.ts` : helpers of `src/lib/meshingStorage`: `slugifySessionName` (lowercase, accents removed, fallback `session`), `sanitizeStlName` (safe basename, `.stl` extension forced, traversal removed, fallback `surface.stl`) … · [api-tests](codemap/api-tests.md)
-- `apps/api/tests/openfoamCase.test.ts` : `collapseBoundaryToSinglePatch` (a single `defaultFaces`, `nFaces` summed, minimum `startFace`, header kept), `removeEmptyBoundaryPatches` (removes 0-face patches and renumbers, including dashed names) … · [api-tests](codemap/api-tests.md)
+- `apps/api/tests/openfoamCase.test.ts` : `collapseBoundaryToSinglePatch` (a single `defaultFaces`, `nFaces` summed, minimum `startFace`, header kept), `removeEmptyBoundaryPatches` (removes 0-face patches and renumbers, including dashed names; `only` filter) … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/projectFiles.test.ts` : case files of a project (`/projects/:id/files/**`): empty tree, 401, 404 for an outsider; folder import (bare polyMesh placed under `constant/polyMesh/`); 400 `NO_FILES_UPLOADED`; zip import; 400 `INVALID_ARCHIVE` for a … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/projects.test.ts` : `POST /api/v1/projects` (401, 201 with `ownerId` not serialized but actually stored, 422 blank title), `PATCH /projects/:id` (rename, 422, 404 for an outsider without leaking existence), `GET /projects` (only one's own p … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/projectsAccess.test.ts` : visibility (project hidden from a non-member, visible to an added collaborator, super-admin sees everything), `GET /projects/:id` (404 `NOT_FOUND` for a non-member, `owner` and `collaborators` for the owner), `DELETE` (2 … · [api-tests](codemap/api-tests.md)
@@ -467,7 +480,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/web/src/features/chamber/ChamberViewer.tsx` : 3D preview of a build (colored per OpenFOAM patch), reusing `MeshScene` and `PatchTable` from Visualize. · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
 - `apps/web/src/features/chamber/SendToMeshingDialog.test.tsx` : default "new" mode (name `chamber-<first 8 characters of the hash>`, engine `snappy`), closing and navigation to `/meshing/sess-new`; `cfmesh` engine; existing mode without a selection sends nothing; existing body; copyF … · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
 - `apps/web/src/features/chamber/SendToMeshingDialog.tsx` : transfers the build (by `hash`) to a meshing session, in three modes: new session (name + engine), existing session, copy of a session's setup with the geometry injected. · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
-- `apps/web/src/features/chamber/chamberForm.test.ts` : valid defaults; cone length required in hollow only; range guards (`footAngleDeg` 0..180, `partScale` ]0,5], `vaneAngleDeg` 45..55, `outletRatio` 0.35..0.50); overrides optional but positive; `chamberInputToFormValues` r … · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
+- `apps/web/src/features/chamber/chamberForm.test.ts` : valid defaults; cone length required in hollow only; range guards (`footAngleDeg` 0..180, `partScale` ]0,5], `vaneAngleDeg` 45..55, `outletRatio` 0.35..0.50, `vaneCount` 16/18 with "Choose 16 or 18 vanes"); overrides opt … · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
 - `apps/web/src/features/chamber/chamberForm.ts` : form contract of the chamber inputs, separated from the component for fast-refresh. · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
 - `apps/web/src/features/chamber/useChamber.ts` : TanStack Query hooks of Chamber Creation. · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
 - `apps/web/src/features/chamber/useChamberSaves.ts` : saved-build hooks. A single shared list (small: names + snapshots); each mutation invalidates it. · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
@@ -499,6 +512,8 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/web/src/features/meshing/CfMeshConfigForm.perPatch.test.tsx` : the tri-state semantics of per-patch layers in `CfMeshConfigForm` (unchecked: `noLayerPatches`; checked without Customize: nothing, mirror of the global block; Customize: a `perPatch` entry), the read-only display of "li … · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
 - `apps/web/src/features/meshing/CfMeshConfigForm.tsx` : form for the cfMesh (`cartesianMesh`) parameters of a session. · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
 - `apps/web/src/features/meshing/MeshResultViewer.tsx` : 3D preview of a session's result mesh. · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
+- `apps/web/src/features/meshing/SendToProjectDialog.test.tsx` : 9 tests: visible projects listed, `Case mesh` default with its warning, case body + navigation to `/projects/:id?view=visualize`, "Choose a project." without a pick, library target (name prefilled with the session name … · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
+- `apps/web/src/features/meshing/SendToProjectDialog.tsx` : dialog of the meshing session page that sends the session's polyMesh into a project (WS-F). · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
 - `apps/web/src/features/meshing/SnappyConfigForm.tsx` : form for the snappyHexMesh parameters of a session. · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
 - `apps/web/src/features/meshing/StlViewer.tsx` : client-side three.js preview of a session's uploaded STLs, without server rendering (works without OpenFOAM). · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
 - `apps/web/src/features/meshing/useMeshing.ts` : all TanStack Query hooks of the Meshing feature. · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
@@ -529,6 +544,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/web/src/features/projects/useBoundaryConditions.ts` : Hook for the BC overlay. · [web-features-projects](codemap/web-features-projects.md)
 - `apps/web/src/features/projects/useCaseFiles.ts` : TanStack Query hooks for the tree and the content of the OpenFOAM case files. · [web-features-projects](codemap/web-features-projects.md)
 - `apps/web/src/features/projects/useConversion.ts` : hooks for a project's CGNS sources and for the CGNS to OpenFOAM conversion. · [web-features-projects](codemap/web-features-projects.md)
+- `apps/web/src/features/projects/useMeshes.fromMeshing.test.tsx` : `useImportMeshFromMeshing`: case target removes the case `manifest`/`glb`/`edges`, sets `files` from `result.entries`, invalidates `meshes`, `assembly`, `mergePlan`, `runnable`, `mesh/backup`; library target sets … · [web-features-projects](codemap/web-features-projects.md)
 - `apps/web/src/features/projects/useMeshes.ts` : hooks for the project's mesh library, the merge pipeline and the applied assembly. · [web-features-projects](codemap/web-features-projects.md)
 - `apps/web/src/features/projects/useProjects.ts` : CRUD hooks for projects and collaborators. · [web-features-projects](codemap/web-features-projects.md)
 
@@ -607,7 +623,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/web/src/pages/LoginPage.tsx` : `/login` sign-in screen: `bg-blueprint` background, `rounded-lg shadow-md` `max-w-[400px]` card, `BrandLockup`, email and password fields, full-width CTA. · [web-core](codemap/web-core.md)
 - `apps/web/src/pages/MeshingPage.tsx` : list and creation of meshing sessions (`/meshing`). · [web-core](codemap/web-core.md)
 - `apps/web/src/pages/MeshingSessionPage.tsx` : session detail (`/meshing/:id`): surface management, engine configuration, background execution with live log, report, resulting mesh, download, deletion. · [web-core](codemap/web-core.md)
-- `apps/web/src/pages/ProjectDetailPage.test.tsx` : disabling/enabling of the Visualize and Solver tabs depending on whether a polyMesh exists; opening a tab replaces the Detail body. · [web-core](codemap/web-core.md)
+- `apps/web/src/pages/ProjectDetailPage.test.tsx` : disabling/enabling of the Visualize and Solver tabs depending on whether a polyMesh exists; opening a tab replaces the Detail body; `?view=visualize` opens Visualize at mount, an unknown `?view=` falls back to Detail. · [web-core](codemap/web-core.md)
 - `apps/web/src/pages/ProjectDetailPage.tsx` : project detail (`/projects/:id`): header with terminal button and gear menu, then Detail / Visualize / Assemble / Solver / Export tabs. · [web-core](codemap/web-core.md)
 - `apps/web/src/pages/ProjectEditPage.test.tsx` : file list and initially empty editor; content loaded on selection; debounced autosave (no Save button) calling `saveCaseFileContent('p1', 'system/controlDict', ...)`. · [web-core](codemap/web-core.md)
 - `apps/web/src/pages/ProjectEditPage.tsx` : case file editor (`/projects/:id/edit`): thin wrapper that binds the project's file hooks to the shared `FileTreeEditor`. · [web-core](codemap/web-core.md)
@@ -761,6 +777,14 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `brain/specs/2026-09-02-generator-dimensions-design.md` : Empirical generator dimensions (Gen Dim v3) — design
 - `brain/specs/2026-09-02-physical-input-names-design.md` : Physical names for X1–X4 (display only) — design
 - `brain/specs/2026-09-02-simplify-generator-design.md` : "Simplify Generator" option (hollow variant) — design
+- `brain/specs/2026-09-29-cone-chamfer-design.md` : Cone chamfer (With cone) — design : Area: shared, backend, python (`apps/api/scripts/buildChamber.py`), frontend, tests
+- `brain/specs/2026-09-29-cone-foot-chamfer-design.md` : Cone foot chamfer (replaces the top-rim cone chamfer) : Supersedes: `2026-09-29-cone-chamfer-design.md` (top-rim chamfer, implemented in `dbc944a` then rejected by the user: the chamfer belongs on the lower edge)
+- `brain/specs/2026-09-29-guide-vane-count-design.md` : Guide vane count (16 or 18) — design : Area: shared, backend, python (`apps/api/scripts/buildChamber.py`), frontend, tests
+- `brain/specs/2026-09-29-meshing-to-project-design.md` : Meshing session → project mesh transfer (WS-F) — design
+- `brain/specs/2026-09-29-optimisation-loop-design.md` : Chamber optimisation loop (WS-H) — design
+- `brain/specs/2026-09-29-runner-case-below-le-design.md` : Runner case Ø below LE Ø with guide vanes: 20 mm ledge : Amends: `2026-09-29-vane-pocket-runner-case-design.md` (WS-A, implemented): its refusal "Runner case Ø below LE Ø − 5 mm" is replaced; the 5 mm snap, the thin-ring …
+- `brain/specs/2026-09-29-semi-spiral-casing-design.md` : Semi-spiral casing option (Chamber Creation) — design
+- `brain/specs/2026-09-29-vane-pocket-runner-case-design.md` : Guide-vane pocket robust to Runner case Ø close to or below LE Ø : Area: python (`apps/api/scripts/buildChamber.py`), shared + API (early refusal), tests
 
 ## `documents`
 
@@ -772,6 +796,46 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 
 - `documents/Semi-spiral-creation/SEMI_SPIRAL_TOOL_SPEC.md` : Approved specification of a tool (not yet implemented in the app): 7 inputs (`Q`, `c_flow`, `H_ch`, `D_LE`, `clearance`, `max_width`, `phi_start`) to a JSON geometric object (6 spiral segments + 3 nose segments) in a "mi … · [api-scripts](codemap/api-scripts.md)
 - `documents/Semi-spiral-creation/reference_semi_spiral.py` : Reference implementation: `design_semi_spiral(Q, c_flow, H_ch, D_LE, clearance, max_width, phi_start, seed=5)` returns a dict compliant with §7; helpers `derived`, `to_frame`, `ray_distances`. · [api-scripts](codemap/api-scripts.md)
+
+## `documents/Tools/ConvergenceFunctions`
+
+- `documents/Tools/ConvergenceFunctions/README.md` : Guide of the portable convergence toolkit for a steady `simpleFoam` single-inlet/single-outlet case: pick `convergenceControl` (robust) or `SimplePDropConvergence` (simple), include `pressureLossMonitors`, remove … · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/ConvergenceFunctions/SimplePDropConvergence` : `coded` function object (simple auto-stop): mass-flow-weighted total-pressure drop Dp0 within ±`devTol` (0.03) of the trailing `window` (100) mean for `nPass` (100) consecutive iterations; no slope or residual gate. · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/ConvergenceFunctions/convergenceControl` : `coded` function object (robust auto-stop, compiled at the first time step): stops when, for `K` consecutive checks every `W` iterations, the windowed mean of Dp0 stops drifting, the least-squares slope is ~0 (both withi … · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/ConvergenceFunctions/plotConvergence.py` : Plot script mirroring `convergenceControl`: residuals + `resTol` line, Dp0 = p0_in − p0_out with trailing mean and status, zoom, pressure-recovery Cp footer; writes `convergence.png`. · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/ConvergenceFunctions/pressureLossMonitors` : Function objects producing `pTotal` [Pa] and the flux-weighted inlet/outlet total-pressure logs (object names like `inlet_p0_flux`) read by the plot and `SimplePDropConvergence`; patch names `inlet` / `outlet` editable. · [api-scripts](codemap/api-scripts.md)
+
+## `documents/Tools/VorticityFunction`
+
+- `documents/Tools/VorticityFunction/README.md` : Procedure (written for OpenFOAM v2606) for the RMS vorticity inside a Q-core zone: `omegaRMS = sqrt(∫|curl U|² dV / ∫dV)` over cells with Q > `Qcrit` and V > `Vmin` (both to set, same for every design); 4 stages ( … · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/VorticityFunction/calculateVorticityRMS.py` : Standard-library script: reads the `vorticityMeanSquareQcore` volume mean of · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/VorticityFunction/postVorticity.sh` : Post-processing script (no solver run): writes `Q`, `vorticity`, `V`, `wallDistance` (coded FO on a temporary controlDict copy) and `Qfiltered` (Q where wall distance > distance, default 0.03 m) into the latest time; pri … · [api-scripts](codemap/api-scripts.md)
+
+## `documents/Tools/VorticityFunction/system`
+
+- `documents/Tools/VorticityFunction/system/topoSetDict.vorticityRMS` : `topoSet` dictionary creating the cell zone `vortexQcore` = cells with `QForVorticityRMS` ≥ `QCRIT_VALUE` minus cells with `V` ≤ `VMIN_VALUE` (placeholders to replace). · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/VorticityFunction/system/vorticityRMSFields` : Function-object include creating `QForVorticityRMS`, `vorticityForVorticityRMS`, `omegaMagSqrForVorticityRMS` and `V` (field `U` or `Urel`, to set consistently). · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/VorticityFunction/system/vorticityRMSMetric` : `volFieldValue` (`volAverage` of `omegaMagSqrForVorticityRMS` over `cellZone vortexQcore`, v2606 syntax), included after `topoSet`. · [api-scripts](codemap/api-scripts.md)
+
+## `documents/Tools/lidIterationKit`
+
+- `documents/Tools/lidIterationKit/README.md` : Lid iteration kit (free surface for rigid-lid `simpleFoam` chamber models, remeshing each time): z_s = Z_LID + (p_lid − p0_inlet)/g from a converged rigid-lid run (patch `atmosphere`), fitted lid STL, cfMesh remesh with … · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/lidIterationKit/lidkit.py` : Kit driver: `init / check / surface / fit / mesh / case / run / next / loop / status / post` on a JSON config. · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/lidIterationKit/lidkit_fitlid.py` : Step 2: rebuilds the flat base STL with the `atmosphere` lid as the smoothed height field z_s (conformal Delaunay, upstands, clamp over submerged tops, generic cut of vertical solids through the lid); `--flat` regression … · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/lidIterationKit/lidkit_post.py` : Per-iteration figure: mesh lid, new z_s, residual map, history, ring sector profiles. · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/lidIterationKit/lidkit_surface.py` : Step 1: reads the `lidSurfaces` VTK export and writes `zs_iter<k>.npy` (x, y, z_s, area) + `.json` statistics and lid residual. · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/lidIterationKit/vtk_reader.py` : Legacy-VTK reader used by the kit (self-contained copy). · [api-scripts](codemap/api-scripts.md)
+
+## `documents/Tools/lidIterationKit/examples`
+
+- `documents/Tools/lidIterationKit/examples/SolidCone_lidIter_KIT_config.json` : Example config of the kit validation on the bigger-spiral solid-cone case (absolute paths on the co-developer workstation). · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/lidIterationKit/examples/Version4_lidIter_config.json` : Example config for the final design Version 4 (reference run @983; absolute paths on the co-developer workstation). · [api-scripts](codemap/api-scripts.md)
+
+## `documents/Tools/lidIterationKit/templates`
+
+- `documents/Tools/lidIterationKit/templates/Allrun.sh` : One-iteration case run: copies the mesh from `MESHSRC`, `renumberMesh`, `potentialFoam`, `decomposePar`, parallel `simpleFoam`, reconstruct, lid export. · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/lidIterationKit/templates/config_template.json` : Config skeleton (`z_lid`, patch names, base STL, parent case, mesh template, work dirs, smoothing and triangulation settings, tolerances). · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/lidIterationKit/templates/lidSurfaces` : `surfaces` function object exporting the lid and inlet patches as legacy ASCII VTK with `p` and `U`. · [api-scripts](codemap/api-scripts.md)
 
 ## `documents/calculator`
 

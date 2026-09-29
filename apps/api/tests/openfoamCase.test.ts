@@ -5,6 +5,8 @@ import {
   BASE_FILE_PATHS,
   collapseBoundaryToSinglePatch,
   fieldBcBody,
+  forceChamberPatchTypes,
+  parseBoundaryPatchDetails,
   parseBoundaryPatches,
   parseCellZoneNames,
   removeEmptyBoundaryPatches,
@@ -98,6 +100,74 @@ describe('removeEmptyBoundaryPatches', () => {
     expect(cleaned).toMatch(/outlet\s*\{/);
     expect(cleaned).not.toMatch(/iface-2\s*\{/); // the empty one is dropped
     expect(cleaned).toMatch(/\n2\n\(/); // count updated to 2
+  });
+});
+
+describe('removeEmptyBoundaryPatches with the `only` filter', () => {
+  const SNAPPY = `FoamFile { class polyBoundaryMesh; object boundary; }
+4
+(
+    inlet { type wall; nFaces 12; startFace 100; }
+    outlet { type wall; nFaces 0; startFace 112; }
+    walls { type wall; nFaces 20; startFace 112; }
+    domainBoundary { type patch; nFaces 0; startFace 132; }
+)
+`;
+
+  it('drops only a zero-face domainBoundary and renumbers', () => {
+    const cleaned = removeEmptyBoundaryPatches(SNAPPY, { only: ['domainBoundary'] });
+    expect(parseBoundaryPatches(cleaned)).toEqual(['inlet', 'outlet', 'walls']);
+    expect(cleaned).toMatch(/\n3\n\(/);
+  });
+
+  it('keeps a domainBoundary that carries faces', () => {
+    const populated = SNAPPY.replace(
+      'domainBoundary { type patch; nFaces 0;',
+      'domainBoundary { type patch; nFaces 8;',
+    );
+    expect(removeEmptyBoundaryPatches(populated, { only: ['domainBoundary'] })).toBe(populated);
+  });
+
+  it('keeps the default behaviour (every empty patch dropped) without the option', () => {
+    const cleaned = removeEmptyBoundaryPatches(SNAPPY);
+    expect(parseBoundaryPatches(cleaned)).toEqual(['inlet', 'walls']);
+  });
+});
+
+describe('forceChamberPatchTypes', () => {
+  const MESHED = `FoamFile { class polyBoundaryMesh; object boundary; }
+6
+(
+    inlet { type wall; inGroups List<word> 1(wall); nFaces 12; startFace 100; }
+    outlet { type wall; nFaces 10; startFace 112; }
+    hub { type patch; nFaces 5; startFace 122; }
+    walls { type cyclicAMI; nFaces 5; startFace 127; neighbourPatch x; }
+    rotor_x { type wall; nFaces 3; startFace 132; }
+    shroud { type wall; nFaces 3; startFace 135; }
+)
+`;
+
+  it('forces the chamber contract and reports the retyped patches', () => {
+    const { content, retyped } = forceChamberPatchTypes(MESHED);
+    const types = Object.fromEntries(
+      parseBoundaryPatchDetails(content).map((p) => [p.name, p.type]),
+    );
+    expect(types).toEqual({
+      inlet: 'patch',
+      outlet: 'patch',
+      hub: 'wall',
+      walls: 'cyclicAMI', // a constraint type is never overwritten
+      rotor_x: 'wall', // not a chamber name: untouched
+      shroud: 'wall', // already right
+    });
+    expect(retyped).toEqual(['inlet', 'outlet', 'hub']);
+  });
+
+  it('is idempotent (a second pass is a no-op)', () => {
+    const first = forceChamberPatchTypes(MESHED).content;
+    const second = forceChamberPatchTypes(first);
+    expect(second.content).toBe(first);
+    expect(second.retyped).toEqual([]);
   });
 });
 

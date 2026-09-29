@@ -32,7 +32,7 @@ Nothing under `STORAGE_DIR` is purged by a periodic job: deletion is always trig
 │   │   │   └── .viz/{patches.glb, manifest.json, edges.bin}   render (meshSourceVizStorage)
 │   │   ├── merge.json                    last MergePlan
 │   │   ├── assembly.json                 AppliedAssembly (applied assembly)
-│   │   └── .work/                        transient merge workspace
+│   │   └── .work/                        transient merge workspace (+ from-meshing-<ts>-<rand>/ staging)
 │   ├── runs/<runId>/solver.log           solver log (runStorage)
 │   ├── viz/{patches.glb, manifest.json, edges.bin}   case render (vizStorage)
 │   ├── export/                           CFD-Post export (exportStorage)
@@ -65,6 +65,9 @@ Nothing under `STORAGE_DIR` is purged by a periodic job: deletion is always trig
     ├── warnings.json                     builder warnings
     ├── build-meta.json                   { stepHasVanes }
     └── exports/{chamber.stl, chamber.step, chamber-mirrored.step, trisurface.zip}
+└── chamber-spiral/<spiralHash16>/       semi-spiral casing results (chamberStorage, since 2026-09-29)
+    ├── in.json                           the 7 tool inputs (m)
+    └── spiral.json                       designSemiSpiral.py result (vertices, quality, warnings)
 ```
 
 The folder names `viz`, `runs`, `export`, `chamber` come from shared constants (`VIZ_DIRNAME`, `RUN_DIRNAME`, `EXPORT_DIRNAME`, `CHAMBER_DIRNAME` in `packages/shared/src/index.ts`); `case`, `cgns`, `meshes`, `backups`, `templates`, `meshing`, `.work`, `.src`, `.viz` are hardcoded in the storage modules.
@@ -94,6 +97,7 @@ The folder names `viz`, `runs`, `export`, `chamber` come from shared constants (
 - **Lifecycle**:
   - `.src/` is deleted after a successful conversion; on failure, the whole source is deleted (`deleteMeshSource`).
   - `.work/` is purged and recreated at the start of each merge (`resetMeshWork`), then serves as a staging area (one case copy per part, points transformed by `meshTransform`).
+  - `.work/from-meshing-<ts>-<rand>/constant/polyMesh` stages a meshing session's mesh sent to the project (`mesh.service.importMeshFromMeshing`): the `boundary` is edited there, then the polyMesh is copied into `case/` (`replaceCasePolyMesh`) or renamed into `meshes/<slug>/` (kind `meshing`, `meta.json` `origin.sessionId`); the staging dir is removed in a `finally`. A merge starting at the same time would purge it (no lock, single user assumed).
   - `assembly.json` is written only after a successful merge promotion, and cleared (`clearAppliedAssembly`) when the backup is restored.
   - `.viz/` lives in the source folder and disappears with it; only `constant/polyMesh` is copied during staging.
 - **Pitfalls**: `uniqueMeshId` reads the folder then picks a free slug, without a lock: two simultaneous imports with the same name can collide. The id is the folder name and is never renamed.
@@ -145,6 +149,12 @@ The folder names `viz`, `runs`, `export`, `chamber` come from shared constants (
 - **Lock**: `withChamberLock(hash)` in `chamber.service`, a promise chain per hash: the cache test and the build happen under the lock, so two identical builds cannot write the same folder in parallel; on-demand STEP generation rechecks under the lock. Reads are lock-free.
 - **Lifecycle**: no purge in the code read; the cache grows with each distinct parameter set (to verify whether a purge exists elsewhere).
 
+### `chamber-spiral/<spiralHash>/`
+- **Key**: SHA-1 of `{algorithm: 'ref-2026-09-22-seed5', inputs: sorted [key, value] pairs}`, 16 hex (`spiralHash` in `chamber.service.ts`). The folder name is hardcoded in `chamberStorage.ts` (`CHAMBER_SPIRAL_DIRNAME`).
+- **Written by**: `writeChamberSpiralInput` (`in.json`) then `CHAMBER_PYTHON_BIN designSemiSpiral.py in.json spiral.json` (the script writes `spiral.json.tmp` then renames), under `withChamberLock('spiral:' + hash)`.
+- **Read by**: `designSpiral` in `chamber.service` (cache test = a valid `spiral.json`); its vertices are copied into the build's `params.json`, so the chamber build never reads this folder.
+- **Lifecycle**: purge it whenever `designSemiSpiral.py` or scipy changes (the vertices are only reproducible on one scipy version); no purge in the code.
+
 ## Path safety rules
 
 All implemented in `apps/api/src/lib/fileTreeStorage.ts` and used by the facades:
@@ -182,7 +192,7 @@ Deviations to know: `exportStorage` uses only `assertSafeId` (fixed file names, 
 | `chamber/<hash>/` | `withChamberLock` (promise chain per hash) | API process |
 | Solver run start | `runExclusive('startRun')` + `handles` / `stopRequested` | API process |
 | Meshing run | `activeMeshRuns` (Map per session) + atomic `status.json` | API process; reconciled at boot |
-| `meshes/.work/` | purge at merge start, no lock | none |
+| `meshes/.work/` | purge at merge start, no lock; `from-meshing-*` staging has a unique name | none |
 | `backups/` | none | none |
 | Slug ids (`meshes/<id>`, `meshing/<id>`) | read then pick, no lock | none |
 

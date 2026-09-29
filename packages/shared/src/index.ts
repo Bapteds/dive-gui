@@ -591,16 +591,85 @@ export const MERGE_STEP_KINDS = [
 ] as const;
 export type MergeStepKind = (typeof MERGE_STEP_KINDS)[number];
 
+/**
+ * How a mesh-library source was imported: an uploaded polyMesh folder or .zip, a
+ * converted .cgns / .msh file, or a meshing session sent to the project
+ * (`POST /projects/:id/mesh/from-meshing`, target `library`).
+ */
+export const MESH_SOURCE_KINDS = ['folder', 'zip', 'cgns', 'msh', 'meshing'] as const;
+export type MeshSourceKind = (typeof MESH_SOURCE_KINDS)[number];
+
 /** One imported polyMesh source in a project's mesh library. */
 export interface MeshSource {
   /** Opaque id (also the source's directory name under meshes/). */
   id: string;
   /** Display name (defaults to the uploaded folder/zip name). */
   name: string;
+  /** How the source was imported (absent on payloads older than the field). */
+  kind?: MeshSourceKind;
   /** Boundary patches parsed from the source's constant/polyMesh/boundary. */
   patches: MeshPatch[];
   /** ISO 8601 import timestamp (drives the default merge order). */
   createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Meshing session -> project hand-off (WS-F, spec 2026-09-29-meshing-to-project).
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a meshing session's constant/polyMesh lands in a project: `case` replaces
+ * the project's case mesh (the default, first entry); `library` adds a new part to
+ * the project's mesh library (meshes/<slug>/).
+ */
+export const MESH_TO_PROJECT_TARGETS = ['case', 'library'] as const;
+export type MeshToProjectTarget = (typeof MESH_TO_PROJECT_TARGETS)[number];
+
+/**
+ * The chamber patch contract: the geometric type of every patch the chamber
+ * builder emits. MIRROR of `PATCH_TYPES` in `apps/api/scripts/buildChamber.py`
+ * (keep both aligned; `apps/api/tests/chamberPatchTypes.test.ts` compares them).
+ * Used to force the types of a meshed chamber sent to a project's case: the
+ * meshers type every surface `wall` by default, so `inlet` / `outlet` come back
+ * as walls. Internal patch names, never display labels.
+ */
+export const CHAMBER_PATCH_TYPES: Readonly<Record<string, 'patch' | 'wall'>> = {
+  inlet: 'patch',
+  outlet: 'patch',
+  cylinder_walls: 'wall',
+  walls: 'wall',
+  hub: 'wall',
+  shroud: 'wall',
+  guide_vanes: 'wall',
+  // Semi-spiral casing builds only: the nose + the plank (spec 2026-09-29-semi-spiral-casing).
+  tongue: 'wall',
+};
+
+/** Body of `POST /projects/:id/mesh/from-meshing`. */
+export interface MeshFromMeshingRequest {
+  /** The meshing session whose constant/polyMesh is sent. */
+  sessionId: string;
+  /** Where it lands in the project (default `case`). */
+  target: MeshToProjectTarget;
+  /** Library part display name (library target only; defaults to the session name). */
+  name?: string;
+}
+
+/** Outcome of `POST /projects/:id/mesh/from-meshing` (wrapped as `{ result }`). */
+export interface MeshFromMeshingResult {
+  target: MeshToProjectTarget;
+  /** Refreshed case tree (case target only). */
+  entries?: Array<{ path: string; type: 'file' | 'directory'; size: number }>;
+  /** The new library part (library target only). */
+  mesh?: MeshSource;
+  /** The refreshed mesh library (library target only). */
+  meshes?: MeshSource[];
+  /** Human-readable notes (backup taken, patches kept / added, retyped, removed). */
+  notes: string[];
+  /** Patches whose geometric type was forced to the chamber contract (case target). */
+  retyped?: string[];
+  /** 0/ fields re-aligned to the new patch set (case target). */
+  syncedFields?: string[];
 }
 
 /**
@@ -2399,8 +2468,36 @@ export interface ChamberConstraint {
 export const CHAMBER_VARIANTS = ['stepped', 'hollow'] as const;
 export type ChamberVariant = (typeof CHAMBER_VARIANTS)[number];
 
+/**
+ * Guide vane counts the builder accepts (spec 2026-09-29-guide-vane-count). 16 is
+ * the committed asset; with 18 each blade's chord is scaled by 16/18 about its pivot
+ * so the cascade solidity and the pivot radius stay the same.
+ */
+export const CHAMBER_VANE_COUNTS = [16, 18] as const;
+export type ChamberVaneCount = (typeof CHAMBER_VANE_COUNTS)[number];
+/** Default guide vane count (the asset's own count). */
+export const CHAMBER_VANE_COUNT_DEFAULT: ChamberVaneCount = 16;
+
 /** Default wall thickness (mm) of the hollow last cylinder in the 'hollow' variant. */
 export const CHAMBER_WALL_THICKNESS_MM = 50;
+
+/**
+ * Default Cone chamfer size (mm, × Part scale in the builder): both legs of the
+ * optional 45° foot chamfer on the lower outer edge of the LE part, which is
+ * widened by the same amount above it (both designs; spec
+ * 2026-09-29-cone-foot-chamfer). Mirrors CONE_CHAMFER_SIZE of buildChamber.py.
+ */
+export const CHAMBER_CONE_CHAMFER_SIZE_MM = 50;
+
+/**
+ * The Cone chamfer widening (mm, unscaled) of the LE part: the size when the
+ * chamfer is on (blank = CHAMBER_CONE_CHAMFER_SIZE_MM), else 0. The widest part
+ * of the machine counts LE Ø + 2 × this (the builder's rmax).
+ */
+export function chamberConeChamferMm(input: ChamberInput): number {
+  if (input.coneChamferEnabled !== true) return 0;
+  return input.coneChamferSize ?? CHAMBER_CONE_CHAMFER_SIZE_MM;
+}
 
 // Fixed geometry ratios that derive the two secondary DIAMETERS from the model
 // outputs when a manual override is absent: consumed by the API
@@ -2580,6 +2677,14 @@ export interface ChamberInput {
    */
   vaneAngleDeg?: number;
   /**
+   * Number of guide vanes: 16 (the asset) or 18. With 18 each blade's chord is
+   * scaled by 16/18 about its own pivot, so the cascade solidity and the pivot
+   * radius stay the same; the angular step is 360°/n. Only affects guide-vane
+   * builds (ignored, and left out of the build key, when guideVanes is false).
+   * Geometry-only (not part of the empirical model). Default 16.
+   */
+  vaneCount?: ChamberVaneCount;
+  /**
    * Outlet inner/outer diameter ratio (0.35..0.50, default 0.45). The outlet's
    * OUTER diameter is X1 (see resolveGeometryParams); the inner diameter is
    * outletRatio * outer. Geometry-only (not part of the empirical model). Only
@@ -2603,6 +2708,23 @@ export interface ChamberInput {
   hollowLength?: number;
   /** Wall thickness (mm) of the hollow last cylinder. Default CHAMBER_WALL_THICKNESS_MM. */
   wallThickness?: number;
+  /**
+   * Cone chamfer (both designs): a 45° foot chamfer on the LOWER OUTER edge of
+   * the LE part (the Closed-generator last cylinder, the With cone outer wall),
+   * where it stands on the distributor roof at LEB. The part is widened by the
+   * size above the chamfer, so the foot lands on LE Ø/2 at LEB. Geometry-only
+   * (not part of the empirical model); left out of the build key when false.
+   * Default false. Spec 2026-09-29-cone-foot-chamfer.
+   */
+  coneChamferEnabled?: boolean;
+  /**
+   * Cone chamfer size (mm): both legs of the 45° foot chamfer (= the widening),
+   * scaled by partScale like the other part dimensions. At most the LE part
+   * height above LEB (Closed generator: up to the chamber top or the Generator
+   * height; With cone: Cone length minus Wall thickness). Read only when
+   * coneChamferEnabled. Default CHAMBER_CONE_CHAMFER_SIZE_MM.
+   */
+  coneChamferSize?: number;
   /**
    * Manual override for the RUNNER CASE (first cylinder) diameter, in mm. Omitted =>
    * CHAMBER_D_FIRST_OVER_LAST × D_last. Scaled by partScale like the derived value.
@@ -2645,6 +2767,23 @@ export interface ChamberInput {
    * variant only. Geometry-only. Default false.
    */
   simplifyGenerator?: boolean;
+  /**
+   * Semi-spiral casing (both designs; spec 2026-09-29-semi-spiral-casing): the
+   * footprint becomes the semi-spiral outline (6 spiral lines + the 3-line
+   * nose) computed by apps/api/scripts/designSemiSpiral.py, plus a plank from
+   * the nose tip tangent to the generator / cone circle; nose + plank form the
+   * `tongue` patch. B Kammer becomes the spiral's width LIMIT; Length, B1, LT and
+   * the four chamfer values are derived from the spiral (status 'from spiral'),
+   * lengthOverride and chamferEnabled are ignored, and Feet must be off.
+   * Geometry-only. Default false.
+   */
+  semiSpiral?: boolean;
+  /**
+   * Casing flow velocity (m/s) of the semi-spiral design (the tool's c_flow),
+   * CHAMBER_SPIRAL_FLOW_RANGE (0.3 to 3, default 0.922). Read only while
+   * semiSpiral is on, and then only through the spiral inputs of the build key.
+   */
+  spiralFlowVelocity?: number;
 }
 
 /** Longest allowed saved-chamber-build name (trimmed). */
@@ -2680,7 +2819,8 @@ export type ChamberStatus =
   | 'raised to min'
   | 'set exact'
   | '! min>max'
-  | 'from relation';
+  | 'from relation'
+  | 'from spiral';
 
 /** One computed output: the raw model value, the clamped FINAL, and metadata. */
 export interface ChamberOutput {
@@ -2926,6 +3066,217 @@ export function blankGeneratorHeightRefusal(
   );
 }
 
+/**
+ * Tolerance (mm, on the SCALED diameters) within which a typed Runner case Ø
+ * counts as equal to LE Ø in a guide-vane build. Mirrors `SNAP_D_TOL` of
+ * buildChamber.py (0.005 m): within it the builder snaps the runner case flush
+ * with LE Ø and warns; further below it builds the 20 mm ledge (WS-A v2).
+ */
+export const CHAMBER_RUNNER_CASE_SNAP_MM = 5;
+
+/**
+ * Minimum margin (mm) of Runner case Ø over Runner Ø (X1, the outlet outer
+ * diameter) in a guide-vane build: the runner case wall stays at least half of
+ * it (radius) outside the outlet passage. Mirrors `RUNNER_CASE_OUTLET_CLEARANCE`
+ * of buildChamber.py (0.020 m). Spec 2026-09-29-runner-case-below-le.
+ */
+export const CHAMBER_RUNNER_CASE_OUTLET_CLEARANCE_MM = 20;
+
+/**
+ * Guide vanes: a typed Runner case Ø (`dFirst`) below LE Ø gets a runner case
+ * wall that stops 20 mm under the shroud brim plus a ledge out to LE Ø/2 (the
+ * builder's WS-A v2 geometry), so only a runner case that would not clear the
+ * outlet is refused: partScale x dFirst < X1 + CHAMBER_RUNNER_CASE_OUTLET_CLEARANCE_MM
+ * (the outlet follows X1 unscaled). The auto Runner case Ø and vane-less builds
+ * are never refused here. Returns the refusal message, else null.
+ */
+export function runnerCaseClearanceRefusal(
+  input: ChamberInput,
+  outputs: ChamberOutput[],
+): string | null {
+  if (input.guideVanes !== true || input.dFirst == null) return null;
+  const dLast = outputs.find((o) => o.key === 'dLast')!.final;
+  const s = input.partScale ?? 1;
+  const minMm = input.x1 + CHAMBER_RUNNER_CASE_OUTLET_CLEARANCE_MM;
+  if (!Number.isFinite(dLast) || s * input.dFirst >= minMm - 1e-6) return null;
+  const mm = (v: number) => `${Math.round(v)} mm`;
+  const scaled = Math.abs(s - 1) > 1e-9 ? `, ${mm(s * input.dFirst)} at Part scale ${s}` : '';
+  return (
+    `With guide vanes the runner case must clear the outlet: ` +
+    `Runner case Ø (${mm(input.dFirst)}${scaled}) must be at least Runner Ø + ` +
+    `${CHAMBER_RUNNER_CASE_OUTLET_CLEARANCE_MM} mm (${mm(minMm)}). ` +
+    `Increase Runner case Ø, clear it (auto ≈ ${mm(CHAMBER_D_FIRST_OVER_LAST * dLast)}), ` +
+    `or turn Guide vanes off.`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Semi-spiral casing (spec brain/specs/2026-09-29-semi-spiral-casing-design.md).
+// The spiral itself is optimised by apps/api/scripts/designSemiSpiral.py in a
+// cached API step; these helpers map the chamber to the tool inputs and the
+// tool's vertices back to the box values the Parameters table shows.
+// ---------------------------------------------------------------------------
+
+/** Casing flow velocity (m/s): the tool's c_flow. Form and API default 0.922. */
+export const CHAMBER_SPIRAL_FLOW_RANGE = { min: 0.3, max: 3, default: 0.922 } as const;
+/** Radial gap (m) from the widest part of the machine to the nose tip. NOT scaled by Part scale. */
+export const CHAMBER_SPIRAL_CLEARANCE_M = 0.2;
+/** Fixed spiral start angle (deg), not exposed. */
+export const CHAMBER_SPIRAL_PHI_START_DEG = 160;
+
+/**
+ * The outputs the spiral derives while it is on (with Length, which is not an
+ * output): read-only in the table, status 'from spiral', left out of the build
+ * key and exempt from the non-positive and Min > Max refusals.
+ */
+export const CHAMBER_SPIRAL_DERIVED_KEYS: readonly ChamberOutputKey[] = [
+  'distFromSideChamfer1',
+  'chamferLength1',
+  'chamferWidth1',
+  'chamferLength2',
+  'chamferWidth2',
+  'distFromEnd',
+];
+
+/** One vertex of the spiral outline (tool frame = axis frame; metres). */
+export interface ChamberSpiralVertex {
+  id: string;
+  x: number;
+  y: number;
+}
+
+/** The doubly chamfered box that carries the spiral (spec section 3). */
+export interface ChamberSpiralBoxDims {
+  width: number;
+  length: number;
+  distFromSideChamfer1: number;
+  distFromEnd: number;
+  chamferLength1: number;
+  chamferWidth1: number;
+  chamferLength2: number;
+  chamferWidth2: number;
+}
+
+/**
+ * The eight box values of a spiral outline (tool frame vertices, axis at the
+ * origin), in the vertices' unit: L1/L5 are the side walls, L3 the chamfered
+ * end, L2/L4 the corner chamfers, V0 -> V9 the flat inlet end.
+ *
+ * The builder MIRRORS the tool frame (tool x -> builder -X) so the spiral turns
+ * the flow the same way as the guide vanes (counter-clockwise seen from +Z; spec
+ * section 5.5, checked 2026-09-29). So B1 is measured to the L1 wall and chamfer
+ * 1 (the +X corner) is L2, chamfer 2 is L4. Mirrors `spiral_box` of
+ * buildChamber.py (SPIRAL_MIRROR_X): change both together.
+ */
+export function chamberSpiralBoxDims(
+  vertices: readonly ChamberSpiralVertex[],
+): ChamberSpiralBoxDims {
+  const v = (id: string) => {
+    const found = vertices.find((p) => p.id === id);
+    if (!found) throw new Error(`spiral vertex ${id} missing`);
+    return found;
+  };
+  const xIn = v('V0').x;
+  const footY = v('V0').y;
+  const x4 = v('V4').x;
+  const yTop = v('V2').y;
+  return {
+    width: x4 - xIn,
+    length: yTop - footY,
+    distFromSideChamfer1: -xIn,
+    distFromEnd: yTop,
+    chamferLength1: yTop - v('V1').y,
+    chamferWidth1: v('V2').x - xIn,
+    chamferLength2: yTop - v('V4').y,
+    chamferWidth2: x4 - v('V3').x,
+  };
+}
+
+/** The spiral quality + derived box the build response carries (mm unless noted). */
+export interface ChamberSpiralSummary {
+  /** Actual spiral width (mm); B Kammer is only its limit. */
+  widthMm: number;
+  worstAreaErrorM2: number;
+  atPhiDeg: number;
+  /** True when B Kammer holds the spiral back (the build then carries a warning). */
+  widthBinding: boolean;
+  /** The eight box values (mm) that fill the read-only rows. */
+  boxMm: ChamberSpiralBoxDims;
+}
+
+/** The semi-spiral tool inputs (m, m³/s, m/s, deg), as designSemiSpiral.py reads them. */
+export interface ChamberSpiralInputs {
+  Q: number;
+  c_flow: number;
+  H_ch: number;
+  D_LE: number;
+  clearance: number;
+  max_width: number;
+  phi_start: number;
+}
+
+/**
+ * Map the chamber to the spiral tool inputs (spec section 4). D_LE is twice the
+ * widest part of the machine, max(Runner case Ø, Guide vanes Ø, LE Ø + 2 × Cone
+ * chamfer size) × Part scale (the builder's rmax), so the nose tip lands
+ * CHAMBER_SPIRAL_CLEARANCE_M from it; H_ch is H Kammer and max_width B Kammer
+ * (Finals, mm -> m).
+ */
+export function chamberSpiralInputs(
+  input: ChamberInput,
+  outputs: ChamberOutput[],
+): ChamberSpiralInputs {
+  const final = (k: ChamberOutputKey) => outputs.find((o) => o.key === k)!.final;
+  const dLast = final('dLast');
+  const dFirst = input.dFirst ?? CHAMBER_D_FIRST_OVER_LAST * dLast;
+  const dMiddle = input.dMiddle ?? CHAMBER_D_MIDDLE_OVER_LAST * dLast;
+  const s = input.partScale ?? 1;
+  return {
+    Q: input.x3,
+    c_flow: input.spiralFlowVelocity ?? CHAMBER_SPIRAL_FLOW_RANGE.default,
+    H_ch: final('height') / 1000,
+    D_LE: (Math.max(dFirst, dMiddle, dLast + 2 * chamberConeChamferMm(input)) * s) / 1000,
+    clearance: CHAMBER_SPIRAL_CLEARANCE_M,
+    max_width: final('width') / 1000,
+    phi_start: CHAMBER_SPIRAL_PHI_START_DEG,
+  };
+}
+
+/**
+ * The model input with the semi-spiral on: Min / Max / Exact values left on the
+ * derived rows are ignored (the rows are read-only while the spiral is on), so
+ * a hidden B1 Exact can no longer refine B Kammer (the spiral's width limit).
+ * Returned unchanged when the spiral is off.
+ */
+export function chamberSpiralModelInput<T extends ChamberInput>(input: T): T {
+  if (input.semiSpiral !== true || !input.constraints) return input;
+  const constraints = { ...input.constraints };
+  for (const key of CHAMBER_SPIRAL_DERIVED_KEYS) delete constraints[key];
+  return { ...input, constraints };
+}
+
+/**
+ * The outputs as the table shows them with the semi-spiral on: the derived rows
+ * read 'from spiral' with the spiral's value (mm), or NaN (no value yet) before
+ * the first spiral build. The other rows are returned unchanged.
+ */
+export function applyChamberSpiralToOutputs(
+  outputs: ChamberOutput[],
+  boxMm: ChamberSpiralBoxDims | null,
+): ChamberOutput[] {
+  return outputs.map((o) =>
+    CHAMBER_SPIRAL_DERIVED_KEYS.includes(o.key)
+      ? {
+          ...o,
+          final: boxMm ? boxMm[o.key as keyof ChamberSpiralBoxDims] : Number.NaN,
+          status: 'from spiral',
+          relationLabel: undefined,
+          userDriven: true,
+        }
+      : o,
+  );
+}
+
 
 /**
  * Machine-readable error codes the API may emit in its `{ error: { code } }`
@@ -2963,6 +3314,8 @@ export const SERVER_ERROR_CODES = [
   'BC_APPLY_FAILED',
   'NOT_RUNNABLE',
   'RUN_IN_PROGRESS',
+  'MESH_IN_PROGRESS',
+  'MESHING_NOT_MESHED',
   'RUN_NOT_FOUND',
   'NO_STL',
   'INVALID_STL',

@@ -1,6 +1,6 @@
 # Feature · Projects (creation, list, detail, collaborators)
 
-> **Status**: in production · **Updated**: 2026-09-28
+> **Status**: in production · **Updated**: 2026-09-29
 > **Specs**: no dedicated spec (history in `brain/changelog/2026-06.md` and `2026-08.md`) · **Codemaps**: `brain/codemap/api-projects.md` (`projects.{routes,controller,schemas,service}.ts`, `runs.service.stopProjectRuns`), `brain/codemap/api-lib.md` (`caseStorage`), `brain/codemap/web-core.md` (`ProjectsPage`, `ProjectDetailPage`, `ProjectEditPage`, `lib/api/projects.ts`, `RenameDialog`), `brain/codemap/web-features-projects.md` (`features/projects`)
 > **See also**: `brain/architecture/storage-layout.md` (`projects/<id>/`), `brain/architecture/data-model.md` (`Project`, `_ProjectCollaborators`), `brain/features/dashboard.md`, `brain/features/terminal.md`, `brain/features/admin-and-audit.md` (deletion of an owner); tab contents: `case-files.md`, `templates.md`, `mesh-library-and-conversion.md`, `merge-and-assembly.md`, `boundary-conditions.md`, `solver-and-runs.md`, `export-cfdpost.md`
 
@@ -24,7 +24,7 @@ The project is the CFD workspace: an OpenFOAM case, its mesh library, its solver
 | `Solver` | `SolverTab` (lazy) | the case has a polyMesh | `Import a polyMesh to enable the solver` |
 | `Export` | `ExportTab` (lazy) | the case has a polyMesh | `Import a polyMesh to enable export` |
 
-  A disabled tab is wrapped in a `span tabIndex={0}` so that its tooltip stays reachable from the keyboard. Each lazy panel is mounted only when its tab is active (no 3D build or polling in the background); the active tab is local state, not in the URL.
+  A disabled tab is wrapped in a `span tabIndex={0}` so that its tooltip stays reachable from the keyboard. Each lazy panel is mounted only when its tab is active (no 3D build or polling in the background); the active tab is local state, not in the URL, except the INITIAL tab: `?view=detail|visualize|assemble|solver|export` is read once at mount (an unknown value falls back to Detail) and then dropped from the URL (`setSearchParams({}, { replace: true })`). Used by the meshing hand-off, which lands on `/projects/:id?view=visualize` (2026-09-29).
 - **Case editor** (`/projects/:id/edit`, from the `Edit` button of `CaseFilesSection`): `ProjectEditPage` wires the project's file hooks onto the shared `FileTreeEditor` (see `case-files.md`).
 
 ## 3. Business rules and invariants

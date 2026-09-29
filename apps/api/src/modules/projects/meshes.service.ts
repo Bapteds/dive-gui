@@ -94,6 +94,7 @@ import {
   caseIsEmpty,
   listCaseTree,
   readCaseFile,
+  replaceCasePolyMesh,
   type CaseEntry,
 } from '../../lib/caseStorage';
 import { backupExists, ensureOriginalBackup, restoreBackup } from '../../lib/meshBackupStorage';
@@ -166,7 +167,7 @@ async function toMeshSource(projectId: string, meta: MeshMeta): Promise<MeshSour
   const patches: MeshPatch[] = boundary
     ? parseBoundaryPatchDetails(boundary.toString('utf8'))
     : [];
-  return { id: meta.id, name: meta.name, patches, createdAt: meta.createdAt };
+  return { id: meta.id, name: meta.name, kind: meta.kind, patches, createdAt: meta.createdAt };
 }
 
 /** List a project's mesh sources (with their boundary patches), no access check. */
@@ -471,6 +472,41 @@ export async function importMesh(
 }
 
 /**
+ * Library branch of the meshing -> project hand-off (WS-F): move an already
+ * STAGED constant/polyMesh (built and edited by mesh.service
+ * importMeshFromMeshing under meshes/.work/) into a new library part named `name`
+ * (its readable slug, `-2`, `-3`… on collision), recorded as kind 'meshing' with
+ * the source session id. No access check here: the caller has gated project
+ * visibility and the session. Returns the new part and the refreshed library.
+ */
+export async function addMeshingPartToLibrary(
+  projectId: string,
+  stagedPolyMeshDir: string,
+  name: string,
+  sessionId: string,
+): Promise<{ mesh: MeshSource; meshes: MeshSource[] }> {
+  const id = await uniqueMeshId(projectId, name);
+  const dest = meshPolyMeshDir(projectId, id);
+  await fs.mkdir(path.dirname(dest), { recursive: true });
+  try {
+    // Same filesystem (both under meshes/): a rename is atomic and instant.
+    await fs.rename(stagedPolyMeshDir, dest);
+  } catch {
+    await fs.cp(stagedPolyMeshDir, dest, { recursive: true });
+  }
+  const meta: MeshMeta = {
+    id,
+    name,
+    kind: 'meshing',
+    createdAt: new Date().toISOString(),
+    origin: { sessionId },
+  };
+  await writeMeshMeta(projectId, meta);
+  const [mesh, meshes] = await Promise.all([toMeshSource(projectId, meta), publicMeshes(projectId)]);
+  return { mesh, meshes };
+}
+
+/**
  * Import a .cgns / .msh file as a library source named `name` (its slug becomes
  * the source id/directory): stage the file, convert it into the source's
  * constant/polyMesh, and keep the source only if the mesh was built. Returns the
@@ -759,15 +795,6 @@ async function stitchedFaceCounts(masterDir: string, patches: string[]): Promise
   const details = parseBoundaryPatchDetails(await fs.readFile(boundaryAbs, 'utf8'));
   const byName = new Map(details.map((d) => [d.name, d.nFaces] as const));
   return new Map(patches.map((p) => [p, byName.get(p) ?? 0] as const));
-}
-
-/** Replace the project's case mesh with the combined mesh from the work master. */
-async function promoteMasterMesh(projectId: string, masterDir: string): Promise<void> {
-  const srcPolyMesh = path.join(masterDir, 'constant', 'polyMesh');
-  const destPolyMesh = path.join(caseDirAbsolute(projectId), 'constant', 'polyMesh');
-  await fs.rm(destPolyMesh, { recursive: true, force: true });
-  await fs.mkdir(path.dirname(destPolyMesh), { recursive: true });
-  await fs.cp(srcPolyMesh, destPolyMesh, { recursive: true });
 }
 
 /**
@@ -1272,7 +1299,8 @@ export async function runMerge(
   if (!(await caseIsEmpty(projectId))) {
     await ensureOriginalBackup(projectId);
   }
-  await promoteMasterMesh(projectId, masterDir);
+  // Replace the case mesh with the combined mesh from the work master.
+  await replaceCasePolyMesh(projectId, path.join(masterDir, 'constant', 'polyMesh'));
   try {
     // A case base preserves its physics (merge mode keeps existing BCs, only new
     // patches get defaults); a library base rebuilds every field (patches renamed).

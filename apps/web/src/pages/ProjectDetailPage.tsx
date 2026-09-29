@@ -1,5 +1,5 @@
-import { Suspense, lazy, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Suspense, lazy, useEffect, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -180,10 +180,27 @@ export function ProjectDetailPage() {
  * Opening it swaps the whole detail body for the lazy-loaded Visualize panel
  * (mesh picker + 3D viewer), which fills the pinned region at lg+.
  */
-type ProjectView = 'detail' | 'visualize' | 'assemble' | 'solver' | 'export';
+const PROJECT_VIEWS = ['detail', 'visualize', 'assemble', 'solver', 'export'] as const;
+type ProjectView = (typeof PROJECT_VIEWS)[number];
+
+function isProjectView(value: string | null): value is ProjectView {
+  return value !== null && (PROJECT_VIEWS as readonly string[]).includes(value);
+}
 
 function ProjectTabs({ project }: { project: Project }) {
-  const [view, setView] = useState<ProjectView>('detail');
+  // The initial tab may come from `?view=` (e.g. the meshing hand-off lands on
+  // Visualize). It is read ONCE, then dropped from the URL so tab clicks stay
+  // local state; an unknown value falls back to Detail.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [view, setView] = useState<ProjectView>(() => {
+    const requested = searchParams.get('view');
+    return isProjectView(requested) ? requested : 'detail';
+  });
+  useEffect(() => {
+    if (searchParams.has('view')) setSearchParams({}, { replace: true });
+    // Only on mount: later tab changes never touch the URL.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const { data: entries } = useCaseFilesQuery(project.id);
   const hasPolyMesh = !!entries?.some((entry) => entry.path.startsWith('constant/polyMesh/'));
   // The Assemble tab works on the mesh LIBRARY (imported parts), not the case

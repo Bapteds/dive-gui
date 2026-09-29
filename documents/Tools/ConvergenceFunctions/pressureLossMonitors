@@ -1,0 +1,64 @@
+/*---------------------------------------------------------------------------*\
+  PORTABLE PRESSURE-LOSS MONITORS  (function objects for controlDict)
+  ---------------------------------------------------------------------------
+  Produces `pTotal` [Pa] and logs the flux-weighted total-pressure drop, giving
+  the postProcessing data that plotConvergence.py and SimplePDropConvergence read.
+
+  HOW TO USE IN ANOTHER MODEL
+  ---------------------------------------------------------------------------
+  1. copy this file into the case `system/` folder.
+  2. in system/controlDict, inside `functions { ... }`, add:  #include "pressureLossMonitors"
+     (put it BEFORE any #include "convergenceControl"/"SimplePDropConvergence").
+  3. EDIT the two patch names below (search `name inlet` / `name outlet`) if your
+     patches are named differently. The monitor OBJECT names (inlet_p0_flux etc.)
+     are what plotConvergence.py expects -- leave them as-is.
+
+  NB static p is kinematic -> pTotal uses rhoInf so it comes out in Pa.
+\*---------------------------------------------------------------------------*/
+pTotal
+{
+    type            pressure;
+    libs            (fieldFunctionObjects);
+    field           p;
+    mode            total;          // p0 = rho*(p + 0.5|U|^2)
+    rho             rhoInf;
+    rhoInf          1000;           // water -> pTotal in Pa
+    result          pTotal;
+    executeControl  timeStep;   executeInterval 1;
+    writeControl    writeTime;
+}
+inlet_p0_flux
+{
+    type            surfaceFieldValue;   libs (fieldFunctionObjects);
+    regionType      patch;   name  inlet;                 // <-- inflow patch
+    operation       weightedAverage;   weightField phi;   fields (pTotal p);
+    writeFields false;   log true;
+    executeControl  timeStep;   executeInterval 1;
+    writeControl    timeStep;   writeInterval 1;
+}
+outlet_p0_flux
+{
+    type            surfaceFieldValue;   libs (fieldFunctionObjects);
+    regionType      patch;   name  outlet;                // <-- outflow patch
+    operation       weightedAverage;   weightField phi;   fields (pTotal p);
+    writeFields false;   log true;
+    executeControl  timeStep;   executeInterval 1;
+    writeControl    timeStep;   writeInterval 1;
+}
+inlet_flux
+{
+    type            surfaceFieldValue;   libs (fieldFunctionObjects);
+    regionType      patch;   name  inlet;                 // <-- inflow patch
+    operation       sum;   fields (phi);   writeFields false;   log true;
+    executeControl  timeStep;   executeInterval 1;
+    writeControl    timeStep;   writeInterval 1;
+}
+outlet_flux
+{
+    type            surfaceFieldValue;   libs (fieldFunctionObjects);
+    regionType      patch;   name  outlet;                // <-- outflow patch
+    operation       sum;   fields (phi);   writeFields false;   log true;
+    executeControl  timeStep;   executeInterval 1;
+    writeControl    timeStep;   writeInterval 1;
+}
+// ************************************************************************* //

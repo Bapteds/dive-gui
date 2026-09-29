@@ -34,7 +34,7 @@
 5. **Configuration**: `git diff <old>..HEAD -- apps/api/.env.example apps/web/.env.example`; add any new variable the release needs to `/home/app/apps/api/.env`. `apps/web/.env` must hold an absolute `VITE_API_URL` (e.g. `https://dive.your-domain.de/api/v1`) before building: it is baked into the bundle and the terminal WebSocket URL is derived from it.
 6. **Build**: `npm run build` (shared, then API `prisma generate && tsc`, then web `tsc -b && vite build` into `apps/web/dist`).
 7. **Migrations**: `npm start` (the service command) runs `prisma migrate deploy` before `node dist/server.js`. To see migration errors before starting, run `npm run db:deploy -w @dive/api`. Never run `db:migrate` (`prisma migrate dev`) or `db:reset` in production.
-8. **Chamber cache**: if `buildChamber.py` changed, purge the builds (keyed on parameters, not on code): `rm -rf /var/lib/dive/storage/chamber/*` (that is `$STORAGE_DIR/chamber`, not `apps/api/storage/chamber` on the server). Saved chamber configurations are in the DB and survive; they rebuild on next open.
+8. **Chamber cache**: if `buildChamber.py` changed, purge the builds (keyed on parameters, not on code): `rm -rf "$STORAGE_DIR"/chamber/*`. The installation guide uses `/var/lib/dive/storage`, but the live server (checked 2026-09-29) has `STORAGE_DIR="./storage"`, relative to the service working directory (probably `/home/app/apps/api/storage/chamber`): check `.env` and `systemctl cat dive-api` first. Saved chamber configurations are in the DB and survive; they rebuild on next open.
 9. **Start**: `systemctl start dive-api` (or `systemctl restart dive-api` if you skipped step 1), then `systemctl status dive-api` must show `active (running)`. Follow the boot with `journalctl -u dive-api -f`: look for `API listening on`, for `Invalid environment configuration:` (fix `.env`), and for migration errors.
 10. **nginx**: static files are served straight from `apps/web/dist`, so no reload is needed for a normal update. Only if `/etc/nginx/sites-available/dive` changed: `nginx -t && systemctl reload nginx`.
 
@@ -42,7 +42,7 @@
 1. `systemctl stop dive-api`.
 2. `cd /home/app && git checkout <previous sha>` (detached HEAD is fine), `npm ci`, `npm run build`.
 3. If the release applied a migration: restore the backup (`cp /var/lib/dive/prod.db.bak-<stamp> /var/lib/dive/prod.db`). Data written since the deploy is lost: confirm with the user first.
-4. If `buildChamber.py` differs between the two versions: purge `/var/lib/dive/storage/chamber/*` again.
+4. If `buildChamber.py` differs between the two versions: purge `$STORAGE_DIR/chamber/*` again (see step 8 for the real path).
 5. `systemctl start dive-api`, then run the Verify section below. Return to `main` later with `git checkout main`.
 
 ## Verify

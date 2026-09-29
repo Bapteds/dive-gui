@@ -70,4 +70,4 @@ Browser ──HTTPS──► nginx ─┬─ /            → apps/web/dist (sta
 
 ## 7. Deployment
 
-Debian 12, ESI OpenFOAM v2406 (`/usr/lib/openfoam/openfoam2406`), Python venv `/opt/dive-venv`, ParaView + Xvfb, app in `/home/app` (root), systemd service `dive-api` (`prisma migrate deploy` then `node dist/server.js`), nginx TLS in front. GitHub Actions CI: `verify` job (lint, typecheck, tests, build) + `geometry` job (real CadQuery pytest). Step by step: `brain/operations/installation.md`.
+Target: Debian 12 (the live server is actually Ubuntu 24.04 with v2406 and v2606 installed, see `brain/STATUS.md` §3), ESI OpenFOAM v2406 (`/usr/lib/openfoam/openfoam2406`), Python venv `/opt/dive-venv`, ParaView + Xvfb, app in `/home/app` (root), systemd service `dive-api` (`prisma migrate deploy` then `node dist/server.js`), nginx TLS in front. GitHub Actions CI: `verify` job (lint, typecheck, tests, build) + `geometry` job (real CadQuery pytest). Step by step: `brain/operations/installation.md`.

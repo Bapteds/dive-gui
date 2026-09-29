@@ -45,6 +45,7 @@ Single operational error class of the API. `AppError(status, code, message, deta
 - `extractArchive(projectId, archive: Buffer): Promise<string[]>`. Zip extraction via `extractArchiveAt`; throws `INVALID_ARCHIVE` (400) or `ARCHIVE_TOO_LARGE` (413).
 - `listCaseTree`, `caseIsEmpty`, `caseFileExists`, `readCaseFile` (Buffer or null), `writeCaseFile`, `deleteCaseFile`, `deleteCaseDir` (404 `NOT_FOUND` if missing), `moveCasePath` (404 / 400 `VALIDATION_ERROR` / 409 `FILE_EXISTS`), `zipCase` (zip Buffer of files only).
 - `removeProjectStorage(projectId): Promise<void>`. `rm -rf` of all of `projects/<id>` (case, cgns, meshes, runs, viz, export, backups).
+- `replaceCasePolyMesh(projectId, srcPolyMeshDir): Promise<void>`. Replaces `case/constant/polyMesh` with a copy of an absolute polyMesh dir (`rm -rf` of the old one first, then `fs.cp` recursive). Used by the merge promote and the meshing hand-off (WS-F); moved here from `meshes.service.promoteMasterMesh`.
 - `clearCase(projectId): Promise<void>`. `rm -rf` of `case/` only.
 **Depends on**: `fileTreeStorage`. **Used by**: `meshBackupStorage`, `vizStorage`, and the services `boundary`, `conversion`, `export`, `files`, `mesh`, `meshes`, `projects`, `runs`, `terminal.gateway`, `templates`, `users`.
 **Notes**: all relative paths go through `sanitizeRelative` + `confineJoin` in the core.
@@ -77,6 +78,7 @@ Single operational error class of the API. `AppError(status, code, message, deta
 **Notes**: `listCgnsFiles` has the same name as an export of `exportStorage` with different semantics (see that section).
 
 ## `apps/api/src/lib/chamberStorage.ts`
+**Semi-spiral (2026-09-29)**: `ChamberParams = Record<string, unknown>` (params may hold the nested `spiral`; `chamberHash` / `writeChamberParams` take it); `chamberSpiralPaths(spiralHash)` → `{dir, input: in.json, result: spiral.json}` under `<STORAGE_DIR>/chamber-spiral/` (`assertSafeId` + `confineJoin`), `readChamberSpiral` (parsed JSON or null), `writeChamberSpiralInput`.
 **Role**: global cache (not tied to a project) of the chamber generator's artifacts, under `<STORAGE_DIR>/chamber/<hash>/`. The key is a content hash of the resolved geometric parameters: same inputs, same build; new parameters, new folder; no mtime-based staleness handling.
 **Exports**:
 - `CHAMBER_EXPORT_FILES`. `{ stl: 'chamber.stl', step: 'chamber.step', stepMirrored: 'chamber-mirrored.step', trisurface: 'trisurface.zip' }`; `ChamberExportKind` = keys.
@@ -205,7 +207,7 @@ Pure, defensive parsing of the patch names of a cfMesh input surface, for the pe
 ## `apps/api/src/lib/meshStorage.ts`
 **Role**: reusable library of a project's imported polyMesh sources and transient merge workspace, under `projects/<id>/meshes/`. Each source is a mini OpenFOAM case (`constant/polyMesh` + `system/`) whose id is a readable, unique slug.
 **Exports**:
-- `MeshSourceKind` (`'folder' | 'zip' | 'cgns' | 'msh'`), `MeshMeta` `{ id, name, kind, createdAt }`.
+- `MeshSourceKind` (re-exported from `@dive/shared`: `'folder' | 'zip' | 'cgns' | 'msh' | 'meshing'`, validated on read against `MESH_SOURCE_KINDS`, unknown → `folder`), `MeshMeta` `{ id, name, kind, createdAt, origin?: { sessionId } }` (`origin` set for a part sent from a meshing session).
 - `meshDirAbsolute(projectId, meshId)` (ids validated + confined), `meshPolyMeshDir`, `meshSrcDir` (`<meshId>/.src`, upload and intermediate files), `meshWorkRoot` (`meshes/.work`).
 - `normalizeMeshPaths(rawPaths): string[]`. Every path becomes `constant/polyMesh/<remainder after the last polyMesh segment>` (or the whole path if there is none). 1:1 with the input.
 - `slugifyMeshName(name): string`. NFKD, diacritics removed, lowercase, non-alphanumeric runs to `-`, fallback `mesh`.
@@ -242,6 +244,7 @@ Pure, defensive parsing of the patch names of a cfMesh input surface, for the pe
 - `sanitizeStlName(rawName): string`. Basename, NFKD without diacritics, characters outside `[A-Za-z0-9._-]` to `_`, `.fms` extension kept, otherwise forced to `.stl`, fallback `surface`.
 - `writeStl` (overwrites a file with the same name), `listStl` (`.stl` and `.fms`, sorted), `readStl`, `deleteStl` (boolean).
 - `hasResultMesh(sessionId)`. Presence of `points`, `faces`, `owner`, `boundary` in the polyMesh.
+- `hasCompleteResultMesh(sessionId)`. `hasResultMesh` + `neighbour` (solver-gate parity); gates sending a session to a project.
 - `writeRun` / `readRun`. `run.json` (`MeshingRun`).
 - `meshLogAbsolute`, `truncateMeshLog`, `appendMeshLog`, `readMeshLog(sessionId, maxBytes)` (reads at most the last `maxBytes` bytes, returns `{ content, size }`).
 - `writeMeshStatus(sessionId, state)`. Writes `status.json.tmp` then `rename` (atomic).
@@ -307,7 +310,8 @@ Pure, defensive parsing of the patch names of a cfMesh input surface, for the pe
 - `renameBoundaryPatch(content, from, to)` and `renameCellZone(content, from, to)`. Rename only a `from {` header (preceded by start, whitespace or `(`).
 - `renameFieldBoundaryPatch(content, from, to)`. Same renaming restricted to the `boundaryField` block.
 - `collapseBoundaryToSinglePatch(content, patchName = 'defaultFaces'): string`. A single patch with `startFace = min` and `nFaces = sum`, to rerun `autoPatch` from a clean base (`auto0` numbering).
-- `removeEmptyBoundaryPatches(content): string`. Removes `nFaces 0` patches and renumbers the list (unchanged if there is nothing to remove).
+- `removeEmptyBoundaryPatches(content, options?: { only?: readonly string[] }): string`. Removes `nFaces 0` patches and renumbers the list (unchanged if there is nothing to remove); with `only`, a zero-face patch is removed only if its name is listed (the meshing hand-off drops only `domainBoundary`).
+- `forceChamberPatchTypes(content): { content, retyped }`. Retypes every patch named in `CHAMBER_PATCH_TYPES` (`@dive/shared`) whose type differs (`inlet`/`outlet` → `patch`, walls → `wall`), never a constraint type (`CONSTRAINT_PATCH_TYPES`), other names untouched; own keys only; idempotent; `retyped` in file order.
 - `setBoundaryPatchType(content, patch, type): string`. Replaces or inserts `type` in the patch block.
 - `setCyclicAmiPair(content, aPatch, bPatch): string`. Rewrites both blocks as cross-referenced `cyclicAMI` (`neighbourPatch`, `transform noOrdering`) keeping `nFaces`/`startFace`; idempotent; replaces the `createNonConformalCouples` utility specific to the .org variant.
 - `getFieldPatchType(content, patch): string | null`, `setFieldPatchType(content, patch, bcType)` (entry reduced to `type`), `setFieldPatchBc(content, patch, body)` (entry replaced by a multi-line body).

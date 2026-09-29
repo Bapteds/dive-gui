@@ -62,6 +62,7 @@ import {
   getMeshEdgesController,
   getMeshGeometryController,
   getMeshManifestController,
+  meshFromMeshingController,
   rebuildMeshController,
   renameMeshPatchController,
   restoreMeshBackupController,
@@ -85,6 +86,7 @@ import { exportArtifactParamSchema } from './export.schemas';
 import {
   autoPatchSchema,
   editPatchesSchema,
+  meshFromMeshingSchema,
   renamePatchSchema,
   setPatchTypeSchema,
 } from './mesh.schemas';
@@ -411,6 +413,14 @@ export function createProjectsRouter(): Router {
     '/:id/mesh/patches',
     validate({ params: projectIdParamSchema, body: editPatchesSchema }),
     asyncHandler(editMeshPatchesController),
+  );
+  // Meshing -> project hand-off (WS-F): copy a meshing session's constant/polyMesh
+  // into the case (replaces the case mesh, backs up the original once) or into the
+  // mesh library as a new part. Visible access, like every other case mutation.
+  router.post(
+    '/:id/mesh/from-meshing',
+    validate({ params: projectIdParamSchema, body: meshFromMeshingSchema }),
+    asyncHandler(meshFromMeshingController),
   );
   // "Boundary conditions" overlay: apply a component BC preset (Turbine / Pipe /
   // DraftTube / Chamber + driving mode) to the case's 0/ fields. Multipart: a JSON

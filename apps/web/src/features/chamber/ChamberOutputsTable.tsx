@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -10,7 +10,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import chamberDimensionsImg from './assets/chamber-dimensions.png';
-import { CHAMBER_DIMENSION_MAX_MM } from '@dive/shared';
+import { CHAMBER_DIMENSION_MAX_MM, type ChamberSpiralSummary } from '@dive/shared';
 import type {
   ChamberConfidence,
   ChamberConstraint,
@@ -46,7 +46,37 @@ const STATUS_STYLES: Record<ChamberStatus, string> = {
   'raised to min': 'text-accent-strong',
   '! min>max': 'text-danger',
   'from relation': 'text-primary',
+  'from spiral': 'text-primary',
 };
+
+/** A read-only cell of a spiral-derived row (Min / Max / Exact do not apply). */
+function ReadOnlyCell({ label }: { label: string }) {
+  return (
+    <span className="inline-block w-20 px-2 py-1 text-sm text-text-secondary" title={label}>
+      <span aria-hidden="true">-</span>
+      <span className="sr-only">{label}</span>
+    </span>
+  );
+}
+
+/** One-line spiral summary above the table (spec 2026-09-29-semi-spiral-casing). */
+function SpiralNote({ summary }: { summary: ChamberSpiralSummary | null }) {
+  if (!summary) {
+    return (
+      <p className="border-b border-border px-5 py-2 text-sm text-text-secondary" role="status">
+        Semi-spiral casing: Length, B1, LT and the corner chamfers come from the spiral and fill in
+        after Generate.
+      </p>
+    );
+  }
+  return (
+    <p className="border-b border-border px-5 py-2 text-sm text-text-secondary" role="status">
+      Semi-spiral casing: {Math.round(summary.widthMm)} mm wide
+      {summary.widthBinding ? ', limited by B Kammer' : ''}; worst cross-section error{' '}
+      {summary.worstAreaErrorM2.toFixed(2)} m² at {Math.round(summary.atPhiDeg)}°.
+    </p>
+  );
+}
 
 /** Format a millimetre value for display (1 decimal, tabular). */
 function mm(value: number): string {
@@ -100,10 +130,21 @@ export function ChamberOutputsTable({
   outputs,
   constraints,
   onConstraintChange,
+  spiral,
 }: {
   outputs: ChamberOutput[] | null;
   constraints: Partial<Record<ChamberOutputKey, ChamberConstraint>>;
-  onConstraintChange: (key: ChamberOutputKey, field: ConstraintField, value: number | undefined) => void;
+  onConstraintChange: (
+    key: ChamberOutputKey,
+    field: ConstraintField,
+    value: number | undefined,
+  ) => void;
+  /**
+   * Semi-spiral casing state: `on` adds the read-only Length row and the spiral
+   * note; `summary` is the current build's spiral (null before Generate). The
+   * derived rows themselves arrive with status 'from spiral' in `outputs`.
+   */
+  spiral?: { on: boolean; summary: ChamberSpiralSummary | null };
 }) {
   const [legendOpen, setLegendOpen] = useState(false);
   return (
@@ -114,6 +155,7 @@ export function ChamberOutputsTable({
           values in mm · empirical values snap to the 50 mm grid
         </span>
       </div>
+      {spiral?.on && outputs !== null && <SpiralNote summary={spiral.summary} />}
       {outputs === null ? (
         <p className="px-5 py-8 text-center text-sm text-text-secondary">
           Enter valid inputs to compute the parameters.
@@ -140,94 +182,151 @@ export function ChamberOutputsTable({
           <TableBody>
             {outputs.map((o) => {
               const con = constraints[o.key] ?? {};
+              const derived = o.status === 'from spiral';
+              const lengthRow =
+                o.key === 'width' && spiral?.on ? (
+                  <TableRow key="spiral-length">
+                    <TableCell className="font-medium text-text">Length</TableCell>
+                    <TableCell className="text-right text-text-secondary">-</TableCell>
+                    <TableCell>
+                      <ReadOnlyCell label="Length minimum: read-only, from the spiral" />
+                    </TableCell>
+                    <TableCell>
+                      <ReadOnlyCell label="Length maximum: read-only, from the spiral" />
+                    </TableCell>
+                    <TableCell>
+                      <ReadOnlyCell label="Length exact: read-only, from the spiral" />
+                    </TableCell>
+                    <TableCell className="text-right font-semibold text-text">
+                      {spiral.summary ? mm(spiral.summary.boxMm.length) : '-'}
+                    </TableCell>
+                    <TableCell>
+                      <span className={cn('text-xs', STATUS_STYLES['from spiral'])}>
+                        from spiral
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-text-secondary">-</TableCell>
+                  </TableRow>
+                ) : null;
               // Relation-driven outputs (e.g. Height = LEB + LEOW) default to their
               // derived value but can be overridden with Min/Max/Exact like any other.
-              return (
-                <TableRow key={o.key}>
-                  <TableCell className="font-medium text-text">
-                    <span className="inline-flex items-center gap-2">
-                      {o.label}
-                      {o.refined && (
-                        <span
-                          title="Refined from its partner's known Exact value (interdependency)"
-                          className="inline-block rounded-sm bg-primary-tint px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary"
-                        >
-                          refined
-                          <span className="sr-only">
-                            : refined from its partner&apos;s known Exact value (interdependency)
-                          </span>
-                        </span>
-                      )}
-                      {o.noEffect && (
-                        <span
-                          title="Not used by the build: H Kammer no longer reads LEOW (it is set Exact, or the H = LEB + LEOW relation is off), and the geometry itself never consumes LEOW directly."
-                          className="inline-block rounded-sm border border-border bg-bg px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-secondary"
-                        >
-                          no effect
-                          <span className="sr-only">
-                            : not used by the build. H Kammer no longer reads LEOW (it is set
-                            Exact, or the H = LEB + LEOW relation is off), and the geometry never
-                            consumes LEOW directly
-                          </span>
-                        </span>
-                      )}
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-right text-text-secondary">{mm(o.model)}</TableCell>
-                  <TableCell>
-                    <NumCell
-                      value={con.min}
-                      ariaLabel={`${o.label} minimum`}
-                      onChange={(v) => onConstraintChange(o.key, 'min', v)}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <NumCell
-                      value={con.max}
-                      ariaLabel={`${o.label} maximum`}
-                      onChange={(v) => onConstraintChange(o.key, 'max', v)}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <NumCell
-                      value={con.exact}
-                      ariaLabel={`${o.label} exact`}
-                      onChange={(v) => onConstraintChange(o.key, 'exact', v)}
-                    />
-                  </TableCell>
-                  <TableCell
-                    className={cn(
-                      'text-right font-semibold',
-                      o.final <= 0 && !o.noEffect ? 'text-danger' : 'text-text',
-                    )}
-                  >
-                    {mm(o.final)}
-                  </TableCell>
-                  <TableCell>
-                    {o.final <= 0 && !o.noEffect ? (
-                      // A non-positive dimension can never build — the server
-                      // refuses it; flag it live, before Generate.
-                      <span className="text-xs text-danger">! ≤ 0 mm — not buildable</span>
-                    ) : (
-                      <span className={cn('text-xs', STATUS_STYLES[o.status])}>
-                        {o.status === 'from relation' ? o.relationLabel : o.status}
+              if (derived) {
+                // Spiral-derived row: read-only, no model or confidence claim.
+                const ro = `read-only, from the spiral`;
+                return (
+                  <TableRow key={o.key}>
+                    <TableCell className="font-medium text-text">{o.label}</TableCell>
+                    <TableCell className="text-right text-text-secondary">-</TableCell>
+                    <TableCell>
+                      <ReadOnlyCell label={`${o.label} minimum: ${ro}`} />
+                    </TableCell>
+                    <TableCell>
+                      <ReadOnlyCell label={`${o.label} maximum: ${ro}`} />
+                    </TableCell>
+                    <TableCell>
+                      <ReadOnlyCell label={`${o.label} exact: ${ro}`} />
+                    </TableCell>
+                    <TableCell className="text-right font-semibold text-text">
+                      {Number.isFinite(o.final) ? mm(o.final) : '-'}
+                    </TableCell>
+                    <TableCell>
+                      <span className={cn('text-xs', STATUS_STYLES['from spiral'])}>
+                        from spiral
                       </span>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {/* The CV error is shown, not hidden in a tooltip — title
-                        attributes never reach keyboard/touch/screen-reader users. */}
-                    <span
-                      title={`Leave-one-out cross-validation error: ${o.cvError}%`}
+                    </TableCell>
+                    <TableCell className="text-text-secondary">-</TableCell>
+                  </TableRow>
+                );
+              }
+              return (
+                <Fragment key={o.key}>
+                  <TableRow>
+                    <TableCell className="font-medium text-text">
+                      <span className="inline-flex items-center gap-2">
+                        {o.label}
+                        {o.refined && (
+                          <span
+                            title="Refined from its partner's known Exact value (interdependency)"
+                            className="inline-block rounded-sm bg-primary-tint px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary"
+                          >
+                            refined
+                            <span className="sr-only">
+                              : refined from its partner&apos;s known Exact value (interdependency)
+                            </span>
+                          </span>
+                        )}
+                        {o.noEffect && (
+                          <span
+                            title="Not used by the build: H Kammer no longer reads LEOW (it is set Exact, or the H = LEB + LEOW relation is off), and the geometry itself never consumes LEOW directly."
+                            className="inline-block rounded-sm border border-border bg-bg px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-secondary"
+                          >
+                            no effect
+                            <span className="sr-only">
+                              : not used by the build. H Kammer no longer reads LEOW (it is set
+                              Exact, or the H = LEB + LEOW relation is off), and the geometry never
+                              consumes LEOW directly
+                            </span>
+                          </span>
+                        )}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-right text-text-secondary">{mm(o.model)}</TableCell>
+                    <TableCell>
+                      <NumCell
+                        value={con.min}
+                        ariaLabel={`${o.label} minimum`}
+                        onChange={(v) => onConstraintChange(o.key, 'min', v)}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <NumCell
+                        value={con.max}
+                        ariaLabel={`${o.label} maximum`}
+                        onChange={(v) => onConstraintChange(o.key, 'max', v)}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <NumCell
+                        value={con.exact}
+                        ariaLabel={`${o.label} exact`}
+                        onChange={(v) => onConstraintChange(o.key, 'exact', v)}
+                      />
+                    </TableCell>
+                    <TableCell
                       className={cn(
-                        'inline-block whitespace-nowrap rounded-sm px-2 py-0.5 text-xs font-medium',
-                        CONF_STYLES[o.confidence],
+                        'text-right font-semibold',
+                        o.final <= 0 && !o.noEffect ? 'text-danger' : 'text-text',
                       )}
                     >
-                      {o.confidence} · {o.cvError}%
-                    </span>
-                  </TableCell>
-                </TableRow>
+                      {mm(o.final)}
+                    </TableCell>
+                    <TableCell>
+                      {o.final <= 0 && !o.noEffect ? (
+                        // A non-positive dimension can never build — the server
+                        // refuses it; flag it live, before Generate.
+                        <span className="text-xs text-danger">! ≤ 0 mm — not buildable</span>
+                      ) : (
+                        <span className={cn('text-xs', STATUS_STYLES[o.status])}>
+                          {o.status === 'from relation' ? o.relationLabel : o.status}
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {/* The CV error is shown, not hidden in a tooltip — title
+                        attributes never reach keyboard/touch/screen-reader users. */}
+                      <span
+                        title={`Leave-one-out cross-validation error: ${o.cvError}%`}
+                        className={cn(
+                          'inline-block whitespace-nowrap rounded-sm px-2 py-0.5 text-xs font-medium',
+                          CONF_STYLES[o.confidence],
+                        )}
+                      >
+                        {o.confidence} · {o.cvError}%
+                      </span>
+                    </TableCell>
+                  </TableRow>
+                  {lengthRow}
+                </Fragment>
               );
             })}
           </TableBody>

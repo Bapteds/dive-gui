@@ -55,6 +55,7 @@ Prisma lock: `provider = "sqlite"`.
 **Depends on**: `src/config/env`, `src/lib/password`, `src/lib/prisma`, `src/lib/logger`. **Used by**: `npm run db:seed` (`tsx prisma/seed.ts`).
 
 ## `apps/api/src/config/env.ts`
+**Semi-spiral (2026-09-29)**: `CHAMBER_SPIRAL_TIMEOUT_MS` (default 300000) bounds one `designSemiSpiral.py` run.
 **Role**: validated configuration for the whole API. Loads `.env` via `dotenv/config` (without overwriting variables already present, which vitest relies on), validates `process.env` with a zod schema, throws an `Error` listing every invalid variable, then exports a frozen object.
 **Exports**:
 - `Env`: type inferred from the schema.
@@ -155,6 +156,7 @@ Exports `chamberSaveCreateSchema` (`name` trim 1..`CHAMBER_SAVE_NAME_MAX`, `snap
 **Depends on**: `lib/prisma`, `@dive/shared` (types). **Used by**: `chamber-saves.controller`.
 
 ## `apps/api/src/modules/chamber/chamber.controller.ts`
+**Semi-spiral (2026-09-29)**: the build response also carries `spiral` (`ChamberSpiralSummary | null`).
 **Role**: adapters for the chamber generator.
 **Exports**:
 - `buildChamberController`: `200 { hash, outputs, warnings, stepHasVanes }`.
@@ -167,21 +169,23 @@ Exports `chamberSaveCreateSchema` (`name` trim 1..`CHAMBER_SAVE_NAME_MAX`, `snap
 Exports `createChamberRouter(): Router`, mounted on `/api/v1/chamber`, entirely behind `requireAuth`. `POST /build`, then the `/saves` routes (GET, POST, PUT `/:id`, DELETE `/:id`) declared before the `/:hash` routes so that `saves` is never captured as a hash, then `GET /:hash/manifest`, `/:hash/geometry`, `/:hash/edges` and `/:hash/export/:kind`.
 
 ## `apps/api/src/modules/chamber/chamber.schemas.ts`
+**Semi-spiral (2026-09-29)**: `semiSpiral` (default false) and `spiralFlowVelocity` (`CHAMBER_SPIRAL_FLOW_RANGE` 0.3..3, default 0.922); `superRefine` refuses `semiSpiral` with `feetEnabled` ("The semi-spiral casing needs Feet off for now. …", path `feetEnabled`; the API default for Feet is on).
 **Role**: zod schemas for the chamber routes: build body (inputs X1..X4, constraints, relations, geometric options) and hash and export parameters.
 **Exports**:
-- `chamberBuildSchema`. x1/x2/x3 bounded by `CHAMBER_INPUT_RANGES`; `constraints` and `relations` as `z.record` keyed by `CHAMBER_OUTPUT_KEYS`; dimensions in positive mm bounded by `CHAMBER_DIMENSION_MAX_MM`; defaults: `relationsMaster` true, `footAngleDeg` 40, `variant` stepped, `guideVanes` false, `chamferEnabled` true, `feetEnabled` true, `vaneAngleDeg` 50 (45..55), `outletRatio` 0.45 (0.35..0.5), `partScale` 1 (> 0, ≤ 5), `simplifyGenerator` false; `x4` positive ≤ `CHAMBER_X4_MAX`. `superRefine`: `hollowLength` required if `variant === 'hollow'`.
+- `chamberBuildSchema`. x1/x2/x3 bounded by `CHAMBER_INPUT_RANGES`; `constraints` and `relations` as `z.record` keyed by `CHAMBER_OUTPUT_KEYS`; dimensions in positive mm bounded by `CHAMBER_DIMENSION_MAX_MM`; defaults: `relationsMaster` true, `footAngleDeg` 40, `variant` stepped, `guideVanes` false, `chamferEnabled` true, `feetEnabled` true, `vaneAngleDeg` 50 (45..55), `vaneCount` 16 (literal 16 or 18, from `CHAMBER_VANE_COUNTS`), `outletRatio` 0.45 (0.35..0.5), `partScale` 1 (> 0, ≤ 5), `simplifyGenerator` false, `coneChamferEnabled` false (+ optional `coneChamferSize` in positive mm; both designs, the foot chamfer of spec 2026-09-29-cone-foot-chamfer; its height bounds are the builder's (and, With cone, the form's), not the API's); `x4` positive ≤ `CHAMBER_X4_MAX`. `superRefine`: `hollowLength` required if `variant === 'hollow'`.
 - `chamberHashParamSchema`, `chamberExportParamSchema` (`kind`: `stl`, `step`, `stepMirrored`, `trisurface`) and the associated types.
 **Notes**: the `footAngleDeg` default is 40 here and in the service, whereas the `ChamberInput` documentation in `@dive/shared` says 45.
 
 ## `apps/api/src/modules/chamber/chamber.service.ts`
+**Semi-spiral (2026-09-29)**: `buildChamber` computes the outputs on `chamberSpiralModelInput(input)` and, when `semiSpiral`, overlays `applyChamberSpiralToOutputs(…, null)` before the refusals (derived rows exempt); then `designSpiral(chamberSpiralInputs(…))` (internal: `spiralHash` = SHA-1 of the sorted inputs + `SPIRAL_ALGORITHM`, lock `spiral:<hash>`, cache `readChamberSpiral`, run `designSemiSpiral.py` with `CHAMBER_SPIRAL_TIMEOUT_MS`, `summarizeSpiralFailure`, `parseSpiralResult` validates 10 vertices + quality and builds the mm summary) runs BEFORE hashing; `resolveGeometryParams(input, outputs, spiral)` adds `semiSpiral` + `spiral {inputs, vertices, quality}` and leaves out `length`, B1, LT, the four chamfers and `chamferEnabled`. Spiral warnings come first in `warnings.json`; `ChamberBuildResult.spiral` = summary or null.
 **Role**: evaluates the empirical model (`@dive/shared`) then delegates geometry to `scripts/buildChamber.py` (CadQuery). Builds are keyed by a parameter hash, stored under `<STORAGE_DIR>/chamber/<hash>` and shared by the whole team.
 **Exports**:
 - `ChamberBuildResult` (`hash`, `outputs`, `warnings`, `stepHasVanes: boolean | null`).
-- `buildChamber(input: ChamberInput): Promise<ChamberBuildResult>`. Computes the outputs; rejects with 422 `VALIDATION_ERROR` non-positive final dimensions (chamfers exempted if `chamferEnabled === false`) and Min > Max ranges; builds the parameters in meters (`resolveGeometryParams`), computes the hash, then under a per-hash lock: returns the cache if the GLB exists, otherwise writes `params`, launches `CHAMBER_PYTHON_BIN script params dir` with `CHAMBER_BUILD_TIMEOUT_MS`, and persists `WARN:`/`WARNING:` warnings. Errors: 500 `SCRIPT_MISSING`, 502 `CHAMBER_BUILD_FAILED`.
+- `buildChamber(input: ChamberInput): Promise<ChamberBuildResult>`. Computes the outputs; rejects with 422 `VALIDATION_ERROR` non-positive final dimensions (chamfers exempted if `chamferEnabled === false`), Min > Max ranges, the blank-generator minimum (`blankGeneratorHeightRefusal`) and, with guide vanes, a typed Runner case Ø below Runner Ø + 20 mm (`runnerCaseClearanceRefusal`, WS-A v2 spec 2026-09-29-runner-case-below-le); builds the parameters in meters (`resolveGeometryParams`), computes the hash, then under a per-hash lock: returns the cache if the GLB exists, otherwise writes `params`, launches `CHAMBER_PYTHON_BIN script params dir` with `CHAMBER_BUILD_TIMEOUT_MS`, and persists `WARN:`/`WARNING:` warnings. Errors: 500 `SCRIPT_MISSING`, 502 `CHAMBER_BUILD_FAILED`.
 - `getChamberManifest(hash)` and `getChamberGeometry(hash)`. 409 `CHAMBER_NOT_BUILT` if missing.
 - `getChamberEdges(hash): Promise<Buffer | null>`.
 - `getChamberExport(hash, kind)`. Reads the artifact; for missing `step` and `stepMirrored`, generates on demand under the lock (re-runs the builder with `--step`, then `mirrorStep.py` for the mirrored version, allowed only if `stepHasVanes === true`, otherwise 409 `CHAMBER_NOT_BUILT`). 404 `NOT_FOUND` if still missing.
-- Internal: `withChamberLock(hash, fn)` (mutex via promise chain, in process memory), `extractBuilderWarnings`, `buildChamberScript`, `mirrorStepScript`, `summarizeFailure(result, action)` (a `KO:` line is shown alone as "Cannot <action>. …"; otherwise spawn / timeout / exit-code messages with a "Technical details" tail), `resolveGeometryParams` (default length `2 × width`, `outletOuterD = X1`, `dFirst`/`dMiddle` not scaled, hollow variant: generator parameters taken from `computeChamberGeneratorDims`, heights omitted if `simplifyGenerator`), `generateStep`, `generateMirroredStep`.
+- Internal: `withChamberLock(hash, fn)` (mutex via promise chain, in process memory), `extractBuilderWarnings`, `buildChamberScript`, `mirrorStepScript`, `summarizeFailure(result, action)` (a `KO:` line is shown alone as "Cannot <action>. …"; otherwise spawn / timeout / exit-code messages with a "Technical details" tail), `resolveGeometryParams` (default length `2 × width`, `outletOuterD = X1`, `dFirst`/`dMiddle` not scaled, hollow variant: generator parameters taken from `computeChamberGeneratorDims`, heights omitted if `simplifyGenerator`, `coneChamferEnabled: true` + `coneChamferSize` (m, from `chamberConeChamferMm`, blank = `CHAMBER_CONE_CHAMFER_SIZE_MM`) passed only when the Cone chamfer is on, both designs; `vaneCount` passed only when guide vanes and not 16, so 16-vane and vane-less keys never change), `generateStep`, `generateMirroredStep`.
 **Depends on**: `@dive/shared`, `lib/commandRunner`, `lib/chamberStorage`, `config/env`. **Used by**: `chamber.controller`; `lib/chamberStorage.readChamberExport` also serves `meshing.service` (transfer into a session).
 **Notes**: `x4` never enters the hash (only resolved dimensions do). The lock is process-local: several API instances could build the same hash in parallel.
 
@@ -223,6 +227,8 @@ Exports `createMeshingRouter()`, mounted on `/api/v1/meshing`, behind `requireAu
 - `addStlFiles(id, uploads)`. snappy: only readable `.stl`; cfMesh: `.stl` files or a single `.fms`, never both. Errors 400 `NO_STL`, 422 `INVALID_STL`.
 - `readStlBytes(id, name)`, `removeStlFile(id, name)` (404 if the file is missing).
 - `isMeshRunActive(id): boolean`.
+- `isSessionRunning(id): Promise<boolean>`. Registry entry OR persisted `status.json` `running`.
+- `requireMeshedSession(id): Promise<MeshingMeta>`. Gate of the meshing -> project hand-off: 404 `NOT_FOUND` "Meshing session not found.", 409 `MESH_IN_PROGRESS`, 409 `MESHING_NOT_MESHED` (no complete polyMesh, `hasCompleteResultMesh`). Used by `projects/mesh.service.importMeshFromMeshing`.
 - `startMeshingRun(id, config)`. Checks the engine (400 `ENGINE_MISMATCH`), one run per session (409 `MESH_IN_PROGRESS`), at least one surface (400 `NO_STL`), readable bounds for snappy; caps cores to the machine budget (`coreBudget`); registers the run in memory, resets `mesh.log`, writes `status.json` (`running`) and the config, then launches `finishMeshingRun` in the background (snappy or cfMesh pipeline, report, terminal status `succeeded`/`failed`/`stopped`, removal of the stale render).
 - `getMeshingLog(id): Promise<MeshingLogPayload>`. Reads at most `SOLVER_LOG_MAX_BYTES` of the log and returns its last 20,000 characters; the report is attached only once the run has finished.
 - `stopMeshingRun(id)`. Marks the stop, SIGTERM then SIGKILL after `RUN_STOP_GRACE_MS`; with no live process, flips an orphaned `running` status to `stopped`. Idempotent.
@@ -286,6 +292,7 @@ Global augmentation of `Express.Request`: `user?: PublicUser & { role: Role }` (
 **Depends on**: `app`, `config/env`, `lib/logger`, `projects/runs.service`, `meshing/meshing.service`, `projects/terminal.gateway`.
 
 ## `apps/api/.env.example`
+**Since 2026-09-29**: a `Chamber Creation` block documents `CHAMBER_SPIRAL_TIMEOUT_MS=300000` (the other chamber variables are still missing, K33).
 Template of the API environment variables, grouped by feature with operational comments (target Debian, OpenFOAM ESI, xvfb for pvbatch, OpenMPI flags, terminal disabled by default, `TRUST_PROXY`, seed). Eleven schema variables are missing from it (`MAX_UPLOAD_TOTAL_MB`, `MAX_ARCHIVE_UNCOMPRESSED_MB`, `BLOCK_MESH_BIN`, `SURFACE_FEATURE_BIN`, `SNAPPY_HEX_MESH_BIN`, `SNAPPY_STEP_TIMEOUT_MS`, `CHAMBER_PYTHON_BIN`, `BUILD_CHAMBER_SCRIPT`, `MIRROR_STEP_SCRIPT`, `CHAMBER_BUILD_TIMEOUT_MS`, `SOLVER_DECOMPOSE_TIMEOUT_MS`), despite the "Keep this in sync" instruction in `env.ts`. The `NCC_COUPLE_BIN` comment still describes the OpenFOAM.org v12 utility, whereas the current coupling is a textual cyclicAMI retyping.
 
 ## `apps/api/package.json`

@@ -18,6 +18,7 @@ import type {
   ChamberSaveSummary,
   ChamberOutput,
   ChamberOutputKey,
+  ChamberSpiralSummary,
   ChamberStatus,
   ExportStep,
   ExportStepId,
@@ -26,6 +27,8 @@ import type {
   MergeResult,
   MergeStep,
   MeshBackupInfo,
+  MeshFromMeshingRequest,
+  MeshFromMeshingResult,
   MeshImportConversion,
   MeshManifest,
   MeshPatch,
@@ -33,6 +36,7 @@ import type {
   MeshPatchSetting,
   MeshPatchType,
   MeshSource,
+  MeshToProjectTarget,
   ResidualSample,
   Role,
   RunStatus,
@@ -381,6 +385,16 @@ export interface ConvertCgnsInput {
 
 // ---- Multi-mesh import + merge ("Merge meshes" flow) ----------------------
 
+// ---- Meshing session -> project hand-off (WS-F) -------------------------------
+
+/** Re-export of the shared hand-off contract (`POST /projects/:id/mesh/from-meshing`). */
+export type { MeshFromMeshingRequest, MeshFromMeshingResult, MeshToProjectTarget };
+
+/** Envelope of `POST /projects/:id/mesh/from-meshing`. */
+export interface MeshFromMeshingResponse {
+  result: MeshFromMeshingResult;
+}
+
 /** Re-export of the shared mesh-library + merge shapes. */
 export type {
   MeshSource,
@@ -588,6 +602,7 @@ export type {
   ChamberOutputKey,
   ChamberConstraint,
   ChamberStatus,
+  ChamberSpiralSummary,
   ChamberConfidence,
   ChamberSaveOwner,
   ChamberSaveSummary,
@@ -604,6 +619,8 @@ export interface ChamberBuildResponse {
    * (unlocks "Change rotational direction"), false = vane-less fallback,
    * null = not a guide-vane build. */
   stepHasVanes: boolean | null;
+  /** Semi-spiral quality + the derived box values (mm); null when the spiral is off. */
+  spiral?: ChamberSpiralSummary | null;
 }
 
 /**

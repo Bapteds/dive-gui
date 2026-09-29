@@ -34,8 +34,19 @@ try:
 except ImportError:
     HAS_GEOMETRY_ENV = False
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "slow: runs the real semi-spiral optimiser (30 to 90 s each); "
+        "deselect with -m 'not slow'")
+
+
+# Tests that only need numpy + scipy (no CadQuery) and so always run.
+CADQUERY_FREE_MODULES = {"test_design_semi_spiral.py"}
+
+
 def pytest_collection_modifyitems(config, items):
-    """Skip every test in this directory when the geometry env is absent."""
+    """Skip the builder tests in this directory when the geometry env is absent
+    (the semi-spiral designer tests need only numpy + scipy and still run)."""
     if HAS_GEOMETRY_ENV:
         return
     skip = pytest.mark.skip(
@@ -45,7 +56,8 @@ def pytest_collection_modifyitems(config, items):
         ),
     )
     for item in items:
-        item.add_marker(skip)
+        if os.path.basename(str(item.fspath)) not in CADQUERY_FREE_MODULES:
+            item.add_marker(skip)
 
 
 @dataclass

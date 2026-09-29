@@ -1,0 +1,100 @@
+/*---------------------------------------------------------------------------*\
+  PORTABLE SIMPLE CONVERGENCE AUTO-STOP  (coded functionObject)
+  ---------------------------------------------------------------------------
+  Simpler alternative to convergenceControl. Mass-flow-weighted total-pressure
+  drop Dp0; converges when the current Dp0 stays within +/- devTol (relative) of
+  the trailing-`window` mean for `nPass` CONSECUTIVE iterations. No slope or
+  residual gate; the consecutive-pass requirement is what makes it robust
+  against the single-crossing false positive.
+
+  HOW TO USE IN ANOTHER MODEL
+  ---------------------------------------------------------------------------
+  1. copy this file into the case `system/` folder.
+  2. in system/controlDict, inside `functions { ... }`, ensure a `pTotal`
+     pressure FO runs BEFORE this one, then add:  #include "SimplePDropConvergence"
+  3. edit the USER INPUTS block below.
+  (pTotal is produced by the `pressureLossMonitors` include, or any `pressure`
+   FO with `mode total, rho rhoInf, rhoInf 1000, result pTotal`.)
+\*---------------------------------------------------------------------------*/
+SimplePDropConvergence
+{
+    type            coded;
+    libs            ("libutilityFunctionObjects.so");
+    name            SimplePDropConvergence;
+
+    executeControl  timeStep;   executeInterval 1;
+
+    codeInclude #{ #include "fvCFD.H" #include "PstreamReduceOps.H" #};
+    codeOptions #{ -I$(LIB_SRC)/finiteVolume/lnInclude #};
+    codeLibs    #{ -lfiniteVolume #};
+
+    codeData
+    #{
+        List<scalar> history_;
+        scalar historySum_ = 0.0;
+        label  nHistory_ = 0;
+        label  nextIndex_ = 0;
+        label  nConsecutive_ = 0;
+        bool   stopped_ = false;
+    #};
+
+    codeExecute
+    #{
+        // ==================== USER INPUTS ====================
+        const word   inletPatch  = "inlet";    // inflow patch name
+        const word   outletPatch = "outlet";   // outflow patch name
+        const label  window = 100;     // trailing-mean window [iterations]
+        const scalar devTol = 0.03;    // allowed relative deviation from the mean (0.03 = +/-3%)
+        const label  nPass  = 100;     // consecutive iterations that must satisfy it
+        // ====================================================
+
+        if (stopped_) return true;
+
+        const fvMesh& m = mesh();
+        const volScalarField&     pTotal = m.lookupObject<volScalarField>("pTotal");
+        const surfaceScalarField& phi    = m.lookupObject<surfaceScalarField>("phi");
+        const label in = m.boundaryMesh().findPatchID(inletPatch);
+        const label out = m.boundaryMesh().findPatchID(outletPatch);
+        if (in < 0 || out < 0)
+            FatalErrorInFunction << "inlet/outlet patch not found" << exit(FatalError);
+
+        const scalar fIn  = gSum(phi.boundaryField()[in]);
+        const scalar fOut = gSum(phi.boundaryField()[out]);
+        if (mag(fIn) < VSMALL || mag(fOut) < VSMALL)
+            FatalErrorInFunction << "near-zero flow rate" << exit(FatalError);
+        const scalar dp0 =
+            gSum(phi.boundaryField()[in] *pTotal.boundaryField()[in]) /fIn
+          - gSum(phi.boundaryField()[out]*pTotal.boundaryField()[out])/fOut;
+
+        // fill the initial reference window
+        if (nHistory_ < window)
+        {
+            history_.setSize(nHistory_ + 1);
+            history_[nHistory_] = dp0; historySum_ += dp0; ++nHistory_;
+            Info<< "SimplePDropConvergence: filling window " << nHistory_ << "/" << window
+                << ", dp0 = " << dp0 << " Pa" << nl;
+            return true;
+        }
+
+        const scalar mean = historySum_/window;
+        const scalar dev  = mag(dp0 - mean)/max(mag(mean), VSMALL);
+        if (dev <= devTol) ++nConsecutive_; else nConsecutive_ = 0;
+
+        Info<< "SimplePDropConvergence: dp0 = " << dp0 << " Pa, mean = " << mean
+            << " Pa, dev = " << 100.0*dev << " %, consecutive = "
+            << nConsecutive_ << "/" << nPass << nl;
+
+        // advance the circular trailing window
+        historySum_ += dp0 - history_[nextIndex_];
+        history_[nextIndex_] = dp0; nextIndex_ = (nextIndex_ + 1) % window;
+
+        if (nConsecutive_ >= nPass)
+        {
+            Info<< nl << "SimplePDropConvergence: CONVERGED. Writing and stopping." << nl;
+            const_cast<Time&>(m.time()).writeAndEnd();
+            stopped_ = true;
+        }
+        return true;
+    #};
+}
+// ************************************************************************* //

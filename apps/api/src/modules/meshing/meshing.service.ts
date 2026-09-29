@@ -46,6 +46,7 @@ import {
   createSession as createSessionDir,
   deleteSession,
   deleteStl,
+  hasCompleteResultMesh,
   hasResultMesh,
   listRunningSessionIds,
   listSessions as listSessionDirs,
@@ -403,6 +404,34 @@ const LOG_TAIL_CHARS = 20000;
 /** Is a run for this session currently executing in this process? */
 export function isMeshRunActive(sessionId: string): boolean {
   return activeMeshRuns.has(sessionId);
+}
+
+/**
+ * Is a run of this session in progress, either in this process (registry) or per
+ * its persisted status.json ('running')? Boot reconciliation turns an orphaned
+ * 'running' status into a terminal one, so a stale file cannot block forever.
+ */
+export async function isSessionRunning(sessionId: string): Promise<boolean> {
+  if (isMeshRunActive(sessionId)) return true;
+  return (await readMeshStatus(sessionId))?.status === 'running';
+}
+
+/**
+ * Gate for sending a session's mesh elsewhere (the project hand-off, WS-F): the
+ * session exists, no run of it is in progress, and its constant/polyMesh is
+ * complete (points, faces, owner, neighbour, boundary). Returns its metadata.
+ * @throws 404 NOT_FOUND unknown session; 409 MESH_IN_PROGRESS run active;
+ *         409 MESHING_NOT_MESHED incomplete polyMesh.
+ */
+export async function requireMeshedSession(sessionId: string): Promise<MeshingMeta> {
+  const meta = await requireSession(sessionId);
+  if (await isSessionRunning(sessionId)) {
+    throw new AppError(409, 'MESH_IN_PROGRESS', 'A mesh run is in progress for this session. Wait for it to finish.');
+  }
+  if (!(await hasCompleteResultMesh(sessionId))) {
+    throw new AppError(409, 'MESHING_NOT_MESHED', 'This session has no mesh yet. Generate the mesh first.');
+  }
+  return meta;
 }
 
 /**

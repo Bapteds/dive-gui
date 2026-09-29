@@ -1,6 +1,25 @@
 // Zod schemas for the 3D mesh viewer endpoints.
 import { z } from 'zod';
-import { MESH_PATCH_SETTINGS } from '@dive/shared';
+import { MESH_PATCH_SETTINGS, MESH_TO_PROJECT_TARGETS } from '@dive/shared';
+
+/**
+ * Body for sending a meshing session's polyMesh into a project (WS-F). The
+ * session id is a storage-safe id (same charset as assertSafeId), so an unsafe
+ * value is a 422 before any path is built. `name` only matters for the library
+ * target (defaults to the session name); it is trimmed and must not be blank.
+ */
+export const meshFromMeshingSchema = z.object({
+  sessionId: z
+    .string()
+    .trim()
+    .min(1, 'A meshing session id is required')
+    .max(200, 'Session id is too long')
+    .regex(/^[A-Za-z0-9_-]+$/, 'Invalid meshing session id'),
+  target: z.enum(MESH_TO_PROJECT_TARGETS).default('case'),
+  name: z.string().trim().min(1, 'The name must not be blank').max(120, 'Name is too long').optional(),
+});
+
+export type MeshFromMeshingInput = z.infer<typeof meshFromMeshingSchema>;
 
 /**
  * Body for renaming a boundary patch. `to` must be a valid OpenFOAM word (a

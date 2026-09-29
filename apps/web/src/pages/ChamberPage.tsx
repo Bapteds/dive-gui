@@ -1,9 +1,19 @@
-import { Suspense, lazy, useMemo, useState } from 'react';
+import { Suspense, lazy, useMemo, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader2, Send } from 'lucide-react';
-import { computeChamberOutputs } from '@dive/shared';
-import type { ChamberConstraint, ChamberInput, ChamberOutput, ChamberOutputKey } from '@/lib/api/types';
+import {
+  applyChamberSpiralToOutputs,
+  chamberSpiralModelInput,
+  computeChamberOutputs,
+} from '@dive/shared';
+import type {
+  ChamberConstraint,
+  ChamberInput,
+  ChamberOutput,
+  ChamberOutputKey,
+  ChamberSpiralSummary,
+} from '@/lib/api/types';
 import { ApiError } from '@/lib/api/client';
 import { buildChamber as buildChamberRequest, type ChamberExportKind } from '@/lib/api/chamber';
 import { toast } from '@/components/ui/sonner';
@@ -15,6 +25,7 @@ import {
   chamberFormSchema,
   chamberInputToFormValues,
   computeChamberAutoDims,
+  semiSpiralToggle,
   type ChamberFormValues,
 } from '@/features/chamber/chamberForm';
 import { ChamberSavesMenu } from '@/features/chamber/ChamberSavesMenu';
@@ -52,9 +63,9 @@ export function ChamberPage() {
     mode: 'onChange',
   });
 
-  const [constraints, setConstraints] = useState<Partial<Record<ChamberOutputKey, ChamberConstraint>>>(
-    {},
-  );
+  const [constraints, setConstraints] = useState<
+    Partial<Record<ChamberOutputKey, ChamberConstraint>>
+  >({});
   const [hash, setHash] = useState<string | null>(null);
   // Whether the LAST build gets the STEP menu with "Change rotational
   // direction" (kept in step with `hash`): a guide-vane build whose STEP is
@@ -72,18 +83,42 @@ export function ChamberPage() {
   // every error/warning surfaces in both places.
   const [buildErrors, setBuildErrors] = useState<string[]>([]);
   const [sendOpen, setSendOpen] = useState(false);
+  // Chamfer state before "Semi-spiral casing" was ticked (null = none saved).
+  const chamferBeforeSpiral = useRef<boolean | null>(null);
+  // Semi-spiral quality + derived box of the LAST build (kept in step with `hash`).
+  const [lastSpiral, setLastSpiral] = useState<ChamberSpiralSummary | null>(null);
   const build = useBuildChamber();
 
   const values = watch();
+  // The last build's spiral only describes the CURRENT inputs while nothing
+  // drifted since Generate; otherwise its derived values would be stale.
+  const lastBuildMatches =
+    lastBuildInput !== null &&
+    chamberBodyKey({ ...values, constraints }) === chamberBodyKey(lastBuildInput);
+  const spiralSummary = values.semiSpiral && lastBuildMatches ? lastSpiral : null;
   const relationsKey = JSON.stringify(values.relations);
   const outputs = useMemo<ChamberOutput[] | null>(() => {
-    const { x1, x2, x3, relationsMaster, relations } = values;
+    const { x1, x2, x3, relationsMaster, relations, semiSpiral } = values;
     if (![x1, x2, x3].every((v) => typeof v === 'number' && Number.isFinite(v))) {
       return null;
     }
-    return computeChamberOutputs({ x1, x2, x3, constraints, relationsMaster, relations });
+    // Semi-spiral casing: the derived rows ignore their constraints and read
+    // 'from spiral' (the value arrives with the build), as on the server.
+    const model = computeChamberOutputs(
+      chamberSpiralModelInput({ x1, x2, x3, constraints, relationsMaster, relations, semiSpiral }),
+    );
+    return semiSpiral ? applyChamberSpiralToOutputs(model, spiralSummary?.boxMm ?? null) : model;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [values.x1, values.x2, values.x3, values.relationsMaster, relationsKey, constraints]);
+  }, [
+    values.x1,
+    values.x2,
+    values.x3,
+    values.relationsMaster,
+    values.semiSpiral,
+    relationsKey,
+    constraints,
+    spiralSummary,
+  ]);
 
   // Auto length shown on the (blank) length field = 2 x the final width (mm).
   const widthFinal = outputs?.find((o) => o.key === 'width')?.final ?? null;
@@ -136,14 +171,18 @@ export function ChamberPage() {
     footAngleDeg: 'Foot angle',
     partScale: 'Part scale',
     vaneAngleDeg: 'Vane angle',
+    vaneCount: 'Guide vane count',
     outletRatio: 'Outlet ratio',
     dFirst: 'Runner case Ø',
     dMiddle: 'Guide vanes Ø',
     hollowLength: 'Cone length',
     wallThickness: 'Wall thickness',
+    coneChamferSize: 'Cone chamfer size',
     centralDiameter: 'Generator Ø',
     centralHeight: 'Generator height',
     domeHeight: 'Dome height',
+    feetEnabled: 'Feet',
+    spiralFlowVelocity: 'Casing flow velocity',
   };
 
   const onGenerate = handleSubmit(
@@ -167,6 +206,7 @@ export function ChamberPage() {
           setHash(res.hash);
           setOfferMirror(Boolean(v.guideVanes) && res.stepHasVanes !== false);
           setLastBuildInput(body);
+          setLastSpiral(res.spiral ?? null);
           setBuildErrors([]);
           setBuildWarnings(res.warnings ?? []);
           if (res.warnings?.length) {
@@ -176,8 +216,7 @@ export function ChamberPage() {
           }
         },
         onError: (err) => {
-          const message =
-            err instanceof ApiError ? err.message : 'Could not generate the chamber.';
+          const message = err instanceof ApiError ? err.message : 'Could not generate the chamber.';
           // Both places: the persistent notices panel and the top-right toast.
           // The previous build's warnings would sit confusingly under the new
           // red errors — clear them (nothing new was built).
@@ -194,7 +233,8 @@ export function ChamberPage() {
       const messages = Object.entries(fieldErrors)
         .map(([key, err]) => {
           const label = FIELD_LABELS[key as keyof ChamberFormValues] ?? key;
-          const detail = err && 'message' in err && err.message ? String(err.message) : 'Invalid value';
+          const detail =
+            err && 'message' in err && err.message ? String(err.message) : 'Invalid value';
           return `${label}: ${detail}`;
         })
         .filter(Boolean);
@@ -227,10 +267,7 @@ export function ChamberPage() {
   // form or constraints have drifted from it since Generate. Compared via
   // chamberBodyKey: the two objects hold their keys in different orders
   // (watch() registration order vs zod parse output in schema order).
-  const isStale =
-    hash !== null &&
-    lastBuildInput !== null &&
-    chamberBodyKey({ ...values, constraints }) !== chamberBodyKey(lastBuildInput);
+  const isStale = hash !== null && lastBuildInput !== null && !lastBuildMatches;
 
   return (
     <div className="flex flex-col gap-6">
@@ -248,6 +285,8 @@ export function ChamberPage() {
               setHash(null);
               setOfferMirror(false);
               setLastBuildInput(null);
+              setLastSpiral(null);
+              chamferBeforeSpiral.current = null;
               setBuildWarnings([]);
               setBuildErrors([]);
             }}
@@ -264,6 +303,22 @@ export function ChamberPage() {
             isBuilding={build.isPending}
             variant={values.variant}
             simplifyGenerator={values.simplifyGenerator}
+            coneChamferEnabled={values.coneChamferEnabled}
+            semiSpiral={values.semiSpiral}
+            onSemiSpiralChange={(on) => {
+              // Feet / Chamfer off with the spiral, Chamfer restored when it goes.
+              const next = semiSpiralToggle(on, values, chamferBeforeSpiral.current);
+              chamferBeforeSpiral.current = next.savedChamfer;
+              if (next.set.feetEnabled !== undefined) {
+                setValue('feetEnabled', next.set.feetEnabled, {
+                  shouldValidate: true,
+                  shouldDirty: true,
+                });
+              }
+              if (next.set.chamferEnabled !== undefined) {
+                setValue('chamferEnabled', next.set.chamferEnabled, { shouldDirty: true });
+              }
+            }}
             autoLengthMm={autoLengthMm}
             autoDims={autoDims}
             relationsMaster={values.relationsMaster}
@@ -278,9 +333,12 @@ export function ChamberPage() {
               Download the built chamber for meshing or CAD.
             </p>
             {isStale && (
-              <p className="mb-3 rounded-sm border border-accent/40 bg-accent-tint px-3 py-2 text-xs text-text" role="status">
-                Inputs changed since this build — the preview and downloads
-                still show the previous geometry. Generate to refresh.
+              <p
+                className="mb-3 rounded-sm border border-accent/40 bg-accent-tint px-3 py-2 text-xs text-text"
+                role="status"
+              >
+                Inputs changed since this build — the preview and downloads still show the previous
+                geometry. Generate to refresh.
               </p>
             )}
             <ChamberExportButtons
@@ -300,9 +358,7 @@ export function ChamberPage() {
                 Send to Meshing
               </Button>
             </div>
-            {hash && (
-              <SendToMeshingDialog hash={hash} open={sendOpen} onOpenChange={setSendOpen} />
-            )}
+            {hash && <SendToMeshingDialog hash={hash} open={sendOpen} onOpenChange={setSendOpen} />}
           </div>
         </div>
 
@@ -314,7 +370,11 @@ export function ChamberPage() {
                 role="status"
                 aria-live="polite"
               >
-                <Loader2 className="size-6 animate-spin text-primary" strokeWidth={1.75} aria-hidden="true" />
+                <Loader2
+                  className="size-6 animate-spin text-primary"
+                  strokeWidth={1.75}
+                  aria-hidden="true"
+                />
               </div>
             }
           >
@@ -329,6 +389,7 @@ export function ChamberPage() {
         outputs={outputs}
         constraints={constraints}
         onConstraintChange={onConstraintChange}
+        spiral={{ on: values.semiSpiral, summary: spiralSummary }}
       />
     </div>
   );

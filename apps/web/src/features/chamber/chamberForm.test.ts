@@ -6,6 +6,7 @@ import {
   chamberFormSchema,
   chamberInputToFormValues,
   computeChamberAutoDims,
+  semiSpiralToggle,
   type ChamberFormValues,
 } from './chamberForm';
 
@@ -33,9 +34,9 @@ describe('chamberFormSchema', () => {
       expect(issue?.message).toBe('Enter a cone length: the With cone design needs one.');
     }
     // The same blank is fine on stepped (the field is unused there).
-    expect(parse({ ...CHAMBER_FORM_DEFAULTS, variant: 'stepped', hollowLength: undefined }).success).toBe(
-      true,
-    );
+    expect(
+      parse({ ...CHAMBER_FORM_DEFAULTS, variant: 'stepped', hollowLength: undefined }).success,
+    ).toBe(true);
   });
 
   it.each([
@@ -48,14 +49,26 @@ describe('chamberFormSchema', () => {
     ['vaneAngleDeg above 55', { vaneAngleDeg: 56 }],
     ['outletRatio below 0.35', { outletRatio: 0.34 }],
     ['outletRatio above 0.50', { outletRatio: 0.51 }],
+    ['a vane count of 17', { vaneCount: 17 as unknown as 16 }],
   ] as const)('rejects %s', (_label, patch) => {
     expect(parse({ ...CHAMBER_FORM_DEFAULTS, ...patch }).success).toBe(false);
   });
 
+  it('defaults the guide vane count to 16 and accepts 16 or 18', () => {
+    expect(CHAMBER_FORM_DEFAULTS.vaneCount).toBe(16);
+    expect(parse({ ...CHAMBER_FORM_DEFAULTS, vaneCount: 18 }).success).toBe(true);
+    const bad = parse({ ...CHAMBER_FORM_DEFAULTS, vaneCount: 17 as unknown as 16 });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      const issue = bad.error.issues.find((i) => i.path.join('.') === 'vaneCount');
+      expect(issue?.message).toBe('Choose 16 or 18 vanes');
+    }
+  });
+
   it('keeps the five dimension overrides optional but positive', () => {
-    expect(
-      parse({ ...CHAMBER_FORM_DEFAULTS, dFirst: undefined, dMiddle: undefined }).success,
-    ).toBe(true);
+    expect(parse({ ...CHAMBER_FORM_DEFAULTS, dFirst: undefined, dMiddle: undefined }).success).toBe(
+      true,
+    );
     expect(parse({ ...CHAMBER_FORM_DEFAULTS, dFirst: 2800 }).success).toBe(true);
     expect(parse({ ...CHAMBER_FORM_DEFAULTS, dFirst: 0 }).success).toBe(false);
     expect(parse({ ...CHAMBER_FORM_DEFAULTS, dMiddle: -10 }).success).toBe(false);
@@ -82,6 +95,7 @@ describe('chamberInputToFormValues', () => {
       variant: 'hollow',
       guideVanes: true,
       vaneAngleDeg: 52,
+      vaneCount: 18,
       outletRatio: 0.4,
       relations: { ...CHAMBER_FORM_DEFAULTS.relations, height: false },
       lengthOverride: 4200,
@@ -96,7 +110,16 @@ describe('chamberInputToFormValues', () => {
 
   it('fills a sparse snapshot with the same defaults as a fresh form', () => {
     const loaded = chamberInputToFormValues({ x1: 1450, x2: 7.85, x3: 8 });
-    expect(loaded).toEqual({ ...CHAMBER_FORM_DEFAULTS, wallThickness: undefined, hollowLength: undefined });
+    expect(loaded).toEqual({
+      ...CHAMBER_FORM_DEFAULTS,
+      wallThickness: undefined,
+      hollowLength: undefined,
+    });
+  });
+
+  it('loads an old save without a vane count as 16 vanes', () => {
+    const loaded = chamberInputToFormValues({ x1: 1450, x2: 7.85, x3: 8, guideVanes: true });
+    expect(loaded.vaneCount).toBe(16);
   });
 
   it('keeps saved per-relation toggles and defaults the missing ones', () => {
@@ -147,6 +170,83 @@ describe('simplifyGenerator (generator pinned to the chamber top)', () => {
       true,
     );
     expect(chamberInputToFormValues(base).simplifyGenerator).toBe(false);
+  });
+});
+
+describe('cone chamfer (45° foot chamfer on the lower outer edge of the LE part, both designs)', () => {
+  const hollow: ChamberFormValues = { ...CHAMBER_FORM_DEFAULTS, variant: 'hollow' };
+  const stepped: ChamberFormValues = { ...CHAMBER_FORM_DEFAULTS, variant: 'stepped' };
+
+  function issueOn(values: ChamberFormValues, key: string) {
+    const res = parse(values);
+    if (res.success) return undefined;
+    return res.error.issues.find((i) => i.path.join('.') === key)?.message;
+  }
+
+  it('ships off, with a 50 mm size', () => {
+    expect(CHAMBER_FORM_DEFAULTS.coneChamferEnabled).toBe(false);
+    expect(CHAMBER_FORM_DEFAULTS.coneChamferSize).toBe(50);
+    expect(parse({ ...hollow, coneChamferEnabled: true }).success).toBe(true);
+    expect(parse({ ...stepped, coneChamferEnabled: true }).success).toBe(true);
+  });
+
+  it('loads an old save as off / 50 and round-trips a saved chamfer', () => {
+    const base = { x1: 1450, x2: 7, x3: 10, variant: 'stepped' } as ChamberInput;
+    const old = chamberInputToFormValues(base);
+    expect(old.coneChamferEnabled).toBe(false);
+    expect(old.coneChamferSize).toBe(50);
+    const saved = chamberInputToFormValues({
+      ...base,
+      coneChamferEnabled: true,
+      coneChamferSize: 30,
+    });
+    expect(saved.coneChamferEnabled).toBe(true);
+    expect(saved.coneChamferSize).toBe(30);
+  });
+
+  /** Cone chamfer ticked, plus a patch (With cone unless the patch says otherwise). */
+  const on = (patch: Partial<ChamberFormValues>): ChamberFormValues => ({
+    ...hollow,
+    coneChamferEnabled: true,
+    ...patch,
+  });
+
+  it('refuses a size taller than Cone length minus Wall thickness (With cone)', () => {
+    const values = on({ coneChamferSize: 40, wallThickness: 50, hollowLength: 80 });
+    expect(issueOn(values, 'coneChamferSize')).toBe(
+      'Must be at most Cone length minus Wall thickness (30 mm)',
+    );
+    // Blank wall thickness = the 50 mm default.
+    expect(
+      issueOn(on({ coneChamferSize: 40, wallThickness: undefined, hollowLength: 80 }), 'coneChamferSize'),
+    ).toBe('Must be at most Cone length minus Wall thickness (30 mm)');
+    // Equal to the bound is allowed.
+    expect(parse(on({ coneChamferSize: 30, wallThickness: 50, hollowLength: 80 })).success).toBe(
+      true,
+    );
+  });
+
+  it('allows a size above the Wall thickness (the part widens outward)', () => {
+    expect(parse(on({ coneChamferSize: 60, wallThickness: 50, hollowLength: 200 })).success).toBe(
+      true,
+    );
+  });
+
+  it('leaves the Closed generator bound to the builder (it depends on H Kammer)', () => {
+    expect(parse(on({ variant: 'stepped', coneChamferSize: 400, hollowLength: 80 })).success).toBe(
+      true,
+    );
+  });
+
+  it('ignores the size when the option is off', () => {
+    expect(
+      parse(on({ coneChamferEnabled: false, coneChamferSize: 400, hollowLength: 80 })).success,
+    ).toBe(true);
+  });
+
+  it('refuses a non-positive size in both designs', () => {
+    expect(parse(on({ coneChamferSize: 0 })).success).toBe(false);
+    expect(parse(on({ variant: 'stepped', coneChamferSize: 0 })).success).toBe(false);
   });
 });
 
@@ -231,5 +331,65 @@ describe('computeChamberAutoDims', () => {
     expect(dims.centralHeight).toBeNull();
     expect(dims.domeHeight).toBeNull();
     expect(dims.dFirst).toBeCloseTo(1.14703 * 2400, 5); // dLast ratios don't need X1–X3
+  });
+});
+
+describe('semi-spiral casing (spec 2026-09-29-semi-spiral-casing)', () => {
+  it('ships off at 0.922 m/s and accepts 0.3 to 3 m/s', () => {
+    expect(CHAMBER_FORM_DEFAULTS.semiSpiral).toBe(false);
+    expect(CHAMBER_FORM_DEFAULTS.spiralFlowVelocity).toBe(0.922);
+    const on = { ...CHAMBER_FORM_DEFAULTS, semiSpiral: true, feetEnabled: false };
+    expect(parse({ ...on, spiralFlowVelocity: 0.3 }).success).toBe(true);
+    expect(parse({ ...on, spiralFlowVelocity: 3 }).success).toBe(true);
+    expect(parse({ ...on, spiralFlowVelocity: 0.29 }).success).toBe(false);
+    expect(parse({ ...on, spiralFlowVelocity: 3.1 }).success).toBe(false);
+  });
+
+  it('refuses Feet on with the spiral, on the Feet field', () => {
+    const res = parse({ ...CHAMBER_FORM_DEFAULTS, semiSpiral: true, feetEnabled: true });
+    expect(res.success).toBe(false);
+    expect(res.error?.issues.map((i) => i.path.join('.'))).toContain('feetEnabled');
+  });
+
+  it('loads old saves with the spiral off at 0.922 m/s and round-trips a saved spiral', () => {
+    const base = { x1: 1450, x2: 7, x3: 10 } as ChamberInput;
+    const old = chamberInputToFormValues(base);
+    expect(old.semiSpiral).toBe(false);
+    expect(old.spiralFlowVelocity).toBe(0.922);
+    const saved = chamberInputToFormValues({
+      ...base,
+      semiSpiral: true,
+      spiralFlowVelocity: 0.7,
+      feetEnabled: false,
+    });
+    expect(saved.semiSpiral).toBe(true);
+    expect(saved.spiralFlowVelocity).toBe(0.7);
+  });
+});
+
+describe('semiSpiralToggle (Chamfer off with the spiral, restored when it goes)', () => {
+  it('turns Feet and Chamfer off when the spiral is ticked and remembers Chamfer', () => {
+    expect(semiSpiralToggle(true, { chamferEnabled: true }, null)).toEqual({
+      set: { feetEnabled: false, chamferEnabled: false },
+      savedChamfer: true,
+    });
+  });
+
+  it('restores the Chamfer state saved when the spiral was ticked', () => {
+    expect(semiSpiralToggle(false, { chamferEnabled: false }, true)).toEqual({
+      set: { chamferEnabled: true },
+      savedChamfer: null,
+    });
+    expect(semiSpiralToggle(false, { chamferEnabled: false }, false)).toEqual({
+      set: { chamferEnabled: false },
+      savedChamfer: null,
+    });
+  });
+
+  it('leaves Chamfer alone when nothing was saved (e.g. a save loaded with the spiral on)', () => {
+    expect(semiSpiralToggle(false, { chamferEnabled: false }, null)).toEqual({
+      set: {},
+      savedChamfer: null,
+    });
   });
 });

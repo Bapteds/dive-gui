@@ -5,9 +5,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   CHAMBER_GENERATOR_FRAME_DIAMETERS_MM,
+  CHAMBER_SPIRAL_CLEARANCE_M,
+  CHAMBER_SPIRAL_DERIVED_KEYS,
+  CHAMBER_SPIRAL_FLOW_RANGE,
+  CHAMBER_SPIRAL_PHI_START_DEG,
+  applyChamberSpiralToOutputs,
+  chamberSpiralBoxDims,
+  chamberSpiralInputs,
+  chamberSpiralModelInput,
   CHAMBER_GRID_MM,
   computeChamberGeneratorDims,
   blankGeneratorHeightRefusal,
+  runnerCaseClearanceRefusal,
   computeChamberOutputs,
   nonPositiveChamberFinals,
   snapToChamberGrid,
@@ -444,5 +453,177 @@ describe('blankGeneratorHeightRefusal (blank generator height)', () => {
     expect(refusal({ ...BASE, ...H(1800), ...SIMPLIFY, hollowLength: 200, centralHeight: 500 })).toBeNull();
     expect(refusal({ ...BASE, ...H(1800), ...SIMPLIFY, hollowLength: 1500 })).toBeNull();
     expect(refusal({ ...BASE, ...H(1800), variant: 'hollow', hollowLength: 200 })).toBeNull();
+  });
+});
+
+describe('runnerCaseClearanceRefusal (Runner case Ø vs the outlet with guide vanes)', () => {
+  // Spec 2026-09-29-runner-case-below-le (WS-A v2): below LE Ø the runner case
+  // gets a 20 mm ledge; only Runner case Ø < Runner Ø (X1 = 1450) + 20 mm is refused.
+  const LE = { constraints: { dLast: { exact: 1600 } } };
+  const VANES = { guideVanes: true };
+  const refusal = (input: Parameters<typeof runnerCaseClearanceRefusal>[0]) =>
+    runnerCaseClearanceRefusal(input, computeChamberOutputs(input));
+
+  it('refuses a Runner case Ø below Runner Ø + 20 mm and names the three levers', () => {
+    const msg = refusal({ ...BASE, ...LE, ...VANES, dFirst: 1460 });
+    expect(msg).toBe(
+      'With guide vanes the runner case must clear the outlet: Runner case Ø (1460 mm) ' +
+        'must be at least Runner Ø + 20 mm (1470 mm). Increase Runner case Ø, clear it ' +
+        '(auto ≈ 1835 mm), or turn Guide vanes off.',
+    );
+  });
+
+  it('accepts a Runner case Ø below LE Ø from Runner Ø + 20 mm up (ledge or snap)', () => {
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1469 })).not.toBeNull();
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1470 })).toBeNull();
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1500 })).toBeNull();
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1550 })).toBeNull();
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1595 })).toBeNull();
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1600 })).toBeNull();
+  });
+
+  it('compares the scaled Runner case Ø with the real (unscaled) Runner Ø', () => {
+    // The outlet follows X1 directly; the runner case scales with Part scale.
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1400, partScale: 1.1 })).toBeNull();
+    expect(refusal({ ...BASE, ...LE, ...VANES, dFirst: 1600, partScale: 0.9 })).toBe(
+      'With guide vanes the runner case must clear the outlet: Runner case Ø (1600 mm, ' +
+        '1440 mm at Part scale 0.9) must be at least Runner Ø + 20 mm (1470 mm). Increase ' +
+        'Runner case Ø, clear it (auto ≈ 1835 mm), or turn Guide vanes off.',
+    );
+  });
+
+  it('leaves the auto Runner case Ø and vane-less builds alone', () => {
+    expect(refusal({ ...BASE, ...LE, ...VANES })).toBeNull();
+    expect(refusal({ ...BASE, ...LE, dFirst: 1450 })).toBeNull();
+    expect(refusal({ ...BASE, ...LE, guideVanes: false, dFirst: 1450 })).toBeNull();
+  });
+});
+
+describe('semi-spiral casing helpers (spec 2026-09-29-semi-spiral-casing)', () => {
+  // The stepped-spiral fixture vertices (metres, axis frame).
+  const VERTICES = [
+    { id: 'V0', x: -2.7, y: -2.13664 },
+    { id: 'V1', x: -2.7, y: 0.75 },
+    { id: 'V2', x: -1.3, y: 2.2 },
+    { id: 'V3', x: 0.55, y: 2.2 },
+    { id: 'V4', x: 1.7, y: 1.0 },
+    { id: 'V5', x: 1.7, y: 0.15 },
+    { id: 'V6', x: 1.492759, y: -0.54332 },
+    { id: 'V7', x: 1.492759, y: -0.99332 },
+    { id: 'V8', x: 1.7, y: -1.68664 },
+    { id: 'V9', x: 1.7, y: -2.13664 },
+  ];
+
+  it('ships the fixed rules and the flow velocity range', () => {
+    expect(CHAMBER_SPIRAL_FLOW_RANGE).toEqual({ min: 0.3, max: 3, default: 0.922 });
+    expect(CHAMBER_SPIRAL_CLEARANCE_M).toBe(0.2);
+    expect(CHAMBER_SPIRAL_PHI_START_DEG).toBe(160);
+    expect([...CHAMBER_SPIRAL_DERIVED_KEYS]).toEqual([
+      'distFromSideChamfer1',
+      'chamferLength1',
+      'chamferWidth1',
+      'chamferLength2',
+      'chamferWidth2',
+      'distFromEnd',
+    ]);
+  });
+
+  it('derives the doubly chamfered box from the spiral vertices, mirrored like the builder', () => {
+    // The builder mirrors the tool frame (x -> -X) so the spiral turns with the
+    // guide vanes: B1 is measured to L1 and chamfer 1 is L2 (spec section 5.5).
+    const box = chamberSpiralBoxDims(VERTICES);
+    expect(box.width).toBeCloseTo(4.4, 9); // x4 - x_in
+    expect(box.length).toBeCloseTo(2.2 + 2.13664, 9); // y_top - foot_y
+    expect(box.distFromSideChamfer1).toBeCloseTo(2.7, 9); // -x_in
+    expect(box.distFromEnd).toBeCloseTo(2.2, 9); // y_top
+    expect(box.chamferLength1).toBeCloseTo(1.45, 9); // y_top - y1
+    expect(box.chamferWidth1).toBeCloseTo(1.4, 9); // x2 - x_in
+    expect(box.chamferLength2).toBeCloseTo(1.2, 9); // y_top - y4
+    expect(box.chamferWidth2).toBeCloseTo(1.15, 9); // x4 - x3
+  });
+
+  it('maps the chamber to the tool inputs in metres (spec section 4)', () => {
+    const input = { ...BASE, semiSpiral: true, spiralFlowVelocity: 0.8, partScale: 1.1 };
+    const outputs = computeChamberOutputs(input);
+    const f = (k: string) => outputs.find((o) => o.key === k)!.final;
+    const inputs = chamberSpiralInputs(input, outputs);
+    // widest part = the auto runner case (1.14703 x LE), scaled; 200 mm unscaled gap
+    expect(inputs.D_LE).toBeCloseTo((1.14703 * f('dLast') * 1.1) / 1000, 12);
+    expect(inputs).toMatchObject({
+      Q: 8,
+      c_flow: 0.8,
+      clearance: 0.2,
+      phi_start: 160,
+    });
+    expect(inputs.H_ch).toBeCloseTo(f('height') / 1000, 12);
+    expect(inputs.max_width).toBeCloseTo(f('width') / 1000, 12);
+    // a typed Guide vanes Ø wider than the runner case becomes the widest part
+    const wide = chamberSpiralInputs({ ...input, dMiddle: 5000 }, outputs);
+    expect(wide.D_LE).toBeCloseTo(5.5, 12);
+    // the default velocity
+    expect(chamberSpiralInputs({ ...BASE, semiSpiral: true }, outputs).c_flow).toBe(0.922);
+  });
+
+  it('counts the cone chamfer widening in the widest part (spec 2026-09-29-cone-foot-chamfer)', () => {
+    const input = { ...BASE, semiSpiral: true, partScale: 1.1 };
+    const outputs = computeChamberOutputs(input);
+    const dLast = outputs.find((o) => o.key === 'dLast')!.final;
+    // Runner case flush with LE: the widened LE part (LE Ø + 2 x size) is the widest.
+    const flush = { ...input, dFirst: dLast };
+    expect(chamberSpiralInputs(flush, outputs).D_LE).toBeCloseTo((dLast * 1.1) / 1000, 12);
+    expect(
+      chamberSpiralInputs({ ...flush, coneChamferEnabled: true }, outputs).D_LE,
+    ).toBeCloseTo(((dLast + 100) * 1.1) / 1000, 12);
+    expect(
+      chamberSpiralInputs({ ...flush, coneChamferEnabled: true, coneChamferSize: 30 }, outputs)
+        .D_LE,
+    ).toBeCloseTo(((dLast + 60) * 1.1) / 1000, 12);
+    // Off: the size is ignored.
+    expect(
+      chamberSpiralInputs({ ...flush, coneChamferEnabled: false, coneChamferSize: 30 }, outputs)
+        .D_LE,
+    ).toBeCloseTo((dLast * 1.1) / 1000, 12);
+    // The auto runner case (1.147 x LE) still wins over a 50 mm widening.
+    expect(
+      chamberSpiralInputs({ ...input, coneChamferEnabled: true }, outputs).D_LE,
+    ).toBeCloseTo((1.14703 * dLast * 1.1) / 1000, 12);
+  });
+
+  it('ignores constraints left on the derived rows while the spiral is on', () => {
+    // A B1 Exact refines B Kammer (the spiral's width limit): not while B1 is derived.
+    const input = {
+      ...BASE,
+      constraints: { distFromSideChamfer1: { exact: 1234 }, width: { max: 9000 } },
+    };
+    const on = chamberSpiralModelInput({ ...input, semiSpiral: true });
+    expect(on.constraints).toEqual({ width: { max: 9000 } });
+    const off = { ...input, semiSpiral: false };
+    expect(chamberSpiralModelInput(off)).toBe(off);
+    const f = (i: typeof input) => byKey(computeChamberOutputs(i)).get('width')!.final;
+    expect(f(on)).toBe(f({ ...BASE, constraints: { width: { max: 9000 } } }));
+    expect(f(input)).not.toBe(f(on));
+  });
+
+  it('marks the derived rows "from spiral" with the derived value, or none before Generate', () => {
+    const outputs = computeChamberOutputs({
+      ...BASE,
+      constraints: { chamferLength1: { min: 900, max: 100 } },
+    });
+    const box = chamberSpiralBoxDims(VERTICES);
+    const boxMm = Object.fromEntries(
+      Object.entries(box).map(([k, v]) => [k, v * 1000]),
+    ) as typeof box;
+    const filled = byKey(applyChamberSpiralToOutputs(outputs, boxMm));
+    for (const key of CHAMBER_SPIRAL_DERIVED_KEYS) {
+      expect(filled.get(key)!.status).toBe('from spiral');
+      expect(filled.get(key)!.final).toBeCloseTo(boxMm[key], 9);
+    }
+    // an inverted range on a derived row no longer counts
+    expect(filled.get('chamferLength1')!.status).toBe('from spiral');
+    // other rows untouched (B Kammer stays the width limit)
+    expect(filled.get('width')).toEqual(byKey(outputs).get('width'));
+    const blank = byKey(applyChamberSpiralToOutputs(outputs, null));
+    expect(Number.isNaN(blank.get('distFromEnd')!.final)).toBe(true);
+    expect(nonPositiveChamberFinals([...blank.values()])).toEqual([]);
   });
 });

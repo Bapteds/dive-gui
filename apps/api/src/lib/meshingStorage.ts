@@ -285,6 +285,21 @@ export async function hasResultMesh(sessionId: string): Promise<boolean> {
   return true;
 }
 
+/**
+ * Stricter than hasResultMesh: the session's polyMesh also has `neighbour`, like
+ * the solver gate (computeRunnable). Gates sending a session to a project, so a
+ * half-written or render-only mesh never replaces a case mesh.
+ */
+export async function hasCompleteResultMesh(sessionId: string): Promise<boolean> {
+  if (!(await hasResultMesh(sessionId))) return false;
+  try {
+    await fs.stat(path.join(sessionPolyMeshDir(sessionId), 'neighbour'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Persist the last run report (config + per-step result + timestamp). */
 export async function writeRun(sessionId: string, run: MeshingRun): Promise<void> {
   const file = path.join(sessionDirAbsolute(sessionId), 'run.json');
