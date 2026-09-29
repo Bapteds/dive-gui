@@ -46,6 +46,7 @@ describe('chamber saves', () => {
       variant: 'stepped',
       guideVanes: false,
       vaneAngleDeg: 50,
+      vaneCount: 16,
     });
 
     const list = await request(app)

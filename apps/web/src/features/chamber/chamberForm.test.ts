@@ -48,8 +48,20 @@ describe('chamberFormSchema', () => {
     ['vaneAngleDeg above 55', { vaneAngleDeg: 56 }],
     ['outletRatio below 0.35', { outletRatio: 0.34 }],
     ['outletRatio above 0.50', { outletRatio: 0.51 }],
+    ['a vane count of 17', { vaneCount: 17 as unknown as 16 }],
   ] as const)('rejects %s', (_label, patch) => {
     expect(parse({ ...CHAMBER_FORM_DEFAULTS, ...patch }).success).toBe(false);
+  });
+
+  it('defaults the guide vane count to 16 and accepts 16 or 18', () => {
+    expect(CHAMBER_FORM_DEFAULTS.vaneCount).toBe(16);
+    expect(parse({ ...CHAMBER_FORM_DEFAULTS, vaneCount: 18 }).success).toBe(true);
+    const bad = parse({ ...CHAMBER_FORM_DEFAULTS, vaneCount: 17 as unknown as 16 });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      const issue = bad.error.issues.find((i) => i.path.join('.') === 'vaneCount');
+      expect(issue?.message).toBe('Choose 16 or 18 vanes');
+    }
   });
 
   it('keeps the five dimension overrides optional but positive', () => {
@@ -82,6 +94,7 @@ describe('chamberInputToFormValues', () => {
       variant: 'hollow',
       guideVanes: true,
       vaneAngleDeg: 52,
+      vaneCount: 18,
       outletRatio: 0.4,
       relations: { ...CHAMBER_FORM_DEFAULTS.relations, height: false },
       lengthOverride: 4200,
@@ -97,6 +110,11 @@ describe('chamberInputToFormValues', () => {
   it('fills a sparse snapshot with the same defaults as a fresh form', () => {
     const loaded = chamberInputToFormValues({ x1: 1450, x2: 7.85, x3: 8 });
     expect(loaded).toEqual({ ...CHAMBER_FORM_DEFAULTS, wallThickness: undefined, hollowLength: undefined });
+  });
+
+  it('loads an old save without a vane count as 16 vanes', () => {
+    const loaded = chamberInputToFormValues({ x1: 1450, x2: 7.85, x3: 8, guideVanes: true });
+    expect(loaded.vaneCount).toBe(16);
   });
 
   it('keeps saved per-relation toggles and defaults the missing ones', () => {

@@ -40,6 +40,9 @@ GOLDEN = {
     # Real cached build (feet off, dFirst/dMiddle overrides, partScale 1) whose
     # passage proportions reproduced the blade-skin/hub classification tie.
     "hollow-vanes-overrides": (167.700993, VANE_PATCHES),
+    # stepped-vanes with 18 guide vanes (chord x 16/18 about the pivot, spec
+    # 2026-09-29-guide-vane-count): the blades' total section drops by 16/18.
+    "stepped-vanes-18": (135.495642, VANE_PATCHES),
 }
 WALL_TYPES = {"cylinder_walls", "walls", "hub", "shroud", "guide_vanes"}
 
@@ -130,7 +133,7 @@ def test_step_export_vane_policy(build):
     used to fall back vane-less: its OCC boolean self-overlapped at the blunt
     TE corners; the tangent TE rounding fixed the overlap, so both variants now
     pass the round-trip volume gate.)"""
-    for name in ("stepped-vanes", "hollow-vanes"):
+    for name in ("stepped-vanes", "hollow-vanes", "stepped-vanes-18"):
         result = build(name, step=True)
         assert result.exit_code == 0, result.stderr
         assert os.path.getsize(result.export_path("chamber.step")) > 0, name
@@ -569,7 +572,8 @@ def test_built_vane_sections_have_a_round_trailing_edge(build):
 # reproduced by hollow-vanes-overrides).
 
 
-@pytest.mark.parametrize("name", ["stepped-vanes", "hollow-vanes", "hollow-vanes-overrides"])
+@pytest.mark.parametrize("name", ["stepped-vanes", "hollow-vanes", "hollow-vanes-overrides",
+                                  "stepped-vanes-18"])
 def test_vane_skin_stays_on_the_guide_vanes_patch(build, name):
     import numpy as np
     import trimesh
@@ -612,6 +616,81 @@ def test_vane_skin_stays_on_the_guide_vanes_patch(build, name):
 
     # Sanity for the metric itself: the blades ARE strongly azimuthal.
     assert (azimuthal(gv) > 0.35).mean() > 0.5
+
+
+# --- guide vane count (16 or 18) ----------------------------------------------
+# With 18 vanes every blade is scaled by 16/18 about its pivot (same solidity,
+# same pivot radius) and the ring step is 360/18 = 20 deg (spec
+# 2026-09-29-guide-vane-count). A refusal guards neighbouring blades touching.
+
+
+def _patch_mesh(result, pname):
+    import trimesh
+
+    with zipfile.ZipFile(result.export_path("trisurface.zip")) as zf:
+        return trimesh.load(io.BytesIO(zf.read(f"{pname}.stl")), file_type="stl")
+
+
+def _vane_components(result):
+    """Connected blade components of the guide_vanes patch (> 20 faces each)."""
+    gv = _patch_mesh(result, "guide_vanes")
+    return [c for c in gv.split(only_watertight=False) if len(c.faces) > 20]
+
+
+def _mid_chord(np, blade):
+    z = blade.vertices[:, 2]
+    sec = blade.section(plane_origin=[0.0, 0.0, 0.5 * (z.min() + z.max())],
+                        plane_normal=[0.0, 0.0, 1.0])
+    loop = np.asarray(max(sec.discrete, key=len), dtype=float)[:, :2]
+    return _chord_axis(np, loop)[0]
+
+
+def test_eighteen_vanes_put_eighteen_blades_on_the_guide_vanes_patch(build):
+    import numpy as np
+
+    r16 = build("stepped-vanes")
+    r18 = build("stepped-vanes-18")
+    assert r18.exit_code == 0, f"builder failed:\n{r18.stderr}"
+    blades16 = _vane_components(r16)
+    blades18 = _vane_components(r18)
+    assert len(blades16) == 16
+    assert len(blades18) == 18
+
+    # Chord scaled by 16/18 (solidity kept).
+    c16 = float(np.mean([_mid_chord(np, b) for b in blades16]))
+    c18 = float(np.mean([_mid_chord(np, b) for b in blades18]))
+    assert c18 / c16 == pytest.approx(16.0 / 18.0, rel=0.02)
+
+    # Evenly spaced every 20 deg about the outlet centre.
+    axis = _patch_mesh(r18, "outlet").vertices.mean(axis=0)
+    ang = sorted(float(np.degrees(np.arctan2(c[1] - axis[1], c[0] - axis[0]))) % 360.0
+                 for c in (b.vertices.mean(axis=0) for b in blades18))
+    steps = np.diff(ang + [ang[0] + 360.0])
+    assert np.allclose(steps, 20.0, atol=0.5), steps
+
+
+def test_min_blade_gap_detects_touching_outlines():
+    import numpy as np
+
+    bc = _builder_module()
+
+    def square(x0, y0=0.0):
+        return np.array([[x0, y0], [x0 + 1.0, y0], [x0 + 1.0, y0 + 1.0], [x0, y0 + 1.0]])
+
+    assert bc._min_blade_gap([square(0.0), square(1.001)]) == pytest.approx(1e-3, abs=1e-9)
+    assert bc._min_blade_gap([square(0.0), square(0.5)]) == 0.0
+    # Shuffled order: the true minimum is between the first and the last ring.
+    rings = [square(0.0), square(5.0), square(1.002)]
+    assert bc._min_blade_gap(rings) == pytest.approx(2e-3, abs=1e-9)
+    assert bc.VANE_MIN_GAP == pytest.approx(2e-3)
+    assert bc.VANE_COUNTS == (16, 18)
+
+
+def test_vane_count_outside_16_or_18_is_refused(build):
+    result = build("stepped-vanes", params_override={"vaneCount": 17})
+    assert result.exit_code == 1
+    assert "KO:" in result.stderr
+    assert "Guide vane count must be 16 or 18 (got 17)." in result.stderr
 
 
 # --- mirrored STEP ("Change rotational direction") ----------------------------
