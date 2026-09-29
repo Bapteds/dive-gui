@@ -1,0 +1,58 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| OpenFOAM v2606                                                          |
+| Creates vortexQcore = Q-qualified cells excluding cells with V <= Vmin. |
+\*---------------------------------------------------------------------------*/
+
+FoamFile
+{
+    format      ascii;
+    class       dictionary;
+    object      topoSetDict.vorticityRMS;
+}
+
+actions
+(
+    // Select rotation-dominated cells above the chosen Q threshold.
+    {
+        name    vortexQcoreCells;
+        type    cellSet;
+        action  new;
+        source  fieldToCell;
+
+        field   QForVorticityRMS;
+
+        // MANUAL SETTING 2/3:
+        // Replace QCRIT_VALUE with a scalar in 1/s2, e.g. 2e4.
+        min     QCRIT_VALUE;
+        max     1e300;
+    }
+
+    // Remove boundary-layer/fine cells using their cell volume V.
+    {
+        name    vortexQcoreCells;
+        type    cellSet;
+        action  delete;
+        source  fieldToCell;
+
+        field   V;
+
+        // MANUAL SETTING 3/3:
+        // Replace VMIN_VALUE with a scalar in m3, e.g. the volume of the last cell of the layer.
+        // Cells with V <= this value are deleted from the Q-selected set.
+        min     -1e300;
+        max     VMIN_VALUE;
+    }
+
+    // Convert the final cellSet into the cellZone used by volFieldValue.
+    {
+        name    vortexQcore;
+        type    cellZoneSet;
+        action  new;
+        source  setToCellZone;
+
+        set     vortexQcoreCells;
+    }
+);
+
+// ************************************************************************* //
+

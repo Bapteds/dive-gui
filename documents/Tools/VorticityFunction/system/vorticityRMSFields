@@ -1,0 +1,56 @@
+// OpenFOAM v2606 function-object include file.
+// Include this INSIDE the functions{} dictionary in system/controlDict.
+
+QForVorticityRMS
+{
+    type            Q;
+    libs            (fieldFunctionObjects);
+
+    // MANUAL SETTING 1/3:
+    // Use U for the absolute frame or Urel for the blade-relative frame.
+    field           U;
+    result          QForVorticityRMS;
+
+    executeControl  writeTime;
+    writeControl    writeTime;
+    log             true;
+}
+
+vorticityForVorticityRMS
+{
+    type            vorticity;
+    libs            (fieldFunctionObjects);
+
+    // MANUAL SETTING 1/3, repeated intentionally:
+    // This MUST match the field used by QForVorticityRMS above.
+    field           U;
+    result          vorticityForVorticityRMS;
+
+    executeControl  writeTime;
+    writeControl    writeTime;
+    log             true;
+}
+
+omegaMagSqrForVorticityRMS
+{
+    type            magSqr;
+    libs            (fieldFunctionObjects);
+
+    field           vorticityForVorticityRMS;
+    result          omegaMagSqrForVorticityRMS;
+
+    executeControl  writeTime;
+    writeControl    writeTime;
+    log             true;
+}
+
+cellVolumesForVorticityRMS
+{
+    type            writeCellVolumes;
+    libs            (fieldFunctionObjects);
+
+    executeControl  writeTime;
+    writeControl    writeTime;
+    log             true;
+}
+

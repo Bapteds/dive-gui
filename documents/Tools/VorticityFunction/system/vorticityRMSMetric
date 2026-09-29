@@ -1,0 +1,25 @@
+// OpenFOAM v2606 function-object include file.
+// Add this INSIDE functions{} only after topoSet has created vortexQcore.
+
+vorticityMeanSquareQcore
+{
+    type                volFieldValue;
+    libs                (fieldFunctionObjects);
+
+    // v2606 fvCellZone syntax:
+    cellZone            vortexQcore;
+
+    // This produces <|omega|^2>_V. The helper script takes its square root.
+    operation           volAverage;
+    fields              (omegaMagSqrForVorticityRMS);
+
+    writeFields         false;
+    writeNumberOfCells  true;
+    writeVolume         true;
+    writeToFile         true;
+    log                 true;
+
+    executeControl      writeTime;
+    writeControl        writeTime;
+}
+

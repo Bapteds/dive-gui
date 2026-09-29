@@ -1,0 +1,125 @@
+/*---------------------------------------------------------------------------*\
+  PORTABLE ROBUST CONVERGENCE AUTO-STOP  (coded functionObject)
+  ---------------------------------------------------------------------------
+  Stops a steady (simpleFoam) run when the total-pressure drop Dp0 across the
+  domain has genuinely settled. For K consecutive checks (one every W iters),
+  ALL three must hold:
+     1  mean stationarity : |mean(last W) - mean(prev W)|       <= tolMean [Pa]
+     2  no trend (slope)  : |leastSquaresSlope(last W)| * (W-1) <= tolMean [Pa]
+     3  residuals         : max initial residual (all eqns) in window <= resTol
+  (1)+(2) are immune to the oscillation-crossing / ramp false positives of the
+  built-in `average` runTimeControl; (3) is the residual gate. AND of all three.
+
+  HOW TO USE IN ANOTHER MODEL
+  ---------------------------------------------------------------------------
+  1. copy this file into the case `system/` folder.
+  2. in system/controlDict, inside `functions { ... }`, add:  #include "convergenceControl"
+  3. in system/fvSolution, DELETE the `residualControl` block from SIMPLE
+     (otherwise the solver stops on residuals alone, bypassing this FO).
+  4. edit the USER INPUTS block below (patch names + tolerances).
+  Nothing else. It compiles itself on the first time step (~1-2 min).
+\*---------------------------------------------------------------------------*/
+convergenceControl
+{
+    type            coded;
+    libs            (utilityFunctionObjects);
+    name            convergenceControl;
+
+    executeControl  timeStep;   executeInterval 1;
+    writeControl    timeStep;   writeInterval   1;
+
+    codeOptions #{ -I$(LIB_SRC)/finiteVolume/lnInclude #};
+    codeLibs    #{ -lfiniteVolume #};
+    codeInclude
+    #{
+        #include "volFields.H"
+        #include "surfaceFields.H"
+        #include "solutionControl.H"
+    #};
+
+    codeData
+    #{
+        DynamicList<scalar> hist_;   // Dp0 history [Pa], one per iteration
+        scalar resWinMax_ = 0;       // worst initial residual in current window
+        label  passCount_ = 0;       // consecutive passing checks so far
+        label  nextCheck_ = 0;       // iteration count of the next check
+    #};
+
+    codeExecute
+    #{
+        // ==================== USER INPUTS ====================
+        const word   inletPatch  = "inlet";    // inflow patch name
+        const word   outletPatch = "outlet";   // outflow patch name
+        const label  W       = 100;     // averaging / check window [iterations]
+        const scalar tolMean = 50.0;    // [Pa] gate for criteria 1 (mean drift) & 2 (slope)
+        const label  K       = 2;       // number of consecutive passing checks required
+        const scalar resTol  = 1e-3;    // max initial residual (all eqns) allowed in the window
+                                        //   NB set ABOVE the residual floor of your case, else it
+                                        //   never passes and the run rides to endTime.
+        // ====================================================
+
+        const fvMesh& m = mesh();
+        if (nextCheck_ == 0) nextCheck_ = 2*W;
+
+        // (A) flux-weighted total-pressure drop Dp0 [Pa] (p0 = p + 0.5|U|^2, *1000 kin->Pa)
+        const volScalarField&     p   = m.lookupObject<volScalarField>("p");
+        const volVectorField&     U   = m.lookupObject<volVectorField>("U");
+        const surfaceScalarField& phi = m.lookupObject<surfaceScalarField>("phi");
+        const label inID  = m.boundaryMesh().findPatchID(inletPatch);
+        const label outID = m.boundaryMesh().findPatchID(outletPatch);
+        if (inID < 0 || outID < 0)
+            FatalErrorInFunction << "inlet/outlet patch not found" << exit(FatalError);
+        auto p0flux = [&](const label id) -> scalar
+        {
+            const scalarField& pp   = p.boundaryField()[id];
+            const vectorField& Up   = U.boundaryField()[id];
+            const scalarField& phip = phi.boundaryField()[id];
+            scalar num = 0, den = 0;
+            forAll(pp, i) { num += phip[i]*(pp[i] + 0.5*magSqr(Up[i])); den += phip[i]; }
+            reduce(num, sumOp<scalar>()); reduce(den, sumOp<scalar>());
+            return (mag(den) > VSMALL ? num/den : 0.0)*1000.0;
+        };
+        hist_.append(p0flux(inID) - p0flux(outID));
+
+        // (B) worst initial residual seen within this window
+        const dictionary& sdict = m.data().solverPerformanceDict();
+        scalar resNow = 0;
+        for (const entry& e : sdict) resNow = max(resNow, solutionControl::maxResidual(m, e).first());
+        resWinMax_ = max(resWinMax_, resNow);
+
+        // (C) evaluate every W iterations
+        if (hist_.size() >= nextCheck_)
+        {
+            const label n = hist_.size();
+            scalar mLast = 0, mPrev = 0;
+            for (label i = n - W;   i < n;     ++i) mLast += hist_[i];
+            for (label i = n - 2*W; i < n - W; ++i) mPrev += hist_[i];
+            mLast /= W;  mPrev /= W;
+
+            const scalar xbar = 0.5*(W - 1);
+            scalar sxy = 0, sxx = 0;
+            for (label i = 0; i < W; ++i)
+            { const scalar dx = scalar(i) - xbar; sxy += dx*(hist_[n-W+i] - mLast); sxx += dx*dx; }
+            const scalar slope = (sxx > 0 ? sxy/sxx : 0.0);
+
+            const scalar drift = mag(mLast - mPrev);
+            const scalar trend = mag(slope)*(W - 1);
+            const bool c1 = (drift <= tolMean), c2 = (trend <= tolMean), c3 = (resWinMax_ <= resTol);
+            if (c1 && c2 && c3) ++passCount_; else passCount_ = 0;
+
+            Info<< "convergenceControl @ " << m.time().timeName()
+                << ":  drift=" << drift << " Pa  trend=" << trend << " Pa  maxRes=" << resWinMax_
+                << "  [mean:" << (c1?"y":"n") << " slope:" << (c2?"y":"n") << " res:" << (c3?"y":"n")
+                << "]  pass " << passCount_ << "/" << K << endl;
+
+            resWinMax_ = 0;  nextCheck_ += W;
+            if (passCount_ >= K)
+            {
+                Info<< "convergenceControl: CONVERGED (Dp0 stationary + residuals) @ iteration "
+                    << m.time().timeName() << endl;
+                const_cast<Time&>(m.time()).writeAndEnd();
+            }
+        }
+    #};
+}
+// ************************************************************************* //

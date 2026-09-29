@@ -1,0 +1,16 @@
+{
+  "_comment": "KIT VALIDATION 2026-09-29: bigger spiral with the SOLID cone, one lid iteration from the same parent (iter0 @237) as the bespoke builder. Compare with case/10_BiggerSpiral_CorrectHLE/BiggerSpiralSolidCone_fine_lidIter_CorrectHLE/iter1: residual 32 -> 2.0 mm RMS, dp0 2842 Pa, ring 1.444-1.65 mean -35.5 mm, deepest -77 mm @ 1 deg.",
+  "name": "SolidConeKIT",
+  "z_lid": 1.485,
+  "atmosphere_patch": "atmosphere",
+  "inlet_patch": "inlet",
+  "base_stl": "/home/hristo/GreenPowerDesign/Chamber/Geometry/Correct HLE/Bigger spiral/semi_spiral_solidCone_freesurface_2026-09-09/domain_solidCone_iter0.stl",
+  "parent_case": "/home/hristo/GreenPowerDesign/Chamber/case/10_BiggerSpiral_CorrectHLE/BiggerSpiralSolidCone_fine_lidIter_CorrectHLE/iter0",
+  "mesh_template": "/home/hristo/GreenPowerDesign/Chamber/mesh/10_BiggerSpiral_CorrectHLE/BiggerSpiralSolidCone_fine_lidIter0_CorrectHLE",
+  "work_dir": "/home/hristo/GreenPowerDesign/Chamber/case/10_BiggerSpiral_CorrectHLE/BiggerSpiralSolidCone_KIT_lidIter",
+  "mesh_root": "/home/hristo/GreenPowerDesign/Chamber/mesh/10_BiggerSpiral_CorrectHLE/BiggerSpiralSolidCone_KIT_lidIter",
+  "smooth": 0.10, "tmin": 0.02, "sub": 0.08, "steiner": 0.07, "clear": 0.08, "upstand_patch": "atmosphere",
+  "tol_rms_mm": 3.0, "max_iter": 1, "improve_mesh_on_fail": true,
+  "axis": [-1.40, 1.40], "rings": [[1.444, 1.65], [1.537, 1.75]], "datum_y": null,
+  "openfoam_bashrc": "/usr/lib/openfoam/openfoam2606/etc/bashrc"
+}

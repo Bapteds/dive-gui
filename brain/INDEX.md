@@ -1,6 +1,6 @@
 # Index of every repository file
 
-> One line per file (565 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
+> One line per file (586 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
 
 Detail of a code file: open the sheet shown and search for the `## path/to/file` section. Documents: the description is their title and introduction line.
 
@@ -19,7 +19,6 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `eslint.config.js` : ESLint 9 "flat" configuration of the monorepo via `tseslint.config`. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package-lock.json` : npm lockfile for the whole monorepo (workspaces), used by `npm ci` in CI and in production. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package.json` : root of the `dive-turbinen` workspace (private, ESM, `engines.node >=20`). · [root-shared-mcp](codemap/root-shared-mcp.md)
-- `tools.tar` : **(undocumented: add a section in brain/codemap)**
 - `tsconfig.base.json` : Common TypeScript base: `target ES2022`, `strict`, `esModuleInterop`, `skipLibCheck`, `forceConsistentCasingInFileNames`, `resolveJsonModule`, `noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch`. · [root-shared-mcp](codemap/root-shared-mcp.md)
 
 ## `.claude`
@@ -796,6 +795,46 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 
 - `documents/Semi-spiral-creation/SEMI_SPIRAL_TOOL_SPEC.md` : Approved specification of a tool (not yet implemented in the app): 7 inputs (`Q`, `c_flow`, `H_ch`, `D_LE`, `clearance`, `max_width`, `phi_start`) to a JSON geometric object (6 spiral segments + 3 nose segments) in a "mi … · [api-scripts](codemap/api-scripts.md)
 - `documents/Semi-spiral-creation/reference_semi_spiral.py` : Reference implementation: `design_semi_spiral(Q, c_flow, H_ch, D_LE, clearance, max_width, phi_start, seed=5)` returns a dict compliant with §7; helpers `derived`, `to_frame`, `ray_distances`. · [api-scripts](codemap/api-scripts.md)
+
+## `documents/Tools/ConvergenceFunctions`
+
+- `documents/Tools/ConvergenceFunctions/README.md` : Guide of the portable convergence toolkit for a steady `simpleFoam` single-inlet/single-outlet case: pick `convergenceControl` (robust) or `SimplePDropConvergence` (simple), include `pressureLossMonitors`, remove … · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/ConvergenceFunctions/SimplePDropConvergence` : `coded` function object (simple auto-stop): mass-flow-weighted total-pressure drop Dp0 within ±`devTol` (0.03) of the trailing `window` (100) mean for `nPass` (100) consecutive iterations; no slope or residual gate. · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/ConvergenceFunctions/convergenceControl` : `coded` function object (robust auto-stop, compiled at the first time step): stops when, for `K` consecutive checks every `W` iterations, the windowed mean of Dp0 stops drifting, the least-squares slope is ~0 (both withi … · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/ConvergenceFunctions/plotConvergence.py` : Plot script mirroring `convergenceControl`: residuals + `resTol` line, Dp0 = p0_in − p0_out with trailing mean and status, zoom, pressure-recovery Cp footer; writes `convergence.png`. · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/ConvergenceFunctions/pressureLossMonitors` : Function objects producing `pTotal` [Pa] and the flux-weighted inlet/outlet total-pressure logs (object names like `inlet_p0_flux`) read by the plot and `SimplePDropConvergence`; patch names `inlet` / `outlet` editable. · [api-scripts](codemap/api-scripts.md)
+
+## `documents/Tools/VorticityFunction`
+
+- `documents/Tools/VorticityFunction/README.md` : Procedure (written for OpenFOAM v2606) for the RMS vorticity inside a Q-core zone: `omegaRMS = sqrt(∫|curl U|² dV / ∫dV)` over cells with Q > `Qcrit` and V > `Vmin` (both to set, same for every design); 4 stages ( … · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/VorticityFunction/calculateVorticityRMS.py` : Standard-library script: reads the `vorticityMeanSquareQcore` volume mean of · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/VorticityFunction/postVorticity.sh` : Post-processing script (no solver run): writes `Q`, `vorticity`, `V`, `wallDistance` (coded FO on a temporary controlDict copy) and `Qfiltered` (Q where wall distance > distance, default 0.03 m) into the latest time; pri … · [api-scripts](codemap/api-scripts.md)
+
+## `documents/Tools/VorticityFunction/system`
+
+- `documents/Tools/VorticityFunction/system/topoSetDict.vorticityRMS` : `topoSet` dictionary creating the cell zone `vortexQcore` = cells with `QForVorticityRMS` ≥ `QCRIT_VALUE` minus cells with `V` ≤ `VMIN_VALUE` (placeholders to replace). · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/VorticityFunction/system/vorticityRMSFields` : Function-object include creating `QForVorticityRMS`, `vorticityForVorticityRMS`, `omegaMagSqrForVorticityRMS` and `V` (field `U` or `Urel`, to set consistently). · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/VorticityFunction/system/vorticityRMSMetric` : `volFieldValue` (`volAverage` of `omegaMagSqrForVorticityRMS` over `cellZone vortexQcore`, v2606 syntax), included after `topoSet`. · [api-scripts](codemap/api-scripts.md)
+
+## `documents/Tools/lidIterationKit`
+
+- `documents/Tools/lidIterationKit/README.md` : Lid iteration kit (free surface for rigid-lid `simpleFoam` chamber models, remeshing each time): z_s = Z_LID + (p_lid − p0_inlet)/g from a converged rigid-lid run (patch `atmosphere`), fitted lid STL, cfMesh remesh with … · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/lidIterationKit/lidkit.py` : Kit driver: `init / check / surface / fit / mesh / case / run / next / loop / status / post` on a JSON config. · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/lidIterationKit/lidkit_fitlid.py` : Step 2: rebuilds the flat base STL with the `atmosphere` lid as the smoothed height field z_s (conformal Delaunay, upstands, clamp over submerged tops, generic cut of vertical solids through the lid); `--flat` regression … · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/lidIterationKit/lidkit_post.py` : Per-iteration figure: mesh lid, new z_s, residual map, history, ring sector profiles. · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/lidIterationKit/lidkit_surface.py` : Step 1: reads the `lidSurfaces` VTK export and writes `zs_iter<k>.npy` (x, y, z_s, area) + `.json` statistics and lid residual. · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/lidIterationKit/vtk_reader.py` : Legacy-VTK reader used by the kit (self-contained copy). · [api-scripts](codemap/api-scripts.md)
+
+## `documents/Tools/lidIterationKit/examples`
+
+- `documents/Tools/lidIterationKit/examples/SolidCone_lidIter_KIT_config.json` : Example config of the kit validation on the bigger-spiral solid-cone case (absolute paths on the co-developer workstation). · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/lidIterationKit/examples/Version4_lidIter_config.json` : Example config for the final design Version 4 (reference run @983; absolute paths on the co-developer workstation). · [api-scripts](codemap/api-scripts.md)
+
+## `documents/Tools/lidIterationKit/templates`
+
+- `documents/Tools/lidIterationKit/templates/Allrun.sh` : One-iteration case run: copies the mesh from `MESHSRC`, `renumberMesh`, `potentialFoam`, `decomposePar`, parallel `simpleFoam`, reconstruct, lid export. · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/lidIterationKit/templates/config_template.json` : Config skeleton (`z_lid`, patch names, base STL, parent case, mesh template, work dirs, smoothing and triangulation settings, tolerances). · [api-scripts](codemap/api-scripts.md)
+- `documents/Tools/lidIterationKit/templates/lidSurfaces` : `surfaces` function object exporting the lid and inlet patches as legacy ASCII VTK with `p` and `U`. · [api-scripts](codemap/api-scripts.md)
 
 ## `documents/calculator`
 
