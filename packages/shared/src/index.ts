@@ -2811,9 +2811,9 @@ export interface ChamberInput {
    */
   semiSpiral?: boolean;
   /**
-   * Casing flow velocity (m/s) of the semi-spiral design (the tool's c_flow),
-   * CHAMBER_SPIRAL_FLOW_RANGE (0.3 to 3, default 0.922). Read only while
-   * semiSpiral is on, and then only through the spiral inputs of the build key.
+   * IGNORED since 2026-09-30 (kept so old saves still validate): the casing
+   * flow velocity (the tool's c_flow) is now DERIVED from B Kammer by
+   * `chamberSpiralFlowVelocity` (read-only in the form).
    */
   spiralFlowVelocity?: number;
 }
@@ -3153,7 +3153,11 @@ export function runnerCaseClearanceRefusal(
 // tool's vertices back to the box values the Parameters table shows.
 // ---------------------------------------------------------------------------
 
-/** Casing flow velocity (m/s): the tool's c_flow. Form and API default 0.922. */
+/**
+ * Casing flow velocity (m/s): the tool's c_flow. Since 2026-09-30 it is derived
+ * from B Kammer (`chamberSpiralFlowVelocity`); the range is its validity window
+ * (outside it the build is refused) and `default` the reference-case value.
+ */
 export const CHAMBER_SPIRAL_FLOW_RANGE = { min: 0.3, max: 3, default: 0.922 } as const;
 /** Radial gap (m) from the widest part of the machine to the nose tip. NOT scaled by Part scale. */
 export const CHAMBER_SPIRAL_CLEARANCE_M = 0.2;
@@ -3252,26 +3256,116 @@ export interface ChamberSpiralInputs {
 }
 
 /**
+ * Sum of the residual-flow shares at the inlet ray (phi_start) and at the ray
+ * opposite it (phi_start + 180 deg): (360 - phi) / 360 + (180 - phi) / 360.
+ * 220 / 360 at the fixed 160 deg start.
+ */
+function spiralAxisFlowShare(phiStartDeg: number): number {
+  return (540 - 2 * phiStartDeg) / 360;
+}
+
+/**
+ * Casing flow velocity (m/s) derived from B Kammer (user rule 2026-09-30).
+ *
+ * B Kammer is taken as the width of the ideal spiral along the inlet axis: the
+ * outer radius at the inlet (phi_start) plus the outer radius opposite it
+ * (phi_start + 180 deg), with R_cl(phi) = r_inner + Q (360 - phi) / 360 / (c H)
+ * and r_inner = D_LE / 2 + clearance (tool spec section 3). Solved for c:
+ *
+ *   c = Q x (540 - 2 phi_start) / 360 / (H x (B - 2 r_inner))
+ *
+ * It returns the reference default on the reference case (Q 12, H 2.97,
+ * D_LE 3.074, B 6.15 -> 0.9227; the tool shows 0.922). Rounded to 0.001 m/s (the value shown and sent
+ * to the tool). NaN when B Kammer does not exceed 2 r_inner or H is not positive.
+ * All lengths in metres.
+ */
+export function chamberSpiralFlowVelocity(
+  q: number,
+  heightM: number,
+  dLeM: number,
+  widthM: number,
+): number {
+  const span = widthM - 2 * (dLeM / 2 + CHAMBER_SPIRAL_CLEARANCE_M);
+  if (!(span > 0) || !(heightM > 0) || !(q > 0)) return Number.NaN;
+  const c = (q * spiralAxisFlowShare(CHAMBER_SPIRAL_PHI_START_DEG)) / (heightM * span);
+  return Math.round(c * 1000) / 1000;
+}
+
+/** B Kammer (m) that gives casing flow velocity `c` (inverse of chamberSpiralFlowVelocity). */
+function chamberSpiralWidthFor(q: number, heightM: number, dLeM: number, c: number): number {
+  return (
+    2 * (dLeM / 2 + CHAMBER_SPIRAL_CLEARANCE_M) +
+    (q * spiralAxisFlowShare(CHAMBER_SPIRAL_PHI_START_DEG)) / (c * heightM)
+  );
+}
+
+/**
+ * D_LE (m) of the spiral: twice the widest part of the machine,
+ * max(Runner case, Guide vanes, LE + 2 x Cone chamfer) x Part scale.
+ */
+function chamberSpiralDLeM(input: ChamberInput, outputs: ChamberOutput[]): number {
+  const dLast = outputs.find((o) => o.key === 'dLast')!.final;
+  const dFirst = input.dFirst ?? CHAMBER_D_FIRST_OVER_LAST * dLast;
+  const dMiddle = input.dMiddle ?? CHAMBER_D_MIDDLE_OVER_LAST * dLast;
+  const s = input.partScale ?? 1;
+  return (Math.max(dFirst, dMiddle, dLast + 2 * chamberConeChamferMm(input)) * s) / 1000;
+}
+
+/** The derived casing flow velocity (m/s) of a chamber (NaN when B Kammer is too narrow). */
+export function chamberSpiralVelocityOf(input: ChamberInput, outputs: ChamberOutput[]): number {
+  const final = (k: ChamberOutputKey) => outputs.find((o) => o.key === k)!.final;
+  return chamberSpiralFlowVelocity(
+    input.x3,
+    final('height') / 1000,
+    chamberSpiralDLeM(input, outputs),
+    final('width') / 1000,
+  );
+}
+
+/**
+ * Refusal message when the velocity derived from B Kammer falls outside
+ * CHAMBER_SPIRAL_FLOW_RANGE (or cannot be computed), with the B Kammer range
+ * that fits; null when it is valid. Used by the API (422) and the form.
+ */
+export function chamberSpiralVelocityRefusal(
+  input: ChamberInput,
+  outputs: ChamberOutput[],
+): string | null {
+  const c = chamberSpiralVelocityOf(input, outputs);
+  if (Number.isFinite(c) && c >= CHAMBER_SPIRAL_FLOW_RANGE.min && c <= CHAMBER_SPIRAL_FLOW_RANGE.max) {
+    return null;
+  }
+  const final = (k: ChamberOutputKey) => outputs.find((o) => o.key === k)!.final;
+  const h = final('height') / 1000;
+  const dLe = chamberSpiralDLeM(input, outputs);
+  const widthMm = Math.round(final('width'));
+  const lo = Math.ceil((chamberSpiralWidthFor(input.x3, h, dLe, CHAMBER_SPIRAL_FLOW_RANGE.max) * 1000) / 50) * 50;
+  const hi = Math.floor((chamberSpiralWidthFor(input.x3, h, dLe, CHAMBER_SPIRAL_FLOW_RANGE.min) * 1000) / 50) * 50;
+  const got = Number.isFinite(c) ? `gives a casing flow velocity of ${c} m/s` : 'is too narrow for the casing';
+  return (
+    `B Kammer (${widthMm} mm) ${got}; it must stay between ${CHAMBER_SPIRAL_FLOW_RANGE.min} and ` +
+    `${CHAMBER_SPIRAL_FLOW_RANGE.max} m/s. Set B Kammer between ${lo} and ${hi} mm.`
+  );
+}
+
+/**
  * Map the chamber to the spiral tool inputs (spec section 4). D_LE is twice the
  * widest part of the machine, max(Runner case Ø, Guide vanes Ø, LE Ø + 2 × Cone
  * chamfer size) × Part scale (the builder's rmax), so the nose tip lands
  * CHAMBER_SPIRAL_CLEARANCE_M from it; H_ch is H Kammer and max_width B Kammer
- * (Finals, mm -> m).
+ * (Finals, mm -> m); c_flow is derived from B Kammer (chamberSpiralFlowVelocity).
  */
 export function chamberSpiralInputs(
   input: ChamberInput,
   outputs: ChamberOutput[],
 ): ChamberSpiralInputs {
   const final = (k: ChamberOutputKey) => outputs.find((o) => o.key === k)!.final;
-  const dLast = final('dLast');
-  const dFirst = input.dFirst ?? CHAMBER_D_FIRST_OVER_LAST * dLast;
-  const dMiddle = input.dMiddle ?? CHAMBER_D_MIDDLE_OVER_LAST * dLast;
-  const s = input.partScale ?? 1;
   return {
     Q: input.x3,
-    c_flow: input.spiralFlowVelocity ?? CHAMBER_SPIRAL_FLOW_RANGE.default,
+    // Derived from B Kammer since 2026-09-30; input.spiralFlowVelocity is ignored.
+    c_flow: chamberSpiralVelocityOf(input, outputs),
     H_ch: final('height') / 1000,
-    D_LE: (Math.max(dFirst, dMiddle, dLast + 2 * chamberConeChamferMm(input)) * s) / 1000,
+    D_LE: chamberSpiralDLeM(input, outputs),
     clearance: CHAMBER_SPIRAL_CLEARANCE_M,
     max_width: final('width') / 1000,
     phi_start: CHAMBER_SPIRAL_PHI_START_DEG,

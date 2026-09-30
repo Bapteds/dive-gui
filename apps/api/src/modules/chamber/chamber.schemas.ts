@@ -7,7 +7,6 @@ import {
   CHAMBER_DIMENSION_MAX_MM,
   CHAMBER_INPUT_RANGES,
   CHAMBER_OUTPUT_KEYS,
-  CHAMBER_SPIRAL_FLOW_RANGE,
   CHAMBER_VANE_COUNT_DEFAULT,
   CHAMBER_VANE_COUNT_MAX,
   CHAMBER_VANE_COUNT_MIN,
@@ -95,14 +94,10 @@ export const chamberBuildSchema = z
     // footprint becomes the optimised semi-spiral outline plus the tongue (nose +
     // plank). Needs Feet off (refused below). Off never adds a build-key entry.
     semiSpiral: z.boolean().default(false),
-    // Casing flow velocity (m/s), the spiral tool's c_flow. Read only while
-    // semiSpiral is on, and then only through the spiral inputs of the key.
-    spiralFlowVelocity: z
-      .number()
-      .finite()
-      .min(CHAMBER_SPIRAL_FLOW_RANGE.min)
-      .max(CHAMBER_SPIRAL_FLOW_RANGE.max)
-      .default(CHAMBER_SPIRAL_FLOW_RANGE.default),
+    // Casing flow velocity: IGNORED since 2026-09-30 (derived from B Kammer by
+    // chamberSpiralFlowVelocity, range checked in the service). Still accepted,
+    // unbounded, so old saves carrying any value keep validating.
+    spiralFlowVelocity: z.number().finite().optional(),
     lengthOverride: dimensionMm.optional(),
     hollowLength: dimensionMm.optional(),
     wallThickness: dimensionMm.optional(),
