@@ -10,7 +10,11 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import chamberDimensionsImg from './assets/chamber-dimensions.png';
-import { CHAMBER_DIMENSION_MAX_MM, type ChamberSpiralSummary } from '@dive/shared';
+import {
+  CHAMBER_DIMENSION_MAX_MM,
+  CHAMBER_PERMANENT_RELATION_KEYS,
+  type ChamberSpiralSummary,
+} from '@dive/shared';
 import type {
   ChamberConfidence,
   ChamberConstraint,
@@ -49,7 +53,10 @@ const STATUS_STYLES: Record<ChamberStatus, string> = {
   'from spiral': 'text-primary',
 };
 
-/** A read-only cell of a spiral-derived row (Min / Max / Exact do not apply). */
+/**
+ * A read-only cell where Min / Max / Exact do not apply: a spiral-derived row, or
+ * BF1 / BF2, which always equal LF1 / LF2 (spec 2026-09-29-corner-chamfer-45).
+ */
 function ReadOnlyCell({ label }: { label: string }) {
   return (
     <span className="inline-block w-20 px-2 py-1 text-sm text-text-secondary" title={label}>
@@ -209,7 +216,10 @@ export function ChamberOutputsTable({
                   </TableRow>
                 ) : null;
               // Relation-driven outputs (e.g. Height = LEB + LEOW) default to their
-              // derived value but can be overridden with Min/Max/Exact like any other.
+              // derived value but can be overridden with Min/Max/Exact like any other,
+              // except the permanent BF1 = LF1 / BF2 = LF2 (45° corners), read-only.
+              const locked = CHAMBER_PERMANENT_RELATION_KEYS.includes(o.key);
+              const lockedNote = `read-only, always equals ${(o.relationLabel ?? '').replace(/^= /, '')}`;
               if (derived) {
                 // Spiral-derived row: read-only, no model or confidence claim.
                 const ro = `read-only, from the spiral`;
@@ -271,27 +281,43 @@ export function ChamberOutputsTable({
                       </span>
                     </TableCell>
                     <TableCell className="text-right text-text-secondary">{mm(o.model)}</TableCell>
-                    <TableCell>
-                      <NumCell
-                        value={con.min}
-                        ariaLabel={`${o.label} minimum`}
-                        onChange={(v) => onConstraintChange(o.key, 'min', v)}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <NumCell
-                        value={con.max}
-                        ariaLabel={`${o.label} maximum`}
-                        onChange={(v) => onConstraintChange(o.key, 'max', v)}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <NumCell
-                        value={con.exact}
-                        ariaLabel={`${o.label} exact`}
-                        onChange={(v) => onConstraintChange(o.key, 'exact', v)}
-                      />
-                    </TableCell>
+                    {locked ? (
+                      <>
+                        <TableCell>
+                          <ReadOnlyCell label={`${o.label} minimum: ${lockedNote}`} />
+                        </TableCell>
+                        <TableCell>
+                          <ReadOnlyCell label={`${o.label} maximum: ${lockedNote}`} />
+                        </TableCell>
+                        <TableCell>
+                          <ReadOnlyCell label={`${o.label} exact: ${lockedNote}`} />
+                        </TableCell>
+                      </>
+                    ) : (
+                      <>
+                        <TableCell>
+                          <NumCell
+                            value={con.min}
+                            ariaLabel={`${o.label} minimum`}
+                            onChange={(v) => onConstraintChange(o.key, 'min', v)}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <NumCell
+                            value={con.max}
+                            ariaLabel={`${o.label} maximum`}
+                            onChange={(v) => onConstraintChange(o.key, 'max', v)}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <NumCell
+                            value={con.exact}
+                            ariaLabel={`${o.label} exact`}
+                            onChange={(v) => onConstraintChange(o.key, 'exact', v)}
+                          />
+                        </TableCell>
+                      </>
+                    )}
                     <TableCell
                       className={cn(
                         'text-right font-semibold',

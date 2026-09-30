@@ -23,6 +23,7 @@ import {
   CHAMBER_FORM_DEFAULTS,
   chamberBodyKey,
   chamberFormSchema,
+  chamberInputToConstraints,
   chamberInputToFormValues,
   computeChamberAutoDims,
   semiSpiralToggle,
@@ -279,7 +280,7 @@ export function ChamberPage() {
             snapshot={saveSnapshot}
             onLoad={(save) => {
               reset(chamberInputToFormValues(save.snapshot));
-              setConstraints(save.snapshot.constraints ?? {});
+              setConstraints(chamberInputToConstraints(save.snapshot));
               // The loaded save is a DIFFERENT configuration: everything tied
               // to the previous build (viewer, exports, notices) is stale now.
               setHash(null);
