@@ -267,6 +267,8 @@ Hook for the BC overlay. `ApplyBoundaryInput` = `{ request: ApplyBoundaryConditi
 **Depends on**: `useFreeSurface.ts`, `ResidualPerIterationChart`, `@/lib/api/projects` (`downloadFreeSurfaceFile`). On a job's end it invalidates `['projects', id, 'files' | 'runs' | 'runnable']`.
 **Notes**: visual contract `brain/design/design-system.md` sections 2, 4 and 6.
 
+**Scroll + loading (2026-09-30)**: root (`data-tab-root`) scrolls on `lg` like `SolverTab`; `FreeSurfaceSkeleton` shows a `Loader2` spinner "Checking the mesh and the last run…"; `updating = isFetching && isPlaceholderData` shows "Updating the checks…" (role `status`) next to the title after a selection change, never on job polls.
+
 ## `apps/web/src/features/freesurface/ResidualPerIterationChart.tsx`
 **Role**: Hand-made SVG of the lid residual RMS per iteration (Parent, It. 1..n) with the tolerance as a dashed line, direct value labels, `role="img"` summary and a "Show residual values" `<details>` table. **Exports**: `ResidualPerIterationChart({ surfaces, tolRmsMm })`.
 

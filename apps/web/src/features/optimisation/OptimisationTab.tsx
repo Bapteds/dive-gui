@@ -91,7 +91,7 @@ export function OptimisationTab({ projectId, onOpenSolver }: OptimisationTabProp
   ) : null;
 
   return (
-    <div className="flex w-full flex-col gap-6">
+    <div className="flex w-full flex-col gap-6 lg:min-h-0 lg:flex-1 lg:overflow-auto lg:overscroll-contain">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
           <h2 className="text-xl font-semibold tracking-[-0.01em] text-text">Optimisation</h2>
@@ -190,7 +190,7 @@ export function OptimisationTab({ projectId, onOpenSolver }: OptimisationTabProp
 function OptimisationSkeleton() {
   return (
     <div
-      className="flex w-full flex-col gap-6"
+      className="flex w-full flex-col gap-6 lg:min-h-0 lg:flex-1 lg:overflow-auto lg:overscroll-contain"
       role="status"
       aria-label="Loading the optimisation studies"
     >

@@ -17,6 +17,7 @@ Project page, tab **Free surface** (`?view=freesurface`), enabled once the case 
 3. **Progress panel** (while a job runs): "Iteration k of n" (or "Residual check after iteration k"), stepper Export → Surface → Fit → Mesh → Case → Solve (`aria-current="step"`), link to the live meshing session, "Open the Solver tab" during the solve, **Stop** (then "Stopping…"). Start is replaced by "A free-surface job is running on this project."
 4. **Results panel** (running or last / picked job): status badge, reason (e.g. "Iterations done: the lid residual RMS is 5.0 mm (tolerance 3.0 mm)."), notes (figures skipped…), table "Results per iteration" (Parent + one row per iteration: z_s mean / min, residual RMS / max, clamped lid points, upstands, mesh cells, Δp₀, fitted STL download), residual-RMS-per-iteration SVG chart with the tolerance line and a "Show residual values" table, "Show figures" (fit check + post figures, fetched on demand), delete (confirmation).
 5. **Previous runs** list when there is more than one job.
+- Loading (2026-09-30): first load = skeleton + spinner "Checking the mesh and the last run…"; changing the lid / inlet / session keeps the previous checks with "Updating the checks…" and a spinner until the new ones arrive. The tab scrolls on its own on large screens.
 
 ## 3. Business rules and invariants
 

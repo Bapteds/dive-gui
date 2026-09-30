@@ -289,10 +289,26 @@ export function FreeSurfaceTab({ projectId, onOpenSolver }: FreeSurfaceTabProps)
     );
   }
 
+  // A new lid / inlet / session selection re-runs the checks (they read the mesh):
+  // the previous checks stay on screen meanwhile, so say that they are updating.
+  // Background polls of a running job keep real data and show nothing.
+  const updating = overview.isFetching && overview.isPlaceholderData;
+
   return (
-    <div className="flex w-full flex-col gap-6">
+    <div data-tab-root className="flex w-full flex-col gap-6 lg:min-h-0 lg:flex-1 lg:overflow-auto lg:overscroll-contain">
       <div className="flex flex-col gap-1">
-        <h2 className="text-xl font-semibold tracking-[-0.01em] text-text">Free surface</h2>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <h2 className="text-xl font-semibold tracking-[-0.01em] text-text">Free surface</h2>
+          {updating && (
+            <span
+              role="status"
+              className="inline-flex items-center gap-1.5 text-sm text-text-secondary"
+            >
+              <Loader2 className="size-3.5 animate-spin" strokeWidth={1.75} aria-hidden="true" />
+              Updating the checks…
+            </span>
+          )}
+        </div>
         <p className="max-w-[75ch] text-sm text-text-secondary">
           Estimates the water surface from the rigid-lid run, fits the lid to it and remeshes, until
           the lid residual meets the tolerance.
@@ -1091,11 +1107,18 @@ function JobHistory({
 function FreeSurfaceSkeleton() {
   return (
     <div
-      className="flex w-full flex-col gap-6"
+      data-tab-root
+      className="flex w-full flex-col gap-6 lg:min-h-0 lg:flex-1 lg:overflow-auto lg:overscroll-contain"
       role="status"
       aria-label="Loading the free-surface tool"
     >
-      <Skeleton className="h-7 w-40" />
+      <div className="flex items-center gap-3">
+        <Skeleton className="h-7 w-40" />
+        <span className="inline-flex items-center gap-1.5 text-sm text-text-secondary">
+          <Loader2 className="size-4 animate-spin text-primary" strokeWidth={1.75} aria-hidden="true" />
+          Checking the mesh and the last run…
+        </span>
+      </div>
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
         <div className="flex flex-col gap-3 rounded-md border border-border bg-surface p-5">
           {Array.from({ length: 6 }, (_, i) => (

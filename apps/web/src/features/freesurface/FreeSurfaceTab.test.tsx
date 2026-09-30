@@ -134,6 +134,36 @@ beforeEach(() => {
 });
 
 describe('FreeSurfaceTab', () => {
+  it('shows a spinner while the checks load the first time', async () => {
+    vi.mocked(api.getFreeSurface).mockReturnValue(new Promise(() => {}));
+    renderTab();
+    const status = screen.getByRole('status', { name: 'Loading the free-surface tool' });
+    expect(within(status).getByText(/Checking the mesh and the last run/)).toBeInTheDocument();
+    expect(status.querySelector('.animate-spin')).not.toBeNull();
+  });
+
+  it('shows a spinner while the checks update after a new selection', async () => {
+    const base = overview();
+    const twoLids = overview({
+      patches: [...base.checks.patches, { name: 'top2', type: 'patch', nFaces: 12, flat: true, z: 1.2 }],
+    });
+    vi.mocked(api.getFreeSurface).mockResolvedValueOnce(twoLids).mockReturnValue(new Promise(() => {}));
+    renderTab();
+    const lidSelect = (await screen.findByLabelText('Lid patch')) as HTMLSelectElement;
+    expect(screen.queryByText(/Updating the checks/)).not.toBeInTheDocument();
+    await userEvent.selectOptions(lidSelect, 'top2');
+    expect(await screen.findByText(/Updating the checks/)).toBeInTheDocument();
+  });
+
+  it('scrolls inside the tab on large screens', async () => {
+    vi.mocked(api.getFreeSurface).mockResolvedValue(overview());
+    renderTab();
+    await screen.findByText(/The lid is not slip/);
+    const root = screen.getByRole('heading', { name: 'Free surface' }).closest('[data-tab-root]');
+    expect(root).not.toBeNull();
+    expect(root!.className).toMatch(/lg:overflow-auto/);
+  });
+
   it('renders the readiness checks and the measured Z_lid', async () => {
     vi.mocked(api.getFreeSurface).mockResolvedValue(overview());
     renderTab();
