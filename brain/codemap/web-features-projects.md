@@ -279,6 +279,8 @@ Hook for the BC overlay. `ApplyBoundaryInput` = `{ request: ApplyBoundaryConditi
 **Role**: the project's Optimisation tab (WS-H): studies list (status badge, counted / max), the shown study (`StudyPanel`, running one first) or the inline `StudyCreateForm` (create / edit draft); skeleton, `ErrorState`, empty state with "New study".
 **Depends on**: `useStudies`, `useChamberSavesQuery`. **Used by**: `pages/ProjectDetailPage.tsx` (view `optimisation`).
 
+**Layout (2026-09-30 redesign)**: `lg` = fixed-height column (header `shrink-0`, then a `16rem | 1fr` grid, `18rem` at `xl`): the studies list and the detail pane scroll independently (`lg:overflow-auto`), the list header is sticky with the study count; below `lg` everything stacks and the page scrolls.
+
 ## `apps/web/src/features/optimisation/StudyCreateForm.tsx`
 **Role**: inline create / edit form: study name, base design (chamber save or chamber of this mesh), parameters table with live range preview (`computeParamSpace`, per-key band, table limit note, relation warnings), objective (weighted / Pareto, weights, vortex metric), reference session, cores, budgets, Advanced (sampler, seed, keep best / last). Client validation mirrors the API; first invalid control focused. One orange CTA ("Create study" / "Save changes").
 
@@ -288,11 +290,15 @@ Hook for the BC overlay. `ApplyBoundaryInput` = `{ request: ApplyBoundaryConditi
 ## `apps/web/src/features/optimisation/StudyPanel.tsx`
 **Role**: one study: status badge (`StudyStatusBadge`, exported), owner-only controls (Start / Resume orange, Pause, Edit, Delete with confirmation), Export CSV, running evaluation stepper (Build, Mesh, Transfer, Configure, Solve) with session link and Solver tab button, search space, best design with "Open in Chamber" (router state `chamberInput`), evaluations table, charts.
 
+**Redesign (2026-09-30)**: `StudySummary` (`<dl aria-label="Study summary">` on hairlines: evaluations counted / budget, best objective or Pareto front size, lowest head loss and lowest vortex metric with `#k` and the change vs the baseline, or "the baseline"); order = progress, best design, charts (`ChartPanel`, side by side at `xl`), evaluations table, search space. "Open Solver tab" is a secondary button. Table headers are two-line (`HeaderLabel`: quantity then unit), notes `line-clamp-2` with the full text in `title`.
+
 ## `apps/web/src/features/optimisation/StudyPanel.test.tsx`
 **Covers**: stepper of the running evaluation + Pause, owner Start and read-only member, evaluations table (infeasible reason, budget flag, best), chart table alternatives.
 
 ## `apps/web/src/features/optimisation/StudyCharts.tsx`
 **Role**: hand-made SVG `ObjectiveChart` (objective per evaluation, best-so-far step line, diamond for the best) and `ParetoChart` (head loss against the picked vortex metric, front joined), each with a "Show … values" table.
+
+**Responsive (2026-09-30)**: width measured with `useMeasuredWidth` (min 320 px, horizontal scroll below), fixed 240 px height; objective x axis = integer `niceTicks` on a regular step (one per evaluation while about 44 px each fit), Pareto x ticks scale with the width.
 
 ## `apps/web/src/features/optimisation/studyFormat.ts`
 **Role**: `VORTEX_METRIC_LABEL` (name + unit per metric) and `vortexOf(evaluation, metric)`.

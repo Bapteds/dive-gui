@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
+  Activity,
   AlertTriangle,
   CheckCircle2,
   Download,
@@ -207,8 +208,8 @@ export function StudyPanel({
             <StudyStatusBadge status={study.status} />
           </div>
           <p className="text-sm text-text-secondary">
-            {study.baseLabel}. {study.mode === 'weighted' ? 'Weighted sum' : 'Pareto front'},{' '}
-            {metric.name.toLowerCase()}. {study.counted} of {study.maxEvaluations} evaluations
+            Base: {study.baseLabel}. {study.mode === 'weighted' ? 'Weighted sum' : 'Pareto front'}{' '}
+            of head loss and {metric.name}. {study.counted} of {study.maxEvaluations} evaluations
             counted.
           </p>
         </div>
@@ -298,6 +299,8 @@ export function StudyPanel({
         </div>
       </div>
 
+      <StudySummary study={study} evaluations={evaluations} best={best} front={paretoFront} />
+
       <div className="flex flex-col gap-6 px-5 py-5">
         {!study.canControl && (
           <p className="text-sm text-text-secondary">
@@ -326,11 +329,9 @@ export function StudyPanel({
 
         {active && <Progress study={study} current={current} onOpenSolver={onOpenSolver} />}
 
-        <SearchSpace study={study} />
-
         {bestEvaluation && (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border px-4 py-3">
-            <div className="flex flex-col gap-1 text-sm">
+            <div className="flex min-w-0 flex-col gap-1 text-sm">
               <span className="font-medium text-text">
                 Best design: #{bestEvaluation.index}
                 {bestEvaluation.objective !== null &&
@@ -356,6 +357,26 @@ export function StudyPanel({
           </div>
         )}
 
+        {evaluations.some((e) => e.status === 'done') && (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            {study.mode === 'weighted' && (
+              <ChartPanel title="Objective per evaluation">
+                <ObjectiveChart evaluations={evaluations} best={best} />
+              </ChartPanel>
+            )}
+            <ChartPanel
+              title={`Head loss and ${metric.name}`}
+              className={study.mode === 'weighted' ? undefined : 'xl:col-span-2'}
+            >
+              <ParetoChart
+                evaluations={evaluations}
+                front={paretoFront}
+                metric={study.vortexMetric}
+              />
+            </ChartPanel>
+          </div>
+        )}
+
         {evaluations.length === 0 ? (
           <p className="text-sm text-text-secondary">
             No evaluation yet.{' '}
@@ -367,26 +388,7 @@ export function StudyPanel({
           <EvaluationsTable study={study} evaluations={evaluations} best={best} />
         )}
 
-        {evaluations.some((e) => e.status === 'done') && (
-          <div className="grid grid-cols-1 gap-6 2xl:grid-cols-2">
-            {study.mode === 'weighted' && (
-              <div className="flex flex-col gap-2">
-                <h4 className="text-sm font-medium text-text">Objective per evaluation</h4>
-                <ObjectiveChart evaluations={evaluations} best={best} />
-              </div>
-            )}
-            <div className="flex flex-col gap-2">
-              <h4 className="text-sm font-medium text-text">
-                Head loss and {metric.name.toLowerCase()}
-              </h4>
-              <ParetoChart
-                evaluations={evaluations}
-                front={paretoFront}
-                metric={study.vortexMetric}
-              />
-            </div>
-          </div>
-        )}
+        <SearchSpace study={study} />
       </div>
     </section>
   );
@@ -456,7 +458,7 @@ function Progress({
         })}
       </ol>
       {(current?.meshingSessionId || (current?.status === 'solving' && onOpenSolver)) && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-sm">
           {current?.meshingSessionId && current.sessionAvailable && (
             <span className="text-text-secondary">
               Meshing session:{' '}
@@ -466,8 +468,9 @@ function Progress({
             </span>
           )}
           {current?.status === 'solving' && onOpenSolver && (
-            <Button type="button" variant="ghost" size="sm" onClick={onOpenSolver}>
-              Open the Solver tab
+            <Button type="button" variant="secondary" size="sm" onClick={onOpenSolver}>
+              <Activity strokeWidth={1.75} aria-hidden="true" />
+              Open Solver tab
             </Button>
           )}
         </div>
@@ -509,12 +512,13 @@ function EvaluationsTable({
   best: number | null;
 }) {
   const metric = VORTEX_METRIC_LABEL[study.vortexMetric];
-  const th = 'px-3 py-2 text-left text-xs font-medium text-text-secondary';
+  const th =
+    'whitespace-nowrap px-3 py-2 text-left align-bottom text-xs font-medium text-text-secondary';
   const td = 'px-3 py-2 text-right tabular-nums text-text';
   const cell = (v: number | null) => (v === null ? '-' : formatValue(v));
   return (
     <div className="overflow-x-auto rounded-md border border-border">
-      <table aria-label="Evaluations" className="w-full min-w-[760px] text-sm">
+      <table aria-label="Evaluations" className="w-full min-w-[680px] text-sm">
         <thead className="bg-bg">
           <tr>
             <th scope="col" className={th}>
@@ -525,14 +529,14 @@ function EvaluationsTable({
             </th>
             {study.paramSpace.map((r) => (
               <th key={r.key} scope="col" className={cn(th, 'text-right')}>
-                {r.label} (mm)
+                <HeaderLabel label={r.label} unit="mm" />
               </th>
             ))}
             <th scope="col" className={cn(th, 'text-right')}>
-              Head loss (m)
+              <HeaderLabel label="Head loss" unit="m" />
             </th>
             <th scope="col" className={cn(th, 'text-right')}>
-              {metric.name} ({metric.unit})
+              <HeaderLabel label={metric.name} unit={metric.unit} />
             </th>
             {study.mode === 'weighted' && (
               <th scope="col" className={cn(th, 'text-right')}>
@@ -557,7 +561,7 @@ function EvaluationsTable({
                 <th scope="row" className="px-3 py-2 text-left font-medium tabular-nums text-text">
                   {e.index}
                 </th>
-                <td className="px-3 py-2">
+                <td className="whitespace-nowrap px-3 py-2">
                   <EvaluationBadge status={e.status} />
                 </td>
                 {study.paramSpace.map((r) => (
@@ -574,8 +578,14 @@ function EvaluationsTable({
                     {e.objective === null ? '-' : e.objective.toFixed(3)}
                   </td>
                 )}
-                <td className="max-w-[28rem] px-3 py-2 text-xs text-text-secondary">
-                  {notes.length ? notes.join('. ') : '-'}
+                <td className="min-w-[9rem] px-3 py-2 text-xs text-text-secondary">
+                  {notes.length ? (
+                    <span className="line-clamp-2" title={notes.join('. ')}>
+                      {notes.join('. ')}
+                    </span>
+                  ) : (
+                    '-'
+                  )}
                 </td>
               </tr>
             );
@@ -583,5 +593,131 @@ function EvaluationsTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** Two-line table header: the quantity, then its unit (every header keeps the same shape). */
+function HeaderLabel({ label, unit }: { label: string; unit: string }) {
+  return (
+    <span className="flex flex-col items-end leading-tight">
+      <span>{label}</span>
+      <span className="font-normal">{unit}</span>
+    </span>
+  );
+}
+
+/** A chart and its title in a hairline frame (the pair sits side by side on wide screens). */
+function ChartPanel({
+  title,
+  className,
+  children,
+}: {
+  title: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      aria-label={title}
+      className={cn('flex min-w-0 flex-col gap-3 rounded-md border border-border p-4', className)}
+    >
+      <h4 className="text-sm font-medium text-text">{title}</h4>
+      {children}
+    </section>
+  );
+}
+
+/** Relative change against the baseline, "-6.7 %" style (null without a baseline). */
+function deltaPct(value: number | null, base: number | null): string | null {
+  if (value === null || base === null || base === 0) return null;
+  const pct = ((value - base) / Math.abs(base)) * 100;
+  if (Math.abs(pct) < 0.05) return '0.0 %';
+  return `${pct > 0 ? '+' : '-'}${Math.abs(pct).toFixed(1)} %`;
+}
+
+/**
+ * The study at a glance: budget used, best objective (or the Pareto front size),
+ * and the lowest head loss and vortex metric reached, each against the baseline
+ * (#0). A definition list on hairlines, not stat cards (brain/design/product.md).
+ */
+function StudySummary({
+  study,
+  evaluations,
+  best,
+  front,
+}: {
+  study: PublicStudy;
+  evaluations: StudyEvaluation[];
+  best: number | null;
+  front: number[];
+}) {
+  const metric = VORTEX_METRIC_LABEL[study.vortexMetric];
+  const done = evaluations.filter((e) => e.status === 'done');
+  const baseline = done.find((e) => e.index === 0);
+  const lowest = (pick: (e: StudyEvaluation) => number | null) =>
+    done.reduce<{ value: number; index: number } | null>((acc, e) => {
+      const v = pick(e);
+      return v !== null && (acc === null || v < acc.value) ? { value: v, index: e.index } : acc;
+    }, null);
+  const headLoss = lowest((e) => e.headLoss);
+  const vortex = lowest((e) => vortexOf(e, study.vortexMetric));
+  const bestObjective =
+    best !== null ? (evaluations.find((e) => e.index === best)?.objective ?? null) : null;
+  const vsBaseline = (index: number, value: number, base: number | null | undefined) => {
+    if (index === 0) return ', the baseline';
+    const d = deltaPct(value, base ?? null);
+    return d ? `, ${d} vs baseline` : '';
+  };
+
+  const items: { label: string; value: string; note: string | null }[] = [
+    {
+      label: 'Evaluations',
+      value: `${study.counted} / ${study.maxEvaluations}`,
+      note: `${done.length} with results`,
+    },
+    study.mode === 'weighted'
+      ? {
+          label: 'Best objective',
+          value: bestObjective !== null ? bestObjective.toFixed(3) : '-',
+          note: best !== null ? `#${best}, baseline = 1` : 'After the baseline',
+        }
+      : { label: 'Pareto front', value: String(front.length), note: 'Non-dominated designs' },
+    {
+      label: 'Lowest head loss',
+      value: headLoss ? `${formatValue(headLoss.value)} m` : '-',
+      note: headLoss
+        ? `#${headLoss.index}${vsBaseline(headLoss.index, headLoss.value, baseline?.headLoss)}`
+        : null,
+    },
+    {
+      label: `Lowest ${metric.name}`,
+      value: vortex ? `${formatValue(vortex.value)} ${metric.unit}` : '-',
+      note: vortex
+        ? `#${vortex.index}${vsBaseline(vortex.index, vortex.value, baseline ? vortexOf(baseline, study.vortexMetric) : null)}`
+        : null,
+    },
+  ];
+
+  return (
+    <dl
+      aria-label="Study summary"
+      className="grid grid-cols-2 border-b border-border xl:grid-cols-4"
+    >
+      {items.map((item, i) => (
+        <div
+          key={item.label}
+          className={cn(
+            'flex min-w-0 flex-col gap-0.5 px-5 py-3',
+            i % 2 === 1 && 'border-l border-border',
+            i >= 2 && 'border-t border-border xl:border-t-0',
+            i === 2 && 'xl:border-l',
+          )}
+        >
+          <dt className="text-xs text-text-secondary">{item.label}</dt>
+          <dd className="text-base font-semibold tabular-nums text-text">{item.value}</dd>
+          {item.note && <dd className="text-xs tabular-nums text-text-secondary">{item.note}</dd>}
+        </div>
+      ))}
+    </dl>
   );
 }

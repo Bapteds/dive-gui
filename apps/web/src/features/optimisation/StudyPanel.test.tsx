@@ -139,12 +139,18 @@ function detail(s: Partial<PublicStudy> = {}, evaluations = EVALUATIONS): StudyD
   return { study: study(s), evaluations, best: 1, paretoFront: [0, 1] };
 }
 
-function renderPanel(d: StudyDetail) {
+function renderPanel(d: StudyDetail, onOpenSolver?: () => void) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <MemoryRouter>
       <QueryClientProvider client={queryClient}>
-        <StudyPanel projectId="p1" detail={d} onEdit={vi.fn()} onDeleted={vi.fn()} />
+        <StudyPanel
+          projectId="p1"
+          detail={d}
+          onEdit={vi.fn()}
+          onDeleted={vi.fn()}
+          onOpenSolver={onOpenSolver}
+        />
       </QueryClientProvider>
     </MemoryRouter>,
   );
@@ -217,5 +223,34 @@ describe('StudyPanel', () => {
     await user.click(screen.getByText('Show head loss and vortex values'));
     const scatter = screen.getByRole('table', { name: /Head loss against/ });
     expect(within(scatter).getAllByText('Pareto front')).toHaveLength(2);
+  });
+  it('summarises the budget, the best objective and the lowest metrics against the baseline', () => {
+    renderPanel(detail({ status: 'completed', currentIndex: null }));
+    const summary = screen.getByLabelText('Study summary');
+    expect(within(summary).getByText('Best objective')).toBeInTheDocument();
+    expect(within(summary).getByText('0.500')).toBeInTheDocument();
+    expect(within(summary).getByText('1 m')).toBeInTheDocument();
+    // Both metrics halve at #1 in this fixture.
+    expect(within(summary).getAllByText('#1, -50.0 % vs baseline')).toHaveLength(2);
+    expect(within(summary).getByText('Lowest Masked Q volume')).toBeInTheDocument();
+    expect(within(summary).getByText('0.25 m³')).toBeInTheDocument();
+  });
+
+  it('says "the baseline" when the baseline holds the lowest value', () => {
+    renderPanel(
+      detail({ status: 'completed', currentIndex: null }, [
+        EVALUATIONS[0],
+        { ...EVALUATIONS[1], headLoss: 3 },
+      ]),
+    );
+    expect(screen.getByText('#0, the baseline')).toBeInTheDocument();
+  });
+
+  it('opens the Solver tab from the evaluation being solved', async () => {
+    const user = userEvent.setup();
+    const onOpenSolver = vi.fn();
+    renderPanel(detail({ status: 'running', currentIndex: 3 }), onOpenSolver);
+    await user.click(screen.getByRole('button', { name: 'Open Solver tab' }));
+    expect(onOpenSolver).toHaveBeenCalledTimes(1);
   });
 });
