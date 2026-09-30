@@ -5,6 +5,7 @@ import {
   CHAMBER_D_MIDDLE_OVER_LAST,
   CHAMBER_DIMENSION_MAX_MM,
   CHAMBER_INPUT_RANGES,
+  CHAMBER_PERMANENT_RELATION_KEYS,
   CHAMBER_RELATIONS,
   CHAMBER_SPIRAL_FLOW_RANGE,
   CHAMBER_VANE_COUNT_DEFAULT,
@@ -46,7 +47,7 @@ export interface ChamberFormValues {
   feetEnabled: boolean;
   /** Absolute guide-vane open angle (deg, 45..55; asset baked at 50°); each blade swings about its spindle. Guide-vane builds only. */
   vaneAngleDeg: number;
-  /** Number of guide vanes (whole number 8..32, default 16; chord x 16/n, same solidity). Guide-vane builds only. */
+  /** Number of guide vanes (whole number 8..32, default 16; chord x min(1, 16/n)). Guide-vane builds only. */
   vaneCount: number;
   /** Outlet inner/outer diameter ratio (0.35..0.50, default 0.45). Guide-vane builds only. */
   outletRatio: number;
@@ -291,6 +292,17 @@ export function chamberInputToFormValues(input: ChamberInput): ChamberFormValues
     semiSpiral: input.semiSpiral ?? CHAMBER_FORM_DEFAULTS.semiSpiral,
     spiralFlowVelocity: input.spiralFlowVelocity ?? CHAMBER_FORM_DEFAULTS.spiralFlowVelocity,
   };
+}
+
+/**
+ * The Parameters-table constraints of a saved build snapshot. Constraints on the
+ * permanent rows (BF1 / BF2, always = LF1 / LF2; spec 2026-09-29-corner-chamfer-45)
+ * came from older saves: they are dropped silently, the model ignores them anyway.
+ */
+export function chamberInputToConstraints(input: ChamberInput): NonNullable<ChamberInput['constraints']> {
+  const constraints = { ...(input.constraints ?? {}) };
+  for (const key of CHAMBER_PERMANENT_RELATION_KEYS) delete constraints[key];
+  return constraints;
 }
 
 /** The auto (empirical) values shown as placeholders on the blank override fields. */

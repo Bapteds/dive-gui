@@ -1,6 +1,6 @@
 # Index of every repository file
 
-> One line per file (588 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
+> One line per file (589 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
 
 Detail of a code file: open the sheet shown and search for the `## path/to/file` section. Documents: the description is their title and introduction line.
 
@@ -779,6 +779,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `brain/specs/2026-09-02-simplify-generator-design.md` : "Simplify Generator" option (hollow variant) — design
 - `brain/specs/2026-09-29-cone-chamfer-design.md` : Cone chamfer (With cone) — design : Area: shared, backend, python (`apps/api/scripts/buildChamber.py`), frontend, tests
 - `brain/specs/2026-09-29-cone-foot-chamfer-design.md` : Cone foot chamfer (replaces the top-rim cone chamfer) : Supersedes: `2026-09-29-cone-chamfer-design.md` (top-rim chamfer, implemented in `dbc944a` then rejected by the user: the chamfer belongs on the lower edge)
+- `brain/specs/2026-09-29-corner-chamfer-45-design.md` : Chamber corner chamfers always at 45° : Area: shared (model), API, web, tests (no builder change)
 - `brain/specs/2026-09-29-guide-vane-count-any-design.md` : Guide vane count: any integer from 8 to 32 : Amends: `2026-09-29-guide-vane-count-design.md` (WS-B, 16 or 18): the count becomes free within a range; the chord rule is generalised.
 - `brain/specs/2026-09-29-guide-vane-count-design.md` : Guide vane count (16 or 18) — design : Area: shared, backend, python (`apps/api/scripts/buildChamber.py`), frontend, tests
 - `brain/specs/2026-09-29-meshing-to-project-design.md` : Meshing session → project mesh transfer (WS-F) — design

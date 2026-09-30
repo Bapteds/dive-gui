@@ -110,16 +110,18 @@ VANE_BASE_ANGLE_DEG = 50.0   # the guide-vane open angle baked into the asset. T
                              # actually applied is (vaneAngleDeg - VANE_BASE_ANGLE_DEG).
 VANE_COUNT_MIN = 8           # guide vane counts accepted (vaneCount param): any whole
 VANE_COUNT_MAX = 32          # number in [8, 32]. 16 is the asset; with n vanes each
-                             # blade is scaled in XY by bladeCount / n about its pivot
-                             # (same solidity, same pivot radius) and the ring step is
+                             # blade is scaled in XY by min(1, bladeCount / n) about
+                             # its pivot (_vane_chord_scale: above 16 same solidity,
+                             # below 16 the 16-vane blade) and the ring step is
                              # 360 / n (specs 2026-09-29-guide-vane-count and
-                             # 2026-09-29-guide-vane-count-any). Mirrors
-                             # CHAMBER_VANE_COUNT_MIN / _MAX of @dive/shared.
+                             # 2026-09-29-guide-vane-count-any, amended 2026-09-30).
+                             # Mirrors CHAMBER_VANE_COUNT_MIN / _MAX of @dive/shared.
 VANE_MIN_GAP = 2e-3          # smallest gap (m) allowed between two neighbouring blade
                              # outlines (2 x VANE_SKIN_TOL: below it the skin mask
                              # cannot tell the blades apart and a mesher cannot fill
                              # the slot). Never reached with the asset over 45..55 deg
-                             # at any count (smallest gap ~0.39 chord, at 8 vanes).
+                             # at any count (smallest gap ~0.52 chord at 16, ~0.54
+                             # at 32, ~1.2 at 8 where the 16-vane blade is kept).
 VANE_OUTLET_SAFE_MARGIN = 0.97   # outlet outer radius clamp: stay this fraction inside
                                  # the vane's own inner working radius (R_anchor in
                                  # make_vane_patches) so the blade always has shroud/hub
@@ -719,11 +721,12 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
     clamped) rims — main() uses these downstream instead of recomputing them.
 
     `vane_count` (8..32) sets the number of blades in the ring, evenly spaced
-    every 360/n degrees. With n other than the asset's bladeCount (16) each blade is
-    scaled UNIFORMLY in XY by bladeCount/n about its own pivot, before the pitch:
-    the chord scales so the cascade solidity n*c/(2 pi R_pivot) is unchanged, the
-    pivot circle does not move, and the airfoil stays similar (the STEP fit follows
-    it). Z is not scaled (the span still fills the HLE band). R_anchor is measured
+    every 360/n degrees. Above the asset's bladeCount (16) each blade is scaled
+    UNIFORMLY in XY by bladeCount/n about its own pivot, before the pitch: the chord
+    shrinks so the cascade solidity n*c/(2 pi R_pivot) is unchanged. Below 16 the
+    blade keeps its 16-vane size (_vane_chord_scale = min(1, 16/n), amendment
+    2026-09-30: lower solidity, wider throat). The pivot circle does not move and
+    the airfoil stays similar (the STEP fit follows it). Z is not scaled (the span still fills the HLE band). R_anchor is measured
     on the scaled blade, so the outlet clamp follows the real blade. The returned
     "pivot" key is the reference blade's pivot (x, y): main() rescales a real blade
     outline about it to find the counts that fit the passage (_vane_count_fit)."""
@@ -777,10 +780,11 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
                    [np.sin(pang), np.cos(pang), 0, 0],
                    [0, 0, 1, 0], [0, 0, 0, 1]])
 
-    # Chord scale for a non-asset vane count (spec 2026-09-29-guide-vane-count):
-    # uniform XY scale about the pivot. Scale and rotation about the same point
-    # commute, so both ride in the pitch block; 16 vanes skips it (bit-identical).
-    k_chord = int(meta["bladeCount"]) / float(vane_count)
+    # Chord scale for a vane count above the asset's (spec 2026-09-29-guide-vane-count,
+    # amended 2026-09-30): uniform XY scale about the pivot, min(1, 16/n). Scale and
+    # rotation about the same point commute, so both ride in the pitch block; 16
+    # vanes and below skip it (bit-identical blade).
+    k_chord = _vane_chord_scale(vane_count, int(meta["bladeCount"]))
     base = place(blade)
     if vane_angle_deg or k_chord != 1.0:
         base.apply_translation((-piv_x, -piv_y, 0))     # pitch about the spindle
@@ -1361,14 +1365,27 @@ def _min_blade_gap(outlines):
     return gap
 
 
+def _vane_chord_scale(n, blade_count=16):
+    """XY scale of each blade at n vanes: min(1, blade_count / n). Above the asset's
+    16 the chord shrinks with the pitch (constant solidity, 18 unchanged since
+    WS-B); below 16 the blade keeps its 16-vane size, so the solidity drops and the
+    throat widens (user decision 2026-09-30, amending spec
+    2026-09-29-guide-vane-count-any: a 16/n chord left the distributor passage
+    below 11 to 13 vanes on every fixture)."""
+    return min(1.0, float(blade_count) / float(n))
+
+
 def _vane_count_fit(np, outline, pivot, vane_count, cx, cy, r_in, r_out):
     """Does the blade fit the distributor passage at `vane_count`, and which counts
     do? Returns (fits, a, b): `fits` for vane_count, and [a, b] the contiguous run
     of counts in [VANE_COUNT_MIN, VANE_COUNT_MAX] around the asset's 16 that fit.
 
     `outline` is one REAL blade outline (XY ring, built at vane_count) and `pivot`
-    its spindle: the blade at count m is that outline scaled by vane_count/m about
-    the pivot (the chord rule), so one outline gives every count. A count fits when
+    its spindle: the blade at count m is that outline scaled by
+    _vane_chord_scale(m) / _vane_chord_scale(vane_count) about the pivot (the chord
+    rule), so one outline gives every count. Since the 2026-09-30 amendment every
+    count up to 16 draws the 16-vane blade and higher counts shrink it towards its
+    pivot, so on a real ring this safety net should never fire. A count fits when
     its outline stays within radii [r_in, r_out] about the ring axis (cx, cy): the
     hub rim and LE/2, the shroud brim edge (spec 2026-09-29-guide-vane-count-any).
     The limits never get tighter than the 16-vane blade itself: a ring the user
@@ -1379,7 +1396,8 @@ def _vane_count_fit(np, outline, pivot, vane_count, cx, cy, r_in, r_out):
     ctr = np.array([cx, cy], dtype=float)
 
     def extent(m):
-        q = piv + (float(vane_count) / m) * (pts - piv) - ctr
+        k = _vane_chord_scale(m) / _vane_chord_scale(vane_count)
+        q = piv + k * (pts - piv) - ctr
         r = np.hypot(q[:, 0], q[:, 1])
         return float(r.min()), float(r.max())
 
@@ -2449,10 +2467,11 @@ def main():
                                    % (vane_count, len(_blade_outlines)))
             # The blades must stay in the distributor passage, between the hub rim
             # and LE/2 (the shroud brim edge, where the runner case starts) (spec
-            # 2026-09-29-guide-vane-count-any): a low count lengthens the chord
-            # (x 16/n) until the tips cross LE/2. Measured on a real outline (every
-            # blade is a rotation of it); the pivot-nearest one is the reference
-            # blade, whose pivot _vane_count_fit rescales about.
+            # 2026-09-29-guide-vane-count-any). Since the 2026-09-30 amendment the
+            # chord is capped at the 16-vane one (min(1, 16/n)), so this is a safety
+            # net that should never fire on a real ring. Measured on a real outline
+            # (every blade is a rotation of it); the pivot-nearest one is the
+            # reference blade, whose pivot _vane_count_fit rescales about.
             _piv = vane_patches["pivot"]
             _ref = min(_blade_outlines, key=lambda o: float(np.hypot(
                 *(np.asarray(o, dtype=float).mean(axis=0) - np.asarray(_piv)))))

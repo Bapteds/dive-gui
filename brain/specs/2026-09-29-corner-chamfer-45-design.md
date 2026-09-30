@@ -1,6 +1,6 @@
 # Chamber corner chamfers always at 45°
 
-> **Status**: approved (2026-09-29) · **Date**: 2026-09-29
+> **Status**: implemented (2026-09-30), approved 2026-09-29 · **Date**: 2026-09-29
 > **Area**: shared (model), API, web, tests (no builder change)
 
 ## 1. Goal

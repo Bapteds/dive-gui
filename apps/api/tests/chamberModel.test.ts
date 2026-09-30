@@ -5,6 +5,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   CHAMBER_GENERATOR_FRAME_DIAMETERS_MM,
+  CHAMBER_PERMANENT_RELATION_KEYS,
+  CHAMBER_RELATIONS,
   CHAMBER_SPIRAL_CLEARANCE_M,
   CHAMBER_SPIRAL_DERIVED_KEYS,
   CHAMBER_SPIRAL_FLOW_RANGE,
@@ -44,8 +46,10 @@ describe('computeChamberOutputs', () => {
     expect(m.get('height')!.form).toBe('linear');
 
     // With relations and constraints off, FINAL is the model snapped to the
-    // 50 mm grid and every output reads "within range".
+    // 50 mm grid and every output reads "within range", except BF1 / BF2 which
+    // always follow LF1 / LF2 (spec 2026-09-29-corner-chamfer-45).
     for (const o of outputs) {
+      if (o.key === 'chamferWidth1' || o.key === 'chamferWidth2') continue;
       expect(o.final).toBe(snapToChamberGrid(o.model));
       expect(o.final % CHAMBER_GRID_MM).toBe(0);
       expect(o.status).toBe('within range');
@@ -77,11 +81,10 @@ describe('computeChamberOutputs', () => {
     expect(m.get('distFromEnd')!.relationLabel).toBe('= LF1 + LF2');
   });
 
-  it('gives chamfer-1 length and width the same value (shared formula)', () => {
-    // Relations off so BOTH models are the raw shared fit (with BF1's = LF1
-    // relation on, its model reads LF1's grid-snapped FINAL instead).
+  it('gives chamfer-1 length and width the same value even with relations off', () => {
+    // BF1 = LF1 is permanent: with the master off BF1 reads LF1's FINAL.
     const m = byKey(computeChamberOutputs({ ...BASE, relationsMaster: false }));
-    expect(m.get('chamferLength1')!.model).toBe(m.get('chamferWidth1')!.model);
+    expect(m.get('chamferWidth1')!.final).toBe(m.get('chamferLength1')!.final);
   });
 
   it('caps a value above its Max', () => {
@@ -625,5 +628,72 @@ describe('semi-spiral casing helpers (spec 2026-09-29-semi-spiral-casing)', () =
     const blank = byKey(applyChamberSpiralToOutputs(outputs, null));
     expect(Number.isNaN(blank.get('distFromEnd')!.final)).toBe(true);
     expect(nonPositiveChamberFinals([...blank.values()])).toEqual([]);
+  });
+});
+
+// Corner chamfers always at 45° (spec 2026-09-29-corner-chamfer-45): BF1 = LF1
+// and BF2 = LF2 whatever the relations master, the per-relation map or any
+// constraint on BF says; LF2 = LF1 stays a normal toggleable relation.
+describe('corner chamfers always at 45° (BF = LF)', () => {
+  const expectFollows = (outputs: ChamberOutput[]) => {
+    const m = byKey(outputs);
+    for (const [bf, lf, label] of [
+      ['chamferWidth1', 'chamferLength1', '= LF1'],
+      ['chamferWidth2', 'chamferLength2', '= LF2'],
+    ] as const) {
+      expect(m.get(bf)!.final).toBe(m.get(lf)!.final);
+      expect(m.get(bf)!.status).toBe('from relation');
+      expect(m.get(bf)!.relationLabel).toBe(label);
+      expect(m.get(bf)!.userDriven).toBe(m.get(lf)!.userDriven);
+    }
+    return m;
+  };
+
+  it('keeps BF = LF with the relations master off', () => {
+    const m = expectFollows(computeChamberOutputs({ ...BASE, relationsMaster: false }));
+    // LF2 = LF1 is off with the master: LF2 is its own fit, and BF2 follows it.
+    expect(m.get('chamferLength2')!.status).toBe('within range');
+  });
+
+  it('keeps BF = LF when an old save switched the BF relations off', () => {
+    expectFollows(
+      computeChamberOutputs({ ...BASE, relations: { chamferWidth1: false, chamferWidth2: false } }),
+    );
+  });
+
+  it('ignores Min / Max / Exact on BF1 and BF2', () => {
+    const m = expectFollows(
+      computeChamberOutputs({
+        ...BASE,
+        constraints: { chamferWidth1: { exact: 999 }, chamferWidth2: { min: 5000, max: 100 } },
+      }),
+    );
+    expect(m.get('chamferWidth1')!.final).not.toBe(999);
+    expect(m.get('chamferWidth1')!.userDriven).toBe(false);
+  });
+
+  it('carries an LF Exact verbatim into BF, user-driven', () => {
+    const m = expectFollows(
+      computeChamberOutputs({ ...BASE, constraints: { chamferLength1: { exact: 1234 } } }),
+    );
+    expect(m.get('chamferWidth1')!.final).toBe(1234);
+    expect(m.get('chamferWidth1')!.userDriven).toBe(true);
+    // LF2 = LF1 (on by default) carries it on to BF2.
+    expect(m.get('chamferWidth2')!.final).toBe(1234);
+  });
+
+  it('keeps LF2 = LF1 toggleable', () => {
+    const m = expectFollows(computeChamberOutputs({ ...BASE, relations: { chamferLength2: false } }));
+    expect(m.get('chamferLength2')!.status).toBe('within range');
+    expect(m.get('chamferLength2')!.final).not.toBe(m.get('chamferLength1')!.final);
+  });
+
+  it('takes the two BF relations out of the relations menu (7 left)', () => {
+    expect(CHAMBER_PERMANENT_RELATION_KEYS).toEqual(['chamferWidth1', 'chamferWidth2']);
+    const keys = CHAMBER_RELATIONS.map((r) => r.key);
+    expect(keys).toHaveLength(7);
+    expect(keys).not.toContain('chamferWidth1');
+    expect(keys).not.toContain('chamferWidth2');
+    expect(keys).toContain('chamferLength2');
   });
 });
