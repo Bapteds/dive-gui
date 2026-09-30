@@ -13,7 +13,10 @@ import {
   CHAMBER_SPIRAL_PHI_START_DEG,
   applyChamberSpiralToOutputs,
   chamberSpiralBoxDims,
+  chamberSpiralFlowVelocity,
   chamberSpiralInputs,
+  chamberSpiralVelocityOf,
+  chamberSpiralVelocityRefusal,
   chamberSpiralModelInput,
   CHAMBER_GRID_MM,
   computeChamberGeneratorDims,
@@ -552,9 +555,12 @@ describe('semi-spiral casing helpers (spec 2026-09-29-semi-spiral-casing)', () =
     const inputs = chamberSpiralInputs(input, outputs);
     // widest part = the auto runner case (1.14703 x LE), scaled; 200 mm unscaled gap
     expect(inputs.D_LE).toBeCloseTo((1.14703 * f('dLast') * 1.1) / 1000, 12);
+    // c_flow is derived from B Kammer; the body's spiralFlowVelocity is ignored
+    expect(inputs.c_flow).toBe(
+      chamberSpiralFlowVelocity(8, f('height') / 1000, inputs.D_LE, f('width') / 1000),
+    );
     expect(inputs).toMatchObject({
       Q: 8,
-      c_flow: 0.8,
       clearance: 0.2,
       phi_start: 160,
     });
@@ -563,8 +569,34 @@ describe('semi-spiral casing helpers (spec 2026-09-29-semi-spiral-casing)', () =
     // a typed Guide vanes Ø wider than the runner case becomes the widest part
     const wide = chamberSpiralInputs({ ...input, dMiddle: 5000 }, outputs);
     expect(wide.D_LE).toBeCloseTo(5.5, 12);
-    // the default velocity
-    expect(chamberSpiralInputs({ ...BASE, semiSpiral: true }, outputs).c_flow).toBe(0.922);
+  });
+
+  it('derives the casing flow velocity from B Kammer (user rule 2026-09-30)', () => {
+    // reference case of the tool spec: Q 12, H 2.97, D_LE 3.074, B 6.15 -> 0.9227 (tool default 0.922)
+    expect(chamberSpiralFlowVelocity(12, 2.97, 3.074, 6.15)).toBe(0.923);
+    // a wider B Kammer slows the casing flow, a narrower one speeds it up
+    expect(chamberSpiralFlowVelocity(12, 2.97, 3.074, 6.9)).toBeLessThan(0.922);
+    expect(chamberSpiralFlowVelocity(12, 2.97, 3.074, 5.5)).toBeGreaterThan(0.922);
+    // B Kammer not wider than 2 x (D_LE/2 + 0.2) has no velocity
+    expect(chamberSpiralFlowVelocity(12, 2.97, 3.074, 3.4)).toBeNaN();
+  });
+
+  it('refuses a B Kammer whose velocity leaves 0.3 to 3 m/s, naming the range that fits', () => {
+    const input = { ...BASE, semiSpiral: true };
+    const outputs = computeChamberOutputs(input);
+    const c = chamberSpiralVelocityOf(input, outputs);
+    expect(c).toBe(chamberSpiralInputs(input, outputs).c_flow);
+    const at = (widthMm: number) =>
+      computeChamberOutputs({ ...input, constraints: { width: { exact: widthMm } } });
+    const ok = at(outputs.find((o) => o.key === 'width')!.final);
+    expect(chamberSpiralVelocityRefusal(input, ok)).toBe(
+      Number.isFinite(c) && c >= 0.3 && c <= 3 ? null : chamberSpiralVelocityRefusal(input, ok),
+    );
+    const narrow = { ...input, constraints: { width: { exact: 1000 } } };
+    const msg = chamberSpiralVelocityRefusal(narrow, at(1000));
+    expect(msg).toMatch(/^B Kammer \(1000 mm\) is too narrow for the casing; it must stay between 0\.3 and 3 m\/s\. Set B Kammer between \d+ and \d+ mm\.$/);
+    const huge = { ...input, constraints: { width: { exact: 60000 } } };
+    expect(chamberSpiralVelocityRefusal(huge, at(60000))).toMatch(/gives a casing flow velocity of 0\.\d+ m\/s/);
   });
 
   it('counts the cone chamfer widening in the widest part (spec 2026-09-29-cone-foot-chamfer)', () => {

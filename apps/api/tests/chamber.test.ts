@@ -8,7 +8,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
-import { computeChamberGeneratorDims } from '@dive/shared';
+import { chamberSpiralFlowVelocity, computeChamberGeneratorDims } from '@dive/shared';
 import { app, authHeader, createTestUser, resetDatabase } from './helpers';
 import { setCommandRunner, type CommandResult, type CommandRunner } from '../src/lib/commandRunner';
 import { storageRoot } from '../src/lib/fileTreeStorage';
@@ -1228,11 +1228,13 @@ describe('Chamber Creation', () => {
       const final = (k: string) => outputs.find((o) => o.key === k)!.final;
 
       // The tool inputs (spec section 4): Q_max, H Kammer, 2 x the widest part
-      // (auto runner case = 1.14703 x LE), 200 mm, B Kammer, 0.922 m/s, 160 deg.
+      // (auto runner case = 1.14703 x LE), 200 mm, B Kammer, the velocity
+      // derived from B Kammer (user rule 2026-09-30), 160 deg.
       expect(spiralRuns).toHaveLength(1);
+      const dLe = (1.14703 * final('dLast')) / 1000;
       expect(spiralRuns[0]).toEqual({
         Q: 8,
-        c_flow: 0.922,
+        c_flow: chamberSpiralFlowVelocity(8, final('height') / 1000, dLe, final('width') / 1000),
         H_ch: final('height') / 1000,
         D_LE: (1.14703 * final('dLast')) / 1000,
         clearance: 0.2,
@@ -1296,11 +1298,19 @@ describe('Chamber Creation', () => {
       expect(spiralRuns).toHaveLength(1);
       expect(params[1].spiral).toEqual(p.spiral);
 
-      // A new casing flow velocity is a new spiral (and a new build).
-      const slower = await post(auth, { ...SPIRAL, spiralFlowVelocity: 0.7 }).expect(200);
-      expect(slower.body.hash).not.toBe(res.body.hash);
+      // The body's casing flow velocity is ignored (derived from B Kammer).
+      const typed = await post(auth, { ...SPIRAL, spiralFlowVelocity: 0.7 }).expect(200);
+      expect(typed.body.hash).toBe(res.body.hash);
+      expect(spiralRuns).toHaveLength(1);
+
+      // A wider B Kammer slows the casing flow: a new spiral (and a new build).
+      const wider = await post(auth, {
+        ...SPIRAL,
+        constraints: { width: { exact: Math.round(final('width')) + 500 } },
+      }).expect(200);
+      expect(wider.body.hash).not.toBe(res.body.hash);
       expect(spiralRuns).toHaveLength(2);
-      expect(spiralRuns[1].c_flow).toBe(0.7);
+      expect(spiralRuns[1].c_flow as number).toBeLessThan(spiralRuns[0].c_flow as number);
     });
 
     it('leaves every build without the spiral on its old key', async () => {
@@ -1350,12 +1360,19 @@ describe('Chamber Creation', () => {
       }
     });
 
-    it('rejects a casing flow velocity outside 0.3-3 m/s', async () => {
+    it('refuses a B Kammer whose casing flow velocity leaves 0.3-3 m/s, before any spiral run', async () => {
+      const spiralRuns: Record<string, unknown>[] = [];
+      setCommandRunner(withSpiralRunner(successRunner, spiralRuns));
       const auth = authHeader(await createTestUser());
-      for (const v of [0.2, 3.5, 0]) {
-        const res = await post(auth, { ...SPIRAL, spiralFlowVelocity: v }).expect(422);
+      for (const width of [1000, 60000]) {
+        const res = await post(auth, { ...SPIRAL, constraints: { width: { exact: width } } }).expect(422);
         expect(res.body.error.code).toBe('VALIDATION_ERROR');
+        expect(res.body.error.message.startsWith(`B Kammer (${width} mm) `)).toBe(true);
+        expect(res.body.error.message).toMatch(/Set B Kammer between \d+ and \d+ mm\.$/);
       }
+      expect(spiralRuns).toHaveLength(0);
+      // an old save's out-of-range velocity is ignored, not refused
+      await post(auth, { ...SPIRAL, spiralFlowVelocity: 5 }).expect(200);
     });
 
     it('persists and replays the width-limit warning of the spiral step', async () => {

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { ChamberInput } from '@dive/shared';
+import { chamberSpiralVelocityOf, computeChamberOutputs, type ChamberInput } from '@dive/shared';
 import {
   CHAMBER_FORM_DEFAULTS,
+  casingVelocity,
   chamberBodyKey,
   chamberFormSchema,
   chamberInputToConstraints,
@@ -349,14 +350,37 @@ describe('computeChamberAutoDims', () => {
 });
 
 describe('semi-spiral casing (spec 2026-09-29-semi-spiral-casing)', () => {
-  it('ships off at 0.922 m/s and accepts 0.3 to 3 m/s', () => {
+  it('ships off, without a casing flow velocity (derived from B Kammer)', () => {
     expect(CHAMBER_FORM_DEFAULTS.semiSpiral).toBe(false);
-    expect(CHAMBER_FORM_DEFAULTS.spiralFlowVelocity).toBe(0.922);
-    const on = { ...CHAMBER_FORM_DEFAULTS, semiSpiral: true, feetEnabled: false };
-    expect(parse({ ...on, spiralFlowVelocity: 0.3 }).success).toBe(true);
-    expect(parse({ ...on, spiralFlowVelocity: 3 }).success).toBe(true);
-    expect(parse({ ...on, spiralFlowVelocity: 0.29 }).success).toBe(false);
-    expect(parse({ ...on, spiralFlowVelocity: 3.1 }).success).toBe(false);
+    expect(CHAMBER_FORM_DEFAULTS).not.toHaveProperty('spiralFlowVelocity');
+  });
+
+  it('derives the casing flow velocity live from B Kammer, as the API does', () => {
+    const values = { ...CHAMBER_FORM_DEFAULTS, semiSpiral: true, feetEnabled: false };
+    const outputs = computeChamberOutputs({ x1: values.x1, x2: values.x2, x3: values.x3 });
+    const shown = casingVelocity(values, {}, outputs);
+    expect(shown.value).toBe(chamberSpiralVelocityOf({ ...values }, outputs));
+    expect(shown.widthMm).toBe(Math.round(outputs.find((o) => o.key === 'width')!.final));
+    // a wider B Kammer lowers it
+    const wider = computeChamberOutputs({
+      x1: values.x1,
+      x2: values.x2,
+      x3: values.x3,
+      constraints: { width: { exact: shown.widthMm! + 1000 } },
+    });
+    expect(casingVelocity(values, {}, wider).value!).toBeLessThan(shown.value!);
+    // too narrow: no value, the API's message
+    const narrow = computeChamberOutputs({
+      x1: values.x1,
+      x2: values.x2,
+      x3: values.x3,
+      constraints: { width: { exact: 1000 } },
+    });
+    const bad = casingVelocity(values, {}, narrow);
+    expect(bad.value).toBeNull();
+    expect(bad.error).toMatch(/^B Kammer \(1000 mm\) is too narrow/);
+    // no outputs yet
+    expect(casingVelocity(values, {}, null)).toEqual({ value: null, widthMm: null, error: null });
   });
 
   it('refuses Feet on with the spiral, on the Feet field', () => {
@@ -365,11 +389,10 @@ describe('semi-spiral casing (spec 2026-09-29-semi-spiral-casing)', () => {
     expect(res.error?.issues.map((i) => i.path.join('.'))).toContain('feetEnabled');
   });
 
-  it('loads old saves with the spiral off at 0.922 m/s and round-trips a saved spiral', () => {
+  it('loads old saves with the spiral off and drops a saved velocity (now derived)', () => {
     const base = { x1: 1450, x2: 7, x3: 10 } as ChamberInput;
     const old = chamberInputToFormValues(base);
     expect(old.semiSpiral).toBe(false);
-    expect(old.spiralFlowVelocity).toBe(0.922);
     const saved = chamberInputToFormValues({
       ...base,
       semiSpiral: true,
@@ -377,7 +400,7 @@ describe('semi-spiral casing (spec 2026-09-29-semi-spiral-casing)', () => {
       feetEnabled: false,
     });
     expect(saved.semiSpiral).toBe(true);
-    expect(saved.spiralFlowVelocity).toBe(0.7);
+    expect(saved).not.toHaveProperty('spiralFlowVelocity');
   });
 });
 
