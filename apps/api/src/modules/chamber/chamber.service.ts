@@ -22,7 +22,9 @@ import {
   blankGeneratorHeightRefusal,
   chamberConeChamferMm,
   chamberSpiralBoxDims,
+  chamberSpiralExtendInlet,
   chamberSpiralInputs,
+  chamberSpiralLengthLimits,
   chamberSpiralVelocityRefusal,
   chamberSpiralModelInput,
   runnerCaseClearanceRefusal,
@@ -203,7 +205,13 @@ interface DesignedSpiral {
   inputs: ChamberSpiralInputs;
   /** V0..V9 in metres, axis frame (frame x = builder X, frame y = builder Y). */
   vertices: ChamberSpiralVertex[];
-  quality: { worst_area_error_m2: number; at_phi_deg: number; width_binding: boolean };
+  /** `length_binding` only when a Length Max was passed (so other keys never change). */
+  quality: {
+    worst_area_error_m2: number;
+    at_phi_deg: number;
+    width_binding: boolean;
+    length_binding?: boolean;
+  };
   /** The designer's warnings (the width-limit note), persisted with the build. */
   warnings: string[];
   summary: ChamberSpiralSummary;
@@ -221,7 +229,12 @@ function parseSpiralResult(raw: unknown, inputs: ChamberSpiralInputs): DesignedS
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as {
     vertices?: unknown;
-    quality?: { worst_area_error_m2?: unknown; at_phi_deg?: unknown; width_binding?: unknown };
+    quality?: {
+      worst_area_error_m2?: unknown;
+      at_phi_deg?: unknown;
+      width_binding?: unknown;
+      length_binding?: unknown;
+    };
     warnings?: unknown;
   };
   if (!Array.isArray(r.vertices) || r.vertices.length !== 10) return null;
@@ -239,15 +252,12 @@ function parseSpiralResult(raw: unknown, inputs: ChamberSpiralInputs): DesignedS
   ) {
     return null;
   }
-  const quality = {
+  const quality: DesignedSpiral['quality'] = {
     worst_area_error_m2: q.worst_area_error_m2,
     at_phi_deg: q.at_phi_deg,
     width_binding: q.width_binding,
   };
-  const box = chamberSpiralBoxDims(vertices);
-  const boxMm = Object.fromEntries(
-    Object.entries(box).map(([k, v]) => [k, toMm(v)]),
-  ) as unknown as ChamberSpiralBoxDims;
+  if (typeof q.length_binding === 'boolean') quality.length_binding = q.length_binding;
   return {
     inputs,
     vertices,
@@ -255,14 +265,46 @@ function parseSpiralResult(raw: unknown, inputs: ChamberSpiralInputs): DesignedS
     warnings: Array.isArray(r.warnings)
       ? r.warnings.filter((w): w is string => typeof w === 'string')
       : [],
-    summary: {
-      widthMm: boxMm.width,
-      worstAreaErrorM2: quality.worst_area_error_m2,
-      atPhiDeg: quality.at_phi_deg,
-      widthBinding: quality.width_binding,
-      boxMm,
-    },
+    summary: spiralSummary(vertices, quality, 0),
   };
+}
+
+/** The page's summary of a spiral outline (mm), `extensionMm` = inlet extension. */
+function spiralSummary(
+  vertices: ChamberSpiralVertex[],
+  quality: DesignedSpiral['quality'],
+  extensionMm: number,
+): ChamberSpiralSummary {
+  const box = chamberSpiralBoxDims(vertices);
+  const boxMm = Object.fromEntries(
+    Object.entries(box).map(([k, v]) => [k, toMm(v)]),
+  ) as unknown as ChamberSpiralBoxDims;
+  return {
+    widthMm: boxMm.width,
+    worstAreaErrorM2: quality.worst_area_error_m2,
+    atPhiDeg: quality.at_phi_deg,
+    widthBinding: quality.width_binding,
+    lengthMm: boxMm.length,
+    lengthBinding: quality.length_binding ?? false,
+    inletExtensionMm: extensionMm,
+    boxMm,
+  };
+}
+
+/**
+ * Length Min (spec 2026-09-30-spiral-length): when the designed spiral is
+ * shorter, the straight inlet channel is extended (V0 and V9 move out, the
+ * spiral itself does not change). Applied after the cached spiral step, so a
+ * Min never re-keys the spiral; the moved vertices re-key the build.
+ */
+function extendSpiralInlet(spiral: DesignedSpiral, minMm: number | null): DesignedSpiral {
+  const vertices = chamberSpiralExtendInlet(spiral.vertices, minMm);
+  if (vertices === spiral.vertices) return spiral;
+  const before = spiral.summary.boxMm.length;
+  const extended = [...vertices];
+  const summary = spiralSummary(extended, spiral.quality, 0);
+  summary.inletExtensionMm = Math.round((summary.boxMm.length - before) * 1e3) / 1e3;
+  return { ...spiral, vertices: extended, summary };
 }
 
 /** Stable 16-hex key of a set of spiral inputs + the algorithm tag. */
@@ -501,13 +543,19 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
 
   // An inverted range is a contradiction, not an input: building on the
   // silently-ignored model value hid the mistake (and it survived into saves).
+  // The semi-spiral Length is not an output but takes Min / Max too (spec
+  // 2026-09-30-spiral-length): its inverted range is refused the same way.
   const inverted = outputs.filter((o) => o.status === '! min>max');
-  if (inverted.length) {
+  const lengthLimits = chamberSpiralLengthLimits(input);
+  if (inverted.length || lengthLimits.inverted) {
     const list = inverted
       .map((o) => {
         const con = input.constraints?.[o.key];
         return `${o.label}: Min ${con?.min ?? '?'} > Max ${con?.max ?? '?'}`;
       })
+      .concat(
+        lengthLimits.inverted ? [`Length: Min ${lengthLimits.minMm} > Max ${lengthLimits.maxMm}`] : [],
+      )
       .join(', ');
     throw new AppError(
       422,
@@ -534,7 +582,11 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
 
   // The spiral step runs BEFORE hashing, so the build key covers the actual
   // geometry (the frozen vertices), not just the inputs that produced them.
-  const spiral = spiralOn ? await designSpiral(chamberSpiralInputs(input, outputs)) : null;
+  // A Length Max is one of the designer's inputs (chamberSpiralInputs); a Length
+  // Min extends the inlet channel of the designed spiral afterwards.
+  const spiral = spiralOn
+    ? extendSpiralInlet(await designSpiral(chamberSpiralInputs(input, outputs)), lengthLimits.minMm)
+    : null;
   const responseOutputs = spiral
     ? applyChamberSpiralToOutputs(modelOutputs, spiral.summary.boxMm)
     : outputs;

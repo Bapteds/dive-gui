@@ -3236,8 +3236,9 @@ export interface ChamberInput {
    * nose) computed by apps/api/scripts/designSemiSpiral.py, plus a plank from
    * the nose tip tangent to the generator / cone circle; nose + plank form the
    * `tongue` patch. B Kammer becomes the spiral's width LIMIT; Length, B1, LT and
-   * the four chamfer values are derived from the spiral (status 'from spiral'),
-   * lengthOverride and chamferEnabled are ignored, and Feet must be off.
+   * the four chamfer values are derived from the spiral (status 'from spiral';
+   * Length takes Min / Max / Exact through `spiralLength`), lengthOverride and
+   * chamferEnabled are ignored, and Feet must be off.
    * Geometry-only. Default false.
    */
   semiSpiral?: boolean;
@@ -3247,6 +3248,16 @@ export interface ChamberInput {
    * `chamberSpiralFlowVelocity` (read-only in the form).
    */
   spiralFlowVelocity?: number;
+  /**
+   * Semi-spiral casing only (ignored otherwise): Min / Max / Exact on the
+   * spiral's Length (mm; V2.y - V0.y, the Length row of the Parameters table).
+   * Max is a hard limit for the spiral designer (`max_length`); Min extends the
+   * straight inlet channel (V0 and V9 move out) when the spiral is shorter;
+   * Exact = both. Length is not a ChamberOutputKey, so it lives here and not in
+   * `constraints`; `lengthOverride` stays the plain box's Length. Spec
+   * brain/specs/2026-09-30-spiral-length-design.md. Absent: no change at all.
+   */
+  spiralLength?: ChamberConstraint;
 }
 
 /** Longest allowed saved-chamber-build name (trimmed). */
@@ -3596,9 +3607,10 @@ export const CHAMBER_SPIRAL_CLEARANCE_M = 0.2;
 export const CHAMBER_SPIRAL_PHI_START_DEG = 160;
 
 /**
- * The outputs the spiral derives while it is on (with Length, which is not an
- * output): read-only in the table, status 'from spiral', left out of the build
- * key and exempt from the non-positive and Min > Max refusals.
+ * The outputs the spiral derives while it is on: read-only in the table, status
+ * 'from spiral', left out of the build key and exempt from the non-positive and
+ * Min > Max refusals. Length (not an output) is derived too but takes Min / Max /
+ * Exact through `ChamberInput.spiralLength` (spec 2026-09-30-spiral-length).
  */
 export const CHAMBER_SPIRAL_DERIVED_KEYS: readonly ChamberOutputKey[] = [
   'distFromSideChamfer1',
@@ -3671,6 +3683,12 @@ export interface ChamberSpiralSummary {
   atPhiDeg: number;
   /** True when B Kammer holds the spiral back (the build then carries a warning). */
   widthBinding: boolean;
+  /** Final Length (mm), after any inlet extension (= boxMm.length). */
+  lengthMm?: number;
+  /** True when the Length Max holds the spiral back (the build then carries a warning). */
+  lengthBinding?: boolean;
+  /** How far the inlet channel was extended to reach the Length Min (mm; 0 = not extended). */
+  inletExtensionMm?: number;
   /** The eight box values (mm) that fill the read-only rows. */
   boxMm: ChamberSpiralBoxDims;
 }
@@ -3684,6 +3702,48 @@ export interface ChamberSpiralInputs {
   clearance: number;
   max_width: number;
   phi_start: number;
+  /** Length Max (m); present only when one applies, so other spiral keys never change. */
+  max_length?: number;
+}
+
+/** The semi-spiral Length limits (mm) of a chamber input (spec 2026-09-30-spiral-length). */
+export interface ChamberSpiralLengthLimits {
+  minMm: number | null;
+  maxMm: number | null;
+  /** Min > Max without an Exact: refused like any other inverted range. */
+  inverted: boolean;
+}
+
+/**
+ * The Length Min / Max of a semi-spiral chamber: `spiralLength`, read only with
+ * the spiral on. Exact wins over Min / Max and sets both (as on every other row).
+ */
+export function chamberSpiralLengthLimits(input: ChamberInput): ChamberSpiralLengthLimits {
+  const con = input.semiSpiral === true ? input.spiralLength : undefined;
+  if (!con) return { minMm: null, maxMm: null, inverted: false };
+  if (con.exact != null) return { minMm: con.exact, maxMm: con.exact, inverted: false };
+  const minMm = con.min ?? null;
+  const maxMm = con.max ?? null;
+  return { minMm, maxMm, inverted: minMm != null && maxMm != null && minMm > maxMm };
+}
+
+/**
+ * Extend the straight inlet channel of a spiral outline to a Length Min (mm):
+ * when V2.y - V0.y is shorter, V0 and V9 (the flat inlet end, both at foot
+ * level) move to V2.y - min (rounded to 1e-6 m like the tool); every other
+ * vertex stays. Returns the same array when nothing moves.
+ */
+export function chamberSpiralExtendInlet<T extends ChamberSpiralVertex>(
+  vertices: readonly T[],
+  minMm: number | null,
+): readonly T[] {
+  if (minMm == null) return vertices;
+  const top = vertices.find((v) => v.id === 'V2');
+  const foot = vertices.find((v) => v.id === 'V0');
+  if (!top || !foot) return vertices;
+  const footY = Math.round((top.y - minMm / 1000) * 1e6) / 1e6;
+  if (!(footY < foot.y)) return vertices;
+  return vertices.map((v) => (v.id === 'V0' || v.id === 'V9' ? { ...v, y: footY } : v));
 }
 
 /**
@@ -3791,7 +3851,11 @@ export function chamberSpiralInputs(
   outputs: ChamberOutput[],
 ): ChamberSpiralInputs {
   const final = (k: ChamberOutputKey) => outputs.find((o) => o.key === k)!.final;
+  const { maxMm } = chamberSpiralLengthLimits(input);
   return {
+    // Only a Length Max adds the key, so the spiral cache key of every other
+    // input set is unchanged (spec 2026-09-30-spiral-length).
+    ...(maxMm != null ? { max_length: maxMm / 1000 } : {}),
     Q: input.x3,
     // Derived from B Kammer since 2026-09-30; input.spiralFlowVelocity is ignored.
     c_flow: chamberSpiralVelocityOf(input, outputs),

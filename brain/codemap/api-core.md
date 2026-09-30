@@ -175,6 +175,7 @@ Exports `chamberSaveCreateSchema` (`name` trim 1..`CHAMBER_SAVE_NAME_MAX`, `snap
 Exports `createChamberRouter(): Router`, mounted on `/api/v1/chamber`, entirely behind `requireAuth`. `POST /build`, then the `/saves` routes (GET, POST, PUT `/:id`, DELETE `/:id`) declared before the `/:hash` routes so that `saves` is never captured as a hash, then `GET /:hash/manifest`, `/:hash/geometry`, `/:hash/edges` and `/:hash/export/:kind`.
 
 ## `apps/api/src/modules/chamber/chamber.schemas.ts`
+**Spiral Length (2026-09-30)**: `spiralLength: constraintSchema.optional()` (Min / Max / Exact in mm; also validates save snapshots).
 **Semi-spiral (2026-09-29)**: `semiSpiral` (default false) and `spiralFlowVelocity` (`CHAMBER_SPIRAL_FLOW_RANGE` 0.3..3, default 0.922); `superRefine` refuses `semiSpiral` with `feetEnabled` ("The semi-spiral casing needs Feet off for now. …", path `feetEnabled`; the API default for Feet is on).
 **Role**: zod schemas for the chamber routes: build body (inputs X1..X4, constraints, relations, geometric options) and hash and export parameters.
 **Exports**:
@@ -184,6 +185,7 @@ Exports `createChamberRouter(): Router`, mounted on `/api/v1/chamber`, entirely 
 
 ## `apps/api/src/modules/chamber/chamber.service.ts`
 **Semi-spiral (2026-09-29)**: `buildChamber` computes the outputs on `chamberSpiralModelInput(input)` and, when `semiSpiral`, overlays `applyChamberSpiralToOutputs(…, null)` before the refusals (derived rows exempt); then `designSpiral(chamberSpiralInputs(…))` (internal: `spiralHash` = SHA-1 of the sorted inputs + `SPIRAL_ALGORITHM`, lock `spiral:<hash>`, cache `readChamberSpiral`, run `designSemiSpiral.py` with `CHAMBER_SPIRAL_TIMEOUT_MS`, `summarizeSpiralFailure`, `parseSpiralResult` validates 10 vertices + quality and builds the mm summary) runs BEFORE hashing; `resolveGeometryParams(input, outputs, spiral)` adds `semiSpiral` + `spiral {inputs, vertices, quality}` and leaves out `length`, B1, LT, the four chamfers and `chamferEnabled`. Spiral warnings come first in `warnings.json`; `ChamberBuildResult.spiral` = summary or null.
+**Spiral Length (2026-09-30, spec `2026-09-30-spiral-length-design.md`)**: a Length Min > Max (`chamberSpiralLengthLimits`) joins the inverted-range 422; a Max reaches the designer as `max_length` (in the spiral hash only when set); `extendSpiralInlet(designed, minMm)` moves V0 / V9 after the cached spiral step (so a Min never re-keys the spiral; the moved vertices re-key the build) and recomputes the summary (`spiralSummary`: `lengthMm`, `lengthBinding` from `quality.length_binding`, `inletExtensionMm`); `parseSpiralResult` keeps `length_binding` only when present.
 **Role**: evaluates the empirical model (`@dive/shared`) then delegates geometry to `scripts/buildChamber.py` (CadQuery). Builds are keyed by a parameter hash, stored under `<STORAGE_DIR>/chamber/<hash>` and shared by the whole team.
 **Exports**:
 - `ChamberBuildResult` (`hash`, `outputs`, `warnings`, `stepHasVanes: boolean | null`).

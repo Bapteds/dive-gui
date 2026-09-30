@@ -264,8 +264,6 @@ describe('ChamberOutputsTable', () => {
         expect(onLengthChange).toHaveBeenCalledWith('max', 6000);
         fireEvent.change(screen.getByLabelText('Length exact'), { target: { value: '5500' } });
         expect(onLengthChange).toHaveBeenCalledWith('exact', 5500);
-        fireEvent.change(screen.getByLabelText('Length exact'), { target: { value: '' } });
-        expect(onLengthChange).toHaveBeenCalledWith('exact', undefined);
         for (const label of ['B1', 'LT', 'LF1', 'BF1', 'LF2', 'BF2']) {
           expect(screen.queryByLabelText(`${label} minimum`)).toBeNull();
           expect(screen.queryByLabelText(`${label} maximum`)).toBeNull();

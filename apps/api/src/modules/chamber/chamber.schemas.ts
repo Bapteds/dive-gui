@@ -99,6 +99,9 @@ export const chamberBuildSchema = z
     // unbounded, so old saves carrying any value keep validating.
     spiralFlowVelocity: z.number().finite().optional(),
     lengthOverride: dimensionMm.optional(),
+    // Semi-spiral casing only: Min / Max / Exact on the spiral's Length (mm;
+    // spec 2026-09-30-spiral-length). Ignored while the spiral is off.
+    spiralLength: constraintSchema.optional(),
     hollowLength: dimensionMm.optional(),
     wallThickness: dimensionMm.optional(),
     // Cone chamfer (both designs, spec 2026-09-29-cone-foot-chamfer): a 45° foot

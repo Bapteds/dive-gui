@@ -76,13 +76,32 @@ function SpiralNote({ summary }: { summary: ChamberSpiralSummary | null }) {
       </p>
     );
   }
+  const extension = summary.inletExtensionMm ?? 0;
   return (
     <p className="border-b border-border px-5 py-2 text-sm text-text-secondary" role="status">
       Semi-spiral casing: {Math.round(summary.widthMm)} mm wide
-      {summary.widthBinding ? ', limited by B Kammer' : ''}; worst cross-section error{' '}
-      {summary.worstAreaErrorM2.toFixed(2)} m² at {Math.round(summary.atPhiDeg)}°.
+      {summary.widthBinding ? ', limited by B Kammer' : ''}
+      {summary.lengthBinding ? ', limited by the Length Max' : ''}
+      {extension > 0 ? `, inlet channel extended by ${Math.round(extension)} mm` : ''}; worst
+      cross-section error {summary.worstAreaErrorM2.toFixed(2)} m² at{' '}
+      {Math.round(summary.atPhiDeg)}°.
     </p>
   );
+}
+
+/**
+ * Status of the semi-spiral Length row (spec 2026-09-30-spiral-length): the
+ * typed range first, then what the last build did with it.
+ */
+function spiralLengthStatus(
+  con: ChamberConstraint,
+  summary: ChamberSpiralSummary | null,
+): ChamberStatus {
+  if (con.exact != null) return 'set exact';
+  if (con.min != null && con.max != null && con.min > con.max) return '! min>max';
+  if (summary?.lengthBinding) return 'capped at max';
+  if ((summary?.inletExtensionMm ?? 0) > 0) return 'raised to min';
+  return 'from spiral';
 }
 
 /** Format a millimetre value for display (1 decimal, tabular). */
@@ -147,11 +166,18 @@ export function ChamberOutputsTable({
     value: number | undefined,
   ) => void;
   /**
-   * Semi-spiral casing state: `on` adds the read-only Length row and the spiral
-   * note; `summary` is the current build's spiral (null before Generate). The
-   * derived rows themselves arrive with status 'from spiral' in `outputs`.
+   * Semi-spiral casing state: `on` adds the Length row and the spiral note;
+   * `summary` is the current build's spiral (null before Generate). The derived
+   * rows themselves arrive with status 'from spiral' in `outputs`. `length` /
+   * `onLengthChange` carry the Length Min / Max / Exact (spec
+   * 2026-09-30-spiral-length); without a handler the Length row is read-only.
    */
-  spiral?: { on: boolean; summary: ChamberSpiralSummary | null };
+  spiral?: {
+    on: boolean;
+    summary: ChamberSpiralSummary | null;
+    length?: ChamberConstraint;
+    onLengthChange?: (field: ConstraintField, value: number | undefined) => void;
+  };
 }) {
   const [legendOpen, setLegendOpen] = useState(false);
   return (
@@ -190,26 +216,38 @@ export function ChamberOutputsTable({
             {outputs.map((o) => {
               const con = constraints[o.key] ?? {};
               const derived = o.status === 'from spiral';
+              // Semi-spiral Length: derived by the spiral, but Min / Max / Exact
+              // apply (Max limits the spiral, Min extends the inlet channel).
+              const lengthCon = spiral?.length ?? {};
+              const lengthStatus = spiralLengthStatus(lengthCon, spiral?.summary ?? null);
+              const onLength = spiral?.onLengthChange;
               const lengthRow =
                 o.key === 'width' && spiral?.on ? (
                   <TableRow key="spiral-length">
                     <TableCell className="font-medium text-text">Length</TableCell>
                     <TableCell className="text-right text-text-secondary">-</TableCell>
-                    <TableCell>
-                      <ReadOnlyCell label="Length minimum: read-only, from the spiral" />
-                    </TableCell>
-                    <TableCell>
-                      <ReadOnlyCell label="Length maximum: read-only, from the spiral" />
-                    </TableCell>
-                    <TableCell>
-                      <ReadOnlyCell label="Length exact: read-only, from the spiral" />
-                    </TableCell>
+                    {(['min', 'max', 'exact'] as const).map((field) => {
+                      const name = { min: 'minimum', max: 'maximum', exact: 'exact' }[field];
+                      return (
+                        <TableCell key={field}>
+                          {onLength ? (
+                            <NumCell
+                              value={lengthCon[field]}
+                              ariaLabel={`Length ${name}`}
+                              onChange={(v) => onLength(field, v)}
+                            />
+                          ) : (
+                            <ReadOnlyCell label={`Length ${name}: read-only, from the spiral`} />
+                          )}
+                        </TableCell>
+                      );
+                    })}
                     <TableCell className="text-right font-semibold text-text">
                       {spiral.summary ? mm(spiral.summary.boxMm.length) : '-'}
                     </TableCell>
                     <TableCell>
-                      <span className={cn('text-xs', STATUS_STYLES['from spiral'])}>
-                        from spiral
+                      <span className={cn('text-xs', STATUS_STYLES[lengthStatus])}>
+                        {lengthStatus}
                       </span>
                     </TableCell>
                     <TableCell className="text-text-secondary">-</TableCell>
