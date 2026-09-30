@@ -4,6 +4,7 @@ import {
   CHAMBER_FORM_DEFAULTS,
   chamberBodyKey,
   chamberFormSchema,
+  chamberInputToConstraints,
   chamberInputToFormValues,
   computeChamberAutoDims,
   semiSpiralToggle,
@@ -404,5 +405,36 @@ describe('semiSpiralToggle (Chamfer off with the spiral, restored when it goes)'
       set: {},
       savedChamfer: null,
     });
+  });
+});
+
+// Corner chamfers always at 45° (spec 2026-09-29-corner-chamfer-45): an old
+// save may carry a BF constraint or a disabled BF relation; it loads without
+// error and both are dropped silently.
+describe('old saves with BF constraints or BF relations', () => {
+  const base: ChamberInput = { x1: 1450, x2: 7.85, x3: 8 };
+
+  it('drops the BF relations from the form values', () => {
+    const loaded = chamberInputToFormValues({
+      ...base,
+      relations: { chamferWidth1: false, chamferWidth2: false, chamferLength2: false },
+    });
+    expect(loaded.relations).not.toHaveProperty('chamferWidth1');
+    expect(loaded.relations).not.toHaveProperty('chamferWidth2');
+    expect(loaded.relations.chamferLength2).toBe(false);
+  });
+
+  it('drops the BF constraints and keeps the others', () => {
+    expect(
+      chamberInputToConstraints({
+        ...base,
+        constraints: {
+          chamferWidth1: { exact: 999 },
+          chamferWidth2: { min: 10 },
+          chamferLength1: { exact: 1200 },
+        },
+      }),
+    ).toEqual({ chamferLength1: { exact: 1200 } });
+    expect(chamberInputToConstraints(base)).toEqual({});
   });
 });

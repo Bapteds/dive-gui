@@ -678,6 +678,34 @@ describe('Chamber Creation', () => {
     expect(oWidth.model).toBeCloseTo(4444.44, 0);
   });
 
+  it('builds the corner chamfers at 45° whatever a BF constraint or relation says', async () => {
+    // Spec 2026-09-29-corner-chamfer-45: BF1 = LF1 and BF2 = LF2 always, so a
+    // BF Exact (or an old save's disabled BF relation) changes nothing.
+    const params: Record<string, unknown>[] = [];
+    setCommandRunner(recordingBuilder(params));
+    const auth = authHeader(await createTestUser());
+    const post = (body: object) =>
+      request(app).post('/api/v1/chamber/build').set('Authorization', auth).send(body).expect(200);
+
+    const plain = await post(BUILD);
+    const pinned = await post({
+      ...BUILD,
+      constraints: { chamferWidth1: { exact: 999 }, chamferWidth2: { max: 100 } },
+      relations: { chamferWidth1: false, chamferWidth2: false },
+    });
+    expect(pinned.body.hash).toBe(plain.body.hash);
+    expect(params).toHaveLength(1);
+    expect(params[0].chamferWidth1).toBe(params[0].chamferLength1);
+    expect(params[0].chamferWidth2).toBe(params[0].chamferLength2);
+
+    // Relations master off: LF2 is its own fit, BF still follows each LF.
+    await post({ ...BUILD, relationsMaster: false });
+    expect(params).toHaveLength(2);
+    expect(params[1].chamferWidth1).toBe(params[1].chamferLength1);
+    expect(params[1].chamferWidth2).toBe(params[1].chamferLength2);
+    expect(params[1].chamferLength2).not.toBe(params[1].chamferLength1);
+  });
+
   it('accepts a foot angle and keys the build on it', async () => {
     setCommandRunner(successRunner);
     const auth = authHeader(await createTestUser());
