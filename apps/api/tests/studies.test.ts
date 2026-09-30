@@ -74,7 +74,10 @@ describe('Studies: access', () => {
     const member = await addCollaborator(f, 'member@dive-turbinen.test');
     const list = await request(app).get(studiesUrl(f)).set('Authorization', member).expect(200);
     expect(list.body.studies.map((s: { id: string }) => s.id)).toEqual([id]);
-    const detail = await request(app).get(`${studiesUrl(f)}/${id}`).set('Authorization', member).expect(200);
+    const detail = await request(app)
+      .get(`${studiesUrl(f)}/${id}`)
+      .set('Authorization', member)
+      .expect(200);
     expect(detail.body.study.canControl).toBe(false);
 
     for (const [method, suffix] of [
@@ -84,8 +87,8 @@ describe('Studies: access', () => {
       ['post', '/resume'],
       ['delete', ''],
     ] as const) {
-      const res = await request(app)
-        [method](`${studiesUrl(f)}/${id}${suffix}`)
+      const agent = request(app);
+      const res = await agent[method](`${studiesUrl(f)}/${id}${suffix}`)
         .set('Authorization', member)
         .send({ name: 'Hijack' });
       expect(res.status, `${method} ${suffix}`).toBe(403);
@@ -105,7 +108,10 @@ describe('Studies: access', () => {
 describe('Studies: creation and search space', () => {
   it('creates a draft on this project with the band snapped to the grid', async () => {
     const f = await makeStudyProject();
-    const res = await create(f, { keys: ['width', 'hMiddle'], bandOverrides: { hMiddle: 20 } }).expect(201);
+    const res = await create(f, {
+      keys: ['width', 'hMiddle'],
+      bandOverrides: { hMiddle: 20 },
+    }).expect(201);
     const study = res.body.study;
     expect(study).toMatchObject({
       name: 'Width sweep',
@@ -150,9 +156,15 @@ describe('Studies: creation and search space', () => {
   });
 
   it('intersects the band with the table Min / Max of the base design', async () => {
-    const f = await makeStudyProject({ input: { ...BASE_INPUT, constraints: { width: { max: 4500 } } } });
+    const f = await makeStudyProject({
+      input: { ...BASE_INPUT, constraints: { width: { max: 4500 } } },
+    });
     const res = await create(f).expect(201);
-    expect(res.body.study.paramSpace[0]).toMatchObject({ key: 'width', max: 4500, source: 'table' });
+    expect(res.body.study.paramSpace[0]).toMatchObject({
+      key: 'width',
+      max: 4500,
+      source: 'table',
+    });
   });
 
   it('refuses an empty range, no parameter, zero weights, a bad session or a permanent row (422)', async () => {
@@ -166,28 +178,43 @@ describe('Studies: creation and search space', () => {
     const none = await create(f, { keys: [] }).expect(422);
     expect(none.body.error.code).toBe('VALIDATION_ERROR');
 
-    const weights = await create(f, { keys: ['hMiddle'], weights: { headLoss: 0, vortex: 0 } }).expect(422);
+    const weights = await create(f, {
+      keys: ['hMiddle'],
+      weights: { headLoss: 0, vortex: 0 },
+    }).expect(422);
     expect(weights.body.error.code).toBe('VALIDATION_ERROR');
 
-    const session = await create(f, { keys: ['hMiddle'], meshingSourceId: 'no-such-session' }).expect(422);
+    const session = await create(f, {
+      keys: ['hMiddle'],
+      meshingSourceId: 'no-such-session',
+    }).expect(422);
     expect(session.body.error.message).toMatch(/meshing session/i);
 
     const bf1 = await create(f, { keys: ['chamferWidth1'] }).expect(422);
     expect(bf1.body.error.message).toMatch(/BF1/);
 
-    const save = await create(f, { keys: ['hMiddle'], base: { kind: 'save', saveId: 'nope' } }).expect(422);
+    const save = await create(f, {
+      keys: ['hMiddle'],
+      base: { kind: 'save', saveId: 'nope' },
+    }).expect(422);
     expect(save.body.error.message).toMatch(/save/i);
   });
 
   it('uses the chamber of the mesh origin as base and its session as reference', async () => {
     const f = await makeStudyProject();
-    const noOrigin = await create(f, { base: { kind: 'meshOrigin' }, meshingSourceId: undefined }).expect(422);
+    const noOrigin = await create(f, {
+      base: { kind: 'meshOrigin' },
+      meshingSourceId: undefined,
+    }).expect(422);
     expect(noOrigin.body.error.message).toMatch(/mesh origin|chamber/i);
 
     const hash = 'abcdef0123456789';
     const originInput = { ...BASE_INPUT, x1: 1500 };
     await fs.mkdir(chamberPaths(hash).dir, { recursive: true });
-    await fs.writeFile(path.join(chamberPaths(hash).dir, 'input.json'), JSON.stringify(originInput));
+    await fs.writeFile(
+      path.join(chamberPaths(hash).dir, 'input.json'),
+      JSON.stringify(originInput),
+    );
     await writeMeshOrigin(f.projectId, {
       sessionId: f.sessionId,
       sessionName: 'Chamber reference',
@@ -196,14 +223,20 @@ describe('Studies: creation and search space', () => {
       at: new Date().toISOString(),
     });
 
-    const setup = await request(app).get(`${studiesUrl(f)}/setup`).set('Authorization', f.auth).expect(200);
+    const setup = await request(app)
+      .get(`${studiesUrl(f)}/setup`)
+      .set('Authorization', f.auth)
+      .expect(200);
     expect(setup.body.originInput).toEqual(originInput);
     expect(setup.body.defaultSessionId).toBe(f.sessionId);
     expect(setup.body.sessions.map((s: { id: string }) => s.id)).toContain(f.sessionId);
     expect(setup.body.criteriaApplicable).toBe(true);
     expect(setup.body.runningStudy).toBeNull();
 
-    const res = await create(f, { base: { kind: 'meshOrigin' }, meshingSourceId: undefined }).expect(201);
+    const res = await create(f, {
+      base: { kind: 'meshOrigin' },
+      meshingSourceId: undefined,
+    }).expect(201);
     expect(res.body.study.baseSource).toBe('meshOrigin');
     expect(res.body.study.baseInput).toEqual(originInput);
     expect(res.body.study.meshingSourceId).toBe(f.sessionId);
@@ -229,14 +262,20 @@ describe('Studies: lifecycle guards', () => {
       .send({ name: 'Too late' })
       .expect(409);
     expect(refused.body.error.code).toBe('STUDY_NOT_DRAFT');
-    const again = await request(app).post(`${studiesUrl(f)}/${id}/start`).set('Authorization', f.auth).expect(409);
+    const again = await request(app)
+      .post(`${studiesUrl(f)}/${id}/start`)
+      .set('Authorization', f.auth)
+      .expect(409);
     expect(again.body.error.code).toBe('STUDY_NOT_DRAFT');
   });
 
   it('resumes paused studies only (409 STUDY_NOT_PAUSED)', async () => {
     const f = await makeStudyProject();
     const id = (await create(f).expect(201)).body.study.id as string;
-    const res = await request(app).post(`${studiesUrl(f)}/${id}/resume`).set('Authorization', f.auth).expect(409);
+    const res = await request(app)
+      .post(`${studiesUrl(f)}/${id}/resume`)
+      .set('Authorization', f.auth)
+      .expect(409);
     expect(res.body.error.code).toBe('STUDY_NOT_PAUSED');
   });
 
@@ -245,7 +284,10 @@ describe('Studies: lifecycle guards', () => {
     const first = (await create(f).expect(201)).body.study.id as string;
     const second = (await create(f, { name: 'Other' }).expect(201)).body.study.id as string;
     await prisma.study.update({ where: { id: first }, data: { status: 'running' } });
-    const res = await request(app).post(`${studiesUrl(f)}/${second}/start`).set('Authorization', f.auth).expect(409);
+    const res = await request(app)
+      .post(`${studiesUrl(f)}/${second}/start`)
+      .set('Authorization', f.auth)
+      .expect(409);
     expect(res.body.error.code).toBe('STUDY_IN_PROGRESS');
   });
 
@@ -257,7 +299,10 @@ describe('Studies: lifecycle guards', () => {
       'system/controlDict',
       'FoamFile { version 2.0; format ascii; class dictionary; object controlDict; }\napplication pimpleFoam;\n',
     );
-    const res = await request(app).post(`${studiesUrl(f)}/${id}/start`).set('Authorization', f.auth).expect(422);
+    const res = await request(app)
+      .post(`${studiesUrl(f)}/${id}/start`)
+      .set('Authorization', f.auth)
+      .expect(422);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
     expect(res.body.error.message).toMatch(/steady incompressible/);
   });
@@ -265,11 +310,20 @@ describe('Studies: lifecycle guards', () => {
   it('deletes a draft (204) and cascades with the project', async () => {
     const f = await makeStudyProject();
     const id = (await create(f).expect(201)).body.study.id as string;
-    await request(app).delete(`${studiesUrl(f)}/${id}`).set('Authorization', f.auth).expect(204);
-    await request(app).get(`${studiesUrl(f)}/${id}`).set('Authorization', f.auth).expect(404);
+    await request(app)
+      .delete(`${studiesUrl(f)}/${id}`)
+      .set('Authorization', f.auth)
+      .expect(204);
+    await request(app)
+      .get(`${studiesUrl(f)}/${id}`)
+      .set('Authorization', f.auth)
+      .expect(404);
 
     await create(f).expect(201);
-    await request(app).delete(`/api/v1/projects/${f.projectId}`).set('Authorization', f.auth).expect(204);
+    await request(app)
+      .delete(`/api/v1/projects/${f.projectId}`)
+      .set('Authorization', f.auth)
+      .expect(204);
     expect(await prisma.study.count()).toBe(0);
   });
 });
@@ -281,14 +335,22 @@ describe('Studies: results', () => {
     setCommandRunner(fakes.commandRunner);
     setStreamRunner(fakes.streamRunner);
     const id = (await create(f, { maxEvaluations: 2 }).expect(201)).body.study.id as string;
-    await request(app).post(`${studiesUrl(f)}/${id}/start`).set('Authorization', f.auth).expect(202);
+    await request(app)
+      .post(`${studiesUrl(f)}/${id}/start`)
+      .set('Authorization', f.auth)
+      .expect(202);
     const detail = await waitForStudy(f, id, settled);
     expect(detail.study.status).toBe('completed');
 
-    const csv = await request(app).get(`${studiesUrl(f)}/${id}/export.csv`).set('Authorization', f.auth).expect(200);
+    const csv = await request(app)
+      .get(`${studiesUrl(f)}/${id}/export.csv`)
+      .set('Authorization', f.auth)
+      .expect(200);
     expect(csv.headers['content-type']).toMatch(/text\/csv/);
     const lines = csv.text.trim().split(/\r?\n/);
-    expect(lines[0]).toMatch(/^index,status,width,dp0_Pa,headLoss_m,maskedQVolume_m3,omegaRms_1_s,objective/);
+    expect(lines[0]).toMatch(
+      /^index,status,width,dp0_Pa,headLoss_m,maskedQVolume_m3,omegaRms_1_s,objective/,
+    );
     expect(lines).toHaveLength(3);
     expect(lines[2]).toMatch(/^1,done,4200,/);
 
@@ -299,18 +361,27 @@ describe('Studies: results', () => {
     expect(evaluation.body.evaluation).toMatchObject({ index: 1, status: 'done' });
     expect(evaluation.body.metrics.pressureDrop.length).toBeGreaterThan(0);
     expect(evaluation.body.metrics.vortex).toMatchObject({ maskedQVolume: 0.5, omegaRms: 12 });
-    await request(app).get(`${studiesUrl(f)}/${id}/evaluations/9`).set('Authorization', f.auth).expect(404);
+    await request(app)
+      .get(`${studiesUrl(f)}/${id}/evaluations/9`)
+      .set('Authorization', f.auth)
+      .expect(404);
   });
 
   it('pauses a study left running by a dead process on boot', async () => {
     const f = await makeStudyProject();
     const id = (await create(f).expect(201)).body.study.id as string;
-    await prisma.study.update({ where: { id }, data: { status: 'running', startedAt: new Date() } });
+    await prisma.study.update({
+      where: { id },
+      data: { status: 'running', startedAt: new Date() },
+    });
     await prisma.evaluation.create({
       data: { studyId: id, index: 0, designParams: '{}', status: 'solving', startedAt: new Date() },
     });
     expect(await reconcileOrphanStudies()).toBe(1);
-    const detail = await request(app).get(`${studiesUrl(f)}/${id}`).set('Authorization', f.auth).expect(200);
+    const detail = await request(app)
+      .get(`${studiesUrl(f)}/${id}`)
+      .set('Authorization', f.auth)
+      .expect(200);
     expect(detail.body.study.status).toBe('paused');
     expect(detail.body.study.reason).toBe('Interrupted by a server restart');
     expect(detail.body.evaluations[0]).toMatchObject({ status: 'interrupted', stage: 'solving' });

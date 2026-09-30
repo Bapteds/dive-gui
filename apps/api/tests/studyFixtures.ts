@@ -142,7 +142,9 @@ export async function makeStudyProject(
   opts: { email?: string; input?: ChamberInput; saveName?: string } = {},
 ): Promise<StudyProject> {
   const user = await createTestUser({ email: opts.email ?? 'study@dive-turbinen.test' });
-  const project = await prisma.project.create({ data: { title: 'Chamber study', ownerId: user.id } });
+  const project = await prisma.project.create({
+    data: { title: 'Chamber study', ownerId: user.id },
+  });
   const auth = authHeader(user);
   for (const [name, content] of Object.entries(POLY_MESH)) {
     await writeCaseFile(project.id, `constant/polyMesh/${name}`, content);
@@ -207,7 +209,12 @@ export interface StudyFakeState {
   builds: ChamberInput[];
   suggestRequests: {
     space: { key: string; low: number; high: number; step: number }[];
-    history: { params: Record<string, number>; values: number[] | null; state: string; feasible?: boolean }[];
+    history: {
+      params: Record<string, number>;
+      values: number[] | null;
+      state: string;
+      feasible?: boolean;
+    }[];
     sampler: string;
     mode: string;
     seed: number | null;
@@ -222,7 +229,13 @@ export function studyFakes(opts: StudyFakeOptions = {}): {
   streamRunner: (spec: StreamSpec) => StreamHandle;
   state: StudyFakeState;
 } {
-  const state: StudyFakeState = { builds: [], suggestRequests: [], meshRuns: 0, solves: 0, postProcess: 0 };
+  const state: StudyFakeState = {
+    builds: [],
+    suggestRequests: [],
+    meshRuns: 0,
+    solves: 0,
+    postProcess: 0,
+  };
   const queue = [...(opts.suggestions ?? [])];
 
   const commandRunner: CommandRunner = async (spec) => {
@@ -230,7 +243,9 @@ export function studyFakes(opts: StudyFakeOptions = {}): {
     const script = args[0] ?? '';
     if (script.endsWith('buildChamber.py')) {
       const outDir = args[2];
-      const input = JSON.parse(await fs.readFile(path.join(outDir, 'input.json'), 'utf8')) as ChamberInput;
+      const input = JSON.parse(
+        await fs.readFile(path.join(outDir, 'input.json'), 'utf8'),
+      ) as ChamberInput;
       state.builds.push(input);
       const ko = opts.refuse?.(input);
       if (ko) return { ...ok(spec, ''), exitCode: 1, stderr: `KO: ${ko}\n` };
@@ -248,9 +263,12 @@ export function studyFakes(opts: StudyFakeOptions = {}): {
       return ok(spec, 'OK: 3 patches');
     }
     if (script.endsWith('optimiseSuggest.py')) {
-      const req = JSON.parse(await fs.readFile(args[1], 'utf8')) as StudyFakeState['suggestRequests'][number];
+      const req = JSON.parse(
+        await fs.readFile(args[1], 'utf8'),
+      ) as StudyFakeState['suggestRequests'][number];
       state.suggestRequests.push(req);
-      if (opts.suggestFails) return { ...ok(spec, ''), exitCode: 1, stderr: `KO: ${opts.suggestFails}\n` };
+      if (opts.suggestFails)
+        return { ...ok(spec, ''), exitCode: 1, stderr: `KO: ${opts.suggestFails}\n` };
       let params = queue.shift();
       if (!params) {
         const n = state.suggestRequests.length;
@@ -350,7 +368,10 @@ export function studyFakes(opts: StudyFakeOptions = {}): {
 }
 
 /** The create body of a study on the fixture save, overridable. */
-export function studyBody(f: StudyProject, extra: Record<string, unknown> = {}): Record<string, unknown> {
+export function studyBody(
+  f: StudyProject,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     name: 'Width sweep',
     base: { kind: 'save', saveId: f.saveId },
@@ -374,15 +395,24 @@ export async function waitForStudy(
     evaluations: Record<string, unknown>[];
   }) => boolean,
   timeoutMs = 20000,
-): Promise<{ study: Record<string, unknown>; evaluations: Record<string, unknown>[]; best: number | null; paretoFront: number[] }> {
+): Promise<{
+  study: Record<string, unknown>;
+  evaluations: Record<string, unknown>[];
+  best: number | null;
+  paretoFront: number[];
+}> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const res = await request(app).get(`${studiesUrl(f)}/${studyId}`).set('Authorization', f.auth);
+    const res = await request(app)
+      .get(`${studiesUrl(f)}/${studyId}`)
+      .set('Authorization', f.auth);
     if (res.status !== 200) throw new Error(`GET study answered ${res.status}`);
     if (done(res.body)) return res.body;
     if (Date.now() > deadline) {
       const last = (res.body.evaluations as { index: number; status: string }[]).at(-1);
-      throw new Error(`study stuck at ${res.body.study.status} (evaluation ${last?.index}: ${last?.status})`);
+      throw new Error(
+        `study stuck at ${res.body.study.status} (evaluation ${last?.index}: ${last?.status})`,
+      );
     }
     await new Promise((r) => setTimeout(r, 25));
   }

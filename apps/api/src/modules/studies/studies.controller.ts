@@ -85,7 +85,8 @@ export async function deleteStudyController(req: Request, res: Response): Promis
 
 /** GET /projects/:id/studies/:studyId/evaluations/:index */
 export async function getEvaluationController(req: Request, res: Response): Promise<void> {
-  const index = (req.validated?.params as { index?: number } | undefined)?.index ?? Number(req.params.index);
+  const index =
+    (req.validated?.params as { index?: number } | undefined)?.index ?? Number(req.params.index);
   res
     .status(200)
     .json(await getEvaluation(requireViewer(req), req.params.id, req.params.studyId, index));
@@ -93,7 +94,11 @@ export async function getEvaluationController(req: Request, res: Response): Prom
 
 /** GET /projects/:id/studies/:studyId/export.csv */
 export async function exportStudyCsvController(req: Request, res: Response): Promise<void> {
-  const { filename, csv } = await exportStudyCsv(requireViewer(req), req.params.id, req.params.studyId);
+  const { filename, csv } = await exportStudyCsv(
+    requireViewer(req),
+    req.params.id,
+    req.params.studyId,
+  );
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate');

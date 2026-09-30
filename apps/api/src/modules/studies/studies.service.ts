@@ -118,7 +118,8 @@ function toPublicStudy(
     status: study.status as StudyStatus,
     reason: study.reason,
     counted,
-    currentIndex: study.status === 'running' || study.status === 'pausing' ? (current?.index ?? null) : null,
+    currentIndex:
+      study.status === 'running' || study.status === 'pausing' ? (current?.index ?? null) : null,
     canControl: canControl(viewer, study),
     startedAt: iso(study.startedAt),
     finishedAt: iso(study.finishedAt),
@@ -153,7 +154,11 @@ function toPublicEvaluation(row: Evaluation): StudyEvaluation {
 }
 
 /** Load a study of a visible project. @throws 404. */
-async function findStudy(viewer: Viewer, projectId: string, studyId: string): Promise<StudyWithOwner> {
+async function findStudy(
+  viewer: Viewer,
+  projectId: string,
+  studyId: string,
+): Promise<StudyWithOwner> {
   await assertProjectVisible(viewer, projectId);
   const study = await prisma.study.findFirst({
     where: { id: studyId, projectId },
@@ -172,7 +177,10 @@ async function evaluationStatuses(studyId: string) {
 }
 
 async function publicStudy(viewer: Viewer, studyId: string): Promise<PublicStudy> {
-  const study = await prisma.study.findUniqueOrThrow({ where: { id: studyId }, include: ownerInclude });
+  const study = await prisma.study.findUniqueOrThrow({
+    where: { id: studyId },
+    include: ownerInclude,
+  });
   return toPublicStudy(viewer, study, await evaluationStatuses(studyId));
 }
 
@@ -197,7 +205,9 @@ async function sessionUsable(sessionId: string): Promise<boolean> {
   const meta = await readMeta(sessionId).catch(() => null);
   if (!meta) return false;
   if (await isSessionRunning(sessionId)) return false;
-  return (await hasCompleteResultMesh(sessionId)) && (await sessionMeshingConfig(sessionId)) !== null;
+  return (
+    (await hasCompleteResultMesh(sessionId)) && (await sessionMeshingConfig(sessionId)) !== null
+  );
 }
 
 async function defaultCores(projectId: string): Promise<number> {
@@ -243,15 +253,29 @@ export async function getStudySetup(viewer: Viewer, projectId: string): Promise<
 async function resolveBase(
   projectId: string,
   base: CreateStudyInput['base'],
-): Promise<{ baseInput: ChamberInput; baseLabel: string; baseSource: StudyBaseSource; originSession: string | null }> {
+): Promise<{
+  baseInput: ChamberInput;
+  baseLabel: string;
+  baseSource: StudyBaseSource;
+  originSession: string | null;
+}> {
   if (base.kind === 'save') {
     const save = await prisma.chamberSave.findUnique({ where: { id: base.saveId } });
     if (!save) throw new AppError(422, 'VALIDATION_ERROR', 'The chamber save was not found.');
     const raw = parseJson<unknown>(save.snapshot, null);
     if (!chamberBuildSchema.safeParse(raw).success) {
-      throw new AppError(422, 'VALIDATION_ERROR', `The chamber save "${save.name}" is not a valid design.`);
+      throw new AppError(
+        422,
+        'VALIDATION_ERROR',
+        `The chamber save "${save.name}" is not a valid design.`,
+      );
     }
-    return { baseInput: raw as ChamberInput, baseLabel: save.name, baseSource: 'save', originSession: null };
+    return {
+      baseInput: raw as ChamberInput,
+      baseLabel: save.name,
+      baseSource: 'save',
+      originSession: null,
+    };
   }
   const origin = await readMeshOrigin(projectId);
   const input = origin?.chamberHash ? await readOriginInput(origin.chamberHash) : null;
@@ -276,7 +300,8 @@ async function assertReferenceSession(sessionId: string | null | undefined): Pro
     throw new AppError(422, 'VALIDATION_ERROR', 'Pick the reference meshing session.');
   }
   const meta = await readMeta(sessionId).catch(() => null);
-  if (!meta) throw new AppError(422, 'VALIDATION_ERROR', 'The reference meshing session was not found.');
+  if (!meta)
+    throw new AppError(422, 'VALIDATION_ERROR', 'The reference meshing session was not found.');
   if (!(await sessionUsable(sessionId))) {
     throw new AppError(
       422,
@@ -370,7 +395,9 @@ export async function updateStudy(
   const keys = input.keys ?? current.map((r) => r.key);
   const overrides =
     input.bandOverrides ??
-    Object.fromEntries(current.filter((r) => r.bandPct !== study.bandPct).map((r) => [r.key, r.bandPct]));
+    Object.fromEntries(
+      current.filter((r) => r.bandPct !== study.bandPct).map((r) => [r.key, r.bandPct]),
+    );
   data.paramSpace = JSON.stringify(spaceOrThrow(baseInput, keys, bandPct, overrides));
   data.bandPct = bandPct;
   if (input.name !== undefined) data.name = input.name;
@@ -429,7 +456,9 @@ export async function getStudyDetail(
   }
   const points = done.flatMap((r) => {
     const vortex = pickedVortex(study, r);
-    return r.headLoss != null && vortex != null ? [{ id: r.index, headLoss: r.headLoss, vortex }] : [];
+    return r.headLoss != null && vortex != null
+      ? [{ id: r.index, headLoss: r.headLoss, vortex }]
+      : [];
   });
   return {
     study: toPublicStudy(viewer, study, rows),
@@ -560,7 +589,11 @@ export async function startStudy(
       where: { projectId, status: { in: [...ACTIVE_RUN_STATUSES] } },
     });
     if (active > 0) {
-      throw new AppError(409, 'RUN_IN_PROGRESS', 'A solver run is active for this project. Wait for it to finish.');
+      throw new AppError(
+        409,
+        'RUN_IN_PROGRESS',
+        'A solver run is active for this project. Wait for it to finish.',
+      );
     }
     const { criteria, applicable } = await resolveProjectCriteria(projectId);
     if (!applicable) {
@@ -635,7 +668,11 @@ async function removeStudyArtefacts(studyIds: string[]): Promise<void> {
 }
 
 /** DELETE …/:studyId (stops first; removes its sessions and archive). */
-export async function deleteStudy(viewer: Viewer, projectId: string, studyId: string): Promise<void> {
+export async function deleteStudy(
+  viewer: Viewer,
+  projectId: string,
+  studyId: string,
+): Promise<void> {
   const study = await findStudy(viewer, projectId, studyId);
   assertControl(viewer, study);
   const entry = getActiveStudy();

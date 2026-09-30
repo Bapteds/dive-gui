@@ -79,7 +79,8 @@ async function startStudy(
   return { id, state: fakes.state };
 }
 
-const evals = (d: { evaluations: Record<string, unknown>[] }) => d.evaluations as unknown as Evaluation[];
+const evals = (d: { evaluations: Record<string, unknown>[] }) =>
+  d.evaluations as unknown as Evaluation[];
 
 describe('Study runner', () => {
   it('evaluates the baseline then two suggested designs (happy path)', async () => {
@@ -89,11 +90,12 @@ describe('Study runner', () => {
       {
         suggestions: [{ width: 4200 }, { width: 4700 }],
         dp0: (n) => [19620, 9810, 29430][n],
-        vortex: (n) => [
-          { maskedQVolume: 0.5, omegaRms: 10 },
-          { maskedQVolume: 0.25, omegaRms: 8 },
-          { maskedQVolume: 1, omegaRms: 20 },
-        ][n],
+        vortex: (n) =>
+          [
+            { maskedQVolume: 0.5, omegaRms: 10 },
+            { maskedQVolume: 0.25, omegaRms: 8 },
+            { maskedQVolume: 1, omegaRms: 20 },
+          ][n],
       },
       { maxEvaluations: 3 },
     );
@@ -124,7 +126,9 @@ describe('Study runner', () => {
     expect(state.builds[1].constraints?.width).toEqual({ exact: 4200 });
     // Ask / tell: the history is rebuilt from the Evaluation rows at each step.
     expect(state.suggestRequests).toHaveLength(2);
-    expect(state.suggestRequests[0].space).toEqual([{ key: 'width', low: 4050, high: 4850, step: 50 }]);
+    expect(state.suggestRequests[0].space).toEqual([
+      { key: 'width', low: 4050, high: 4850, step: 50 },
+    ]);
     expect(state.suggestRequests[0].history).toHaveLength(1);
     expect(state.suggestRequests[1].history).toHaveLength(2);
     expect(state.suggestRequests[1].history[1]).toMatchObject({
@@ -146,7 +150,9 @@ describe('Study runner', () => {
       {
         suggestions: [{ width: 4050 }, { width: 4600 }],
         refuse: (input) =>
-          input.constraints?.width?.exact === 4050 ? 'the guide vanes do not fit in B Kammer' : null,
+          input.constraints?.width?.exact === 4050
+            ? 'the guide vanes do not fit in B Kammer'
+            : null,
       },
       { maxEvaluations: 3 },
     );
@@ -257,7 +263,10 @@ describe('Study runner', () => {
     const f = await makeStudyProject();
     const { id, state } = await startStudy(
       f,
-      { suggestions: [{ width: 4200 }, { width: 4700 }], solve: (n) => (n === 1 ? 'hang' : 'converged') },
+      {
+        suggestions: [{ width: 4200 }, { width: 4700 }],
+        solve: (n) => (n === 1 ? 'hang' : 'converged'),
+      },
       { maxEvaluations: 3 },
     );
     await waitForStudy(f, id, (d) => {
@@ -266,10 +275,15 @@ describe('Study runner', () => {
     });
 
     // The project lock: manual run, case mutation, free-surface start, another study.
-    const run = await request(app).post(`/api/v1/projects/${f.projectId}/runs`).set('Authorization', f.auth).send({});
+    const run = await request(app)
+      .post(`/api/v1/projects/${f.projectId}/runs`)
+      .set('Authorization', f.auth)
+      .send({});
     expect(run.status).toBe(409);
     expect(run.body.error.code).toBe('STUDY_IN_PROGRESS');
-    const reset = await request(app).delete(`/api/v1/projects/${f.projectId}/files`).set('Authorization', f.auth);
+    const reset = await request(app)
+      .delete(`/api/v1/projects/${f.projectId}/files`)
+      .set('Authorization', f.auth);
     expect(reset.status).toBe(409);
     expect(reset.body.error.code).toBe('STUDY_IN_PROGRESS');
     const send = await request(app)
@@ -293,10 +307,16 @@ describe('Study runner', () => {
       .set('Authorization', f.auth);
     expect(second.status).toBe(409);
     expect(second.body.error.code).toBe('STUDY_IN_PROGRESS');
-    await request(app).delete(`${studiesUrl(f)}/${other.body.study.id}`).set('Authorization', f.auth).expect(204);
+    await request(app)
+      .delete(`${studiesUrl(f)}/${other.body.study.id}`)
+      .set('Authorization', f.auth)
+      .expect(204);
 
     // Stop = pause: the run is stopped, the evaluation interrupted.
-    const stop = await request(app).post(`${studiesUrl(f)}/${id}/stop`).set('Authorization', f.auth).expect(200);
+    const stop = await request(app)
+      .post(`${studiesUrl(f)}/${id}/stop`)
+      .set('Authorization', f.auth)
+      .expect(200);
     expect(['pausing', 'paused']).toContain(stop.body.study.status);
     const paused = await waitForStudy(f, id, settled);
     expect(paused.study.status).toBe('paused');
@@ -305,7 +325,10 @@ describe('Study runner', () => {
     const runRow = await prisma.run.findUnique({ where: { id: interrupted.runId! } });
     expect(runRow?.status).toBe('stopped');
     // Idempotent stop; unlocked once paused.
-    await request(app).post(`${studiesUrl(f)}/${id}/stop`).set('Authorization', f.auth).expect(200);
+    await request(app)
+      .post(`${studiesUrl(f)}/${id}/stop`)
+      .set('Authorization', f.auth)
+      .expect(200);
     const unlocked = await request(app)
       .post(`/api/v1/projects/${f.projectId}/mesh/from-meshing`)
       .set('Authorization', f.auth)
@@ -313,7 +336,9 @@ describe('Study runner', () => {
     expect(unlocked.status).toBe(404);
 
     // Resume: the interrupted design is evaluated first (same index), then the next.
-    const resumed = await request(app).post(`${studiesUrl(f)}/${id}/resume`).set('Authorization', f.auth);
+    const resumed = await request(app)
+      .post(`${studiesUrl(f)}/${id}/resume`)
+      .set('Authorization', f.auth);
     expect(resumed.status).toBe(202);
     const done = await waitForStudy(f, id, settled);
     expect(done.study.status).toBe('completed');
@@ -328,7 +353,11 @@ describe('Study runner', () => {
 
   it('fails the study with the optimiser message when the suggestion fails', async () => {
     const f = await makeStudyProject();
-    const { id } = await startStudy(f, { suggestFails: 'optuna is not installed' }, { maxEvaluations: 3 });
+    const { id } = await startStudy(
+      f,
+      { suggestFails: 'optuna is not installed' },
+      { maxEvaluations: 3 },
+    );
     const d = await waitForStudy(f, id, settled);
     expect(d.study.status).toBe('failed');
     expect(d.study.reason).toMatch(/optuna is not installed/);

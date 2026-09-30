@@ -300,7 +300,12 @@ async function suggestDesign(
   const out: Partial<Record<ChamberOutputKey, number>> = {};
   for (const range of space) {
     const value = params[range.key];
-    if (typeof value !== 'number' || !Number.isFinite(value) || value < range.min || value > range.max) {
+    if (
+      typeof value !== 'number' ||
+      !Number.isFinite(value) ||
+      value < range.min ||
+      value > range.max
+    ) {
       throw new StudyFailure(
         `The optimiser suggested an invalid value for ${range.label} (${String(value)}).`,
       );
@@ -384,7 +389,11 @@ async function evaluate(
       name: `study-${slugifySessionName(study.name)}-${row.index}`,
     });
     entry.sessionId = session.id;
-    await set({ meshingSessionId: session.id, meshingSessionName: session.name, sessionDeleted: false });
+    await set({
+      meshingSessionId: session.id,
+      meshingSessionName: session.name,
+      sessionDeleted: false,
+    });
     const config =
       (await sessionMeshingConfig(study.meshingSourceId)) ?? (await readConfig(session.id));
     if (!config) {
@@ -459,7 +468,10 @@ async function evaluate(
       vortex = await computeVortexOnDemand(entry.viewer, projectId);
     } catch (err) {
       if (err instanceof AppError) {
-        throw new TrialOutcome('failed', `The vortex metrics could not be computed: ${err.message}`);
+        throw new TrialOutcome(
+          'failed',
+          `The vortex metrics could not be computed: ${err.message}`,
+        );
       }
       throw err;
     }
@@ -587,13 +599,19 @@ async function runStudy(entry: ActiveStudy): Promise<void> {
         COUNTED_EVALUATION_STATUSES.includes(r.status as EvaluationStatus),
       ).length;
       if (counted >= study.maxEvaluations) {
-        await finishStudy(studyId, 'completed', `Evaluation budget reached (${counted} evaluations).`);
+        await finishStudy(
+          studyId,
+          'completed',
+          `Evaluation budget reached (${counted} evaluations).`,
+        );
         return;
       }
       if (study.maxDurationHours != null) {
         const elapsedMs = rows.reduce(
           (sum, r) =>
-            r.startedAt && r.finishedAt ? sum + (r.finishedAt.getTime() - r.startedAt.getTime()) : sum,
+            r.startedAt && r.finishedAt
+              ? sum + (r.finishedAt.getTime() - r.startedAt.getTime())
+              : sum,
           0,
         );
         if (elapsedMs >= study.maxDurationHours * 3_600_000) {
@@ -633,7 +651,12 @@ async function runStudy(entry: ActiveStudy): Promise<void> {
       } else if (rows.length === 0) {
         const params = Object.fromEntries(space.map((r) => [r.key, r.base]));
         row = await prisma.evaluation.create({
-          data: { studyId, index: 0, designParams: JSON.stringify(params), projectId: study.projectId },
+          data: {
+            studyId,
+            index: 0,
+            designParams: JSON.stringify(params),
+            projectId: study.projectId,
+          },
         });
       } else {
         const params = await suggestDesign(study, space, rows);
@@ -709,7 +732,8 @@ export async function reconcileOrphanStudies(): Promise<number> {
     });
     for (const row of inflight) {
       const stage =
-        row.stage ?? ((EVALUATION_STAGES as readonly string[]).includes(row.status) ? row.status : null);
+        row.stage ??
+        ((EVALUATION_STAGES as readonly string[]).includes(row.status) ? row.status : null);
       await prisma.evaluation.update({
         where: { id: row.id },
         data: { status: 'interrupted', stage, finishedAt: new Date() },

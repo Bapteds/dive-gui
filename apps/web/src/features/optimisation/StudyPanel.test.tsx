@@ -36,7 +36,16 @@ function study(partial: Partial<PublicStudy> = {}): PublicStudy {
     baseLabel: 'Kaplan 1450',
     baseInput: { x1: 1450, x2: 7.85, x3: 8 },
     paramSpace: [
-      { key: 'width', label: 'B Kammer', base: 4450, min: 4050, max: 4850, step: 50, bandPct: 10, source: 'band' },
+      {
+        key: 'width',
+        label: 'B Kammer',
+        base: 4450,
+        min: 4050,
+        max: 4850,
+        step: 50,
+        bandPct: 10,
+        source: 'band',
+      },
     ],
     bandPct: 10,
     weights: { headLoss: 0.5, vortex: 0.5 },
@@ -178,7 +187,14 @@ describe('StudyPanel', () => {
     renderPanel(
       detail({ status: 'completed', currentIndex: null }, [
         ...EVALUATIONS.slice(0, 3),
-        evaluation({ index: 3, budgetHit: true, runStatus: 'completed', objective: 0.9, headLoss: 1.9, maskedQVolume: 0.45 }),
+        evaluation({
+          index: 3,
+          budgetHit: true,
+          runStatus: 'completed',
+          objective: 0.9,
+          headLoss: 1.9,
+          maskedQVolume: 0.45,
+        }),
       ]),
     );
     const table = screen.getByRole('table', { name: 'Evaluations' });

@@ -25,7 +25,13 @@ describe('computeParamSpace', () => {
     expect(errors).toEqual([]);
     expect(ranges).toHaveLength(1);
     const r = ranges[0];
-    expect(r).toMatchObject({ key: 'width', label: 'B Kammer', base, step: CHAMBER_GRID_MM, source: 'band' });
+    expect(r).toMatchObject({
+      key: 'width',
+      label: 'B Kammer',
+      base,
+      step: CHAMBER_GRID_MM,
+      source: 'band',
+    });
     expect(r.min).toBe(Math.ceil((base * 0.9) / 50) * 50);
     expect(r.max).toBe(Math.floor((base * 1.1) / 50) * 50);
     expect(r.min % 50).toBe(0);
@@ -66,7 +72,10 @@ describe('computeParamSpace', () => {
 
 describe('chamberInputWithExact', () => {
   it('pins the given keys as Exact and keeps the other constraints', () => {
-    const input: ChamberInput = { ...BASE, constraints: { hLast: { min: 100 }, width: { max: 5000 } } };
+    const input: ChamberInput = {
+      ...BASE,
+      constraints: { hLast: { min: 100 }, width: { max: 5000 } },
+    };
     const out = chamberInputWithExact(input, { width: 4200 });
     expect(out.constraints).toEqual({ hLast: { min: 100 }, width: { exact: 4200 } });
     expect(final(out, 'width')).toBe(4200);
@@ -83,7 +92,9 @@ describe('studyRelationWarnings', () => {
     expect(warnings[0]).toMatch(/LEOW/);
     expect(studyRelationWarnings(BASE, ['width', 'hMiddle'])).toEqual([]);
     // Relation switched off in the base design: no warning.
-    expect(studyRelationWarnings({ ...BASE, relationsMaster: false }, ['height', 'hLast'])).toEqual([]);
+    expect(studyRelationWarnings({ ...BASE, relationsMaster: false }, ['height', 'hLast'])).toEqual(
+      [],
+    );
   });
 });
 
@@ -91,8 +102,12 @@ describe('objectives', () => {
   it('normalises the weighted sum by the baseline', () => {
     const baseline = { headLoss: 2, vortex: 0.5 };
     expect(weightedObjective(baseline, baseline, { headLoss: 0.5, vortex: 0.5 })).toBeCloseTo(1);
-    expect(weightedObjective({ headLoss: 1, vortex: 0.5 }, baseline, { headLoss: 0.5, vortex: 0.5 })).toBeCloseTo(0.75);
-    expect(weightedObjective({ headLoss: 1, vortex: 1 }, baseline, { headLoss: 1, vortex: 0 })).toBeCloseTo(0.5);
+    expect(
+      weightedObjective({ headLoss: 1, vortex: 0.5 }, baseline, { headLoss: 0.5, vortex: 0.5 }),
+    ).toBeCloseTo(0.75);
+    expect(
+      weightedObjective({ headLoss: 1, vortex: 1 }, baseline, { headLoss: 1, vortex: 0 }),
+    ).toBeCloseTo(0.5);
   });
 
   it('keeps the non-dominated points', () => {

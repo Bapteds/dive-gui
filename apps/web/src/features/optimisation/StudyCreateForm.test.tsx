@@ -82,7 +82,9 @@ describe('StudyCreateForm', () => {
 
   it('shows a tighter table Max as the range limit', async () => {
     const user = userEvent.setup();
-    renderForm([save({ snapshot: { x1: 1450, x2: 7.85, x3: 8, constraints: { width: { max: 4500 } } } })]);
+    renderForm([
+      save({ snapshot: { x1: 1450, x2: 7.85, x3: 8, constraints: { width: { max: 4500 } } } }),
+    ]);
     await user.click(screen.getByRole('checkbox', { name: 'B Kammer' }));
     expect(screen.getByTestId('range-width')).toHaveTextContent('4050 to 4500 mm');
     expect(screen.getByTestId('range-width')).toHaveTextContent(/table limit/i);

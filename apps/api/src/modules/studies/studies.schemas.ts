@@ -37,10 +37,22 @@ const studyFields = {
   weights: weights.optional(),
   mode: z.enum(STUDY_MODES).optional(),
   sampler: z.enum(STUDY_SAMPLERS).optional(),
-  seed: z.number().int().min(0).max(2 ** 31 - 1).nullable().optional(),
+  seed: z
+    .number()
+    .int()
+    .min(0)
+    .max(2 ** 31 - 1)
+    .nullable()
+    .optional(),
   vortexMetric: z.enum(STUDY_VORTEX_METRICS).optional(),
   maxEvaluations: z.number().int().min(1).max(STUDY_MAX_EVALUATIONS).optional(),
-  maxDurationHours: z.number().finite().positive().max(24 * 365).nullable().optional(),
+  maxDurationHours: z
+    .number()
+    .finite()
+    .positive()
+    .max(24 * 365)
+    .nullable()
+    .optional(),
   keepBest: z.number().int().min(0).max(100).optional(),
   keepLast: z.number().int().min(0).max(100).optional(),
   meshingSourceId: sessionId.optional(),
