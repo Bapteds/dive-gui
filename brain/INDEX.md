@@ -1,6 +1,6 @@
 # Index of every repository file
 
-> One line per file (590 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
+> One line per file (592 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
 
 Detail of a code file: open the sheet shown and search for the `## path/to/file` section. Documents: the description is their title and introduction line.
 
@@ -15,10 +15,10 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `AGENTS.md` : instructions common to every AI agent (project, session protocol, golden rules, commands, brain map, design in brief). · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `CLAUDE.md` : Claude Code entry point: imports `AGENTS.md` (`@AGENTS.md`) and adds the Claude-specific parts (memory, changelog hook, UI skills, index, Windows shells). · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `README.md` : technical reference for humans (architecture, prerequisites, dev, configuration, Debian deployment, CFD tools per feature, commands, auth, REST API, links to the brain). · [root-shared-mcp](codemap/root-shared-mcp.md)
-- `brain.zip` : **(undocumented: add a section in brain/codemap)**
 - `eslint.config.js` : ESLint 9 "flat" configuration of the monorepo via `tseslint.config`. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package-lock.json` : npm lockfile for the whole monorepo (workspaces), used by `npm ci` in CI and in production. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package.json` : root of the `dive-turbinen` workspace (private, ESM, `engines.node >=20`). · [root-shared-mcp](codemap/root-shared-mcp.md)
+- `tools.tar` : **(undocumented: add a section in brain/codemap)**
 - `tsconfig.base.json` : Common TypeScript base: `target ES2022`, `strict`, `esModuleInterop`, `skipLibCheck`, `forceConsistentCasingInFileNames`, `resolveJsonModule`, `noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch`. · [root-shared-mcp](codemap/root-shared-mcp.md)
 
 ## `.claude`
@@ -788,6 +788,8 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `brain/specs/2026-09-29-runner-case-below-le-design.md` : Runner case Ø below LE Ø with guide vanes: 20 mm ledge : Amends: `2026-09-29-vane-pocket-runner-case-design.md` (WS-A, implemented): its refusal "Runner case Ø below LE Ø − 5 mm" is replaced; the 5 mm snap, the thin-ring …
 - `brain/specs/2026-09-29-semi-spiral-casing-design.md` : Semi-spiral casing option (Chamber Creation) — design
 - `brain/specs/2026-09-29-vane-pocket-runner-case-design.md` : Guide-vane pocket robust to Runner case Ø close to or below LE Ø : Area: python (`apps/api/scripts/buildChamber.py`), shared + API (early refusal), tests
+- `brain/specs/2026-09-30-free-surface-tool-design.md` : Free-surface (lid iteration) tool (WS-I) — design
+- `brain/specs/2026-09-30-solver-convergence-vorticity-design.md` : Solver convergence criteria + vortex metrics (WS-G) — design
 
 ## `documents`
 

@@ -1,11 +1,27 @@
 # Chamber optimisation loop (WS-H) — design
 
 **Date:** 2026-09-29
-**Status:** approved (2026-09-29); WS-G criteria still placeholders; implementation after WS-F + WS-G
+**Status:** approved (2026-09-29), amended 2026-09-30 (§0); implementation after WS-G + WS-I
 **Sequencing:** implementation starts **only after WS-F and WS-G are implemented on branch `feat/chamber-v2-cfd-loop`** (WS-G also validated on the Debian server).
 **Feature:** new "Optimisation" feature chaining Chamber Creation → Meshing → Project case → Boundary conditions → Solver → metrics
 **Scope:** Prisma (2 tables) + API (new `studies` module, an in-process orchestrator, a Python suggestion script) + web (study page) + tests. **No change** to `buildChamber.py`, to the meshing pipelines, to the BC presets or to the solver internals: the loop only calls existing services.
-**Related:** `brain/specs/2026-08-11-chamber-to-meshing-transfer-design.md` (the `copyFrom` path was built for this loop, `brain/features/chamber-creation.md` §4.9), WS-F `2026-09-29-meshing-to-project-design.md`, WS-G `2026-09-29-solver-convergence-criteria-design.md`.
+**Related:** `brain/specs/2026-08-11-chamber-to-meshing-transfer-design.md` (the `copyFrom` path was built for this loop, `brain/features/chamber-creation.md` §4.9), WS-F `2026-09-29-meshing-to-project-design.md`, WS-G `2026-09-30-solver-convergence-vorticity-design.md` (replaces the never-committed `2026-09-29-solver-convergence-criteria-design.md`), WS-I `2026-09-30-free-surface-tool-design.md` (shared pipeline helpers, mesh origin).
+
+---
+
+## 0. Amendment 2026-09-30 (user decisions; wins over the sections below where they differ)
+
+| # | Topic | Amended decision |
+|---|---|---|
+| A1 | Where it lives | **In the project**: a new project tab **Optimisation** (no `/studies` pages, no navigation entry). A study is created from a project and uses **that project as its work project** (Q3 amended: no project is created; `Study.projectId` = the project it was created in). Each evaluation replaces the project's case mesh (the original case is backed up once by the WS-F route) and solves there. |
+| A2 | Base design | Picked in the creation form: a **Chamber save** (`ChamberSave.snapshot`), or **the chamber this mesh came from** when the project's mesh origin (WS-I §4) has a `chamberHash` whose build dir holds `input.json`. |
+| A3 | Reference meshing session | Default = the mesh origin's session; else picked among meshed sessions. |
+| A4 | Metrics (WS-G) | `headLoss` (m) = mean Δp₀ over the last `window` iterations of the run (the criterion's window; `simplePDrop.window` or `robust.W`) / (ρ g), from the WS-G monitors. Vortex: WS-G computes **both** the masked Q volume (m³) and the RMS vorticity in the Q-core (1/s) at the latest time (on-demand post-process after the solve). **The study picks which one enters the objective**: new field `Study.vortexMetric` `'maskedQVolume'` (default) \| `'omegaRms'`. `Evaluation` stores both (`maskedQVolume`, `omegaRms`) plus `dp0` (Pa); `vortexVolume` in §3 is replaced by these columns and the objective uses the picked one (`vortex₀` = the baseline's value of the picked metric). Objectives ids: `headLoss`, `vortex`. |
+| A5 | Criteria | `Study.criteria` = snapshot of the project's WS-G `cfd-criteria.json` at study start (method, patches, vortex settings); the runner re-installs it before each solve. |
+| A6 | Routes | Nested under the project: `/api/v1/projects/:id/studies[...]` (same verbs as §7). Visibility = the project's; control = study owner + super-admin. |
+| A7 | Locks | A running study locks its project (manual runs, mesh/case mutations, free-surface job: 409 `STUDY_IN_PROGRESS`); a running free-surface job blocks a study start (409 `FREE_SURFACE_IN_PROGRESS`). One study running at a time globally stays. |
+| A8 | Pipeline | The stages reuse the WS-I helpers (`lib/pipelineStages.ts`: `awaitRunTerminal`, `awaitMeshingTerminal`, `sendSessionToCase`, `solveCase`). |
+| A9 | Out of scope now | "Optimise this design" on the Chamber page; MCP tools. |
 
 ---
 
