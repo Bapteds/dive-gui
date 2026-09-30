@@ -89,6 +89,17 @@
 | 2026-09-29 | Unticking **Semi-spiral casing** restores Chamfer to its state before the spiral was ticked (Feet stays off) | User choice: no surprise when going back to a regular chamber. |
 | 2026-09-30 | Parameters table: the BF1 / BF2 rows show no confidence ("-"), like the spiral rows | They always copy LF1 / LF2 (45° corners), so their own fit confidence would not describe the value shown; user choice. |
 
+## CFD loop: convergence, vortex metrics, free surface, optimisation
+
+| Date | Decision | Reason |
+|---|---|---|
+| 2026-09-30 | **Default convergence criterion = `SimplePDropConvergence`** (Δp₀ within ±devTol of the trailing mean for nPass iterations); `robust` (`convergenceControl`) and `residuals` (OpenFOAM residualControl) selectable per project in the Solver tab | User choice on the tools delivered 2026-09-29 (`documents/Tools/ConvergenceFunctions/`); spec `2026-09-30-solver-convergence-vorticity-design.md`. |
+| 2026-09-30 | Vortex metrics: **both** the masked Q volume (`postVorticity.sh`) and the RMS vorticity in the Q-core are computed; each optimisation study picks which one enters its objective (`Study.vortexMetric`, default masked Q volume) | User choice; the two tools answer different questions. |
+| 2026-09-30 | Vortex metrics computed by **one DIVE coded function object** instead of the v2606 topoSet + `volFieldValue cellZone` chain | The API runs ESI v2406; the `cellZone` shortcut is v2606-only; one coded FO also gives a live series. To validate on the server. |
+| 2026-09-30 | **Free-surface tool in the project** (tab), lid iterations **remesh** (no morphing), **1 iteration by default, 2 and 3 optional**, lid STL fitted automatically (kit fit step) | User request; spec `2026-09-30-free-surface-tool-design.md`. |
+| 2026-09-30 | **No builder change for the lid**: the tool uses a flat top patch when the mesh has one (default `atmosphere`, pickable) and is disabled otherwise | User: not every mesh has an `atmosphere` patch; some are walls only. |
+| 2026-09-30 | **Optimisation lives in the project** (tab) and uses **that project** as its work project (amends WS-H Q3) | User: every tool belongs in the project page once a mesh is there. Spec `2026-09-29-optimisation-loop-design.md` §0. |
+
 ## Project organization
 
 | Date | Decision | Reason |

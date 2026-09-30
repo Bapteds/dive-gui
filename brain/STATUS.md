@@ -15,7 +15,7 @@
     - WS-E Semi-spiral casing (cached `designSemiSpiral.py` step, nose + plank = new `tongue` patch, Feet off; unticking it restores Chamfer);
     - WS-F Meshing session → project (`POST /projects/:id/mesh/from-meshing`, "Send to project" dialog, chamber patch types forced).
   - **Decided, no code**: WS-D hub shoulder: keep the current rule (the small-Ø fold is logged in `known-issues.md`).
-  - **Blocked**: WS-G convergence + vorticity criteria (waiting for the user's definitions; draft spec in the session scratchpad, not committed); WS-H optimisation loop (spec approved, `2026-09-29-optimisation-loop-design.md`; implementation after WS-G); WS-I free-surface tool (waiting for the user's tool).
+  - **In progress (2026-09-30)**: tools received. Specs written and approved: WS-G `2026-09-30-solver-convergence-vorticity-design.md` (convergence criteria + vortex metrics in the Solver tab), WS-I `2026-09-30-free-surface-tool-design.md` (Free surface project tab), WS-H amended (§0: Optimisation project tab, this project as work project). Implementation order: WS-G and WS-I, then WS-H.
   - **Still to do (after the merge)**: browser pass (A, B, C, E, F), CI run (geometry job), and at deploy **purge `$STORAGE_DIR/chamber/*`** (`buildChamber.py` changed; the live `.env` has `STORAGE_DIR="./storage"`, relative to the service working directory, so probably `/home/app/apps/api/storage/chamber/*`: to confirm) plus a real snappy chamber session sent to a project on the server.
 - **Before it on `main`**: `5638b42` (brain chamber-sheet refresh) and the 2026-09-28/29 chamber fixes (generator minimum with dome, readable errors).
 - **Version**: 1.0.x (v1.0.1 audit fixes included: every CRITICAL and HIGH finding).
