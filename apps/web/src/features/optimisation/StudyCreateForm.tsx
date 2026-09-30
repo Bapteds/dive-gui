@@ -268,7 +268,10 @@ export function StudyCreateForm({
     }
   };
 
-  const fieldset = 'flex flex-col gap-4 border-t border-border pt-5 first:border-t-0 first:pt-0';
+  // min-w-0: a fieldset defaults to min-inline-size: min-content, which would let the
+  // 560 px parameters table push it (and the form) past the card instead of scrolling.
+  const fieldset =
+    'flex min-w-0 flex-col gap-4 border-t border-border pt-5 first:border-t-0 first:pt-0';
   const legend = 'mb-1 text-sm font-semibold text-text';
 
   return (
