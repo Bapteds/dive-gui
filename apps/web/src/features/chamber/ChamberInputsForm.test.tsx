@@ -150,9 +150,6 @@ describe('ChamberInputsForm', () => {
   it('shows the active relation count and disables Configure when the master is off', () => {
     const { rerender } = render(<Harness onValid={() => {}} />);
     const defaultOn = CHAMBER_RELATIONS.filter((rel) => rel.defaultOn).length;
-    // BF1 = LF1 and BF2 = LF2 are permanent (spec 2026-09-29-corner-chamfer-45):
-    // 7 toggleable relations, all on by default.
-    expect(screen.getByRole('button', { name: /\(7\/7 on\)/ })).toBeEnabled();
     expect(
       screen.getByRole('button', {
         name: new RegExp(`\\(${defaultOn}/${CHAMBER_RELATIONS.length} on\\)`),

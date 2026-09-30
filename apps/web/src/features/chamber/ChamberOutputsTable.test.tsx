@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import {
   applyChamberSpiralToOutputs,
   computeChamberOutputs,
@@ -74,36 +74,6 @@ describe('ChamberOutputsTable', () => {
     // The cell exists now (identity rows are editable) and reports up like any other.
     fireEvent.change(screen.getByLabelText('H Kammer exact'), { target: { value: '5000' } });
     expect(onChange).toHaveBeenCalledWith('height', 'exact', 5000);
-  });
-
-  it('shows BF1 / BF2 read-only as "= LF1" / "= LF2" (corner chamfers always 45°)', () => {
-    render(
-      <ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />,
-    );
-    for (const [label, status] of [
-      ['BF1', '= LF1'],
-      ['BF2', '= LF2'],
-    ] as const) {
-      const row = screen.getByText(label).closest('tr')!;
-      expect(within(row).queryAllByRole('spinbutton')).toHaveLength(0);
-      expect(within(row).getByText(status)).toBeInTheDocument();
-      expect(within(row).getByText(`${label} exact: read-only, always equals ${status.slice(2)}`))
-        .toBeInTheDocument();
-    }
-    // LF1 / LF2 keep their Min / Max / Exact cells.
-    expect(screen.getByRole('spinbutton', { name: 'LF1 exact' })).toBeInTheDocument();
-    expect(screen.getByRole('spinbutton', { name: 'LF2 minimum' })).toBeInTheDocument();
-    expect(screen.queryByRole('spinbutton', { name: 'BF1 exact' })).toBeNull();
-  });
-
-  it('keeps BF read-only even with the relations master off', () => {
-    const outputs = computeChamberOutputs({ x1: 1450, x2: 7.85, x3: 8, relationsMaster: false });
-    render(
-      <ChamberOutputsTable outputs={outputs} constraints={{}} onConstraintChange={() => {}} />,
-    );
-    const row = screen.getByText('BF2').closest('tr')!;
-    expect(within(row).queryAllByRole('spinbutton')).toHaveLength(0);
-    expect(within(row).getByText('= LF2')).toBeInTheDocument();
   });
 
   it('marks LEOW "no effect" when H Kammer is pinned by an Exact', () => {
