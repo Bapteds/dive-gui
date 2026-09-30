@@ -4,7 +4,6 @@ import { ChevronDown } from 'lucide-react';
 import {
   CHAMBER_INPUT_RANGES,
   CHAMBER_RELATIONS,
-  CHAMBER_SPIRAL_FLOW_RANGE,
   CHAMBER_VANE_COUNT_MAX,
   CHAMBER_VANE_COUNT_MIN,
   type ChamberVariant,
@@ -22,9 +21,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import type { ChamberAutoDims, ChamberFormValues } from './chamberForm';
+import type { CasingVelocity, ChamberAutoDims, ChamberFormValues } from './chamberForm';
 
-export type { ChamberAutoDims } from './chamberForm';
+export type { CasingVelocity, ChamberAutoDims } from './chamberForm';
 
 /**
  * ChamberInputsForm - the three empirical inputs (X1/X2/X3), the cylinder design
@@ -57,6 +56,7 @@ export function ChamberInputsForm({
   semiSpiral = false,
   onSemiSpiralChange,
   autoLengthMm,
+  casingVelocity,
   autoDims,
   relationsMaster,
   relations,
@@ -79,6 +79,8 @@ export function ChamberInputsForm({
   /** Called when the Semi-spiral casing box is toggled (the parent unticks Feet / Chamfer). */
   onSemiSpiralChange?: (on: boolean) => void;
   autoLengthMm: number | null;
+  /** Casing flow velocity derived live from B Kammer (read-only; semi-spiral casing). */
+  casingVelocity: CasingVelocity;
   /** Auto (empirical) placeholders for the five manual dimension overrides. */
   autoDims: ChamberAutoDims;
   /** Current master switch state (governs whether individual relations apply). */
@@ -298,16 +300,19 @@ export function ChamberInputsForm({
         {semiSpiral ? (
           <Field
             label="Casing flow velocity (m/s)"
-            error={errors.spiralFlowVelocity?.message}
-            helperText={`Design flow velocity in the casing, ${CHAMBER_SPIRAL_FLOW_RANGE.min}–${CHAMBER_SPIRAL_FLOW_RANGE.max} (default ${CHAMBER_SPIRAL_FLOW_RANGE.default})`}
+            error={casingVelocity.error ?? undefined}
+            helperText={
+              casingVelocity.widthMm != null
+                ? `From B Kammer (${casingVelocity.widthMm} mm), H Kammer and Q_max. Read-only.`
+                : 'From B Kammer, H Kammer and Q_max. Read-only.'
+            }
           >
             <Input
-              type="number"
-              step="0.01"
-              inputMode="decimal"
-              min={CHAMBER_SPIRAL_FLOW_RANGE.min}
-              max={CHAMBER_SPIRAL_FLOW_RANGE.max}
-              {...register('spiralFlowVelocity', { valueAsNumber: true })}
+              type="text"
+              readOnly
+              aria-readonly="true"
+              className="bg-bg tabular-nums text-text-secondary"
+              value={casingVelocity.value != null ? casingVelocity.value.toFixed(3) : ''}
             />
           </Field>
         ) : (

@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { CHAMBER_RELATIONS, type ChamberVariant } from '@dive/shared';
-import { ChamberInputsForm, type ChamberAutoDims } from './ChamberInputsForm';
+import { ChamberInputsForm, type CasingVelocity, type ChamberAutoDims } from './ChamberInputsForm';
 import { CHAMBER_FORM_DEFAULTS, chamberFormSchema, type ChamberFormValues } from './chamberForm';
 
 /**
@@ -30,8 +30,10 @@ function Harness({
   variant,
   defaults,
   relationsMaster = true,
+  casingVelocity = { value: 0.923, widthMm: 6150, error: null },
 }: {
   onValid: (values: ChamberFormValues) => void;
+  casingVelocity?: CasingVelocity;
   variant?: ChamberVariant;
   defaults?: Partial<ChamberFormValues>;
   relationsMaster?: boolean;
@@ -60,6 +62,7 @@ function Harness({
         }
       }}
       autoLengthMm={8889}
+      casingVelocity={casingVelocity}
       autoDims={AUTO_DIMS}
       relationsMaster={relationsMaster}
       relations={values.relations}
@@ -351,18 +354,35 @@ describe('ChamberInputsForm', () => {
       expect(screen.getByText(/Off while Semi-spiral casing is on/)).toBeInTheDocument();
     });
 
-    it('submits the flag, Feet off and the velocity', async () => {
+    it('shows the casing flow velocity read-only, derived from B Kammer', async () => {
+      render(<Harness onValid={() => {}} />);
+      fireEvent.click(screen.getByLabelText(/Semi-spiral casing/));
+      const velocity = (await screen.findByLabelText('Casing flow velocity (m/s)')) as HTMLInputElement;
+      expect(velocity.readOnly).toBe(true);
+      expect(velocity.value).toBe('0.923');
+      expect(screen.getByText(/From B Kammer \(6150 mm\)/)).toBeInTheDocument();
+    });
+
+    it('shows the out-of-range message under the velocity', async () => {
+      const error = 'B Kammer (1000 mm) is too narrow for the casing; it must stay between 0.3 and 3 m/s. Set B Kammer between 3550 and 7250 mm.';
+      render(<Harness onValid={() => {}} casingVelocity={{ value: null, widthMm: 1000, error }} />);
+      fireEvent.click(screen.getByLabelText(/Semi-spiral casing/));
+      const velocity = (await screen.findByLabelText('Casing flow velocity (m/s)')) as HTMLInputElement;
+      expect(velocity.value).toBe('');
+      expect(screen.getByText(error)).toBeInTheDocument();
+    });
+
+    it('submits the flag and Feet off, without a velocity', async () => {
       const onValid = vi.fn();
       render(<Harness onValid={onValid} />);
       fireEvent.click(screen.getByLabelText(/Semi-spiral casing/));
-      const velocity = await screen.findByLabelText('Casing flow velocity (m/s)');
-      fireEvent.change(velocity, { target: { value: '0.8' } });
+      await screen.findByLabelText('Casing flow velocity (m/s)');
       fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
       await waitFor(() => expect(onValid).toHaveBeenCalledTimes(1));
       const submitted = onValid.mock.calls[0][0] as ChamberFormValues;
       expect(submitted.semiSpiral).toBe(true);
       expect(submitted.feetEnabled).toBe(false);
-      expect(submitted.spiralFlowVelocity).toBe(0.8);
+      expect(submitted).not.toHaveProperty('spiralFlowVelocity');
     });
   });
 });

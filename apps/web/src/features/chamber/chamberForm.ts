@@ -7,16 +7,17 @@ import {
   CHAMBER_INPUT_RANGES,
   CHAMBER_PERMANENT_RELATION_KEYS,
   CHAMBER_RELATIONS,
-  CHAMBER_SPIRAL_FLOW_RANGE,
   CHAMBER_VANE_COUNT_DEFAULT,
   CHAMBER_VANE_COUNT_MAX,
   CHAMBER_VANE_COUNT_MIN,
   CHAMBER_VARIANTS,
   CHAMBER_WALL_THICKNESS_MM,
   CHAMBER_X4_MAX,
+  chamberSpiralVelocityOf,
+  chamberSpiralVelocityRefusal,
   computeChamberGeneratorDims,
 } from '@dive/shared';
-import type { ChamberInput, ChamberVariant } from '@dive/shared';
+import type { ChamberConstraint, ChamberInput, ChamberOutput, ChamberVariant } from '@dive/shared';
 
 /**
  * Form contract for the chamber inputs, kept apart from the component file so
@@ -77,8 +78,6 @@ export interface ChamberFormValues {
   domeHeight?: number;
   /** Semi-spiral casing: the footprint follows the optimised spiral + tongue. Both designs; needs Feet off. */
   semiSpiral: boolean;
-  /** Casing flow velocity (m/s, 0.3..3, default 0.922). Read only while semiSpiral is on. */
-  spiralFlowVelocity: number;
 }
 
 // A user-entered dimension (mm): strictly positive and bounded, mirroring the
@@ -148,10 +147,6 @@ export const chamberFormSchema = z
     centralHeight: optionalPositive,
     domeHeight: optionalPositive,
     semiSpiral: z.boolean(),
-    spiralFlowVelocity: z
-      .number({ invalid_type_error: 'Enter a number' })
-      .min(CHAMBER_SPIRAL_FLOW_RANGE.min, `Min ${CHAMBER_SPIRAL_FLOW_RANGE.min} m/s`)
-      .max(CHAMBER_SPIRAL_FLOW_RANGE.max, `Max ${CHAMBER_SPIRAL_FLOW_RANGE.max} m/s`),
   })
   .superRefine((v, ctx) => {
     // Mirrors the API refusal (spec 2026-09-29-semi-spiral-casing): the form
@@ -222,7 +217,6 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   centralHeight: undefined,
   domeHeight: undefined,
   semiSpiral: false,
-  spiralFlowVelocity: CHAMBER_SPIRAL_FLOW_RANGE.default,
 };
 
 /** Recursively sort object keys so serialization ignores property order. */
@@ -290,7 +284,6 @@ export function chamberInputToFormValues(input: ChamberInput): ChamberFormValues
     domeHeight: input.domeHeight,
     // Saves made before the semi-spiral casing existed load with it off.
     semiSpiral: input.semiSpiral ?? CHAMBER_FORM_DEFAULTS.semiSpiral,
-    spiralFlowVelocity: input.spiralFlowVelocity ?? CHAMBER_FORM_DEFAULTS.spiralFlowVelocity,
   };
 }
 
@@ -395,4 +388,31 @@ export function semiSpiralToggle(
     set: savedChamfer === null ? {} : { chamferEnabled: savedChamfer },
     savedChamfer: null,
   };
+}
+
+/** The read-only Casing flow velocity the form shows (semi-spiral casing). */
+export interface CasingVelocity {
+  /** m/s, null when it cannot be computed or is out of range. */
+  value: number | null;
+  /** B Kammer Final (mm) it comes from, null before the outputs exist. */
+  widthMm: number | null;
+  /** The API's refusal text when the velocity leaves 0.3 to 3 m/s. */
+  error: string | null;
+}
+
+/**
+ * Casing flow velocity derived live from B Kammer (user rule 2026-09-30), with
+ * the same shared helpers the API uses, so it follows every B Kammer / H Kammer /
+ * Q_max / machine-diameter change without a build.
+ */
+export function casingVelocity(
+  values: ChamberFormValues,
+  constraints: Record<string, ChamberConstraint>,
+  outputs: ChamberOutput[] | null,
+): CasingVelocity {
+  if (!outputs) return { value: null, widthMm: null, error: null };
+  const input = { ...values, constraints } as unknown as ChamberInput;
+  const widthMm = Math.round(outputs.find((o) => o.key === 'width')!.final);
+  const error = chamberSpiralVelocityRefusal(input, outputs);
+  return { value: error ? null : chamberSpiralVelocityOf(input, outputs), widthMm, error };
 }

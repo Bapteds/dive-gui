@@ -26,6 +26,7 @@ import {
   chamberInputToConstraints,
   chamberInputToFormValues,
   computeChamberAutoDims,
+  casingVelocity,
   semiSpiralToggle,
   type ChamberFormValues,
 } from '@/features/chamber/chamberForm';
@@ -124,6 +125,21 @@ export function ChamberPage() {
   // Auto length shown on the (blank) length field = 2 x the final width (mm).
   const widthFinal = outputs?.find((o) => o.key === 'width')?.final ?? null;
   const autoLengthMm = widthFinal != null ? 2 * widthFinal : null;
+  // Semi-spiral casing: the Casing flow velocity follows B Kammer live (user
+  // rule 2026-09-30), from the same shared helper the API builds with.
+  const casing = useMemo(
+    () => casingVelocity(values, constraints, outputs),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      outputs,
+      constraints,
+      values.dFirst,
+      values.dMiddle,
+      values.partScale,
+      values.coneChamferEnabled,
+      values.coneChamferSize,
+    ],
+  );
 
   // Auto (empirical) placeholders for the manual dimension overrides + X4 —
   // the same shared model the API resolves with, computed from the CURRENT
@@ -183,7 +199,6 @@ export function ChamberPage() {
     centralHeight: 'Generator height',
     domeHeight: 'Dome height',
     feetEnabled: 'Feet',
-    spiralFlowVelocity: 'Casing flow velocity',
   };
 
   const onGenerate = handleSubmit(
@@ -321,6 +336,7 @@ export function ChamberPage() {
               }
             }}
             autoLengthMm={autoLengthMm}
+            casingVelocity={casing}
             autoDims={autoDims}
             relationsMaster={values.relationsMaster}
             relations={values.relations}

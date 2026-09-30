@@ -48,10 +48,11 @@ describe('chamber saves', () => {
       vaneAngleDeg: 50,
       vaneCount: 16,
       coneChamferEnabled: false,
-      // Semi-spiral casing (spec 2026-09-29): off, at the default casing flow velocity.
+      // Semi-spiral casing (spec 2026-09-29): off; the casing flow velocity is
+      // derived from B Kammer since 2026-09-30, so no default is stored.
       semiSpiral: false,
-      spiralFlowVelocity: 0.922,
     });
+    expect(created.body.save.snapshot).not.toHaveProperty('spiralFlowVelocity');
 
     const list = await request(app)
       .get('/api/v1/chamber/saves')

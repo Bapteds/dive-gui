@@ -23,6 +23,7 @@ import {
   chamberConeChamferMm,
   chamberSpiralBoxDims,
   chamberSpiralInputs,
+  chamberSpiralVelocityRefusal,
   chamberSpiralModelInput,
   runnerCaseClearanceRefusal,
   computeChamberGeneratorDims,
@@ -508,6 +509,11 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
   // below LE Ø the builder adds the 20 mm ledge (spec 2026-09-29-runner-case-below-le).
   const runnerCaseRefusal = runnerCaseClearanceRefusal(input, outputs);
   if (runnerCaseRefusal) throw new AppError(422, 'VALIDATION_ERROR', runnerCaseRefusal);
+
+  // Semi-spiral: the casing flow velocity is derived from B Kammer and must stay
+  // within 0.3 to 3 m/s (user rule 2026-09-30); refused before the spiral step.
+  const velocityRefusal = spiralOn ? chamberSpiralVelocityRefusal(input, outputs) : null;
+  if (velocityRefusal) throw new AppError(422, 'VALIDATION_ERROR', velocityRefusal);
 
   // The spiral step runs BEFORE hashing, so the build key covers the actual
   // geometry (the frozen vertices), not just the inputs that produced them.
