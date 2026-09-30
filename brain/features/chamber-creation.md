@@ -32,7 +32,7 @@ Chamber Creation generates the parametric geometry of a turbine chamber (the flu
 ### 2.3 Key states and messages
 - Viewer: no hash (prompt "Enter Runner Ø, Head and Q_max plus a length, then Generate…"), no WebGL, manifest loading or in error, no patches, geometry loading or in error (collapsible `ApiError` details).
 - Build: button in `loading` during the mutation. Any error (server refusal 422/502, invalid form, Min > Max detected on the client) appears **both** in the "Build errors" block and as a toast; the previous build's warnings are cleared on failure.
-- Table: a Final ≤ 0 (except `noEffect`) is shown in red with `! ≤ 0 mm` ("not buildable"); inline `! min>max` status; `refined` and `no effect` badges (doubled by `sr-only` text); confidence pill with the CV error visible (e.g. "Low · 38.9 %").
+- Table: a Final ≤ 0 (except `noEffect`) is shown in red with `! ≤ 0 mm` ("not buildable"); inline `! min>max` status; `refined` and `no effect` badges (doubled by `sr-only` text); confidence pill with the CV error visible (none, shown as "-", on the BF1 / BF2 rows, which copy LF1 / LF2, and on the spiral-derived rows) (e.g. "Low · 38.9 %").
 - Export card: amber note `role="status"` "Inputs changed since this build…" when the form has drifted from the last build (downloads stay active, they serve the old geometry).
 - First STEP (or mirrored) download of a build with vanes: info toast "Preparing the STEP export…" (once per kind and per hash).
 

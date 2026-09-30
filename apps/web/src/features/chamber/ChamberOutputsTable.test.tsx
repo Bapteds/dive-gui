@@ -96,6 +96,19 @@ describe('ChamberOutputsTable', () => {
     expect(screen.queryByRole('spinbutton', { name: 'BF1 exact' })).toBeNull();
   });
 
+  it('shows no confidence on BF1 / BF2 (copies of LF1 / LF2) but keeps it on LF1', () => {
+    render(
+      <ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />,
+    );
+    for (const label of ['BF1', 'BF2']) {
+      const row = screen.getByText(label).closest('tr')!;
+      expect(within(row).queryByTitle(/cross-validation error/)).toBeNull();
+      expect(within(row).getAllByRole('cell').at(-1)).toHaveTextContent(/^-$/);
+    }
+    const lf1 = screen.getByText('LF1').closest('tr')!;
+    expect(within(lf1).getByTitle(/cross-validation error/)).toBeInTheDocument();
+  });
+
   it('keeps BF read-only even with the relations master off', () => {
     const outputs = computeChamberOutputs({ x1: 1450, x2: 7.85, x3: 8, relationsMaster: false });
     render(
