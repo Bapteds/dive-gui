@@ -24,8 +24,14 @@ const FIELD_RE = /Solving for (\w+),\s+Initial residual\s*=\s*([^\s,]+)/;
 // actually blown up. This is the ONLY divergence signal from a residual value —
 // a numeric token we merely fail to parse (see below) is NOT divergence.
 const NONFINITE_RESIDUAL_RE = /nan|inf/i;
-/** The steady-solver convergence banner. */
+/** The steady-solver convergence banner (OpenFOAM residualControl). */
 const CONVERGED_RE = /solution converged in \d+ iterations/i;
+/**
+ * The pressure-drop convergence banners of the DIVE-installed coded function
+ * objects (WS-G): SimplePDropConvergence and convergenceControl (robust). A
+ * progress line ("...: dp0 = ...") never matches: only "<name>: CONVERGED".
+ */
+const PDROP_CONVERGED_RE = /\b(SimplePDropConvergence|convergenceControl): CONVERGED\b/;
 /** A hard solver error / floating-point crash in the log. */
 const FOAM_ERROR_RE = /FOAM FATAL|Floating point exception|#0\s+Foam::error/i;
 
@@ -35,8 +41,13 @@ export interface ParsedResiduals {
   samples: ResidualSample[];
   /** A residual went to nan/inf (the solution blew up). */
   diverged: boolean;
-  /** The solver printed its steady-convergence banner. */
+  /** The solver printed a convergence banner (residuals or pressure drop). */
   converged: boolean;
+  /**
+   * Which criterion stopped the run: `residuals` (OpenFOAM residualControl),
+   * `simplePDrop` / `robust` (the pressure-drop function objects), or null.
+   */
+  convergedBy: 'residuals' | 'simplePDrop' | 'robust' | null;
   /** A FOAM fatal error / floating-point exception appeared. */
   foamError: boolean;
   /** The last iteration index seen, or null when none. */
@@ -50,6 +61,7 @@ export function parseResiduals(log: string): ParsedResiduals {
   let current: ResidualSample | null = null;
   let diverged = false;
   let converged = false;
+  let convergedBy: ParsedResiduals['convergedBy'] = null;
   let foamError = false;
   let lastTime: number | null = null;
 
@@ -70,7 +82,16 @@ export function parseResiduals(log: string): ParsedResiduals {
       continue;
     }
 
-    if (CONVERGED_RE.test(line)) converged = true;
+    if (CONVERGED_RE.test(line)) {
+      converged = true;
+      convergedBy ??= 'residuals';
+    }
+    const pdrop = PDROP_CONVERGED_RE.exec(line);
+    if (pdrop) {
+      converged = true;
+      // The function object stopped the run: it wins over an earlier residual banner.
+      convergedBy = pdrop[1] === 'convergenceControl' ? 'robust' : 'simplePDrop';
+    }
     if (FOAM_ERROR_RE.test(line)) foamError = true;
 
     const fieldMatch = FIELD_RE.exec(line);
@@ -95,7 +116,7 @@ export function parseResiduals(log: string): ParsedResiduals {
   }
   flush();
 
-  return { samples, diverged, converged, foamError, lastTime };
+  return { samples, diverged, converged, convergedBy, foamError, lastTime };
 }
 
 /**

@@ -38,6 +38,7 @@ import type {
   MeshSource,
   MeshToProjectTarget,
   ResidualSample,
+  RunMonitors,
   Role,
   RunStatus,
   ServerErrorCode,
@@ -748,13 +749,15 @@ export interface ListRunsResponse {
 
 /**
  * `GET /projects/:id/runs/:runId/log` response: the run, its residual series
- * (downsampled), a bounded log tail, and the total log size in bytes.
+ * (downsampled), a bounded log tail, the total log size in bytes, and the
+ * convergence monitors (pressure drop, criterion progress, vortex metrics).
  */
 export interface RunLogPayload {
   run: RunSummary;
   series: ResidualSample[];
   logTail: string;
   logBytes: number;
+  monitors: RunMonitors;
 }
 
 /** Live metrics of the machine running the API (Home dashboard). */

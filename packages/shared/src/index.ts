@@ -2218,6 +2218,190 @@ export interface ResidualSample {
 }
 
 // ---------------------------------------------------------------------------
+// Solver convergence criteria + vortex metrics (WS-G, spec
+// brain/specs/2026-09-30-solver-convergence-vorticity-design.md).
+//
+// Per-project settings (STORAGE_DIR/projects/<id>/cfd-criteria.json) that the API
+// renders into coded function objects (the user's ConvergenceFunctions tools and
+// DIVE's diveVortexMetrics) and #includes in system/controlDict before each run.
+// ---------------------------------------------------------------------------
+
+/**
+ * How a steady run decides it has converged:
+ *  - `simplePDrop` (default): Dp0 within +/- devTol of its trailing mean for nPass iterations;
+ *  - `robust`: windowed mean drift + slope + residual gate, K consecutive checks;
+ *  - `residuals`: OpenFOAM `residualControl` only (the behaviour before WS-G).
+ */
+export const CONVERGENCE_METHODS = ['simplePDrop', 'robust', 'residuals'] as const;
+export type ConvergenceMethod = (typeof CONVERGENCE_METHODS)[number];
+
+/** Velocity fields the vortex metrics may use (the same field for Q and vorticity). */
+export const VORTEX_VELOCITY_FIELDS = ['U', 'Urel'] as const;
+export type VortexVelocityField = (typeof VORTEX_VELOCITY_FIELDS)[number];
+
+/**
+ * A patch name as rendered into the function objects (C++ string literals and
+ * dictionary words): OpenFOAM word characters only. Empty = not chosen.
+ */
+const criteriaPatchSchema = z
+  .string()
+  .max(128)
+  .regex(/^[A-Za-z0-9_.:-]*$/, 'Patch names use letters, digits, _ . : - only');
+
+const positiveFinite = z.number().finite().positive();
+
+/** zod schema of the per-project convergence + vortex settings (PUT body). */
+export const cfdCriteriaSchema = z.object({
+  convergence: z.object({
+    method: z.enum(CONVERGENCE_METHODS),
+    inletPatch: criteriaPatchSchema,
+    outletPatch: criteriaPatchSchema,
+    /** Density [kg/m3]: rhoInf of the monitors, converts kinematic p to Pa. */
+    rho: positiveFinite.max(100000),
+    simplePDrop: z.object({
+      window: z.number().int().min(2).max(100000),
+      devTol: positiveFinite.max(1),
+      nPass: z.number().int().min(1).max(1000000),
+    }),
+    robust: z.object({
+      W: z.number().int().min(2).max(100000),
+      tolMean: positiveFinite.max(1e9),
+      K: z.number().int().min(1).max(1000),
+      resTol: positiveFinite.max(1),
+    }),
+  }),
+  vortex: z.object({
+    enabled: z.boolean(),
+    velocityField: z.enum(VORTEX_VELOCITY_FIELDS),
+    qThreshold: z.number().finite().min(0),
+    wallDistance: z.number().finite().min(0),
+    qCrit: z.number().finite().min(0),
+    vMin: z.number().finite().min(0),
+    interval: z.number().int().min(1).max(1000000),
+    writeFields: z.boolean(),
+  }),
+});
+
+/** Per-project convergence + vortex settings. */
+export type CfdCriteriaSettings = z.infer<typeof cfdCriteriaSchema>;
+export type ConvergenceSettings = CfdCriteriaSettings['convergence'];
+export type VortexMetricsSettings = CfdCriteriaSettings['vortex'];
+
+/**
+ * Default settings (the user's tool defaults). The patch names are the tools'
+ * defaults; the API resolves them against the mesh when no file is saved yet.
+ */
+export const DEFAULT_CFD_CRITERIA: CfdCriteriaSettings = {
+  convergence: {
+    method: 'simplePDrop',
+    inletPatch: 'inlet',
+    outletPatch: 'outlet',
+    rho: 1000,
+    simplePDrop: { window: 100, devTol: 0.03, nPass: 100 },
+    robust: { W: 100, tolMean: 50, K: 2, resTol: 1e-3 },
+  },
+  vortex: {
+    enabled: true,
+    velocityField: 'U',
+    qThreshold: 5,
+    wallDistance: 0.03,
+    qCrit: 5,
+    vMin: 0,
+    interval: 50,
+    writeFields: true,
+  },
+};
+
+/**
+ * Do the convergence criteria apply to this solver? Only steady incompressible
+ * solvers (the tools are simpleFoam tools: kinematic p x rho).
+ */
+export function criteriaApplicable(solver: string | null | undefined): boolean {
+  if (!solver || !isConfigurableSolver(solver)) return false;
+  const spec = SOLVER_CATALOG[solver];
+  return spec.regime === 'steady' && spec.family === 'incompressible';
+}
+
+/** `GET /projects/:id/criteria` response. */
+export interface CfdCriteriaResponse {
+  criteria: CfdCriteriaSettings;
+  /** Patch names of constant/polyMesh/boundary (for the inlet / outlet selects). */
+  patches: string[];
+  /** Whether the case's solver is steady incompressible (criteria installed). */
+  applicable: boolean;
+  /** Whether system/controlDict currently carries the managed includes. */
+  installed: boolean;
+}
+
+/** `PUT /projects/:id/criteria` response. */
+export interface SaveCfdCriteriaResponse {
+  criteria: CfdCriteriaSettings;
+  installed: boolean;
+}
+
+/** One flux-weighted total-pressure drop sample (Pa) per iteration. */
+export interface PressureDropSample {
+  time: number;
+  dp0: number;
+}
+
+/** Latest progress line of SimplePDropConvergence. */
+export interface SimplePDropProgress {
+  method: 'simplePDrop';
+  /** Consecutive iterations within the band so far (0 while filling the window). */
+  consecutive: number;
+  /** Iterations required (nPass), or null while the window is filling. */
+  required: number | null;
+  /** Latest relative deviation from the trailing mean, in %. */
+  devPct: number | null;
+  /** Latest trailing mean [Pa]. */
+  mean: number | null;
+  /** Window filling state (`filled / size`) until the first check, else null. */
+  filling: { filled: number; size: number } | null;
+}
+
+/** Latest check line of convergenceControl (robust). */
+export interface RobustProgress {
+  method: 'robust';
+  drift: number;
+  trend: number;
+  maxRes: number;
+  passes: number;
+  required: number;
+  gates: { mean: boolean; slope: boolean; res: boolean };
+  /** Iteration of the check. */
+  time: number;
+}
+
+export type CriterionProgress = SimplePDropProgress | RobustProgress;
+
+/** One diveVortexMetrics evaluation. */
+export interface VortexMetricsSample {
+  time: number;
+  /** Volume of the cells with Q > qThreshold [m3]. */
+  qVolume: number;
+  /** Same, restricted to the cells farther than wallDistance from any wall [m3]. */
+  maskedQVolume: number;
+  /** RMS vorticity over the Q-core (Q >= qCrit and V > vMin) [1/s]. */
+  omegaRms: number;
+  /** Q-core volume [m3]. */
+  coreVolume: number;
+  coreCells: number;
+}
+
+/** Monitors parsed from a solver log (`monitors` of the run log payload). */
+export interface RunMonitors {
+  pressureDrop: PressureDropSample[];
+  criterion: CriterionProgress | null;
+  vortex: VortexMetricsSample[];
+}
+
+/** `POST /projects/:id/criteria/vortex` response. */
+export interface VortexOnDemandResponse {
+  vortex: VortexMetricsSample;
+}
+
+// ---------------------------------------------------------------------------
 // Chamber Creation (standalone /chamber page).
 //
 // Three empirical inputs (X1, X2, X3) drive twelve geometry parameters through
@@ -3353,6 +3537,9 @@ export const SERVER_ERROR_CODES = [
   'MESH_IN_PROGRESS',
   'MESHING_NOT_MESHED',
   'RUN_NOT_FOUND',
+  'CRITERIA_INVALID',
+  'NO_RESULTS',
+  'POSTPROCESS_FAILED',
   'NO_STL',
   'INVALID_STL',
   'PAYLOAD_TOO_LARGE',

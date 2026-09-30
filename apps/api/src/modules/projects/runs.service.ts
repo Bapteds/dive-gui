@@ -21,6 +21,7 @@ import {
   SOLVER_IDS,
   isTerminalRunStatus,
   type ResidualSample,
+  type RunMonitors,
   type RunStatus,
   type SolverId,
 } from '@dive/shared';
@@ -43,7 +44,9 @@ import { renderDecomposeParDict } from '../../lib/openfoamCase';
 import { coreBudget } from '../../lib/cores';
 import { appendRunLog, ensureRunDir, readRunLog, runLogAbsolute } from '../../lib/runStorage';
 import { downsampleResiduals, parseResiduals } from '../../lib/residualParser';
+import { parseMonitors } from '../../lib/monitorParser';
 import { computeRunnable } from './files.service';
+import { installCriteriaForRun } from './criteria.service';
 import { assertProjectVisible, type Viewer } from './projects.service';
 import type { StartRunInput } from './runs.schemas';
 
@@ -61,12 +64,16 @@ export interface PublicRun {
   createdAt: string;
 }
 
-/** Catch-up payload for the run log: the run, its residual series, and a log tail. */
+/**
+ * Catch-up payload for the run log: the run, its residual series, a log tail,
+ * and the WS-G monitors (pressure drop, criterion progress, vortex metrics).
+ */
 export interface RunLogPayload {
   run: PublicRun;
   series: ResidualSample[];
   logTail: string;
   logBytes: number;
+  monitors: RunMonitors;
 }
 
 /**
@@ -175,8 +182,11 @@ async function requestGracefulStop(projectId: string): Promise<void> {
   if (next !== content) await writeCaseFile(projectId, 'system/controlDict', next);
 }
 
-/** Classify a finished process into a terminal status from its exit + log tail. */
-function classifyExit(
+/**
+ * Classify a finished process into a terminal status from its exit + log tail.
+ * Exported for the unit tests (runs.test.ts).
+ */
+export function classifyExit(
   exit: StreamExit,
   wasStopped: boolean,
   log: string,
@@ -207,6 +217,10 @@ function classifyExit(
     return { status: 'failed', reason: 'Solver stopped on a fatal error. See the log.' };
   }
   if (exit.exitCode === 0) {
+    // A DIVE pressure-drop function object (WS-G) stopped the run with writeAndEnd.
+    if (parsed.convergedBy === 'simplePDrop' || parsed.convergedBy === 'robust') {
+      return { status: 'converged', reason: `Pressure drop converged (${parsed.convergedBy}).` };
+    }
     return parsed.converged
       ? { status: 'converged', reason: null }
       : { status: 'completed', reason: 'Reached endTime without meeting the convergence tolerance' };
@@ -425,6 +439,11 @@ export async function startRun(
   // once and exiting after a single iteration.
   await clearGracefulStop(projectId);
   await ensureRunTimeModifiable(projectId);
+  // Convergence criteria + vortex metrics (WS-G): re-install the function objects
+  // and the controlDict includes, which a scaffold or solver change may have
+  // dropped. A saved patch that no longer exists fails the start (422
+  // CRITERIA_INVALID) rather than running without the chosen criterion.
+  await installCriteriaForRun(projectId);
 
   // Resolve the requested cores and enforce the GLOBAL core budget: the sum of all
   // active runs' cores (across every project) plus this request must fit, so two
@@ -562,7 +581,9 @@ export async function getRunLog(
   const logTail =
     content.length > LOG_TAIL_CHARS ? content.slice(content.length - LOG_TAIL_CHARS) : content;
 
-  return { run: toPublicRun(run), series, logTail, logBytes: size };
+  const monitors = parseMonitors(content);
+
+  return { run: toPublicRun(run), series, logTail, logBytes: size, monitors };
 }
 
 /**
