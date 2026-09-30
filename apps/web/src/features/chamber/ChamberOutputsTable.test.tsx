@@ -245,6 +245,94 @@ describe('ChamberOutputsTable', () => {
       expect(screen.getByText(/0\.43 m² at 219°/)).toBeInTheDocument();
     });
 
+    describe('Length Min / Max / Exact (spec 2026-09-30-spiral-length)', () => {
+      const lengthRow = () => screen.getByText('Length').closest('tr')!;
+
+      it('makes the Length row editable while the other derived rows stay read-only', () => {
+        const onLengthChange = vi.fn();
+        render(
+          <ChamberOutputsTable
+            outputs={applyChamberSpiralToOutputs(OUTPUTS, null)}
+            constraints={{}}
+            onConstraintChange={() => {}}
+            spiral={{ on: true, summary: null, length: {}, onLengthChange }}
+          />,
+        );
+        fireEvent.change(screen.getByLabelText('Length minimum'), { target: { value: '5000' } });
+        expect(onLengthChange).toHaveBeenCalledWith('min', 5000);
+        fireEvent.change(screen.getByLabelText('Length maximum'), { target: { value: '6000' } });
+        expect(onLengthChange).toHaveBeenCalledWith('max', 6000);
+        fireEvent.change(screen.getByLabelText('Length exact'), { target: { value: '5500' } });
+        expect(onLengthChange).toHaveBeenCalledWith('exact', 5500);
+        for (const label of ['B1', 'LT', 'LF1', 'BF1', 'LF2', 'BF2']) {
+          expect(screen.queryByLabelText(`${label} minimum`)).toBeNull();
+          expect(screen.queryByLabelText(`${label} maximum`)).toBeNull();
+          expect(screen.queryByLabelText(`${label} exact`)).toBeNull();
+        }
+        expect(within(lengthRow()).getByText('from spiral')).toBeInTheDocument();
+      });
+
+      it('shows the typed values and flags an inverted Length range', () => {
+        render(
+          <ChamberOutputsTable
+            outputs={applyChamberSpiralToOutputs(OUTPUTS, null)}
+            constraints={{}}
+            onConstraintChange={() => {}}
+            spiral={{ on: true, summary: null, length: { min: 7000, max: 6000 }, onLengthChange: () => {} }}
+          />,
+        );
+        expect(screen.getByLabelText('Length minimum')).toHaveValue(7000);
+        expect(screen.getByLabelText('Length maximum')).toHaveValue(6000);
+        expect(within(lengthRow()).getByText('! min>max')).toBeInTheDocument();
+      });
+
+      it('reports an extended inlet channel and a binding Length Max after Generate', () => {
+        const extended = {
+          ...SUMMARY,
+          lengthMm: 5000,
+          lengthBinding: false,
+          inletExtensionMm: 663.36,
+          boxMm: { ...SUMMARY.boxMm, length: 5000 },
+        };
+        const { unmount } = render(
+          <ChamberOutputsTable
+            outputs={applyChamberSpiralToOutputs(OUTPUTS, extended.boxMm)}
+            constraints={{}}
+            onConstraintChange={() => {}}
+            spiral={{ on: true, summary: extended, length: { min: 5000 }, onLengthChange: () => {} }}
+          />,
+        );
+        expect(lengthRow()).toHaveTextContent('5,000');
+        expect(within(lengthRow()).getByText('raised to min')).toBeInTheDocument();
+        expect(screen.getByText(/inlet channel extended by 663 mm/)).toBeInTheDocument();
+        unmount();
+
+        const bound = { ...SUMMARY, lengthMm: 4300, lengthBinding: true, inletExtensionMm: 0 };
+        render(
+          <ChamberOutputsTable
+            outputs={applyChamberSpiralToOutputs(OUTPUTS, SUMMARY.boxMm)}
+            constraints={{}}
+            onConstraintChange={() => {}}
+            spiral={{ on: true, summary: bound, length: { max: 4300 }, onLengthChange: () => {} }}
+          />,
+        );
+        expect(within(lengthRow()).getByText('capped at max')).toBeInTheDocument();
+        expect(screen.getByText(/limited by the Length Max/)).toBeInTheDocument();
+      });
+
+      it('reads "set exact" with a Length Exact', () => {
+        render(
+          <ChamberOutputsTable
+            outputs={applyChamberSpiralToOutputs(OUTPUTS, SUMMARY.boxMm)}
+            constraints={{}}
+            onConstraintChange={() => {}}
+            spiral={{ on: true, summary: SUMMARY, length: { exact: 4400 }, onLengthChange: () => {} }}
+          />,
+        );
+        expect(within(lengthRow()).getByText('set exact')).toBeInTheDocument();
+      });
+    });
+
     it('has no Length row and no spiral note while the spiral is off', () => {
       render(
         <ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />,

@@ -93,6 +93,27 @@ describe('chamber saves', () => {
     expect(created.body.save.snapshot.vaneCount).toBe(12);
   });
 
+  it('keeps the semi-spiral Length Min / Max / Exact in the snapshot', async () => {
+    const user = await createTestUser();
+    const snapshot = {
+      ...SNAPSHOT,
+      semiSpiral: true,
+      feetEnabled: false,
+      spiralLength: { min: 5000, max: 6000 },
+    };
+    const created = await request(app)
+      .post('/api/v1/chamber/saves')
+      .set('Authorization', authHeader(user))
+      .send({ name: 'Long spiral', snapshot })
+      .expect(201);
+    expect(created.body.save.snapshot.spiralLength).toEqual({ min: 5000, max: 6000 });
+    await request(app)
+      .post('/api/v1/chamber/saves')
+      .set('Authorization', authHeader(user))
+      .send({ name: 'Bad length', snapshot: { ...snapshot, spiralLength: { max: -1 } } })
+      .expect(422);
+  });
+
   it('refuses a taken name with 409 (create and rename)', async () => {
     const user = await createTestUser();
     const auth = authHeader(user);

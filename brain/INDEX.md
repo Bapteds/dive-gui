@@ -18,7 +18,6 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `eslint.config.js` : ESLint 9 "flat" configuration of the monorepo via `tseslint.config`. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package-lock.json` : npm lockfile for the whole monorepo (workspaces), used by `npm ci` in CI and in production. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package.json` : root of the `dive-turbinen` workspace (private, ESM, `engines.node >=20`). · [root-shared-mcp](codemap/root-shared-mcp.md)
-- `tools.tar` : **(undocumented: add a section in brain/codemap)**
 - `tsconfig.base.json` : Common TypeScript base: `target ES2022`, `strict`, `esModuleInterop`, `skipLibCheck`, `forceConsistentCasingInFileNames`, `resolveJsonModule`, `noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch`. · [root-shared-mcp](codemap/root-shared-mcp.md)
 
 ## `.claude`
@@ -871,6 +870,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `brain/specs/2026-09-29-vane-pocket-runner-case-design.md` : Guide-vane pocket robust to Runner case Ø close to or below LE Ø : Area: python (`apps/api/scripts/buildChamber.py`), shared + API (early refusal), tests
 - `brain/specs/2026-09-30-free-surface-tool-design.md` : Free-surface (lid iteration) tool (WS-I) — design
 - `brain/specs/2026-09-30-solver-convergence-vorticity-design.md` : Solver convergence criteria + vortex metrics (WS-G) — design
+- `brain/specs/2026-09-30-spiral-length-design.md` : Semi-spiral casing: editable Length (Min / Max / Exact)
 
 ## `documents`
 

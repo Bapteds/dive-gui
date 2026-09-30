@@ -8,6 +8,8 @@ import {
   chamberFormSchema,
   chamberInputToConstraints,
   chamberInputToFormValues,
+  chamberInputToSpiralLength,
+  chamberSpiralLengthBody,
   computeChamberAutoDims,
   semiSpiralToggle,
   type ChamberFormValues,
@@ -461,6 +463,29 @@ describe('old saves with BF constraints or BF relations', () => {
       }),
     ).toEqual({ chamferLength1: { exact: 1200 } });
     expect(chamberInputToConstraints(base)).toEqual({});
+  });
+
+  it('restores the semi-spiral Length Min / Max / Exact (empty for old saves)', () => {
+    expect(chamberInputToSpiralLength({ ...base, spiralLength: { min: 5000, max: 6000 } })).toEqual({
+      min: 5000,
+      max: 6000,
+    });
+    expect(chamberInputToSpiralLength(base)).toEqual({});
+  });
+});
+
+describe('chamberSpiralLengthBody (spec 2026-09-30-spiral-length)', () => {
+  it('sends the Length constraint only with the spiral on and a value typed', () => {
+    expect(chamberSpiralLengthBody(true, { min: 5000 })).toEqual({ min: 5000 });
+    expect(chamberSpiralLengthBody(true, {})).toBeUndefined();
+    expect(chamberSpiralLengthBody(false, { max: 6000 })).toBeUndefined();
+  });
+
+  it('keeps an old body and one with an empty Length on the same comparison key', () => {
+    const body = { x1: 1450, x2: 7.85, x3: 8, semiSpiral: true };
+    expect(chamberBodyKey({ ...body, spiralLength: chamberSpiralLengthBody(true, {}) })).toBe(
+      chamberBodyKey(body),
+    );
   });
 });
 

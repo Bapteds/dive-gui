@@ -18,6 +18,8 @@ import {
   chamberSpiralVelocityOf,
   chamberSpiralVelocityRefusal,
   chamberSpiralModelInput,
+  chamberSpiralLengthLimits,
+  chamberSpiralExtendInlet,
   CHAMBER_GRID_MM,
   computeChamberGeneratorDims,
   blankGeneratorHeightRefusal,
@@ -727,5 +729,73 @@ describe('corner chamfers always at 45° (BF = LF)', () => {
     expect(keys).not.toContain('chamferWidth1');
     expect(keys).not.toContain('chamferWidth2');
     expect(keys).toContain('chamferLength2');
+  });
+});
+
+describe('semi-spiral Length Min / Max / Exact (spec 2026-09-30-spiral-length)', () => {
+  const SPIRAL_BASE = { ...BASE, semiSpiral: true };
+  // The stepped-spiral fixture (metres): length = 2.2 - (-2.13664) = 4.33664 m.
+  const VERTICES = [
+    { id: 'V0', x: -2.7, y: -2.13664 },
+    { id: 'V1', x: -2.7, y: 0.75 },
+    { id: 'V2', x: -1.3, y: 2.2 },
+    { id: 'V3', x: 0.55, y: 2.2 },
+    { id: 'V4', x: 1.7, y: 1.0 },
+    { id: 'V5', x: 1.7, y: 0.15 },
+    { id: 'V6', x: 1.492759, y: -0.54332 },
+    { id: 'V7', x: 1.492759, y: -0.99332 },
+    { id: 'V8', x: 1.7, y: -1.68664 },
+    { id: 'V9', x: 1.7, y: -2.13664 },
+  ];
+
+  it('reads the limits only with the spiral on; Exact sets both; flags an inverted range', () => {
+    const none = { minMm: null, maxMm: null, inverted: false };
+    expect(chamberSpiralLengthLimits(SPIRAL_BASE)).toEqual(none);
+    expect(chamberSpiralLengthLimits({ ...BASE, spiralLength: { min: 5000, max: 6000 } })).toEqual(none);
+    expect(
+      chamberSpiralLengthLimits({ ...SPIRAL_BASE, spiralLength: { min: 5000, max: 6000 } }),
+    ).toEqual({ minMm: 5000, maxMm: 6000, inverted: false });
+    expect(chamberSpiralLengthLimits({ ...SPIRAL_BASE, spiralLength: { max: 6000 } })).toEqual({
+      minMm: null,
+      maxMm: 6000,
+      inverted: false,
+    });
+    // Exact wins over Min / Max, like every other row.
+    expect(
+      chamberSpiralLengthLimits({
+        ...SPIRAL_BASE,
+        spiralLength: { min: 9000, max: 1000, exact: 5500 },
+      }),
+    ).toEqual({ minMm: 5500, maxMm: 5500, inverted: false });
+    expect(
+      chamberSpiralLengthLimits({ ...SPIRAL_BASE, spiralLength: { min: 7000, max: 6000 } }),
+    ).toEqual({ minMm: 7000, maxMm: 6000, inverted: true });
+  });
+
+  it('passes a Length Max to the spiral tool only when one applies', () => {
+    const outputs = computeChamberOutputs(SPIRAL_BASE);
+    expect(chamberSpiralInputs(SPIRAL_BASE, outputs)).not.toHaveProperty('max_length');
+    expect(
+      chamberSpiralInputs({ ...SPIRAL_BASE, spiralLength: { min: 5000 } }, outputs),
+    ).not.toHaveProperty('max_length');
+    expect(
+      chamberSpiralInputs({ ...SPIRAL_BASE, spiralLength: { max: 6000 } }, outputs).max_length,
+    ).toBe(6);
+    expect(
+      chamberSpiralInputs({ ...SPIRAL_BASE, spiralLength: { exact: 5500 } }, outputs).max_length,
+    ).toBe(5.5);
+  });
+
+  it('extends the inlet channel (V0 and V9 only) up to the Length Min', () => {
+    const extended = chamberSpiralExtendInlet(VERTICES, 5000);
+    expect(extended.find((v) => v.id === 'V0')).toEqual({ id: 'V0', x: -2.7, y: -2.8 });
+    expect(extended.find((v) => v.id === 'V9')).toEqual({ id: 'V9', x: 1.7, y: -2.8 });
+    for (const id of ['V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8']) {
+      expect(extended.find((v) => v.id === id)).toEqual(VERTICES.find((v) => v.id === id));
+    }
+    expect(chamberSpiralBoxDims(extended).length).toBeCloseTo(5, 9);
+    // Already long enough (or no Min): the same vertices.
+    expect(chamberSpiralExtendInlet(VERTICES, 4000)).toBe(VERTICES);
+    expect(chamberSpiralExtendInlet(VERTICES, null)).toBe(VERTICES);
   });
 });

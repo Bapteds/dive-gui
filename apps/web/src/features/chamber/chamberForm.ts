@@ -299,6 +299,25 @@ export function chamberInputToConstraints(input: ChamberInput): NonNullable<Cham
   return constraints;
 }
 
+/**
+ * The semi-spiral Length Min / Max / Exact of a saved build snapshot (spec
+ * 2026-09-30-spiral-length); empty for saves made before it existed.
+ */
+export function chamberInputToSpiralLength(input: ChamberInput): ChamberConstraint {
+  return { ...(input.spiralLength ?? {}) };
+}
+
+/**
+ * The `spiralLength` field of a build body: sent only with the spiral on and a
+ * value typed, so every other body (and its comparison key) is unchanged.
+ */
+export function chamberSpiralLengthBody(
+  semiSpiral: boolean,
+  spiralLength: ChamberConstraint,
+): ChamberConstraint | undefined {
+  return semiSpiral && Object.keys(spiralLength).length > 0 ? { ...spiralLength } : undefined;
+}
+
 /** The auto (empirical) values shown as placeholders on the blank override fields. */
 export interface ChamberAutoDims {
   /** Runner case (first cylinder) Ø, mm. */

@@ -11,7 +11,8 @@ consumes the frozen vertices this script writes.
 
 Library use:
     from designSemiSpiral import design_semi_spiral
-    geom = design_semi_spiral(Q, c_flow, H_ch, D_LE, clearance, max_width, phi_start)
+    geom = design_semi_spiral(Q, c_flow, H_ch, D_LE, clearance, max_width, phi_start,
+                              max_length=None)
 
 The pieces are separate, individually testable functions (tool spec section 10):
     derived()          A(phi) and R_cl(phi), exactly as the design spreadsheet
@@ -25,9 +26,14 @@ CLI usage:
     python designSemiSpiral.py <in.json> <out.json>
 
     in.json holds {"Q", "c_flow", "H_ch", "D_LE", "clearance", "max_width",
-    "phi_start"} (m, m3/s, m/s, deg). out.json receives the geometry object of
-    tool spec section 7 plus a "warnings" list; it is written atomically
-    (<out>.tmp then os.replace).
+    "phi_start"} (m, m3/s, m/s, deg) and optionally "max_length" (m, the chamber's
+    Length Max, spec brain/specs/2026-09-30-spiral-length-design.md). out.json
+    receives the geometry object of tool spec section 7 plus a "warnings" list;
+    it is written atomically (<out>.tmp then os.replace).
+
+Length limit: length = V2.y - V0.y (top of the chamfered end to the flat inlet
+end). Without max_length every step is exactly the historical one (same
+constraint list, same floating point, golden vertices unchanged).
 
 Dependencies: numpy, scipy (scipy imported inside the optimiser, so a usage
 error stays cheap).
@@ -66,6 +72,17 @@ FRAME = ("mirrored view: x=-r*cos(phi-phi_start), y=r*sin(phi-phi_start); "
          "origin = turbine axis; metres")
 
 
+class SpiralLengthInfeasibleError(ValueError):
+    """max_length admits no valid wall; carries a feasible length (m) to name."""
+
+    def __init__(self, max_length, shortest):
+        self.max_length = max_length
+        self.shortest = shortest
+        super().__init__(
+            "max_length %g m is infeasible; the shortest achievable length for these "
+            "inputs is %.3f m" % (max_length, shortest))
+
+
 class SpiralInputError(ValueError):
     """An input is out of its domain (the message names it)."""
 
@@ -86,11 +103,14 @@ class SpiralInfeasibleError(ValueError):
 
 
 # --- section 2: validation ---------------------------------------------------
-def validate(Q, c_flow, H_ch, D_LE, clearance, max_width, phi_start):
-    for name, v, cond in [("Q", Q, Q > 0), ("c_flow", c_flow, c_flow > 0), ("H_ch", H_ch, H_ch > 0),
+def validate(Q, c_flow, H_ch, D_LE, clearance, max_width, phi_start, max_length=None):
+    checks = [("Q", Q, Q > 0), ("c_flow", c_flow, c_flow > 0), ("H_ch", H_ch, H_ch > 0),
                           ("D_LE", D_LE, D_LE > 0), ("clearance", clearance, clearance >= 0),
                           ("max_width", max_width, max_width > 0),
-                          ("phi_start", phi_start, 0 < phi_start < 360)]:
+                          ("phi_start", phi_start, 0 < phi_start < 360)]
+    if max_length is not None:
+        checks.append(("max_length", max_length, max_length > 0))
+    for name, v, cond in checks:
         if not (isinstance(v, (int, float)) and math.isfinite(v)) or not cond:
             raise SpiralInputError("invalid input %s=%s" % (name, v))
 
@@ -161,23 +181,55 @@ class _Problem:
         return area_error(V, self.U[self.obj_mask], self.Ad[self.obj_mask], self.H_ch, self.r_in)
 
 
-def _shape_ok(V6, wmax, x_in, y1, x2, yt, x3, x4, y4, y5, y0=None):
-    """Section 6.1 ordering constraints as a list of values that must be >= 0."""
+def spiral_length(V6y, yt, y5):
+    """Length V2.y - V0.y of a wall: the foot is V9.y = V6.y - STUB + (V6.y - y5)
+    - STUB (L7 down, L8 = L6 mirrored, L9 down; section 6.4)."""
+    return yt - (2.0 * V6y - y5 - 2.0 * STUB)
+
+
+def _shape_ok(V6, wmax, x_in, y1, x2, yt, x3, x4, y4, y5, y0=None, *, max_length=None):
+    """Section 6.1 ordering constraints as a list of values that must be >= 0,
+    plus the length limit when max_length is set (appended last)."""
     c = [x2 - x_in, x3 - x2, x4 - x3, yt - y4, y4 - y5, y5 - V6[1], y1 - y5, x4 - V6[0],
          wmax - (x4 - x_in)]
     if y0 is not None:
         c.append(y1 - y0)
+    if max_length is not None:
+        c.append(max_length - spiral_length(V6[1], yt, y5))
     return c
 
 
+def _search_bounds(prob):
+    """The global-search box of the 9 wall parameters
+    (x_in, y0, y1, x2, yt, x3, x4, y4, y5)."""
+    V6 = prob.V6
+    tw = prob.true_wall
+    lo_x = tw[:, 0].min()
+    top = tw[:, 1].max()
+    return [(lo_x - 0.15, lo_x + 0.6), (-3.0, -0.3), (0.2, 2.0), (lo_x + 0.6, -1.0), (top - 0.6, top + 0.5),
+            (-0.3, 1.8), (max(V6[0] + 0.05, 1.2), tw[:, 0].max() + 0.3), (1.0, top), (V6[1] + 0.05, 0.8)]
+
+
+def shortest_length(prob):
+    """The shortest length the search box allows: yt, y4 and y5 at their lower
+    bounds (yt >= y4 >= y5). A Length Max below it is refused before optimising."""
+    b = _search_bounds(prob)
+    y5 = b[8][0]
+    y4 = max(b[7][0], y5)
+    yt = max(b[4][0], y4)
+    return spiral_length(prob.V6[1], yt, y5)
+
+
 # --- section 6.3: optimisation -------------------------------------------------
-def optimise_wall(prob, wmax, seed=SEED):
+def optimise_wall(prob, wmax, seed=SEED, max_length=None):
     """Global search + bounded polish + 0.05 m grid refinement of the 6-line
-    wall V0..V6 under the width limit wmax. Returns (V (7x2), worst error);
-    V0.y is a placeholder (set by build_nose)."""
+    wall V0..V6 under the width limit wmax (and the length limit max_length when
+    set). Returns (V (7x2), worst error); V0.y is a placeholder (set by build_nose)."""
     from scipy.optimize import differential_evolution, minimize
 
     V6 = prob.V6
+    # Only a set limit adds a keyword: without it every call is the historical one.
+    lkw = {} if max_length is None else {"max_length": max_length}
 
     def verts(p):
         x_in, y0, y1, x2, yt, x3, x4, y4, y5 = p
@@ -185,16 +237,13 @@ def optimise_wall(prob, wmax, seed=SEED):
 
     def penalty(p):
         x_in, y0, y1, x2, yt, x3, x4, y4, y5 = p
-        return sum(max(0.0, -g) for g in _shape_ok(V6, wmax, x_in, y1, x2, yt, x3, x4, y4, y5, y0)) * 120.0
+        return sum(max(0.0, -g) for g in _shape_ok(V6, wmax, x_in, y1, x2, yt, x3, x4, y4, y5, y0,
+                                                    **lkw)) * 120.0
 
     def obj(p):
         return prob.err(verts(p)) + penalty(p)
 
-    tw = prob.true_wall
-    lo_x = tw[:, 0].min()
-    top = tw[:, 1].max()
-    bounds = [(lo_x - 0.15, lo_x + 0.6), (-3.0, -0.3), (0.2, 2.0), (lo_x + 0.6, -1.0), (top - 0.6, top + 0.5),
-              (-0.3, 1.8), (max(V6[0] + 0.05, 1.2), tw[:, 0].max() + 0.3), (1.0, top), (V6[1] + 0.05, 0.8)]
+    bounds = _search_bounds(prob)
     res = differential_evolution(obj, bounds, seed=seed, maxiter=900, popsize=45, tol=1e-11,
                                  mutation=(0.4, 1.3), recombination=0.85, polish=False)
     p = res.x
@@ -213,11 +262,13 @@ def optimise_wall(prob, wmax, seed=SEED):
         return np.array([[x_in, y5 - 1.0], [x_in, y1], [x2, yt], [x3, yt], [x4, y4], [x4, y5], V6])
 
     def score(d):
-        if min(_shape_ok(V6, wmax, *d)) < -1e-9:
+        if min(_shape_ok(V6, wmax, *d, **lkw)) < -1e-9:
             return 9e9
         return prob.err(make(d))
 
     d = np.array([round(v / GRID) * GRID for v in [p[0], p[2], p[3], p[4], p[5], p[6], p[7], p[8]]])
+    if max_length is not None:
+        d = _fit_length(d, V6[1], max_length)
     best, bs = d.copy(), score(d)
     for _ in range(60):
         improved = False
@@ -233,6 +284,23 @@ def optimise_wall(prob, wmax, seed=SEED):
         if not improved:
             break
     return make(best), bs
+
+
+def _fit_length(d, V6y, max_length):
+    """Grid rounding can push a wall just over the length limit: lower yt by grid
+    steps (dragging y4, y5 down to keep yt >= y4 >= y5 >= V6.y) until it fits.
+    d = (x_in, y1, x2, yt, x3, x4, y4, y5)."""
+    d = d.copy()
+    for _ in range(400):
+        if spiral_length(V6y, d[3], d[7]) <= max_length + 1e-9:
+            break
+        yt = round((d[3] - GRID) / GRID) * GRID
+        if yt < V6y:
+            break
+        d[3] = yt
+        d[6] = min(d[6], yt)
+        d[7] = min(d[7], d[6])
+    return d
 
 
 # --- section 6.4: tongue / nose + foot ------------------------------------------
@@ -268,16 +336,33 @@ def width_warning(geom):
             % (round(geom["inputs"]["max_width"] * 1000.0), q["worst_area_error_m2"], q["at_phi_deg"]))
 
 
-def design_semi_spiral(Q, c_flow, H_ch, D_LE, clearance, max_width, phi_start, seed=SEED):
-    """7 inputs -> the geometry object of tool spec section 7 (plus "warnings").
+def design_semi_spiral(Q, c_flow, H_ch, D_LE, clearance, max_width, phi_start, seed=SEED,
+                       max_length=None):
+    """7 inputs (+ the optional length limit) -> the geometry object of tool spec
+    section 7 (plus "warnings").
 
     Raises SpiralInputError (bad input), SpiralDegenerateError (r_inner >=
-    R_cl(phi_start)) or SpiralInfeasibleError (no valid wall under max_width;
-    carries the natural width)."""
-    validate(Q, c_flow, H_ch, D_LE, clearance, max_width, phi_start)
+    R_cl(phi_start)), SpiralInfeasibleError (no valid wall under max_width;
+    carries the natural width) or SpiralLengthInfeasibleError (no valid wall
+    under max_length; carries a feasible length)."""
+    validate(Q, c_flow, H_ch, D_LE, clearance, max_width, phi_start, max_length)
     prob = _Problem(Q, c_flow, H_ch, D_LE, clearance, phi_start)
 
-    V, err = optimise_wall(prob, max_width, seed=seed)
+    if max_length is not None:
+        shortest = shortest_length(prob)
+        if max_length < shortest:
+            raise SpiralLengthInfeasibleError(max_length, shortest)
+        V, err = optimise_wall(prob, max_width, seed=seed, max_length=max_length)
+        if err > INFEASIBLE_ERR:
+            # Width or length? The width-only design decides; when it exists, its
+            # length is a feasible one to name.
+            Vw, err_w = optimise_wall(prob, max_width, seed=seed)
+            if err_w <= INFEASIBLE_ERR:
+                raise SpiralLengthInfeasibleError(
+                    max_length, spiral_length(prob.V6[1], Vw[2, 1], Vw[5, 1]))
+            V, err = Vw, err_w
+    else:
+        V, err = optimise_wall(prob, max_width, seed=seed)
     if err > INFEASIBLE_ERR:
         # Report the natural width (no width limit) so the caller can name the
         # lever. (The reference re-ran with its closure still bound to the old
@@ -295,6 +380,7 @@ def design_semi_spiral(Q, c_flow, H_ch, D_LE, clearance, max_width, phi_start, s
     e[-1] = 0.0
     k = int(np.nanargmax(np.abs(e)))
     width = V[:, 0].max() - V[:, 0].min()
+    length = float(V[2, 1] - V9[1])
 
     P = {"V%d" % i: V[i] for i in range(7)}
     P.update(V7=V7, V8=V8, V9=V9)
@@ -321,9 +407,25 @@ def design_semi_spiral(Q, c_flow, H_ch, D_LE, clearance, max_width, phi_start, s
                     "width_binding": bool(width >= max_width - 1e-6)},
         "algorithm": ALGORITHM,
     }
-    warning = width_warning(geom)
-    geom["warnings"] = [warning] if warning else []
+    if max_length is not None:
+        # Only with a length limit, so a result without one is unchanged.
+        geom["inputs"]["max_length"] = max_length
+        geom["dimensions"]["length"] = round(length, 6)
+        # yt and y5 sit on the 0.05 m grid, so the reachable lengths are 0.05 m
+        # apart: a wall within one grid step under the limit is held by it.
+        geom["quality"]["length_binding"] = bool(length > max_length - GRID - 1e-6)
+    geom["warnings"] = [w for w in (width_warning(geom), length_warning(geom)) if w]
     return geom
+
+
+def length_warning(geom):
+    """The chamber warning for a wall held back by the Length Max, else None."""
+    q = geom["quality"]
+    if not q.get("length_binding"):
+        return None
+    return ("The semi-spiral casing is limited by the Length Max (%d mm): worst cross-section "
+            "error %.2f m² at %.0f°. Raise the Length Max to reduce it."
+            % (round(geom["inputs"]["max_length"] * 1000.0), q["worst_area_error_m2"], q["at_phi_deg"]))
 
 
 def to_json(geom):
@@ -344,6 +446,13 @@ def infeasible_message(max_width, natural_width):
             % (round(max_width * 1000.0), natural_mm, natural_mm))
 
 
+def length_infeasible_message(max_length, shortest):
+    shortest_mm = int(math.ceil(shortest * 1000.0 - 1e-6))
+    return ("The semi-spiral casing does not fit in the Length Max (%d mm): the shortest "
+            "valid spiral for these inputs is %d mm long. Raise the Length Max to at least %d mm."
+            % (round(max_length * 1000.0), shortest_mm, shortest_mm))
+
+
 _INPUT_KEYS = ("Q", "c_flow", "H_ch", "D_LE", "clearance", "max_width", "phi_start")
 
 
@@ -361,7 +470,10 @@ def main(argv):
         missing = [k for k in _INPUT_KEYS if k not in raw]
         if missing:
             raise SpiralInputError("missing input %s" % ", ".join(missing))
-        geom = design_semi_spiral(**{k: raw[k] for k in _INPUT_KEYS})
+        kwargs = {k: raw[k] for k in _INPUT_KEYS}
+        if raw.get("max_length") is not None:
+            kwargs["max_length"] = raw["max_length"]
+        geom = design_semi_spiral(**kwargs)
         tmp = out_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             fh.write(to_json(geom))
@@ -371,6 +483,9 @@ def main(argv):
         return 1
     except SpiralInfeasibleError as exc:
         sys.stderr.write("KO: %s\n" % infeasible_message(exc.max_width, exc.natural_width))
+        return 1
+    except SpiralLengthInfeasibleError as exc:
+        sys.stderr.write("KO: %s\n" % length_infeasible_message(exc.max_length, exc.shortest))
         return 1
     except Exception as exc:  # noqa: BLE001 - one-shot CLI, report and fail
         sys.stderr.write("KO: The semi-spiral casing could not be designed (%s: %s).\n"

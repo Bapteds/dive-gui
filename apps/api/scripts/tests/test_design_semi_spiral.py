@@ -152,6 +152,61 @@ def test_width_warning_only_when_binding():
     assert dss.width_warning(geom) is None
 
 
+# --- Length Max (spec 2026-09-30-spiral-length) ---------------------------------------
+GOLDEN_A = dict(V0=(-4.05, -1.938178), V2=(-2.05, 3.0), V5=(2.0, -0.15), V6=(1.632246, -0.594089))
+
+
+def test_spiral_length_is_the_top_to_foot_distance():
+    """length = yt - foot_y, foot_y = V9.y = 2 V6.y - y5 - 2 STUB (golden case A)."""
+    g = GOLDEN_A
+    assert dss.spiral_length(g["V6"][1], g["V2"][1], g["V5"][1]) == pytest.approx(
+        g["V2"][1] - g["V0"][1], abs=1e-9)
+
+
+def test_length_limit_is_one_more_shape_constraint_only_when_set():
+    V6 = np.array(GOLDEN_A["V6"])
+    args = (V6, 10.0, -4.05, 0.95, -2.05, 3.0, 0.6, 2.0, 1.5, -0.15)
+    base = dss._shape_ok(*args)
+    assert len(base) == 9
+    assert dss._shape_ok(*args, max_length=None) == base
+    limited = dss._shape_ok(*args, max_length=4.9)
+    assert limited[:9] == base
+    assert limited[9] == pytest.approx(4.9 - 4.938178, abs=1e-6)
+
+
+def test_invalid_length_limit_is_refused_by_name():
+    with pytest.raises(dss.SpiralInputError, match="invalid input max_length="):
+        dss.design_semi_spiral(**SPEC_A, max_length=0)
+
+
+def test_length_limit_below_the_shortest_spiral_is_refused_before_optimising():
+    prob = dss._Problem(SPEC_A["Q"], SPEC_A["c_flow"], SPEC_A["H_ch"], SPEC_A["D_LE"],
+                        SPEC_A["clearance"], SPEC_A["phi_start"])
+    shortest = dss.shortest_length(prob)
+    assert 3.5 < shortest < 4.938178        # below case A's natural 4.94 m
+    with pytest.raises(dss.SpiralLengthInfeasibleError) as info:
+        dss.design_semi_spiral(**SPEC_A, max_length=shortest - 0.01)
+    assert info.value.max_length == pytest.approx(shortest - 0.01)
+    assert info.value.shortest == pytest.approx(shortest)
+
+
+def test_length_messages_name_the_lever():
+    msg = dss.length_infeasible_message(3.9, 4.0183)
+    assert msg == ("The semi-spiral casing does not fit in the Length Max (3900 mm): the shortest "
+                   "valid spiral for these inputs is 4019 mm long. Raise the Length Max to at "
+                   "least 4019 mm.")
+    geom = {"inputs": {"max_width": 6.15, "max_length": 4.5},
+            "quality": {"worst_area_error_m2": 0.8123, "at_phi_deg": 250.0, "width_binding": False,
+                        "length_binding": True}}
+    assert dss.length_warning(geom) == (
+        "The semi-spiral casing is limited by the Length Max (4500 mm): worst cross-section "
+        "error 0.81 m² at 250°. Raise the Length Max to reduce it.")
+    geom["quality"]["length_binding"] = False
+    assert dss.length_warning(geom) is None
+    del geom["quality"]["length_binding"]
+    assert dss.length_warning(geom) is None
+
+
 def _cli(*args):
     return subprocess.run([sys.executable, SCRIPT, *args], capture_output=True, text=True,
                           encoding="utf-8", timeout=600)
@@ -165,6 +220,11 @@ def test_cli_usage_and_refusals(tmp_path):
     proc = _cli(str(src), str(out))
     assert proc.returncode == 1
     assert proc.stderr.startswith("KO: Q_max is too small")
+    assert not out.exists()
+    src.write_text(json.dumps(dict(SPEC_A, max_length=1.0)))
+    proc = _cli(str(src), str(out))
+    assert proc.returncode == 1
+    assert proc.stderr.startswith("KO: The semi-spiral casing does not fit in the Length Max (1000 mm)")
     assert not out.exists()
     src.write_text(json.dumps({"Q": 12}))
     proc = _cli(str(src), str(out))
@@ -253,3 +313,33 @@ def test_narrow_width_builds_width_bound(designed):
     assert geom["quality"]["width_binding"] is True
     assert geom["quality"]["worst_area_error_m2"] == pytest.approx(1.23, abs=0.02)
     assert geom["warnings"] == [dss.width_warning(geom)]
+
+
+@pytest.mark.slow
+def test_length_limit_reshapes_the_spiral_and_warns(designed):
+    """A binding Length Max (spec 2026-09-30-spiral-length): length <= the limit,
+    a valid wall, the length warning, and the limit echoed in the result."""
+    inputs = dict(SPEC_A, max_length=4.5)
+    geom = designed(**inputs)
+    V = _vertices(geom)
+    length = V["V2"][1] - V["V0"][1]
+    assert length <= 4.5 + 1e-9
+    assert geom["dimensions"]["length"] == pytest.approx(length, abs=1e-6)
+    assert geom["inputs"]["max_length"] == 4.5
+    assert geom["quality"]["length_binding"] is True
+    assert geom["quality"]["worst_area_error_m2"] < dss.INFEASIBLE_ERR
+    assert V["V9"][1] == pytest.approx(V["V0"][1])
+    assert geom["warnings"] == [dss.length_warning(geom)]
+
+
+@pytest.mark.slow
+def test_a_loose_length_limit_is_not_binding(designed):
+    """A Length Max well above the natural length (4.94 m) does not bind: no flag,
+    no warning. (The vertices may still differ slightly from the unlimited run:
+    the global search visits, and penalises, walls longer than the limit.)"""
+    loose = designed(**dict(SPEC_A, max_length=6.0))
+    V = _vertices(loose)
+    assert V["V2"][1] - V["V0"][1] <= 6.0
+    assert loose["quality"]["length_binding"] is False
+    assert loose["quality"]["worst_area_error_m2"] <= CASES["A"][3]
+    assert loose["warnings"] == []

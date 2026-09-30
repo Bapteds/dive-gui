@@ -109,7 +109,9 @@ beforeEach(async () => {
 afterEach(() => setCommandRunner(null));
 
 /** A designSemiSpiral.py result (the stepped-spiral fixture vertices, metres). */
-function spiralGeometry(overrides: { widthBinding?: boolean; warnings?: string[] } = {}) {
+function spiralGeometry(
+  overrides: { widthBinding?: boolean; lengthBinding?: boolean; warnings?: string[] } = {},
+) {
   const pts: [string, number, number][] = [
     ['V0', -2.7, -2.13664],
     ['V1', -2.7, 0.75],
@@ -130,6 +132,7 @@ function spiralGeometry(overrides: { widthBinding?: boolean; warnings?: string[]
       worst_area_error_m2: 0.4309,
       at_phi_deg: 219.4,
       width_binding: overrides.widthBinding ?? false,
+      ...(overrides.lengthBinding !== undefined ? { length_binding: overrides.lengthBinding } : {}),
     },
     algorithm: 'ref-2026-09-22-seed5',
     warnings: overrides.warnings ?? [],
@@ -1469,6 +1472,134 @@ describe('Chamber Creation', () => {
       expect(res.body.error.code).toBe('CHAMBER_BUILD_FAILED');
       expect(res.body.error.message).toContain('semi-spiral');
       expect(res.body.error.message).toContain('CHAMBER_SPIRAL_TIMEOUT_MS');
+    });
+
+    describe('Length Min / Max / Exact (spec 2026-09-30-spiral-length)', () => {
+      const vertex = (p: Record<string, unknown>, id: string) =>
+        (p.spiral as { vertices: { id: string; x: number; y: number }[] }).vertices.find(
+          (v) => v.id === id,
+        )!;
+
+      it('passes a Length Max to the designer (and its cache key) only when one is set', async () => {
+        const spiralRuns: Record<string, unknown>[] = [];
+        const params: Record<string, unknown>[] = [];
+        setCommandRunner(withSpiralRunner(recordingBuilder(params), spiralRuns));
+        const auth = authHeader(await createTestUser());
+
+        const base = await post(auth, SPIRAL).expect(200);
+        expect(spiralRuns[0]).not.toHaveProperty('max_length');
+        // An empty Length constraint, or one on a build without the spiral, changes nothing.
+        const empty = await post(auth, { ...SPIRAL, spiralLength: {} }).expect(200);
+        expect(empty.body.hash).toBe(base.body.hash);
+        const plain = await post(auth, BUILD).expect(200);
+        const plainLength = await post(auth, { ...BUILD, spiralLength: { max: 3000 } }).expect(200);
+        expect(plainLength.body.hash).toBe(plain.body.hash);
+        expect(spiralRuns).toHaveLength(1);
+
+        const limited = await post(auth, { ...SPIRAL, spiralLength: { max: 4400 } }).expect(200);
+        expect(spiralRuns).toHaveLength(2); // a new spiral cache key
+        expect(spiralRuns[1]).toEqual({ ...spiralRuns[0], max_length: 4.4 });
+        expect(limited.body.hash).not.toBe(base.body.hash);
+        const p = params[params.length - 1];
+        expect((p.spiral as { inputs: object }).inputs).toEqual(spiralRuns[1]);
+        expect(limited.body.spiral).toMatchObject({ lengthBinding: false, inletExtensionMm: 0 });
+        expect(limited.body.spiral.lengthMm).toBeCloseTo(4336.64, 6);
+      });
+
+      it('extends the inlet channel to the Length Min without redesigning the spiral', async () => {
+        const spiralRuns: Record<string, unknown>[] = [];
+        const params: Record<string, unknown>[] = [];
+        setCommandRunner(withSpiralRunner(recordingBuilder(params), spiralRuns));
+        const auth = authHeader(await createTestUser());
+
+        const base = await post(auth, SPIRAL).expect(200);
+        // A Min the spiral already meets: nothing moves, same build.
+        const met = await post(auth, { ...SPIRAL, spiralLength: { min: 4000 } }).expect(200);
+        expect(met.body.hash).toBe(base.body.hash);
+
+        const res = await post(auth, { ...SPIRAL, spiralLength: { min: 5000 } }).expect(200);
+        expect(spiralRuns).toHaveLength(1); // Min alone never re-keys the spiral
+        expect(spiralRuns[0]).not.toHaveProperty('max_length');
+        expect(res.body.hash).not.toBe(base.body.hash);
+        const p = params[params.length - 1];
+        // V0 and V9 move out to V2.y - 5 m; the spiral and the nose do not move.
+        expect(vertex(p, 'V0')).toEqual({ id: 'V0', x: -2.7, y: -2.8 });
+        expect(vertex(p, 'V9')).toEqual({ id: 'V9', x: 1.7, y: -2.8 });
+        expect(vertex(p, 'V8')).toEqual({ id: 'V8', x: 1.7, y: -1.68664 });
+        expect(vertex(p, 'V1')).toEqual({ id: 'V1', x: -2.7, y: 0.75 });
+        expect(res.body.spiral.boxMm.length).toBeCloseTo(5000, 6);
+        expect(res.body.spiral.lengthMm).toBeCloseTo(5000, 6);
+        expect(res.body.spiral.inletExtensionMm).toBeCloseTo(663.36, 6);
+        expect(res.body.spiral.boxMm.distFromEnd).toBeCloseTo(2200, 6); // LT unchanged
+      });
+
+      it('treats an Exact as Max = Min = Exact', async () => {
+        const spiralRuns: Record<string, unknown>[] = [];
+        const params: Record<string, unknown>[] = [];
+        setCommandRunner(withSpiralRunner(recordingBuilder(params), spiralRuns));
+        const auth = authHeader(await createTestUser());
+        const res = await post(auth, {
+          ...SPIRAL,
+          spiralLength: { exact: 5000, min: 100, max: 90000 },
+        }).expect(200);
+        expect(spiralRuns[0].max_length).toBe(5);
+        expect(vertex(params[0], 'V0').y).toBe(-2.8);
+        expect(res.body.spiral.lengthMm).toBeCloseTo(5000, 6);
+      });
+
+      it('refuses an inverted Length range before the spiral step', async () => {
+        const spiralRuns: Record<string, unknown>[] = [];
+        setCommandRunner(withSpiralRunner(successRunner, spiralRuns));
+        const auth = authHeader(await createTestUser());
+        const res = await post(auth, { ...SPIRAL, spiralLength: { min: 5000, max: 4000 } }).expect(
+          422,
+        );
+        expect(res.body.error.code).toBe('VALIDATION_ERROR');
+        expect(res.body.error.message).toContain('Length: Min 5000 > Max 4000');
+        expect(spiralRuns).toHaveLength(0);
+        // The other derived rows stay exempt (still built).
+        await post(auth, {
+          ...SPIRAL,
+          constraints: { chamferLength1: { min: 900, max: 100 } },
+        }).expect(200);
+      });
+
+      it('carries the length-limit flag and warning of the designer', async () => {
+        const warning =
+          'The semi-spiral casing is limited by the Length Max (4300 mm): worst cross-section error 0.95 m² at 250°. Raise the Length Max to reduce it.';
+        const params: Record<string, unknown>[] = [];
+        setCommandRunner(
+          withSpiralRunner(
+            recordingBuilder(params),
+            [],
+            spiralGeometry({ lengthBinding: true, warnings: [warning] }),
+          ),
+        );
+        const auth = authHeader(await createTestUser());
+        const res = await post(auth, { ...SPIRAL, spiralLength: { max: 4300 } }).expect(200);
+        expect(res.body.warnings).toEqual([warning]);
+        expect(res.body.spiral.lengthBinding).toBe(true);
+        expect((params[0].spiral as { quality: object }).quality).toEqual({
+          worst_area_error_m2: 0.4309,
+          at_phi_deg: 219.4,
+          width_binding: false,
+          length_binding: true,
+        });
+      });
+
+      it('shows the Length Max refusal alone', async () => {
+        const ko =
+          'The semi-spiral casing does not fit in the Length Max (3000 mm): the shortest valid spiral for these inputs is 4019 mm long. Raise the Length Max to at least 4019 mm.';
+        setCommandRunner(async (spec) =>
+          spec.args[0]?.endsWith('designSemiSpiral.py')
+            ? { ...ok(spec), exitCode: 1, stdout: '', stderr: `KO: ${ko}\n` }
+            : successRunner(spec),
+        );
+        const auth = authHeader(await createTestUser());
+        const res = await post(auth, { ...SPIRAL, spiralLength: { max: 3000 } }).expect(422);
+        expect(res.body.error.code).toBe('CHAMBER_REFUSED');
+        expect(res.body.error.message).toBe(`Cannot build the chamber. ${ko}`);
+      });
     });
 
     it('runs one optimisation for concurrent builds sharing a spiral (per-spiral lock)', async () => {
