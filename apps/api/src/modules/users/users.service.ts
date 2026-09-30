@@ -12,6 +12,7 @@ import { prisma } from '../../lib/prisma';
 import { removeTemplateStorage } from '../../lib/templateStorage';
 import { removeProjectStorage } from '../../lib/caseStorage';
 import { stopProjectRuns } from '../projects/runs.service';
+import { cleanupStudies } from '../studies/studies.service';
 import { toPublicUser, type PublicUser } from '../../lib/serializeUser';
 import type { CreateUserInput, UpdateUserInput } from './users.schemas';
 
@@ -241,6 +242,11 @@ export async function deleteUser(id: string, actor: Actor): Promise<void> {
 
   // Stop live solvers BEFORE the run rows vanish with the cascade.
   await Promise.all(ownedProjects.map((p) => stopProjectRuns(p.id).catch(() => undefined)));
+  // Optimisation studies owned by the user or living in their projects cascade
+  // too: pause the running one and drop their meshing sessions + archives.
+  await cleanupStudies({ OR: [{ ownerId: id }, { project: { ownerId: id } }] }).catch(
+    () => undefined,
+  );
 
   await prisma.user.delete({ where: { id } });
 

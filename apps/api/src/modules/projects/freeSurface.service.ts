@@ -74,6 +74,7 @@ import {
 } from '../../lib/freeSurfaceStorage';
 import {
   awaitMeshingTerminal,
+  clearCaseSolution,
   meshSessionWithSurfaces,
   sendSessionToCase,
   sessionMeshingConfig,
@@ -81,6 +82,7 @@ import {
 } from '../../lib/pipelineStages';
 import { isSessionRunning, stopMeshingRun } from '../meshing/meshing.service';
 import { stopRun } from './runs.service';
+import { isStudyActiveForProject, studyInProgressError } from '../studies/studyRegistry';
 import { assertProjectVisible, type Viewer } from './projects.service';
 import type { FreeSurfaceSelectionQuery, FreeSurfaceStartInput } from './freeSurface.schemas';
 
@@ -415,6 +417,8 @@ export async function startFreeSurfaceJob(
       'A free-surface job is already running for this project.',
     );
   }
+  // An optimisation study running on this project owns its case (WS-H §0 A7).
+  if (isStudyActiveForProject(projectId)) throw studyInProgressError();
   const running = await prisma.run.count({
     where: { projectId, status: { in: [...ACTIVE_RUN_STATUSES] } },
   });
@@ -650,24 +654,6 @@ function statArgs(settings: FreeSurfaceSettings): string[] {
   if (settings.datumY !== null && settings.datumY !== undefined)
     args.push(`--datum-y=${settings.datumY}`);
   return args;
-}
-
-/** Remove the previous solution from the case (the kit's Allrun cleanup). */
-async function cleanCaseSolution(projectId: string): Promise<void> {
-  const caseDir = caseDirAbsolute(projectId);
-  for (const t of await listTimeDirs(caseDir)) {
-    if (Number(t) > 0) await deleteCaseDir(projectId, t).catch(() => undefined);
-  }
-  let names: string[] = [];
-  try {
-    names = await fs.readdir(caseDir);
-  } catch {
-    /* empty case */
-  }
-  for (const name of names) {
-    if (/^processor\d+$/.test(name)) await deleteCaseDir(projectId, name).catch(() => undefined);
-  }
-  await deleteCaseDir(projectId, 'postProcessing').catch(() => undefined);
 }
 
 async function runJob(
@@ -923,7 +909,7 @@ async function runJob(
       // --- transferring: WS-F hand-off to the case, then drop the stale solution
       await enter('transferring', k);
       await sendSessionToCase(entry.viewer, projectId, meshed.sessionId);
-      await cleanCaseSolution(projectId);
+      await clearCaseSolution(projectId);
 
       // --- solving
       await enter('solving', k);

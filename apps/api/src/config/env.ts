@@ -214,6 +214,16 @@ const envSchema = z
     // Wall-clock timeout (ms) of one kit step (postProcess lid export, surface,
     // fit, figure). The mesh and the solve have their own limits.
     LIDKIT_TIMEOUT_MS: z.coerce.number().int().positive().default(900000),
+    // --- Chamber optimisation loop (project tab, WS-H) -------------------------
+    // Interpreter of scripts/optimiseSuggest.py (needs optuna). Empty => the
+    // MESH_PYTHON_BIN value.
+    OPTIM_PYTHON_BIN: z.string().default(''),
+    // Absolute path to the suggestion script. Empty => apps/api/scripts/
+    // optimiseSuggest.py bundled with the API (resolved relative to the module).
+    OPTIMISE_SUGGEST_SCRIPT: z.string().default(''),
+    // Wall-clock timeout (ms) of one suggestion (rebuilds the Optuna study from
+    // the evaluation history, then asks for one design).
+    OPTIM_SUGGEST_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
     // --- Draft-tube inlet profile (boundary-condition overlay) ----------------
     // The DraftTube object type maps a runner-exit velocity profile onto its inlet
     // via timeVaryingMappedFixedValue, which reads constant/boundaryData (NOT a CSV

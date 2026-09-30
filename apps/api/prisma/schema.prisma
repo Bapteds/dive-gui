@@ -43,6 +43,7 @@ model User {
   collaboratingOn Project[] @relation("ProjectCollaborators")
   templates       Template[] @relation("TemplateOwner")
   chamberSaves    ChamberSave[] @relation("ChamberSaveOwner")
+  studies         Study[]       @relation("StudyOwner")
 }
 
 /// A project owned by a user, optionally shared with collaborators. This base
@@ -56,6 +57,7 @@ model Project {
   owner         User     @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   collaborators User[]   @relation("ProjectCollaborators")
   runs          Run[]
+  studies       Study[]
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -149,4 +151,84 @@ model AuditLog {
   @@index([createdAt])
   @@index([actorId])
   @@index([targetId])
+}
+
+/// One chamber optimisation study (WS-H, spec 2026-09-29-optimisation-loop-design
+/// §0): a base design, a search space around it, the objective settings and the
+/// pipeline settings. It runs in the project it was created in (its work project:
+/// each evaluation replaces that project's case mesh and solves there). JSON
+/// columns are Strings (SQLite), validated at the app layer; `status`, `mode`,
+/// `sampler` and `vortexMetric` mirror the unions of @dive/shared.
+model Study {
+  id               String       @id @default(cuid())
+  name             String // 1..120, not unique
+  ownerId          String
+  owner            User         @relation("StudyOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  projectId        String // the work project (the one the study was created in)
+  project          Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  baseSource       String // 'save' | 'meshOrigin'
+  baseLabel        String // the save name, or the mesh origin's session name
+  baseInput        String // JSON ChamberInput (validated by chamberBuildSchema), incl. constraints
+  paramSpace       String // JSON ParamRange[] (50 mm grid)
+  bandPct          Float        @default(10)
+  objectives       String       @default("[{\"id\":\"headLoss\",\"sense\":\"min\"},{\"id\":\"vortex\",\"sense\":\"min\"}]")
+  weights          String       @default("{\"headLoss\":0.5,\"vortex\":0.5}") // JSON StudyWeights
+  mode             String       @default("weighted") // 'weighted' | 'pareto'
+  sampler          String       @default("tpe") // 'tpe' | 'nsga2' | 'random'
+  seed             Int?
+  vortexMetric     String       @default("maskedQVolume") // 'maskedQVolume' | 'omegaRms'
+  maxEvaluations   Int          @default(30)
+  maxDurationHours Float? // wall-clock budget of the evaluations (paused time excluded)
+  keepBest         Int          @default(3) // meshing sessions kept: best K ...
+  keepLast         Int          @default(2) // ... and last N (others deleted once archived)
+  meshingSourceId  String // reference meshing session copied for each design (copyFrom)
+  solverSetup      String       @default("{\"cores\":1}") // JSON { cores }
+  criteria         String? // JSON CfdCriteriaSettings snapshot, taken at the first start
+  normalisation    String? // JSON { headLoss, vortex } of the baseline evaluation
+  status           String       @default("draft") // draft | running | pausing | paused | completed | failed
+  reason           String?
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  evaluations      Evaluation[]
+
+  @@index([ownerId])
+  @@index([projectId])
+  @@index([status])
+}
+
+/// One design evaluated by a study (one trial). Index 0 is the baseline (the
+/// unmodified base design), then 1..n. An interrupted evaluation is re-run in
+/// place (same row) when the study resumes.
+model Evaluation {
+  id                 String    @id @default(cuid())
+  studyId            String
+  study              Study     @relation(fields: [studyId], references: [id], onDelete: Cascade)
+  index              Int
+  designParams       String // JSON { width: 4150, ... } (mm)
+  chamberHash        String?
+  meshingSessionId   String?
+  meshingSessionName String?
+  sessionDeleted     Boolean   @default(false) // disk hygiene removed the session
+  projectId          String? // = study.projectId (kept for per-evaluation projects later)
+  runId              String? // Run row of the solve (no FK: runs are purged with the project)
+  dp0                Float? // Pa, mean over the criterion window
+  headLoss           Float? // m
+  maskedQVolume      Float? // m3
+  omegaRms           Float? // 1/s
+  objective          Float? // weighted sum (normalised), null in pareto mode
+  status             String    @default("pending") // pending | building | meshing | transferring | configuring | solving | done | infeasible | failed | interrupted
+  stage              String? // last stage reached (failed / interrupted)
+  refusalReason      String? // builder / validation / checkMesh / failure message
+  runStatus          String? // converged | completed | diverged | failed | stopped
+  budgetHit          Boolean   @default(false) // the solve ended on the time budget (completed)
+  warnings           String? // JSON string[]
+  startedAt          DateTime?
+  finishedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@unique([studyId, index])
+  @@index([studyId, status])
 }

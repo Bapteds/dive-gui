@@ -40,3 +40,7 @@ scipy>=1.10
 # LIDKIT_PYTHON_BIN (default CHAMBER_PYTHON_BIN). matplotlib is OPTIONAL: without
 # it the fit / post figures are skipped with a note in the job.
 matplotlib>=3.7
+
+# Chamber optimisation loop (optimiseSuggest.py, WS-H): Optuna ask / tell, run
+# under OPTIM_PYTHON_BIN (default MESH_PYTHON_BIN). >= 3.0 for constraints_func.
+optuna>=3.0

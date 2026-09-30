@@ -7,8 +7,11 @@
 // The awaits rely on the completion hooks of the run and meshing services
 // (awaitRunTerminal is resolved by runs.service.finalizeRun, awaitMeshingTerminal
 // by meshing.service's run finalizer), with a row / status.json poll fallback.
+import { promises as fs } from 'node:fs';
 import type { MeshFromMeshingResult, MeshingConfig } from '@dive/shared';
 import { AppError } from './AppError';
+import { caseDirAbsolute, deleteCaseDir } from './caseStorage';
+import { listTimeDirs } from './lidkit';
 import { copySessionSetup, readConfig, readMeta, readRun, writeStl } from './meshingStorage';
 import {
   awaitMeshingTerminal as awaitMeshingRunTerminal,
@@ -88,6 +91,28 @@ export function sendSessionToCase(
   sessionId: string,
 ): Promise<MeshFromMeshingResult> {
   return importMeshFromMeshing(viewer, projectId, { sessionId, target: 'case' });
+}
+
+/**
+ * Remove the previous solution from the project's case (time directories > 0,
+ * processor*, postProcessing/: the lid kit's Allrun cleanup), so the next solve
+ * of a freshly transferred mesh starts from 0/. Best-effort, never throws.
+ */
+export async function clearCaseSolution(projectId: string): Promise<void> {
+  const caseDir = caseDirAbsolute(projectId);
+  for (const t of await listTimeDirs(caseDir)) {
+    if (Number(t) > 0) await deleteCaseDir(projectId, t).catch(() => undefined);
+  }
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(caseDir);
+  } catch {
+    /* empty case */
+  }
+  for (const name of names) {
+    if (/^processor\d+$/.test(name)) await deleteCaseDir(projectId, name).catch(() => undefined);
+  }
+  await deleteCaseDir(projectId, 'postProcessing').catch(() => undefined);
 }
 
 /**

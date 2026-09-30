@@ -119,6 +119,26 @@ import {
   saveCriteriaController,
 } from './criteria.controller';
 import { saveCriteriaSchema } from './criteria.schemas';
+import { studyLock } from '../studies/studyRegistry';
+import {
+  createStudyController,
+  deleteStudyController,
+  exportStudyCsvController,
+  getEvaluationController,
+  getStudyController,
+  listStudiesController,
+  resumeStudyController,
+  startStudyController,
+  stopStudyController,
+  studySetupController,
+  updateStudyController,
+} from '../studies/studies.controller';
+import {
+  createStudySchema,
+  evaluationParamSchema,
+  studyParamSchema,
+  updateStudySchema,
+} from '../studies/studies.schemas';
 import { cgnsNameQuerySchema, convertCgnsSchema } from './conversion.schemas';
 import {
   meshIdParamSchema,
@@ -198,12 +218,14 @@ export function createProjectsRouter(): Router {
     '/:id/files',
     validate({ params: projectIdParamSchema }),
     freeSurfaceLock(),
+    studyLock(),
     asyncHandler(resetCaseController),
   );
   router.post(
     '/:id/files/import',
     validate({ params: projectIdParamSchema }),
     freeSurfaceLock(),
+    studyLock(),
     parseCaseUpload,
     asyncHandler(importCaseFilesController),
   );
@@ -301,6 +323,7 @@ export function createProjectsRouter(): Router {
     '/:id/cgns/convert',
     validate({ params: projectIdParamSchema, body: convertCgnsSchema }),
     freeSurfaceLock(),
+    studyLock(),
     asyncHandler(convertCgnsController),
   );
 
@@ -334,6 +357,7 @@ export function createProjectsRouter(): Router {
     '/:id/meshes/merge',
     validate({ params: projectIdParamSchema, body: mergePlanSchema }),
     freeSurfaceLock(),
+    studyLock(),
     asyncHandler(mergeMeshesController),
   );
   // Disassemble: the applied-assembly record (or null). A static sub-path, so it is
@@ -447,6 +471,7 @@ export function createProjectsRouter(): Router {
     '/:id/mesh/from-meshing',
     validate({ params: projectIdParamSchema, body: meshFromMeshingSchema }),
     freeSurfaceLock((req) => (req.body as { target?: string }).target !== 'library'),
+    studyLock((req) => (req.body as { target?: string }).target !== 'library'),
     asyncHandler(meshFromMeshingController),
   );
   // "Boundary conditions" overlay: apply a component BC preset (Turbine / Pipe /
@@ -456,6 +481,7 @@ export function createProjectsRouter(): Router {
     '/:id/boundary-conditions/apply',
     validate({ params: projectIdParamSchema }),
     freeSurfaceLock(),
+    studyLock(),
     parseBoundaryUpload,
     asyncHandler(applyBoundaryConditionsController),
   );
@@ -475,6 +501,7 @@ export function createProjectsRouter(): Router {
     '/:id/mesh/backup/restore',
     validate({ params: projectIdParamSchema }),
     freeSurfaceLock(),
+    studyLock(),
     asyncHandler(restoreMeshBackupController),
   );
   // Where the case mesh came from (meshing hand-off, WS-I §4), or null.
@@ -494,6 +521,7 @@ export function createProjectsRouter(): Router {
   router.post(
     '/:id/free-surface',
     validate({ params: projectIdParamSchema, body: freeSurfaceStartSchema }),
+    studyLock(),
     asyncHandler(startFreeSurfaceController),
   );
   router.get(
@@ -566,6 +594,7 @@ export function createProjectsRouter(): Router {
     '/:id/runs',
     validate({ params: projectIdParamSchema, body: startRunSchema }),
     freeSurfaceLock(),
+    studyLock(),
     asyncHandler(startRunController),
   );
   router.get(
@@ -601,6 +630,65 @@ export function createProjectsRouter(): Router {
     '/:id/criteria/vortex',
     validate({ params: projectIdParamSchema }),
     asyncHandler(computeVortexController),
+  );
+
+  // Optimisation studies ("Optimisation" tab, WS-H): the study works in this
+  // project; while it runs, studyLock answers 409 STUDY_IN_PROGRESS on manual runs,
+  // case / mesh mutations and the free-surface start.
+  router.get(
+    '/:id/studies',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(listStudiesController),
+  );
+  router.get(
+    '/:id/studies/setup',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(studySetupController),
+  );
+  router.post(
+    '/:id/studies',
+    validate({ params: projectIdParamSchema, body: createStudySchema }),
+    asyncHandler(createStudyController),
+  );
+  router.get(
+    '/:id/studies/:studyId',
+    validate({ params: studyParamSchema }),
+    asyncHandler(getStudyController),
+  );
+  router.patch(
+    '/:id/studies/:studyId',
+    validate({ params: studyParamSchema, body: updateStudySchema }),
+    asyncHandler(updateStudyController),
+  );
+  router.post(
+    '/:id/studies/:studyId/start',
+    validate({ params: studyParamSchema }),
+    asyncHandler(startStudyController),
+  );
+  router.post(
+    '/:id/studies/:studyId/stop',
+    validate({ params: studyParamSchema }),
+    asyncHandler(stopStudyController),
+  );
+  router.post(
+    '/:id/studies/:studyId/resume',
+    validate({ params: studyParamSchema }),
+    asyncHandler(resumeStudyController),
+  );
+  router.delete(
+    '/:id/studies/:studyId',
+    validate({ params: studyParamSchema }),
+    asyncHandler(deleteStudyController),
+  );
+  router.get(
+    '/:id/studies/:studyId/evaluations/:index',
+    validate({ params: evaluationParamSchema }),
+    asyncHandler(getEvaluationController),
+  );
+  router.get(
+    '/:id/studies/:studyId/export.csv',
+    validate({ params: studyParamSchema }),
+    asyncHandler(exportStudyCsvController),
   );
 
   return router;

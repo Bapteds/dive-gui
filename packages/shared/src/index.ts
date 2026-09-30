@@ -3877,6 +3877,10 @@ export const SERVER_ERROR_CODES = [
   'RUN_IN_PROGRESS',
   'FREE_SURFACE_IN_PROGRESS',
   'FREE_SURFACE_NOT_READY',
+  'STUDY_IN_PROGRESS',
+  'STUDY_NOT_DRAFT',
+  'STUDY_NOT_PAUSED',
+  'CHAMBER_REFUSED',
   'MESH_IN_PROGRESS',
   'MESHING_NOT_MESHED',
   'RUN_NOT_FOUND',
@@ -3895,3 +3899,413 @@ export const SERVER_ERROR_CODES = [
   'RATE_LIMITED',
 ] as const;
 export type ServerErrorCode = (typeof SERVER_ERROR_CODES)[number];
+
+// ---------------------------------------------------------------------------
+// Chamber optimisation loop, WS-H (spec 2026-09-29-optimisation-loop-design,
+// amendment §0 of 2026-09-30): a study runs in a project (Optimisation tab),
+// evaluates chamber designs end to end (build → mesh → case → solve → metrics)
+// and asks Optuna for the next design.
+// ---------------------------------------------------------------------------
+
+/** Study lifecycle: draft → running → (pausing → paused → running …) → completed | failed. */
+export const STUDY_STATUSES = ['draft', 'running', 'pausing', 'paused', 'completed', 'failed'] as const;
+export type StudyStatus = (typeof STUDY_STATUSES)[number];
+
+/** Stages of one evaluation, persisted in `Evaluation.status` before each starts. */
+export const EVALUATION_STAGES = [
+  'building',
+  'meshing',
+  'transferring',
+  'configuring',
+  'solving',
+] as const;
+export type EvaluationStage = (typeof EVALUATION_STAGES)[number];
+
+/** Every evaluation status: pending, a stage, or a terminal outcome. */
+export const EVALUATION_STATUSES = [
+  'pending',
+  ...EVALUATION_STAGES,
+  'done',
+  'infeasible',
+  'failed',
+  'interrupted',
+] as const;
+export type EvaluationStatus = (typeof EVALUATION_STATUSES)[number];
+
+/** Evaluations the study budget counts (an interrupted one is re-run, not counted). */
+export const COUNTED_EVALUATION_STATUSES: readonly EvaluationStatus[] = [
+  'done',
+  'infeasible',
+  'failed',
+];
+
+/** Objective aggregation: weighted sum normalised by the baseline (default) or Pareto front. */
+export const STUDY_MODES = ['weighted', 'pareto'] as const;
+export type StudyMode = (typeof STUDY_MODES)[number];
+
+/** Optuna samplers offered (TPE default; NSGA-II for Pareto; random as a control). */
+export const STUDY_SAMPLERS = ['tpe', 'nsga2', 'random'] as const;
+export type StudySampler = (typeof STUDY_SAMPLERS)[number];
+
+/** WS-G vortex metric entering the objective (both are stored per evaluation). */
+export const STUDY_VORTEX_METRICS = ['maskedQVolume', 'omegaRms'] as const;
+export type StudyVortexMetric = (typeof STUDY_VORTEX_METRICS)[number];
+
+/** Objective weights of the weighted sum (normalised by the baseline values). */
+export interface StudyWeights {
+  headLoss: number;
+  vortex: number;
+}
+
+/** Defaults of a new study (spec §4-§6, §10). */
+export const STUDY_DEFAULTS: {
+  bandPct: number;
+  weights: StudyWeights;
+  mode: StudyMode;
+  sampler: StudySampler;
+  vortexMetric: StudyVortexMetric;
+  maxEvaluations: number;
+  keepBest: number;
+  keepLast: number;
+} = {
+  bandPct: 10,
+  weights: { headLoss: 0.5, vortex: 0.5 },
+  mode: 'weighted',
+  sampler: 'tpe',
+  vortexMetric: 'maskedQVolume',
+  maxEvaluations: 30,
+  keepBest: 3,
+  keepLast: 2,
+};
+
+/** Upper bound of `maxEvaluations`. */
+export const STUDY_MAX_EVALUATIONS = 500;
+
+/** One optimised parameter: its base value, its discrete range (mm, 50 mm grid) and why. */
+export interface ParamRange {
+  key: ChamberOutputKey;
+  label: string;
+  /** FINAL of the base design (mm), calculated or set. */
+  base: number;
+  /** Inclusive bounds on the grid (mm). */
+  min: number;
+  max: number;
+  /** Grid step (mm): CHAMBER_GRID_MM. */
+  step: number;
+  /** Band percentage used for this key. */
+  bandPct: number;
+  /** `table` when a Parameters-table Min / Max is tighter than the band. */
+  source: 'band' | 'table';
+}
+
+/** computeParamSpace result: the ranges, and a message per key that cannot be optimised. */
+export interface ParamSpaceResult {
+  ranges: ParamRange[];
+  errors: string[];
+}
+
+/** Is the relation of `spec` on for this input? Permanent ones always are. */
+function studyRelationOn(input: ChamberInput, spec: ChamberOutputSpec): boolean {
+  if (!spec.relation) return false;
+  if (spec.relation.permanent) return true;
+  return (
+    input.relationsMaster !== false && (input.relations?.[spec.key] ?? spec.relation.defaultOn)
+  );
+}
+
+/** Label of an output key. */
+function chamberOutputLabel(key: ChamberOutputKey): string {
+  return CHAMBER_OUTPUT_SPECS.find((s) => s.key === key)?.label ?? key;
+}
+
+/**
+ * The outputs a study may optimise for this base design: every output except the
+ * permanent identities (BF1 = LF1, BF2 = LF2) and, with the semi-spiral on, the
+ * rows the spiral derives.
+ */
+export function studyPickableKeys(base: ChamberInput): ChamberOutputKey[] {
+  return CHAMBER_OUTPUT_KEYS.filter(
+    (k) =>
+      !CHAMBER_PERMANENT_RELATION_KEYS.includes(k) &&
+      !(base.semiSpiral === true && CHAMBER_SPIRAL_DERIVED_KEYS.includes(k)),
+  );
+}
+
+/**
+ * The search space of a study (spec §4): for each picked key, base = the FINAL of
+ * the base design, range = [base·(1 − band), base·(1 + band)] intersected with the
+ * Parameters-table Min / Max of the base design, bounds snapped INWARD to the
+ * CHAMBER_GRID_MM grid. A key whose range holds no grid value, or that cannot be
+ * optimised, yields an error message instead of a range. Keys follow the table order.
+ */
+export function computeParamSpace(
+  base: ChamberInput,
+  keys: readonly ChamberOutputKey[],
+  bandPct: number,
+  overrides: Partial<Record<ChamberOutputKey, number>> = {},
+): ParamSpaceResult {
+  const outputs = computeChamberOutputs(chamberSpiralModelInput(base));
+  const pickable = studyPickableKeys(base);
+  const wanted = CHAMBER_OUTPUT_KEYS.filter((k) => keys.includes(k));
+  const ranges: ParamRange[] = [];
+  const errors: string[] = [];
+  const eps = 1e-9;
+  for (const key of wanted) {
+    const label = chamberOutputLabel(key);
+    if (!pickable.includes(key)) {
+      errors.push(
+        CHAMBER_PERMANENT_RELATION_KEYS.includes(key)
+          ? `${label} always equals its chamfer length (45° corner) and cannot be optimised.`
+          : `${label} comes from the semi-spiral casing and cannot be optimised.`,
+      );
+      continue;
+    }
+    const final = outputs.find((o) => o.key === key)?.final ?? NaN;
+    if (!Number.isFinite(final) || final <= 0) {
+      errors.push(`${label} has no positive value in the base design.`);
+      continue;
+    }
+    const band = overrides[key] ?? bandPct;
+    let lo = final * (1 - band / 100);
+    let hi = final * (1 + band / 100);
+    const con = base.constraints?.[key];
+    let source: ParamRange['source'] = 'band';
+    if (con?.min != null && con.min > lo) {
+      lo = con.min;
+      source = 'table';
+    }
+    if (con?.max != null && con.max < hi) {
+      hi = con.max;
+      source = 'table';
+    }
+    const min = Math.ceil(lo / CHAMBER_GRID_MM - eps) * CHAMBER_GRID_MM;
+    const max = Math.floor(hi / CHAMBER_GRID_MM + eps) * CHAMBER_GRID_MM;
+    if (min > max || max <= 0) {
+      errors.push(
+        `${label}: no value on the ${CHAMBER_GRID_MM} mm grid between ${Math.round(lo)} and ${Math.round(hi)} mm (±${band} % around ${Math.round(final)} mm${source === 'table' ? ', limited by the table Min / Max' : ''}).`,
+      );
+      continue;
+    }
+    ranges.push({
+      key,
+      label,
+      base: final,
+      min,
+      max,
+      step: CHAMBER_GRID_MM,
+      bandPct: band,
+      source,
+    });
+  }
+  return { ranges, errors };
+}
+
+/** The base design with the given keys pinned as Exact (other constraints unchanged). */
+export function chamberInputWithExact(
+  base: ChamberInput,
+  params: Partial<Record<ChamberOutputKey, number>>,
+): ChamberInput {
+  const constraints: Partial<Record<ChamberOutputKey, ChamberConstraint>> = {
+    ...(base.constraints ?? {}),
+  };
+  for (const [key, value] of Object.entries(params) as [ChamberOutputKey, number][]) {
+    if (typeof value === 'number' && Number.isFinite(value)) constraints[key] = { exact: value };
+  }
+  return { ...base, constraints };
+}
+
+/**
+ * Warnings for picked keys tied by an active `combination` relation (spec §4):
+ * optimising both the driven output and one of its partners pins the driven one by
+ * its Exact value, so the relation no longer ties them.
+ */
+export function studyRelationWarnings(
+  base: ChamberInput,
+  keys: readonly ChamberOutputKey[],
+): string[] {
+  const warnings: string[] = [];
+  for (const spec of CHAMBER_OUTPUT_SPECS) {
+    const rel = spec.relation;
+    if (!rel || rel.kind !== 'combination' || rel.permanent) continue;
+    if (!keys.includes(spec.key) || !studyRelationOn(base, spec)) continue;
+    const partners = (rel.terms ?? []).map((t) => t.key).filter((k) => keys.includes(k));
+    if (partners.length === 0) continue;
+    warnings.push(
+      `${spec.label} ${rel.label}: optimising ${spec.label} together with ${partners.map(chamberOutputLabel).join(', ')} pins ${spec.label} by its own value, so the relation no longer ties them. Pick independent parameters, or turn the relation off in the base design.`,
+    );
+  }
+  return warnings;
+}
+
+/** The two objective values of an evaluation (head loss m, picked vortex metric). */
+export interface StudyObjectivePoint {
+  headLoss: number;
+  vortex: number;
+}
+
+/**
+ * Weighted sum normalised by the baseline (spec §5):
+ * J = w_h · headLoss / headLoss₀ + w_v · vortex / vortex₀.
+ */
+export function weightedObjective(
+  point: StudyObjectivePoint,
+  baseline: StudyObjectivePoint,
+  weights: StudyWeights,
+): number {
+  return (
+    (weights.headLoss * point.headLoss) / baseline.headLoss +
+    (weights.vortex * point.vortex) / baseline.vortex
+  );
+}
+
+/** Ids of the non-dominated points (both objectives minimised), in input order. */
+export function paretoFront(points: readonly (StudyObjectivePoint & { id: number })[]): number[] {
+  return points
+    .filter(
+      (p) =>
+        !points.some(
+          (q) =>
+            q !== p &&
+            q.headLoss <= p.headLoss &&
+            q.vortex <= p.vortex &&
+            (q.headLoss < p.headLoss || q.vortex < p.vortex),
+        ),
+    )
+    .map((p) => p.id);
+}
+
+/** Where the base design came from. */
+export type StudyBaseSource = 'save' | 'meshOrigin';
+
+/** Baseline values the objective is normalised by (set once evaluation #0 is done). */
+export interface StudyNormalisation {
+  headLoss: number;
+  vortex: number;
+}
+
+/** A study as the API returns it. */
+export interface PublicStudy {
+  id: string;
+  name: string;
+  projectId: string;
+  owner: { id: string; fullName: string };
+  baseSource: StudyBaseSource;
+  /** Human label of the base: the save name, or the mesh origin's session. */
+  baseLabel: string;
+  baseInput: ChamberInput;
+  paramSpace: ParamRange[];
+  bandPct: number;
+  weights: StudyWeights;
+  mode: StudyMode;
+  sampler: StudySampler;
+  seed: number | null;
+  vortexMetric: StudyVortexMetric;
+  maxEvaluations: number;
+  maxDurationHours: number | null;
+  keepBest: number;
+  keepLast: number;
+  meshingSourceId: string;
+  cores: number;
+  /** Criteria snapshot (WS-G) taken at the first start; null while draft. */
+  criteria: CfdCriteriaSettings | null;
+  normalisation: StudyNormalisation | null;
+  status: StudyStatus;
+  reason: string | null;
+  /** Evaluations counted by the budget (done + infeasible + failed). */
+  counted: number;
+  /** Index of the evaluation in progress, or null. */
+  currentIndex: number | null;
+  /** Can the viewer edit / start / stop / resume / delete it (owner or super-admin)? */
+  canControl: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One evaluated design. */
+export interface StudyEvaluation {
+  index: number;
+  status: EvaluationStatus;
+  /** Last stage reached (for failed / interrupted evaluations). */
+  stage: EvaluationStage | null;
+  /** The values of the optimised keys (mm); the baseline holds the base values. */
+  designParams: Partial<Record<ChamberOutputKey, number>>;
+  chamberHash: string | null;
+  meshingSessionId: string | null;
+  meshingSessionName: string | null;
+  /** False once disk hygiene deleted the session. */
+  sessionAvailable: boolean;
+  runId: string | null;
+  runStatus: RunStatus | null;
+  budgetHit: boolean;
+  /** Mean total-pressure drop over the criterion window (Pa). */
+  dp0: number | null;
+  /** dp0 / (rho g) (m). */
+  headLoss: number | null;
+  maskedQVolume: number | null;
+  omegaRms: number | null;
+  /** Weighted objective (null in Pareto mode or without metrics). */
+  objective: number | null;
+  /** Refusal / failure message. */
+  refusalReason: string | null;
+  warnings: string[];
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+/** `GET /projects/:id/studies/:studyId`. */
+export interface StudyDetail {
+  study: PublicStudy;
+  evaluations: StudyEvaluation[];
+  /** Index of the best done evaluation (weighted mode), or null. */
+  best: number | null;
+  /** Indexes of the Pareto front of the done evaluations (both modes). */
+  paretoFront: number[];
+}
+
+/** Archived series of an evaluation (`GET …/evaluations/:index`). */
+export interface StudyEvaluationMetrics {
+  /** Δp₀ per iteration (downsampled). */
+  pressureDrop: PressureDropSample[];
+  /** Iterations averaged for dp0. */
+  window: number;
+  vortex: VortexMetricsSample | null;
+}
+
+/** `GET /projects/:id/studies/setup`: what the creation form needs. */
+export interface StudySetup {
+  origin: MeshOrigin | null;
+  /** The ChamberInput of the mesh origin's chamber build (input.json), if any. */
+  originInput: ChamberInput | null;
+  /** Meshing sessions with a finished mesh and reusable settings. */
+  sessions: { id: string; name: string; engine: MeshingEngine }[];
+  /** Default reference session: the mesh origin's, when it is meshed. */
+  defaultSessionId: string | null;
+  /** Does the case solver take the WS-G criteria (steady incompressible)? */
+  criteriaApplicable: boolean;
+  /** Cores of the project's latest run, else 1. */
+  defaultCores: number;
+  /** The study running anywhere (one at a time globally), or null. */
+  runningStudy: { id: string; name: string; projectId: string } | null;
+}
+
+/** Body of `POST /projects/:id/studies` (every field optional in `PATCH`). */
+export interface CreateStudyRequest {
+  name: string;
+  base: { kind: 'save'; saveId: string } | { kind: 'meshOrigin' };
+  keys: ChamberOutputKey[];
+  bandPct?: number;
+  bandOverrides?: Partial<Record<ChamberOutputKey, number>>;
+  weights?: StudyWeights;
+  mode?: StudyMode;
+  sampler?: StudySampler;
+  seed?: number | null;
+  vortexMetric?: StudyVortexMetric;
+  maxEvaluations?: number;
+  maxDurationHours?: number | null;
+  keepBest?: number;
+  keepLast?: number;
+  meshingSourceId?: string;
+  cores?: number;
+}
