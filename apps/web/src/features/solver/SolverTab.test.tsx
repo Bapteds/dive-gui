@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { DEFAULT_CFD_CRITERIA } from '@dive/shared';
 import type { RunSummary, RunnableCheck } from '@/lib/api/types';
 
 /**
@@ -24,6 +25,10 @@ vi.mock('@/lib/api/projects', () => ({
   getCaseFiles: vi.fn(),
   getCaseFileContent: vi.fn(),
   saveCaseFileContent: vi.fn(),
+  // Convergence criteria + vortex metrics (WS-G).
+  getCriteria: vi.fn(),
+  saveCriteria: vi.fn(),
+  computeVortexMetrics: vi.fn(),
 }));
 
 vi.mock('@/components/ui/sonner', () => ({
@@ -79,7 +84,15 @@ beforeEach(() => {
     size: 20,
   });
   vi.mocked(api.saveCaseFileContent).mockResolvedValue(undefined);
+  vi.mocked(api.getCriteria).mockResolvedValue({
+    criteria: structuredClone(DEFAULT_CFD_CRITERIA),
+    patches: ['inlet', 'outlet', 'walls'],
+    applicable: true,
+    installed: true,
+  });
 });
+
+const emptyMonitors = { pressureDrop: [], criterion: null, vortex: [] };
 
 describe('SolverTab', () => {
   it('walks the setup wizard (solver -> turbulence -> generate) and scaffolds + syncs', async () => {
@@ -228,6 +241,7 @@ describe('SolverTab', () => {
       ],
       logTail: 'Time = 2\nSolving for Ux, Initial residual = 0.01\n',
       logBytes: 48,
+      monitors: emptyMonitors,
     });
 
     renderTab();
@@ -238,5 +252,64 @@ describe('SolverTab', () => {
     expect(await screen.findByText(/met the convergence tolerance/i)).toBeInTheDocument();
     // The chart's screen-reader data table toggle appears once residuals load.
     expect(await screen.findByText(/show residual values/i)).toBeInTheDocument();
+  });
+
+  it('shows the convergence section and the pressure drop / vortex charts', async () => {
+    vi.mocked(api.getRunnable).mockResolvedValue(runnableYes);
+    vi.mocked(api.listRuns).mockResolvedValue([convergedRun]);
+    vi.mocked(api.getRunLog).mockResolvedValue({
+      run: { ...convergedRun, reason: 'Pressure drop converged (simplePDrop).' },
+      series: [{ time: 1, values: { p: 0.2 } }],
+      logTail: '',
+      logBytes: 0,
+      monitors: {
+        pressureDrop: [
+          { time: 1, dp0: 19900 },
+          { time: 2, dp0: 19700 },
+        ],
+        criterion: null,
+        vortex: [
+          { time: 2, qVolume: 0.2, maskedQVolume: 0.1, omegaRms: 12.5, coreVolume: 0.15, coreCells: 42 },
+        ],
+      },
+    });
+    vi.mocked(api.computeVortexMetrics).mockResolvedValue({
+      time: 2,
+      qVolume: 0.2,
+      maskedQVolume: 0.1,
+      omegaRms: 12.5,
+      coreVolume: 0.15,
+      coreCells: 42,
+    });
+
+    renderTab();
+
+    expect(await screen.findByRole('button', { name: /convergence criteria/i })).toBeInTheDocument();
+    expect(await screen.findByText('Pressure drop converged (simplePDrop).')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /pressure drop/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /vortex metrics/i })).toBeInTheDocument();
+    // A terminal run offers the on-demand vortex computation.
+    await userEvent.click(screen.getByRole('button', { name: /compute at latest time/i }));
+    await waitFor(() => expect(api.computeVortexMetrics).toHaveBeenCalledWith('p1'));
+  });
+
+  it('locks the convergence criteria while a run is active', async () => {
+    const running: RunSummary = { ...convergedRun, status: 'running', exitCode: null, finishedAt: null };
+    vi.mocked(api.getRunnable).mockResolvedValue(runnableYes);
+    vi.mocked(api.listRuns).mockResolvedValue([running]);
+    vi.mocked(api.getRunLog).mockResolvedValue({
+      run: running,
+      series: [],
+      logTail: '',
+      logBytes: 0,
+      monitors: emptyMonitors,
+    });
+
+    renderTab();
+
+    await userEvent.click(await screen.findByRole('button', { name: /convergence criteria/i }));
+    expect(await screen.findByRole('button', { name: /save criteria/i })).toBeDisabled();
+    // No on-demand computation while the solver runs.
+    expect(screen.queryByRole('button', { name: /compute at latest time/i })).not.toBeInTheDocument();
   });
 });
