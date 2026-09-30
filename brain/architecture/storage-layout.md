@@ -52,6 +52,9 @@ Nothing under `STORAGE_DIR` is purged by a periodic job: deletion is always trig
 │                                         zs_iter<j>.{npy,json}, geometry/domain_lidIter<k>.{stl,json,png},
 │                                         lid_iter<j>.{png,json}, logs/
 ├── templates/<templateId>/files/<free tree>   file templates (templateStorage)
+├── studies/<studyId>/                    optimisation study archive (studyStorage, WS-H)
+│   ├── suggest-request.json              last optimiseSuggest.py request
+│   └── evaluations/<index>/              metrics.json (Δp₀ series, window, vortex), postProcessing/ (WS-G monitors)
 ├── meshing/<sessionId>/                  standalone meshing session = OpenFOAM case (meshingStorage)
 │   ├── meta.json                         { id, name, engine, createdAt, origin?: { chamberHash } }
 │   ├── config.json                       autosaved form config
@@ -146,6 +149,11 @@ The folder names `viz`, `runs`, `export`, `chamber` come from shared constants (
 ### `projects/<id>/freesurface/`
 - **Written by**: `freeSurface.service` (job runner) through `freeSurfaceStorage` (`writeJob` tmp + rename) and the kit scripts (outputs in the job dir).
 - **Lifecycle**: one directory per job, removed by `DELETE …/free-surface/:jobId` or with the project; a job left `running` is set `interrupted` at boot.
+
+### `studies/<studyId>/`
+- **Written by**: `studyRunner` through `studyStorage` (metrics JSON tmp + rename with a Windows retry; WS-G monitor folders copied from the case after each solve; the suggestion request before each `optimiseSuggest.py` call).
+- **Read by**: `GET …/studies/:studyId/evaluations/:index`.
+- **Lifecycle**: removed by `DELETE …/studies/:studyId`, or before a project / user deletion (`cleanupStudies`). The study's meshing sessions `study-<slug>-<index>` live under `meshing/` and are pruned to the best `keepBest` + last `keepLast` after each evaluation.
 
 ### `templates/<templateId>/files/`
 - **Written by**: `templateStorage` from `templates.service` (folder upload, zip, editing, move).

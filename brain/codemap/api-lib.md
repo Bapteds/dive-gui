@@ -394,6 +394,7 @@ Pure, defensive parsing of the patch names of a cfMesh input surface, for the pe
 - `sendSessionToCase(viewer, projectId, sessionId)`: `importMeshFromMeshing` case target.
 - `solveCase(viewer, projectId, cores, onStarted?)`: `startRun` then `awaitRunTerminal`; `onStarted(runId)` runs as soon as the row exists.
 **Used by**: `freeSurface.service.ts` (WS-H later).
+**WS-H (2026-09-30)**: `clearCaseSolution(projectId)` (time dirs > 0, `processor*`, `postProcessing/`; moved from the free-surface service, used by both runners).
 
 ## `apps/api/src/lib/polyMeshLevels.ts`
 **Role**: Per-patch face-centre height statistics of an ASCII polyMesh, streamed line by line (points kept in one `Float64Array`, only boundary faces examined). Finds the flat horizontal top patch (the rigid lid) of the free-surface tool.
@@ -507,3 +508,7 @@ Re-exports `ROLES` and `Role` from `@dive/shared`. `isRole(value): value is Role
 - `vizIsStale(projectId): Promise<boolean>`. GLB or `edges.bin` missing, or `case/constant/polyMesh/{boundary,points}` newer than the GLB.
 **Depends on**: `fileTreeStorage`, `caseStorage`, `VIZ_DIRNAME` (`'viz'`). **Used by**: `modules/projects/mesh.service.ts` (which runs `extractPatches.py` with `MESH_PYTHON_BIN` and `MESH_BUILD_TIMEOUT_MS`).
 **Notes**: the header comment does not list `edges.bin`. Invalidation by mtime only: a change to other polyMesh files (`faces`, `owner`) without touching `boundary`/`points` does not refresh the render.
+
+## `apps/api/src/lib/studyStorage.ts`
+**Role**: archive of the optimisation studies (WS-H) under `STORAGE_DIR/studies/<studyId>/`: `evaluations/<index>/metrics.json` (`StudyEvaluationMetrics`, atomic with a Windows rename retry), `evaluations/<index>/postProcessing/` (WS-G monitor folders copied from the case), `suggest-request.json`.
+**Exports**: `studyDirAbsolute`, `evaluationDirAbsolute`, `writeEvaluationMetrics`, `readEvaluationMetrics`, `archivePostProcessing`, `writeSuggestRequest`, `removeStudyStorage`.

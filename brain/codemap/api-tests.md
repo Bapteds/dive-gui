@@ -127,6 +127,7 @@ Single test of `GET /api/v1/config` without authentication: returns exactly `{ t
 - `extractRefreshCookie(setCookie): string | null`. Raw value of the `refresh_token` cookie.
 **Depends on**: `src/app`, `src/lib/password`, `src/lib/prisma`, `src/lib/jwt`, `src/lib/role`. **Used by**: all integration `*.test.ts` files, `snappyPipeline.test.ts` (for `logicalCommand`).
 **Notes**: argon2 is deliberately slow, hence `testTimeout: 20000`. Any new fake OpenFOAM command must go through `logicalCommand`.
+**WS-H (2026-09-30)**: `resetDatabase` deletes `evaluation` and `study` first.
 
 ## `apps/api/tests/mesh.test.ts`
 **Covers**: project mesh viewer (Visualize tab) and editing of the case mesh.
@@ -251,3 +252,15 @@ Unit tests of `mergeStlFilesToAscii` (`src/lib/stlMerge`) on a temporary folder 
 - `default` (`defineConfig`). Env values: `NODE_ENV=test`, `DATABASE_URL=file:./test.db` (relative to the schema folder, so `prisma/test.db`), dummy `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET`, `ACCESS_TOKEN_TTL=15m`, `REFRESH_TOKEN_TTL_DAYS=7`, `CORS_ORIGIN=http://localhost:5173`, `STORAGE_DIR=./test-storage`, `CGNS_TO_VTK_SCRIPT=./tests/fixtures/CgnsToVtk.py`, `EXTRACT_PATCHES_SCRIPT=./tests/fixtures/extractPatches.py`, `RUN_STOP_GRACE_MS=50`, `SOLVER_TOTAL_CORES=8`, `SEED_ADMIN_EMAIL`/`SEED_ADMIN_PASSWORD`/`SEED_ADMIN_NAME`.
 **Used by**: `npm test -w @dive/api` (`vitest run`).
 **Notes**: `OPENFOAM_BASHRC`, `TERMINAL_ENABLED` and the Python binaries are not set here; a value present in `apps/api/.env` is therefore loaded during tests (cause of the local failures of `conversion.test.ts` and `meshes.test.ts`). `test-storage/` and `*.db` are gitignored.
+
+## `apps/api/tests/studyFixtures.ts`
+**Role**: shared fixtures of the study suites: `BASE_INPUT`, the chamber-patch cube polyMesh, `makeSourceSession`, `makeStudyProject` (scaffolded simpleFoam case, reference session, chamber save), `studyFakes(opts)` (command runner: `buildChamber.py` with KO refusals and a real `trisurface.zip`, `optimiseSuggest.py` queue, `postProcess` vortex line; stream runner: cartesianMesh, checkMesh OK / failed checks, simpleFoam converged / budget / diverged / hang with WS-G monitor lines), `studyBody`, `studiesUrl`, `waitForStudy`, `settled`.
+
+## `apps/api/tests/studyModel.test.ts`
+**Covers**: `computeParamSpace` (band snapped inward, table Max, empty intersection, per-key band, BF1 refused), `chamberInputWithExact`, `studyRelationWarnings`, `weightedObjective`, `paretoFront`.
+
+## `apps/api/tests/studies.test.ts`
+**Covers**: 401, invisible project 404, member read / 403 on control, super-admin edit, draft creation on this project (space, defaults, no project created), table limit, 422 cases (empty range, no key, zero weights, bad session, BF1, unknown save), mesh-origin base + setup endpoint, draft-only edit (409 `STUDY_NOT_DRAFT`), 409 `STUDY_NOT_PAUSED`, 409 `STUDY_IN_PROGRESS`, 422 non-steady solver, delete + project cascade, CSV + archived metrics, boot reconciliation.
+
+## `apps/api/tests/studyRunner.test.ts`
+**Covers**: 3-evaluation happy path (Exact pinning, ask / tell history, metrics, objectives, normalisation, best, mesh origin), builder `CHAMBER_REFUSED` ⇒ infeasible, checkMesh failures ⇒ infeasible without retry, mesher failure / divergence ⇒ failed, budget-hit run, baseline infeasible ⇒ study failed, time budget, best K + last N sessions, duplicate reuse, project locks + pause during solving + resume of the interrupted design, suggestion failure.

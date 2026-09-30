@@ -224,6 +224,7 @@ PNG 1319 × 511 (≈ 390 KB): annotated CAD drawings (plan view B Kammer, B1, BF
 - `computeChamberAutoDims(values, dLastFinal): ChamberAutoDims`. `dFirst = CHAMBER_D_FIRST_OVER_LAST × dLast`, `dMiddle = CHAMBER_D_MIDDLE_OVER_LAST × dLast` (if `dLastFinal` is known, provided by `ChamberPage` from the `dLast` output); the generator hints (Gen Dim v3) come from `computeChamberGeneratorDims` of `@dive/shared` called **with** the current overrides (`x4`, `centralDiameter`, `centralHeight`, `domeHeight`): a typed X4 re-picks the frame, a typed Ø re-bases height and dome; the Ø hint remains the value an empty Ø would have (`gen.auto.centralDiameter`), `x4` = `gen.x4Auto`. All `null` if X1..X3 are not finite.
 **Depends on**: `zod`, `@dive/shared` (chamber constants, `computeChamberGeneratorDims`, types `ChamberInput`, `ChamberVariant`). **Used by**: `ChamberPage`, `ChamberInputsForm` (types), tests.
 **Notes**: the same shared function feeds the hints and the API build (single source). The header comment of `ChamberFormValues` labels several fields "Hollow only" / "Guide-vane builds only": this is a builder-side usage, the schema does not make them conditional.
+**WS-H (2026-09-30)**: `chamberBuildErrorMessage(err)` (the API message for any `ApiError`, incl. 422 `CHAMBER_REFUSED`; generic line otherwise).
 
 ## `apps/web/src/features/chamber/useChamber.ts`
 **Role**: TanStack Query hooks of Chamber Creation. A build is identified by the hash returned by `POST /chamber/build`; manifest, geometry and edges are then loaded by hash.

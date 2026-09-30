@@ -25,6 +25,7 @@
 | `boundary-conditions.md` | Boundary conditions per object type, MRF / Moving Rotor, draft-tube CSV | Case files → Boundary conditions |
 | `solver-and-runs.md` | Solver catalog, setup, Easy/Advanced config, turbulence, TopoSet, serial/MPI runs, live residuals | Solver tab |
 | `free-surface.md` | Free surface from a rigid-lid run, lid iteration by remeshing (lidIterationKit), mesh origin | Free surface tab |
+| `optimisation.md` | Chamber optimisation studies in the project: build, mesh, solve, WS-G metrics, Optuna ask / tell, pause / resume | Optimisation tab |
 | `export-cfdpost.md` | OpenFOAM → transient CGNS export for Ansys CFD-Post | Export tab |
 
 ## Standalone tools

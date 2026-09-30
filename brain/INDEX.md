@@ -1,6 +1,6 @@
 # Index of every repository file
 
-> One line per file (631 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
+> One line per file (654 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
 
 Detail of a code file: open the sheet shown and search for the `## path/to/file` section. Documents: the description is their title and introduction line.
 
@@ -18,7 +18,6 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `eslint.config.js` : ESLint 9 "flat" configuration of the monorepo via `tseslint.config`. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package-lock.json` : npm lockfile for the whole monorepo (workspaces), used by `npm ci` in CI and in production. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package.json` : root of the `dive-turbinen` workspace (private, ESM, `engines.node >=20`). · [root-shared-mcp](codemap/root-shared-mcp.md)
-- `tools.tar` : **(undocumented: add a section in brain/codemap)**
 - `tsconfig.base.json` : Common TypeScript base: `target ES2022`, `strict`, `esModuleInterop`, `skipLibCheck`, `forceConsistentCasingInFileNames`, `resolveJsonModule`, `noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch`. · [root-shared-mcp](codemap/root-shared-mcp.md)
 
 ## `.claude`
@@ -87,6 +86,10 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 
 - `apps/api/prisma/migrations/20260831142110_chamber_saves/migration.sql` : Creates `ChamberSave` (`id`, `name`, `ownerId` cascading to `User`, `snapshot` TEXT, timestamps), the unique index `ChamberSave_name_key` and the index `ChamberSave_ownerId_idx`. · [api-core](codemap/api-core.md)
 
+## `apps/api/prisma/migrations/20260930085427_optimisation_studies`
+
+- `apps/api/prisma/migrations/20260930085427_optimisation_studies/migration.sql` : creates `Study` (owner FK cascade, project FK cascade, JSON String columns, status / mode / sampler / vortexMetric defaults, indexes on owner, project, status) and `Evaluation` (study FK cascade, unique … · [api-core](codemap/api-core.md)
+
 ## `apps/api/scripts`
 
 - `apps/api/scripts/AGENTS.md` : Zone rules: `apps/api/scripts` (Python tools) : Loaded automatically when working in `apps/api/scripts/`.
@@ -103,6 +106,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/scripts/designSemiSpiral.py` : semi-spiral casing designer (spec `brain/specs/2026-09-29-semi-spiral-casing-design.md` §8): a numpy + scipy port of `documents/Semi-spiral-creation/reference_semi_spiral.py`. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/extractPatches.py` : reads the boundary patches of an OpenFOAM case and produces a compact GLB + JSON manifest + `edges.bin` for the three.js viewer. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/mirrorStep.py` : produces the mirrored STEP of a chamber (YZ plane, x to -x, then translation by `xmin + xmax`) for the "Change rotational direction" action: same bounding box, only the chirality changes. · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/optimiseSuggest.py` : next design of an optimisation study (WS-H spec §5): reads a request JSON (`space`, `sampler`, `seed`, `mode`, `history`), rebuilds an in-memory Optuna study from the history (`create_trial` + `add_trial`: done = COMPLET … · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/preprocessVanes.py` : offline (one-time) tool that splits `GuideVanes50DegOpen.stl` (17 components: 16 blades + 1 shell) into committed assets. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/requirements-geometry.txt` : Pinned environment of the geometry suite (mirror of the local WSL CadQuery venv): `cadquery==2.8.0`, `trimesh==4.12.2`, `numpy==2.4.6`, `scipy==1.18.0`, `networkx==3.6.1`, `manifold3d==3.5.2`, `shapely==2.1.2` … · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/requirements.txt` : Version floors of the runtime dependencies, per script: `vtk>=9.2` (CgnsToVtk, CgnsInspect; `FoamToCgns.py` excluded because ParaView), `h5py>=3.0` (CgnsMergeTime), `pyvista>=0.43`, `trimesh>=4.0`, `numpy>=1.24` (extract … · [api-scripts](codemap/api-scripts.md)
@@ -132,6 +136,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/scripts/tests/test_build_chamber.py` : the guarantees of `buildChamber.py` the API depends on: output contract (last stdout line `OK:`; `KO:` + exit code 1), watertight STL, golden volume (`GOLDEN`, tolerance `VOL_RTOL = 5e-3`), names and order of the manifes … · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/tests/test_design_semi_spiral.py` : `designSemiSpiral.py` with numpy + scipy only (runs without CadQuery: `conftest.py` skips only the builder tests). · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/tests/test_lidkit.py` : the vendored kit: `--flat` fit of a closed box reproduces the flat lid (no clamp, no upstand, no new open edge), `lidkit_surface.py` on a synthetic VTK pair gives the analytic z_s and p0, `lidkit_post.py` writes a PNG. · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/tests/test_optimise_suggest.py` : usage exit 2, `KO:` on a bad request, seeded determinism on the 50 mm grid, history with FAIL / infeasible / off-grid entries, the random sampler moving on with the history, NSGA-II Pareto mode. · [api-scripts](codemap/api-scripts.md)
 
 ## `apps/api/scripts/tests/params`
 
@@ -204,6 +209,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/src/lib/stlBounds.ts` : pure TypeScript parsing of an STL into its axis-aligned bounding box, to size the snappy domain and the keep point without OpenFOAM. · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/stlMerge.ts` : in-process merge of several STLs (ASCII or binary) into a single multi-solid ASCII STL, one solid (hence one cfMesh patch) per file. · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/streamRunner.ts` : injectable, never-throwing runner for long processes (solver, streamed meshing steps). · [api-lib](codemap/api-lib.md)
+- `apps/api/src/lib/studyStorage.ts` : archive of the optimisation studies (WS-H) under `STORAGE_DIR/studies/<studyId>/`: `evaluations/<index>/metrics.json` (`StudyEvaluationMetrics`, atomic with a Windows rename retry), `evaluations/<index>/postProcessing/` … · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/templateStorage.ts` : `fileTreeStorage` facade for reusable file templates, `<STORAGE_DIR>/templates/<templateId>/files/<free tree>`. · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/terminalSession.ts` : an interactive shell session for the project terminal, independent of the transport (the WebSocket bridge is `terminal.gateway.ts`). · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/vizStorage.ts` : 3D render cache of a project's case mesh, `projects/<id>/viz/{patches.glb, manifest.json, edges.bin}`, produced by `scripts/extractPatches.py`. · [api-lib](codemap/api-lib.md)
@@ -290,6 +296,14 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/src/modules/projects/runs.service.ts` : the app's first long-running job. · [api-projects](codemap/api-projects.md)
 - `apps/api/src/modules/projects/terminal.gateway.ts` : WebSocket gateway to an interactive shell (`terminalSession`) whose cwd is the project's storage root. · [api-projects](codemap/api-projects.md)
 
+## `apps/api/src/modules/studies`
+
+- `apps/api/src/modules/studies/studies.controller.ts` : thin HTTP adapters of the optimisation studies (WS-H): `listStudiesController` (200 `{ studies }`), `studySetupController` (200 `StudySetup`), `createStudyController` (201 `{ study }`), `getStudyController` (200 … · [api-projects](codemap/api-projects.md)
+- `apps/api/src/modules/studies/studies.schemas.ts` : zod schemas of the study routes: `createStudySchema` (`name` 1..120, `base` = `{ kind: 'save', saveId }` | `{ kind: 'meshOrigin' }`, `keys` 1..12 output keys, optional `bandPct` / `bandOverrides` (0 < % ≤ 100), `weights` … · [api-projects](codemap/api-projects.md)
+- `apps/api/src/modules/studies/studies.service.ts` : optimisation studies of a project (WS-H spec §0, §7): CRUD, permissions (visibility = the project's via `assertProjectVisible`, control = study owner or super-admin, 403 `FORBIDDEN`), base resolution ( … · [api-projects](codemap/api-projects.md)
+- `apps/api/src/modules/studies/studyRegistry.ts` : in-memory registry of the one running study (single API instance, K31) and the project lock. · [api-projects](codemap/api-projects.md)
+- `apps/api/src/modules/studies/studyRunner.ts` : the study stage machine (WS-H spec §6): per evaluation `building` (`buildChamber(base + Exact)`; 422 ⇒ `infeasible`, other errors ⇒ `failed`; same chamber hash as an earlier done / infeasible evaluation ⇒ its result reus … · [api-projects](codemap/api-projects.md)
+
 ## `apps/api/src/modules/templates`
 
 - `apps/api/src/modules/templates/templates.controller.ts` : adapters for shared file templates, plus three handlers mounted on the projects router. · [api-core](codemap/api-core.md)
@@ -353,6 +367,10 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/tests/solverCatalog.test.ts` : Pure contract of `@dive/shared`: every solver in `SOLVER_LIBRARY` has an entry in `SOLVER_CATALOG` and `isConfigurableSolver` true (`foamRun` and unknown ids excluded); `full` tier for the `incompressible`/`compressible` … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/stlBounds.test.ts` : Pure unit tests of `src/lib/stlBounds`: `parseStlBounds` on binary STL (detected only by the exact size 84 + n·50) and ASCII, `valid: false` and `triangleCount: 0` on unreadable content; `unionBounds` component by compon … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/stlMerge.test.ts` : Unit tests of `mergeStlFilesToAscii` (`src/lib/stlMerge`) on a temporary folder cleaned in `afterEach`: merge into a multi-solid ASCII STL (one `solid` per file, named after the root name), binary STL read back and re-em … · [api-tests](codemap/api-tests.md)
+- `apps/api/tests/studies.test.ts` : 401, invisible project 404, member read / 403 on control, super-admin edit, draft creation on this project (space, defaults, no project created), table limit, 422 cases (empty range, no key, zero weights, bad session, BF … · [api-tests](codemap/api-tests.md)
+- `apps/api/tests/studyFixtures.ts` : shared fixtures of the study suites: `BASE_INPUT`, the chamber-patch cube polyMesh, `makeSourceSession`, `makeStudyProject` (scaffolded simpleFoam case, reference session, chamber save), `studyFakes(opts)` (command runne … · [api-tests](codemap/api-tests.md)
+- `apps/api/tests/studyModel.test.ts` : `computeParamSpace` (band snapped inward, table Max, empty intersection, per-key band, BF1 refused), `chamberInputWithExact`, `studyRelationWarnings`, `weightedObjective`, `paretoFront`. · [api-tests](codemap/api-tests.md)
+- `apps/api/tests/studyRunner.test.ts` : 3-evaluation happy path (Exact pinning, ask / tell history, metrics, objectives, normalisation, best, mesh origin), builder `CHAMBER_REFUSED` ⇒ infeasible, checkMesh failures ⇒ infeasible without retry, mesher failure / … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/templates.test.ts` : shared templates (`/api/v1/templates/**`): 401, creation and listing for everyone with `owner.email`, 404, update by the author (403 outsider, super-admin allowed), deletion by the author; template files (creation, 409 … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/users.test.ts` : back office `/api/v1/users`: 401, 403 `FORBIDDEN` for a `USER`, list with the protected super-admin first and without secrets, creation 201 with working login, 409 `EMAIL_TAKEN`, 422 short password, single read and 404 … · [api-tests](codemap/api-tests.md)
 
@@ -558,6 +576,17 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/web/src/features/meshing/StlViewer.tsx` : client-side three.js preview of a session's uploaded STLs, without server rendering (works without OpenFOAM). · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
 - `apps/web/src/features/meshing/useMeshing.ts` : all TanStack Query hooks of the Meshing feature. · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
 
+## `apps/web/src/features/optimisation`
+
+- `apps/web/src/features/optimisation/OptimisationTab.tsx` : the project's Optimisation tab (WS-H): studies list (status badge, counted / max), the shown study (`StudyPanel`, running one first) or the inline `StudyCreateForm` (create / edit draft); skeleton, `ErrorState`, empty st … · [web-features-projects](codemap/web-features-projects.md)
+- `apps/web/src/features/optimisation/StudyCharts.tsx` : hand-made SVG `ObjectiveChart` (objective per evaluation, best-so-far step line, diamond for the best) and `ParetoChart` (head loss against the picked vortex metric, front joined), each with a "Show … values" table. · [web-features-projects](codemap/web-features-projects.md)
+- `apps/web/src/features/optimisation/StudyCreateForm.test.tsx` : band preview on the grid, table limit, zero weights refused, Pareto hides the weights, create body. · [web-features-projects](codemap/web-features-projects.md)
+- `apps/web/src/features/optimisation/StudyCreateForm.tsx` : inline create / edit form: study name, base design (chamber save or chamber of this mesh), parameters table with live range preview (`computeParamSpace`, per-key band, table limit note, relation warnings), objective (wei … · [web-features-projects](codemap/web-features-projects.md)
+- `apps/web/src/features/optimisation/StudyPanel.test.tsx` : stepper of the running evaluation + Pause, owner Start and read-only member, evaluations table (infeasible reason, budget flag, best), chart table alternatives. · [web-features-projects](codemap/web-features-projects.md)
+- `apps/web/src/features/optimisation/StudyPanel.tsx` : one study: status badge (`StudyStatusBadge`, exported), owner-only controls (Start / Resume orange, Pause, Edit, Delete with confirmation), Export CSV, running evaluation stepper (Build, Mesh, Transfer, Configure, Solve) … · [web-features-projects](codemap/web-features-projects.md)
+- `apps/web/src/features/optimisation/studyFormat.ts` : `VORTEX_METRIC_LABEL` (name + unit per metric) and `vortexOf(evaluation, metric)`. · [web-features-projects](codemap/web-features-projects.md)
+- `apps/web/src/features/optimisation/useStudies.ts` : React Query hooks: keys `['projects', id, 'studies', 'list' | 'setup' | 'detail', studyId]`, `useStudiesQuery` / `useStudyQuery` (poll 3 s while running or pausing), `useStudySetupQuery`, `useCreateStudy` … · [web-features-projects](codemap/web-features-projects.md)
+
 ## `apps/web/src/features/projects`
 
 - `apps/web/src/features/projects/BoundaryConditionDialog.test.tsx` : the BC wizard end to end. · [web-features-projects](codemap/web-features-projects.md)
@@ -657,6 +686,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/web/src/lib/api/meshes.ts` : a project's multi-mesh library and merge pipeline (`/projects/:id/meshes`). · [web-core](codemap/web-core.md)
 - `apps/web/src/lib/api/meshing.ts` : standalone Meshing sessions STL to snappyHexMesh/cfMesh to polyMesh (`/meshing/*`), shared by the team. · [web-core](codemap/web-core.md)
 - `apps/web/src/lib/api/projects.ts` : the largest module: projects, OpenFOAM case files, 3D viewer, CGNS export, template application, solver. · [web-core](codemap/web-core.md)
+- `apps/web/src/lib/api/studies.ts` : client of `/projects/:id/studies[...]` (WS-H): `listStudies`, `getStudySetup`, `createStudy`, `updateStudy`, `getStudy`, `startStudy`, `stopStudy`, `resumeStudy`, `deleteStudy`, `getStudyEvaluation`, `downloadStudyCsv` ( … · [web-core](codemap/web-core.md)
 - `apps/web/src/lib/api/templates.ts` : shared file templates (`/templates`); file responses reuse the case file types. · [web-core](codemap/web-core.md)
 - `apps/web/src/lib/api/types.ts` : typed contract of the `/api/v1` API consumed by the whole front end. · [web-core](codemap/web-core.md)
 - `apps/web/src/lib/api/users.ts` : Account management (super-admin). · [web-core](codemap/web-core.md)
@@ -722,7 +752,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `brain/codemap/_FORMAT.md` : Codemap sheet format : Common template of every sheet in `brain/codemap/`.
 - `brain/codemap/api-core.md` : Codemap: API core and cross-cutting modules : Scope: `apps/api/{package.json,tsconfig.json,vitest.config.ts,.env.example}`, `apps/api/prisma/`, `apps/api/src/{app.ts,server.ts}`, `apps/api/src/{config,middleware,types}/` …
 - `brain/codemap/api-lib.md` : Codemap: API lib (cross-cutting helpers) : Scope: `apps/api/src/lib/` · Updated: 2026-09-28
-- `brain/codemap/api-projects.md` : Codemap: API module projects : Scope: `apps/api/src/modules/projects/` · Updated: 2026-09-28
+- `brain/codemap/api-projects.md` : Codemap: API module projects : Scope: `apps/api/src/modules/projects/`, `apps/api/src/modules/studies/` (optimisation studies, WS-H, nested under `/projects/:id/studies`) · Updated: 2026-09-28
 - `brain/codemap/api-scripts.md` : Codemap: API: Python scripts, assets, geometry tests, fixtures and reference documents : Scope: `apps/api/scripts/`, `apps/api/tests/fixtures/`, `documents/` · Updated: 2026-09-28
 - `brain/codemap/api-tests.md` : Codemap: API tests (vitest + supertest) : Scope: `apps/api/tests/` (excluding `apps/api/tests/fixtures/`), `apps/api/vitest.config.ts` · Updated: 2026-09-28
 - `brain/codemap/build-index.py` : generates `brain/INDEX.md` (one line per repository file) from the `**Role**` sections of the codemap sheets and the intro line of Markdown documents; `--check` exits with an error if a file is not documented. · [root-shared-mcp](codemap/root-shared-mcp.md)
@@ -731,7 +761,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `brain/codemap/web-features-assemble-chamber.md` : Codemap: web features: assemble + chamber : Scope: `apps/web/src/features/assemble/`, `apps/web/src/features/chamber/` · Updated: 2026-09-28
 - `brain/codemap/web-features-meshing-solver.md` : Codemap: Web: meshing + solver features : Scope: `apps/web/src/features/meshing/`, `apps/web/src/features/solver/` · Updated: 2026-09-30
 - `brain/codemap/web-features-platform.md` : Codemap: web features (platform) : Scope: `apps/web/src/features/{account,admin,auth,dashboard,export,files,templates,terminal,visualize}/` · Updated: 2026-09-28
-- `brain/codemap/web-features-projects.md` : Codemap: web / features / projects : Scope: `apps/web/src/features/projects/`, `apps/web/src/features/freesurface/` (Free surface tab, WS-I) · Updated: 2026-09-30
+- `brain/codemap/web-features-projects.md` : Codemap: web / features / projects : Scope: `apps/web/src/features/projects/`, `apps/web/src/features/freesurface/` (Free surface tab, WS-I), `apps/web/src/features/optimisation/` (Optimisation tab, WS-H) · Updated: 2026 …
 
 ## `brain/conventions`
 
@@ -762,6 +792,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `brain/features/merge-and-assembly.md` : Feature · Merge and multi-part assembly
 - `brain/features/mesh-library-and-conversion.md` : Feature · Mesh library, conversion and 3D viewer
 - `brain/features/meshing.md` : Feature · Meshing (snappyHexMesh / cfMesh)
+- `brain/features/optimisation.md` : Feature · Optimisation (chamber optimisation loop)
 - `brain/features/projects.md` : Feature · Projects (creation, list, detail, collaborators)
 - `brain/features/solver-and-runs.md` : Feature · Solver and runs
 - `brain/features/templates.md` : Feature · Templates (reusable case file sets)
@@ -785,6 +816,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `brain/plans/2026-08-13-guide-vane-step-export.md` : Guide-Vane STEP Export Implementation Plan
 - `brain/plans/2026-08-17-cfmesh-per-patch-refinement-and-layers.md` : cfMesh Per-Patch Local Refinement + Tri-State Inflation Layers Implementation Plan : Note: verify `cta-hover` is a defined token in this repo's Tailwind config; if not, reuse the same hover class the form's other accent …
 - `brain/plans/2026-09-02-generator-dimensions.md` : Empirical Generator Dimensions (Gen Dim v3) Implementation Plan
+- `brain/plans/2026-09-30-optimisation-loop.md` : Chamber optimisation loop (WS-H) · implementation plan : Spec: `brain/specs/2026-09-29-optimisation-loop-design.md`, §0 amendment (2026-09-30) wins over the older sections.
 
 ## `brain/playbooks`
 
