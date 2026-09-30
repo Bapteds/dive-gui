@@ -76,49 +76,6 @@ describe('ChamberOutputsTable', () => {
     expect(onChange).toHaveBeenCalledWith('height', 'exact', 5000);
   });
 
-  it('shows BF1 / BF2 read-only as "= LF1" / "= LF2" (corner chamfers always 45°)', () => {
-    render(
-      <ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />,
-    );
-    for (const [label, status] of [
-      ['BF1', '= LF1'],
-      ['BF2', '= LF2'],
-    ] as const) {
-      const row = screen.getByText(label).closest('tr')!;
-      expect(within(row).queryAllByRole('spinbutton')).toHaveLength(0);
-      expect(within(row).getByText(status)).toBeInTheDocument();
-      expect(within(row).getByText(`${label} exact: read-only, always equals ${status.slice(2)}`))
-        .toBeInTheDocument();
-    }
-    // LF1 / LF2 keep their Min / Max / Exact cells.
-    expect(screen.getByRole('spinbutton', { name: 'LF1 exact' })).toBeInTheDocument();
-    expect(screen.getByRole('spinbutton', { name: 'LF2 minimum' })).toBeInTheDocument();
-    expect(screen.queryByRole('spinbutton', { name: 'BF1 exact' })).toBeNull();
-  });
-
-  it('shows no confidence on BF1 / BF2 (copies of LF1 / LF2) but keeps it on LF1', () => {
-    render(
-      <ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />,
-    );
-    for (const label of ['BF1', 'BF2']) {
-      const row = screen.getByText(label).closest('tr')!;
-      expect(within(row).queryByTitle(/cross-validation error/)).toBeNull();
-      expect(within(row).getAllByRole('cell').at(-1)).toHaveTextContent(/^-$/);
-    }
-    const lf1 = screen.getByText('LF1').closest('tr')!;
-    expect(within(lf1).getByTitle(/cross-validation error/)).toBeInTheDocument();
-  });
-
-  it('keeps BF read-only even with the relations master off', () => {
-    const outputs = computeChamberOutputs({ x1: 1450, x2: 7.85, x3: 8, relationsMaster: false });
-    render(
-      <ChamberOutputsTable outputs={outputs} constraints={{}} onConstraintChange={() => {}} />,
-    );
-    const row = screen.getByText('BF2').closest('tr')!;
-    expect(within(row).queryAllByRole('spinbutton')).toHaveLength(0);
-    expect(within(row).getByText('= LF2')).toBeInTheDocument();
-  });
-
   it('marks LEOW "no effect" when H Kammer is pinned by an Exact', () => {
     const outputs = computeChamberOutputs({
       x1: 1450,
@@ -278,7 +235,12 @@ describe('ChamberOutputsTable', () => {
             outputs={applyChamberSpiralToOutputs(OUTPUTS, null)}
             constraints={{}}
             onConstraintChange={() => {}}
-            spiral={{ on: true, summary: null, length: { min: 7000, max: 6000 }, onLengthChange: () => {} }}
+            spiral={{
+              on: true,
+              summary: null,
+              length: { min: 7000, max: 6000 },
+              onLengthChange: () => {},
+            }}
           />,
         );
         expect(screen.getByLabelText('Length minimum')).toHaveValue(7000);
@@ -299,7 +261,12 @@ describe('ChamberOutputsTable', () => {
             outputs={applyChamberSpiralToOutputs(OUTPUTS, extended.boxMm)}
             constraints={{}}
             onConstraintChange={() => {}}
-            spiral={{ on: true, summary: extended, length: { min: 5000 }, onLengthChange: () => {} }}
+            spiral={{
+              on: true,
+              summary: extended,
+              length: { min: 5000 },
+              onLengthChange: () => {},
+            }}
           />,
         );
         expect(lengthRow()).toHaveTextContent('5,000');
@@ -326,7 +293,12 @@ describe('ChamberOutputsTable', () => {
             outputs={applyChamberSpiralToOutputs(OUTPUTS, SUMMARY.boxMm)}
             constraints={{}}
             onConstraintChange={() => {}}
-            spiral={{ on: true, summary: SUMMARY, length: { exact: 4400 }, onLengthChange: () => {} }}
+            spiral={{
+              on: true,
+              summary: SUMMARY,
+              length: { exact: 4400 },
+              onLengthChange: () => {},
+            }}
           />,
         );
         expect(within(lengthRow()).getByText('set exact')).toBeInTheDocument();

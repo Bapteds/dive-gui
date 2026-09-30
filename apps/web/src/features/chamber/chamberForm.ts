@@ -5,7 +5,6 @@ import {
   CHAMBER_D_MIDDLE_OVER_LAST,
   CHAMBER_DIMENSION_MAX_MM,
   CHAMBER_INPUT_RANGES,
-  CHAMBER_PERMANENT_RELATION_KEYS,
   CHAMBER_RELATIONS,
   CHAMBER_VANE_COUNT_DEFAULT,
   CHAMBER_VANE_COUNT_MAX,
@@ -286,17 +285,6 @@ export function chamberInputToFormValues(input: ChamberInput): ChamberFormValues
     // Saves made before the semi-spiral casing existed load with it off.
     semiSpiral: input.semiSpiral ?? CHAMBER_FORM_DEFAULTS.semiSpiral,
   };
-}
-
-/**
- * The Parameters-table constraints of a saved build snapshot. Constraints on the
- * permanent rows (BF1 / BF2, always = LF1 / LF2; spec 2026-09-29-corner-chamfer-45)
- * came from older saves: they are dropped silently, the model ignores them anyway.
- */
-export function chamberInputToConstraints(input: ChamberInput): NonNullable<ChamberInput['constraints']> {
-  const constraints = { ...(input.constraints ?? {}) };
-  for (const key of CHAMBER_PERMANENT_RELATION_KEYS) delete constraints[key];
-  return constraints;
 }
 
 /**

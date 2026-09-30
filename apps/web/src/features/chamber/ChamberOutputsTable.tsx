@@ -10,11 +10,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import chamberDimensionsImg from './assets/chamber-dimensions.png';
-import {
-  CHAMBER_DIMENSION_MAX_MM,
-  CHAMBER_PERMANENT_RELATION_KEYS,
-  type ChamberSpiralSummary,
-} from '@dive/shared';
+import { CHAMBER_DIMENSION_MAX_MM, type ChamberSpiralSummary } from '@dive/shared';
 import type {
   ChamberConfidence,
   ChamberConstraint,
@@ -53,10 +49,7 @@ const STATUS_STYLES: Record<ChamberStatus, string> = {
   'from spiral': 'text-primary',
 };
 
-/**
- * A read-only cell where Min / Max / Exact do not apply: a spiral-derived row, or
- * BF1 / BF2, which always equal LF1 / LF2 (spec 2026-09-29-corner-chamfer-45).
- */
+/** A read-only cell of a spiral-derived row (Min / Max / Exact do not apply). */
 function ReadOnlyCell({ label }: { label: string }) {
   return (
     <span className="inline-block w-20 px-2 py-1 text-sm text-text-secondary" title={label}>
@@ -83,8 +76,8 @@ function SpiralNote({ summary }: { summary: ChamberSpiralSummary | null }) {
       {summary.widthBinding ? ', limited by B Kammer' : ''}
       {summary.lengthBinding ? ', limited by the Length Max' : ''}
       {extension > 0 ? `, inlet channel extended by ${Math.round(extension)} mm` : ''}; worst
-      cross-section error {summary.worstAreaErrorM2.toFixed(2)} m² at{' '}
-      {Math.round(summary.atPhiDeg)}°.
+      cross-section error {summary.worstAreaErrorM2.toFixed(2)} m² at {Math.round(summary.atPhiDeg)}
+      °.
     </p>
   );
 }
@@ -254,10 +247,7 @@ export function ChamberOutputsTable({
                   </TableRow>
                 ) : null;
               // Relation-driven outputs (e.g. Height = LEB + LEOW) default to their
-              // derived value but can be overridden with Min/Max/Exact like any other,
-              // except the permanent BF1 = LF1 / BF2 = LF2 (45° corners), read-only.
-              const locked = CHAMBER_PERMANENT_RELATION_KEYS.includes(o.key);
-              const lockedNote = `read-only, always equals ${(o.relationLabel ?? '').replace(/^= /, '')}`;
+              // derived value but can be overridden with Min/Max/Exact like any other.
               if (derived) {
                 // Spiral-derived row: read-only, no model or confidence claim.
                 const ro = `read-only, from the spiral`;
@@ -319,43 +309,27 @@ export function ChamberOutputsTable({
                       </span>
                     </TableCell>
                     <TableCell className="text-right text-text-secondary">{mm(o.model)}</TableCell>
-                    {locked ? (
-                      <>
-                        <TableCell>
-                          <ReadOnlyCell label={`${o.label} minimum: ${lockedNote}`} />
-                        </TableCell>
-                        <TableCell>
-                          <ReadOnlyCell label={`${o.label} maximum: ${lockedNote}`} />
-                        </TableCell>
-                        <TableCell>
-                          <ReadOnlyCell label={`${o.label} exact: ${lockedNote}`} />
-                        </TableCell>
-                      </>
-                    ) : (
-                      <>
-                        <TableCell>
-                          <NumCell
-                            value={con.min}
-                            ariaLabel={`${o.label} minimum`}
-                            onChange={(v) => onConstraintChange(o.key, 'min', v)}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <NumCell
-                            value={con.max}
-                            ariaLabel={`${o.label} maximum`}
-                            onChange={(v) => onConstraintChange(o.key, 'max', v)}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <NumCell
-                            value={con.exact}
-                            ariaLabel={`${o.label} exact`}
-                            onChange={(v) => onConstraintChange(o.key, 'exact', v)}
-                          />
-                        </TableCell>
-                      </>
-                    )}
+                    <TableCell>
+                      <NumCell
+                        value={con.min}
+                        ariaLabel={`${o.label} minimum`}
+                        onChange={(v) => onConstraintChange(o.key, 'min', v)}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <NumCell
+                        value={con.max}
+                        ariaLabel={`${o.label} maximum`}
+                        onChange={(v) => onConstraintChange(o.key, 'max', v)}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <NumCell
+                        value={con.exact}
+                        ariaLabel={`${o.label} exact`}
+                        onChange={(v) => onConstraintChange(o.key, 'exact', v)}
+                      />
+                    </TableCell>
                     <TableCell
                       className={cn(
                         'text-right font-semibold',
@@ -375,24 +349,18 @@ export function ChamberOutputsTable({
                         </span>
                       )}
                     </TableCell>
-                    <TableCell className={locked ? 'text-text-secondary' : undefined}>
-                      {/* BF1 / BF2 copy LF1 / LF2: their own fit's confidence would
-                        not describe the value shown, so no claim (like spiral rows). */}
-                      {locked ? (
-                        '-'
-                      ) : (
-                        /* The CV error is shown, not hidden in a tooltip — title
-                        attributes never reach keyboard/touch/screen-reader users. */
-                        <span
-                          title={`Leave-one-out cross-validation error: ${o.cvError}%`}
-                          className={cn(
-                            'inline-block whitespace-nowrap rounded-sm px-2 py-0.5 text-xs font-medium',
-                            CONF_STYLES[o.confidence],
-                          )}
-                        >
-                          {o.confidence} · {o.cvError}%
-                        </span>
-                      )}
+                    <TableCell>
+                      {/* The CV error is shown, not hidden in a tooltip — title
+                        attributes never reach keyboard/touch/screen-reader users. */}
+                      <span
+                        title={`Leave-one-out cross-validation error: ${o.cvError}%`}
+                        className={cn(
+                          'inline-block whitespace-nowrap rounded-sm px-2 py-0.5 text-xs font-medium',
+                          CONF_STYLES[o.confidence],
+                        )}
+                      >
+                        {o.confidence} · {o.cvError}%
+                      </span>
                     </TableCell>
                   </TableRow>
                   {lengthRow}

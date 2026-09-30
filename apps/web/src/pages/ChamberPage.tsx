@@ -24,7 +24,6 @@ import {
   chamberBodyKey,
   chamberBuildErrorMessage,
   chamberFormSchema,
-  chamberInputToConstraints,
   chamberInputToSpiralLength,
   chamberSpiralLengthBody,
   chamberInputToFormValues,
@@ -106,7 +105,7 @@ export function ChamberPage() {
     const handed = (location.state as { chamberInput?: ChamberInput } | null)?.chamberInput;
     if (!handed) return;
     reset(chamberInputToFormValues(handed));
-    setConstraints(chamberInputToConstraints(handed));
+    setConstraints(handed.constraints ?? {});
     setSpiralLength(chamberInputToSpiralLength(handed));
     navigate(location.pathname, { replace: true, state: null });
     // Only when a new hand-off arrives.
@@ -201,9 +200,7 @@ export function ChamberPage() {
 
   // The current form as a build body for the saved-builds Save button (null
   // while the form is invalid, which disables saving an unbuildable state).
-  const saveSnapshot = isValid
-    ? { ...values, constraints, spiralLength: spiralLengthBody }
-    : null;
+  const saveSnapshot = isValid ? { ...values, constraints, spiralLength: spiralLengthBody } : null;
 
   const onSpiralLengthChange = (field: keyof ChamberConstraint, value: number | undefined) => {
     setSpiralLength((prev) => {
@@ -343,7 +340,7 @@ export function ChamberPage() {
             snapshot={saveSnapshot}
             onLoad={(save) => {
               reset(chamberInputToFormValues(save.snapshot));
-              setConstraints(chamberInputToConstraints(save.snapshot));
+              setConstraints(save.snapshot.constraints ?? {});
               setSpiralLength(chamberInputToSpiralLength(save.snapshot));
               // The loaded save is a DIFFERENT configuration: everything tied
               // to the previous build (viewer, exports, notices) is stale now.

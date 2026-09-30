@@ -63,10 +63,13 @@ describe('computeParamSpace', () => {
     expect(ranges[1].bandPct).toBe(10);
   });
 
-  it('refuses the permanent BF1 / BF2 rows', () => {
+  it('refuses BF1 / BF2 while their BF = LF relation is on, allows them once it is off', () => {
     expect(studyPickableKeys(BASE)).not.toContain('chamferWidth1');
     const { errors } = computeParamSpace(BASE, ['chamferWidth1'], 10);
-    expect(errors[0]).toMatch(/BF1/);
+    expect(errors[0]).toMatch(/^BF1 follows its chamfer length through its relation/);
+    const off = { ...BASE, relations: { chamferWidth1: false } };
+    expect(studyPickableKeys(off)).toContain('chamferWidth1');
+    expect(computeParamSpace(off, ['chamferWidth1'], 10).errors).toEqual([]);
   });
 });
 

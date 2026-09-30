@@ -4,9 +4,8 @@
 // Exact clamp + Status behave like the calculator.
 import { describe, expect, it } from 'vitest';
 import {
-  CHAMBER_GENERATOR_FRAME_DIAMETERS_MM,
-  CHAMBER_PERMANENT_RELATION_KEYS,
   CHAMBER_RELATIONS,
+  CHAMBER_GENERATOR_FRAME_DIAMETERS_MM,
   CHAMBER_SPIRAL_CLEARANCE_M,
   CHAMBER_SPIRAL_DERIVED_KEYS,
   CHAMBER_SPIRAL_FLOW_RANGE,
@@ -51,10 +50,8 @@ describe('computeChamberOutputs', () => {
     expect(m.get('height')!.form).toBe('linear');
 
     // With relations and constraints off, FINAL is the model snapped to the
-    // 50 mm grid and every output reads "within range", except BF1 / BF2 which
-    // always follow LF1 / LF2 (spec 2026-09-29-corner-chamfer-45).
+    // 50 mm grid and every output reads "within range".
     for (const o of outputs) {
-      if (o.key === 'chamferWidth1' || o.key === 'chamferWidth2') continue;
       expect(o.final).toBe(snapToChamberGrid(o.model));
       expect(o.final % CHAMBER_GRID_MM).toBe(0);
       expect(o.status).toBe('within range');
@@ -79,17 +76,20 @@ describe('computeChamberOutputs', () => {
       6,
     );
     // LE = 255.16 + 3.4954 x HLE is a fitted formula: its result re-snaps to the grid.
-    expect(m.get('dLast')!.final).toBe(snapToChamberGrid(255.16 + 3.4954 * m.get('hMiddle')!.final));
+    expect(m.get('dLast')!.final).toBe(
+      snapToChamberGrid(255.16 + 3.4954 * m.get('hMiddle')!.final),
+    );
     // A relation-sourced value carries 'from relation' + its label.
     expect(m.get('height')!.status).toBe('from relation');
     expect(m.get('height')!.relationLabel).toBe('= LEB + LEOW');
     expect(m.get('distFromEnd')!.relationLabel).toBe('= LF1 + LF2');
   });
 
-  it('gives chamfer-1 length and width the same value even with relations off', () => {
-    // BF1 = LF1 is permanent: with the master off BF1 reads LF1's FINAL.
+  it('gives chamfer-1 length and width the same value (shared formula)', () => {
+    // Relations off so BOTH models are the raw shared fit (with BF1's = LF1
+    // relation on, its model reads LF1's grid-snapped FINAL instead).
     const m = byKey(computeChamberOutputs({ ...BASE, relationsMaster: false }));
-    expect(m.get('chamferWidth1')!.final).toBe(m.get('chamferLength1')!.final);
+    expect(m.get('chamferLength1')!.model).toBe(m.get('chamferWidth1')!.model);
   });
 
   it('caps a value above its Max', () => {
@@ -174,7 +174,9 @@ describe('computeChamberOutputs', () => {
   });
 
   it('honors an Exact on the LEB identity and propagates it into Height', () => {
-    const m = byKey(computeChamberOutputs({ ...BASE, constraints: { hMiddlePlusFirst: { exact: 1500 } } }));
+    const m = byKey(
+      computeChamberOutputs({ ...BASE, constraints: { hMiddlePlusFirst: { exact: 1500 } } }),
+    );
     expect(m.get('hMiddlePlusFirst')!.final).toBe(1500);
     expect(m.get('hMiddlePlusFirst')!.status).toBe('set exact');
     // Height = LEB + LEOW reads LEB's overridden FINAL.
@@ -272,7 +274,9 @@ describe('computeChamberOutputs', () => {
 
     it('clamps against the snapped value, and an unbitten Max leaves the snap', () => {
       // Width base fit ≈ 4444.44 → snaps to 4450.
-      const capped = byKey(computeChamberOutputs({ ...BASE, constraints: { width: { max: 4430 } } }));
+      const capped = byKey(
+        computeChamberOutputs({ ...BASE, constraints: { width: { max: 4430 } } }),
+      );
       expect(capped.get('width')!.final).toBe(4430);
       expect(capped.get('width')!.status).toBe('capped at max');
       const free = byKey(computeChamberOutputs({ ...BASE, constraints: { width: { max: 4460 } } }));
@@ -347,9 +351,7 @@ describe('computeChamberOutputs', () => {
     });
 
     it('never flags any other output', () => {
-      const m = byKey(
-        computeChamberOutputs({ ...BASE, constraints: { height: { exact: 4200 } } }),
-      );
+      const m = byKey(computeChamberOutputs({ ...BASE, constraints: { height: { exact: 4200 } } }));
       for (const [key, output] of m) {
         if (key !== 'hLast') expect(output.noEffect).toBeFalsy();
       }
@@ -458,7 +460,9 @@ describe('blankGeneratorHeightRefusal (blank generator height)', () => {
 
   it('leaves a typed height, a taller cone and the domed design to the builder', () => {
     expect(refusal({ ...BASE, ...H(1800), centralHeight: 500 })).toBeNull();
-    expect(refusal({ ...BASE, ...H(1800), ...SIMPLIFY, hollowLength: 200, centralHeight: 500 })).toBeNull();
+    expect(
+      refusal({ ...BASE, ...H(1800), ...SIMPLIFY, hollowLength: 200, centralHeight: 500 }),
+    ).toBeNull();
     expect(refusal({ ...BASE, ...H(1800), ...SIMPLIFY, hollowLength: 1500 })).toBeNull();
     expect(refusal({ ...BASE, ...H(1800), variant: 'hollow', hollowLength: 200 })).toBeNull();
   });
@@ -596,9 +600,13 @@ describe('semi-spiral casing helpers (spec 2026-09-29-semi-spiral-casing)', () =
     );
     const narrow = { ...input, constraints: { width: { exact: 1000 } } };
     const msg = chamberSpiralVelocityRefusal(narrow, at(1000));
-    expect(msg).toMatch(/^B Kammer \(1000 mm\) is too narrow for the casing; it must stay between 0\.3 and 3 m\/s\. Set B Kammer between \d+ and \d+ mm\.$/);
+    expect(msg).toMatch(
+      /^B Kammer \(1000 mm\) is too narrow for the casing; it must stay between 0\.3 and 3 m\/s\. Set B Kammer between \d+ and \d+ mm\.$/,
+    );
     const huge = { ...input, constraints: { width: { exact: 60000 } } };
-    expect(chamberSpiralVelocityRefusal(huge, at(60000))).toMatch(/gives a casing flow velocity of 0\.\d+ m\/s/);
+    expect(chamberSpiralVelocityRefusal(huge, at(60000))).toMatch(
+      /gives a casing flow velocity of 0\.\d+ m\/s/,
+    );
   });
 
   it('counts the cone chamfer widening in the widest part (spec 2026-09-29-cone-foot-chamfer)', () => {
@@ -608,9 +616,10 @@ describe('semi-spiral casing helpers (spec 2026-09-29-semi-spiral-casing)', () =
     // Runner case flush with LE: the widened LE part (LE Ø + 2 x size) is the widest.
     const flush = { ...input, dFirst: dLast };
     expect(chamberSpiralInputs(flush, outputs).D_LE).toBeCloseTo((dLast * 1.1) / 1000, 12);
-    expect(
-      chamberSpiralInputs({ ...flush, coneChamferEnabled: true }, outputs).D_LE,
-    ).toBeCloseTo(((dLast + 100) * 1.1) / 1000, 12);
+    expect(chamberSpiralInputs({ ...flush, coneChamferEnabled: true }, outputs).D_LE).toBeCloseTo(
+      ((dLast + 100) * 1.1) / 1000,
+      12,
+    );
     expect(
       chamberSpiralInputs({ ...flush, coneChamferEnabled: true, coneChamferSize: 30 }, outputs)
         .D_LE,
@@ -621,9 +630,10 @@ describe('semi-spiral casing helpers (spec 2026-09-29-semi-spiral-casing)', () =
         .D_LE,
     ).toBeCloseTo((dLast * 1.1) / 1000, 12);
     // The auto runner case (1.147 x LE) still wins over a 50 mm widening.
-    expect(
-      chamberSpiralInputs({ ...input, coneChamferEnabled: true }, outputs).D_LE,
-    ).toBeCloseTo((1.14703 * dLast * 1.1) / 1000, 12);
+    expect(chamberSpiralInputs({ ...input, coneChamferEnabled: true }, outputs).D_LE).toBeCloseTo(
+      (1.14703 * dLast * 1.1) / 1000,
+      12,
+    );
   });
 
   it('ignores constraints left on the derived rows while the spiral is on', () => {
@@ -665,70 +675,42 @@ describe('semi-spiral casing helpers (spec 2026-09-29-semi-spiral-casing)', () =
   });
 });
 
-// Corner chamfers always at 45° (spec 2026-09-29-corner-chamfer-45): BF1 = LF1
-// and BF2 = LF2 whatever the relations master, the per-relation map or any
-// constraint on BF says; LF2 = LF1 stays a normal toggleable relation.
-describe('corner chamfers always at 45° (BF = LF)', () => {
-  const expectFollows = (outputs: ChamberOutput[]) => {
-    const m = byKey(outputs);
-    for (const [bf, lf, label] of [
-      ['chamferWidth1', 'chamferLength1', '= LF1'],
-      ['chamferWidth2', 'chamferLength2', '= LF2'],
-    ] as const) {
-      expect(m.get(bf)!.final).toBe(m.get(lf)!.final);
-      expect(m.get(bf)!.status).toBe('from relation');
-      expect(m.get(bf)!.relationLabel).toBe(label);
-      expect(m.get(bf)!.userDriven).toBe(m.get(lf)!.userDriven);
-    }
-    return m;
-  };
-
-  it('keeps BF = LF with the relations master off', () => {
-    const m = expectFollows(computeChamberOutputs({ ...BASE, relationsMaster: false }));
-    // LF2 = LF1 is off with the master: LF2 is its own fit, and BF2 follows it.
-    expect(m.get('chamferLength2')!.status).toBe('within range');
+// Corner chamfer relations toggleable again (user decision 2026-09-30, reverses
+// the 45° lock of spec 2026-09-29-corner-chamfer-45): BF1 = LF1 and BF2 = LF2
+// are normal relations, on by default, back in the menu, and BF takes its own
+// Min / Max / Exact when its relation is off.
+describe('corner chamfer relations (BF = LF) toggleable', () => {
+  it('lists the nine relations, BF1 and BF2 included', () => {
+    const keys = CHAMBER_RELATIONS.map((r) => r.key);
+    expect(keys).toHaveLength(9);
+    expect(keys).toContain('chamferWidth1');
+    expect(keys).toContain('chamferWidth2');
   });
 
-  it('keeps BF = LF when an old save switched the BF relations off', () => {
-    expectFollows(
-      computeChamberOutputs({ ...BASE, relations: { chamferWidth1: false, chamferWidth2: false } }),
-    );
+  it('copies LF into BF by default', () => {
+    const m = byKey(computeChamberOutputs(BASE));
+    expect(m.get('chamferWidth1')!.final).toBe(m.get('chamferLength1')!.final);
+    expect(m.get('chamferWidth2')!.final).toBe(m.get('chamferLength2')!.final);
   });
 
-  it('ignores Min / Max / Exact on BF1 and BF2', () => {
-    const m = expectFollows(
+  it('lets BF1 take its own fit and its Exact once its relation is off', () => {
+    const off = byKey(computeChamberOutputs({ ...BASE, relations: { chamferWidth1: false } }));
+    expect(off.get('chamferWidth1')!.status).not.toBe('from relation');
+    const exact = byKey(
       computeChamberOutputs({
         ...BASE,
-        constraints: { chamferWidth1: { exact: 999 }, chamferWidth2: { min: 5000, max: 100 } },
+        relations: { chamferWidth1: false },
+        constraints: { chamferWidth1: { exact: 999 } },
       }),
     );
-    expect(m.get('chamferWidth1')!.final).not.toBe(999);
-    expect(m.get('chamferWidth1')!.userDriven).toBe(false);
+    expect(exact.get('chamferWidth1')!.final).toBe(999);
+    expect(exact.get('chamferWidth1')!.userDriven).toBe(true);
   });
 
-  it('carries an LF Exact verbatim into BF, user-driven', () => {
-    const m = expectFollows(
-      computeChamberOutputs({ ...BASE, constraints: { chamferLength1: { exact: 1234 } } }),
-    );
-    expect(m.get('chamferWidth1')!.final).toBe(1234);
-    expect(m.get('chamferWidth1')!.userDriven).toBe(true);
-    // LF2 = LF1 (on by default) carries it on to BF2.
-    expect(m.get('chamferWidth2')!.final).toBe(1234);
-  });
-
-  it('keeps LF2 = LF1 toggleable', () => {
-    const m = expectFollows(computeChamberOutputs({ ...BASE, relations: { chamferLength2: false } }));
-    expect(m.get('chamferLength2')!.status).toBe('within range');
-    expect(m.get('chamferLength2')!.final).not.toBe(m.get('chamferLength1')!.final);
-  });
-
-  it('takes the two BF relations out of the relations menu (7 left)', () => {
-    expect(CHAMBER_PERMANENT_RELATION_KEYS).toEqual(['chamferWidth1', 'chamferWidth2']);
-    const keys = CHAMBER_RELATIONS.map((r) => r.key);
-    expect(keys).toHaveLength(7);
-    expect(keys).not.toContain('chamferWidth1');
-    expect(keys).not.toContain('chamferWidth2');
-    expect(keys).toContain('chamferLength2');
+  it('turns BF off with the relations master', () => {
+    const m = byKey(computeChamberOutputs({ ...BASE, relationsMaster: false }));
+    expect(m.get('chamferWidth1')!.status).not.toBe('from relation');
+    expect(m.get('chamferWidth2')!.status).not.toBe('from relation');
   });
 });
 
@@ -751,7 +733,9 @@ describe('semi-spiral Length Min / Max / Exact (spec 2026-09-30-spiral-length)',
   it('reads the limits only with the spiral on; Exact sets both; flags an inverted range', () => {
     const none = { minMm: null, maxMm: null, inverted: false };
     expect(chamberSpiralLengthLimits(SPIRAL_BASE)).toEqual(none);
-    expect(chamberSpiralLengthLimits({ ...BASE, spiralLength: { min: 5000, max: 6000 } })).toEqual(none);
+    expect(chamberSpiralLengthLimits({ ...BASE, spiralLength: { min: 5000, max: 6000 } })).toEqual(
+      none,
+    );
     expect(
       chamberSpiralLengthLimits({ ...SPIRAL_BASE, spiralLength: { min: 5000, max: 6000 } }),
     ).toEqual({ minMm: 5000, maxMm: 6000, inverted: false });

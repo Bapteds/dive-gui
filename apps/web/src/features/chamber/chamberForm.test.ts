@@ -6,7 +6,6 @@ import {
   chamberBodyKey,
   chamberBuildErrorMessage,
   chamberFormSchema,
-  chamberInputToConstraints,
   chamberInputToFormValues,
   chamberInputToSpiralLength,
   chamberSpiralLengthBody,
@@ -136,7 +135,13 @@ describe('chamberInputToFormValues', () => {
   });
 
   it.each([16, 18, 24])('loads a save with %i vanes as is', (vaneCount) => {
-    const loaded = chamberInputToFormValues({ x1: 1450, x2: 7.85, x3: 8, guideVanes: true, vaneCount });
+    const loaded = chamberInputToFormValues({
+      x1: 1450,
+      x2: 7.85,
+      x3: 8,
+      guideVanes: true,
+      vaneCount,
+    });
     expect(loaded.vaneCount).toBe(vaneCount);
     expect(parse(loaded).success).toBe(true);
   });
@@ -237,7 +242,10 @@ describe('cone chamfer (45° foot chamfer on the lower outer edge of the LE part
     );
     // Blank wall thickness = the 50 mm default.
     expect(
-      issueOn(on({ coneChamferSize: 40, wallThickness: undefined, hollowLength: 80 }), 'coneChamferSize'),
+      issueOn(
+        on({ coneChamferSize: 40, wallThickness: undefined, hollowLength: 80 }),
+        'coneChamferSize',
+      ),
     ).toBe('Must be at most Cone length minus Wall thickness (30 mm)');
     // Equal to the bound is allowed.
     expect(parse(on({ coneChamferSize: 30, wallThickness: 50, hollowLength: 80 })).success).toBe(
@@ -435,41 +443,26 @@ describe('semiSpiralToggle (Chamfer off with the spiral, restored when it goes)'
   });
 });
 
-// Corner chamfers always at 45° (spec 2026-09-29-corner-chamfer-45): an old
-// save may carry a BF constraint or a disabled BF relation; it loads without
-// error and both are dropped silently.
-describe('old saves with BF constraints or BF relations', () => {
+describe('old saves: BF relations and constraints load as saved (2026-09-30)', () => {
   const base: ChamberInput = { x1: 1450, x2: 7.85, x3: 8 };
 
-  it('drops the BF relations from the form values', () => {
+  it('keeps disabled BF relations', () => {
     const loaded = chamberInputToFormValues({
       ...base,
       relations: { chamferWidth1: false, chamferWidth2: false, chamferLength2: false },
     });
-    expect(loaded.relations).not.toHaveProperty('chamferWidth1');
-    expect(loaded.relations).not.toHaveProperty('chamferWidth2');
+    expect(loaded.relations.chamferWidth1).toBe(false);
+    expect(loaded.relations.chamferWidth2).toBe(false);
     expect(loaded.relations.chamferLength2).toBe(false);
   });
 
-  it('drops the BF constraints and keeps the others', () => {
-    expect(
-      chamberInputToConstraints({
-        ...base,
-        constraints: {
-          chamferWidth1: { exact: 999 },
-          chamferWidth2: { min: 10 },
-          chamferLength1: { exact: 1200 },
-        },
-      }),
-    ).toEqual({ chamferLength1: { exact: 1200 } });
-    expect(chamberInputToConstraints(base)).toEqual({});
-  });
-
   it('restores the semi-spiral Length Min / Max / Exact (empty for old saves)', () => {
-    expect(chamberInputToSpiralLength({ ...base, spiralLength: { min: 5000, max: 6000 } })).toEqual({
-      min: 5000,
-      max: 6000,
-    });
+    expect(chamberInputToSpiralLength({ ...base, spiralLength: { min: 5000, max: 6000 } })).toEqual(
+      {
+        min: 5000,
+        max: 6000,
+      },
+    );
     expect(chamberInputToSpiralLength(base)).toEqual({});
   });
 });

@@ -31,9 +31,7 @@ export function ChamberBuildWarnings({
             <XCircle className="size-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />
             Build errors
           </p>
-          <p className="mt-1 text-xs text-text-secondary">
-            The chamber was not generated:
-          </p>
+          <p className="mt-1 text-xs text-text-secondary">The chamber was not generated:</p>
           <ul className="mt-2 flex list-disc flex-col gap-1 pl-5 text-sm text-text">
             {errors.map((error) => (
               <li key={error}>{error}</li>

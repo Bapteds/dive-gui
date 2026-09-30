@@ -1,5 +1,7 @@
 # Chamber corner chamfers always at 45°
 
+> **Superseded 2026-09-30** (user decision): BF1 = LF1 and BF2 = LF2 are toggleable and editable again; see `brain/decisions.md` and the changelog entry "Chamber: BF1 / BF2 relations toggleable and editable again".
+
 > **Status**: implemented (2026-09-30), approved 2026-09-29 · **Date**: 2026-09-29
 > **Area**: shared (model), API, web, tests (no builder change)
 
