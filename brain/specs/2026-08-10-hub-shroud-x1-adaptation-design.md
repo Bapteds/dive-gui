@@ -4,6 +4,8 @@
 **Feature:** Chamber Creation — guide-vane distributor, hub/shroud adaptation to outlet size
 **Scope:** `apps/api/scripts/buildChamber.py` geometry only (`make_vane_patches` + the hub-core / shroud-casing builders in `main()`). No shared-type / API-schema / web-form change — this reuses the existing `outletOuterD` (= X1·MM_TO_M) and `outletRatio` params already plumbed by the 2026-08-06 feature. No change to the empirical model or the non-guide-vane path.
 
+**Superseded in part by** `2026-09-30-hub-shoulder-knee-ellipse-design.md`: the P2 rule of §4 (half `Δr_hub`) and §6 decision 4 (fold accepted, `WARNING` only). P2 is now the 45° point of the P1–P3 quarter ellipse; the rest of this spec stays in force.
+
 **Supersedes** the hub/shroud reshaping half of `2026-08-06-outlet-x1-ratio-design.md` §5.2–5.3 (the "monotonic piecewise-linear radial remap pinned at both rims, identity beyond `R_anchor`"). The **rims** (`ro_target = X1/2`, `ri_target = outletRatio·ro_target`) and all the parameter plumbing from that feature are kept unchanged; only how the hub shoulder and shroud floor are *built between and beyond the rims* changes.
 
 ---

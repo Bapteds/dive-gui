@@ -48,7 +48,7 @@
 | **Runner case ledge** | Guide vanes with a typed Runner case Ø below LE Ø (WS-A v2): the runner case wall stops 20 mm under the shroud brim and a horizontal **ledge** runs out to LE Ø/2; the 20 mm vertical band at LE Ø/2 above it is the distributor casing (`shroud`). Internal names `runner_case_ledge`, `z_ledge`, `LEDGE_GAP`. Not the "shoulder" (the stepped middle/last step). |
 | **partScale** | Uniform scale of the inner assembly (chamber and axis fixed). |
 | **Structural relations** | Toggleable empirical identities (H Kammer = LEB + LEOW, LEB = 2 × HLE, P11 = 2 × P10…) with Min/Max/Exact constraints. Original German labels: H Kammer (chamber height), LEB, LEOW, HLE. |
-| **Refusal vs warning** | Refusal (422, build blocked) when a part overflows the chamber; warning (build delivered, message surfaced in the UI) for edge cases (e.g. non-monotonic hub shoulder). |
+| **Refusal vs warning** | Refusal (422, build blocked) when a part overflows the chamber; warning (build delivered, message surfaced in the UI) for edge cases (e.g. the outlet outer radius clamped to the vane's working radius). |
 | **50 mm rounding** | Empirical dimensions are rounded to a multiple of 50 mm. |
 
 ## 4. OpenFOAM and CFD

@@ -138,8 +138,12 @@ VANE_SKIN_TOL = 1e-3             # XY distance (m) within which a wetted face ce
 # guideVanes_walls.stl by RDP reduction (_diag_rdp.py). Each is (r, z_asset);
 # z_asset maps to build z via the existing HLE map z = z_sb + z_asset*sz.
 VANE_HUB_P1 = (0.29548, 0.22608)     # duct-top -> shoulder (tracks rim: duct vertical)
-VANE_HUB_P2 = (0.39274, 0.51575)     # shoulder knee (half-rate)
 VANE_HUB_P3 = (0.61465, 0.64565)     # roof break; z_asset == asset height -> lands at z_mid_top
+# Shoulder knee P2 = the 45 deg point of the construction quarter ellipse centred at
+# (r_P3, z_P1) that leaves P1 vertically and meets P3 horizontally (spec
+# 2026-09-30-hub-shoulder-knee-ellipse; replaces the measured half-rate knee).
+HUB_KNEE_R_FRACTION = 1.0 - math.sqrt(2) / 2   # of (r_P3 - r_P1), from P1
+HUB_KNEE_Z_FRACTION = math.sqrt(2) / 2         # of (z_P3 - z_P1), from P1
 VANE_P3_RATIO = 0.93840              # P3 r / outletOuterR: P3 tracks R_shroud (X1), ratio-independent
 # Shroud floor fillet = axis-aligned ellipse; semi-axes as fractions of R_shroud
 # (fit in _diag_shroudcurve.py). a = radial, b = vertical.
@@ -628,15 +632,31 @@ def _split_hub_shroud(np, walls):
     return hub, shroud
 
 
+def _hub_knee_from_ellipse(r_p1, z_p1, r_p3, z_p3):
+    """Hub shoulder knee P2 = the 45 deg point of the quarter ellipse centred at
+    (r_P3, z_P1) with semi-axes (r_P3 - r_P1, z_P3 - z_P1): vertical tangent at P1
+    (continues the duct), horizontal tangent at P3 (continues the roof). The
+    ellipse is a construction only; the profile stays straight P1 -> P2 -> P3
+    (spec 2026-09-30-hub-shoulder-knee-ellipse). Refuses a degenerate shoulder."""
+    if not (r_p3 > r_p1 and z_p3 > z_p1):
+        raise ValueError(
+            "hub shoulder degenerate: roof break not outside/above the duct top "
+            "(P1=(%.4f, %.4f) P3=(%.4f, %.4f))" % (r_p1, z_p1, r_p3, z_p3))
+    return (r_p1 + HUB_KNEE_R_FRACTION * (r_p3 - r_p1),
+            z_p1 + HUB_KNEE_Z_FRACTION * (z_p3 - z_p1))
+
+
 def _hub_point_radii(R_hub_new, R_shroud_new, meta):
     """Radial positions of the hub shoulder points under the X1/ratio rule
     (spec 2026-08-10 §4). Radial only; the caller applies z via the HLE map.
-    P1 tracks the rim (full delta), P2 half, P3 proportional to R_shroud."""
+    P1 tracks the rim (full delta), P3 proportional to R_shroud, P2 = 45 deg point
+    of the P1-P3 quarter ellipse (_hub_knee_from_ellipse; its radius does not
+    depend on the heights, so the asset heights stand in here)."""
     dr_hub = R_hub_new - meta["outletInnerR"]      # R_hub0 = asset inner rim (absolute)
     r_rim = R_hub_new
     r_p1 = VANE_HUB_P1[0] + dr_hub
-    r_p2 = VANE_HUB_P2[0] + dr_hub / 2.0
     r_p3 = VANE_P3_RATIO * R_shroud_new
+    r_p2 = _hub_knee_from_ellipse(r_p1, VANE_HUB_P1[1], r_p3, VANE_HUB_P3[1])[0]
     return r_rim, r_p1, r_p2, r_p3
 
 
@@ -875,20 +895,18 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
 
     hub_profile = None
     if analytic:
-        # HUB = the 3-point meridional polyline (rim -> P1 -> P2 -> P3) + a flat roof
-        # out to the wall. Points move per _hub_point_radii; z is fixed via the HLE map.
-        r_rim, r_p1, r_p2, r_p3 = _hub_point_radii(ri_target, ro_target, meta)
-        # The real invalid case is the shoulder folding (P1 overtaking P2 at high X1).
-        # rim vs P1 is an inherent ~0.25 mm lean (P1_0 sits just inside R_hub0), not a fold.
-        if not (r_p1 <= r_p2 <= r_p3):
-            print("WARNING: hub shoulder non-monotonic (Runner Ø too large for the "
-                  "point spacing): rim=%.4f P1=%.4f P2=%.4f P3=%.4f"
-                  % (r_rim, r_p1, r_p2, r_p3))
+        # HUB = the meridional polyline rim -> P1 -> P2 -> P3 + a flat roof out to the
+        # wall. P1 tracks the rim (a ~0.25 mm inward lean, intended), P3 tracks
+        # R_shroud, z via the HLE map; the knee P2 is the 45 deg point of the P1-P3
+        # quarter ellipse (_hub_knee_from_ellipse), so the shoulder can never fold.
+        r_rim, r_p1, _, r_p3 = _hub_point_radii(ri_target, ro_target, meta)
+        z_p1, z_p3 = _z(VANE_HUB_P1[1]), _z(VANE_HUB_P3[1])
+        r_p2, z_p2 = _hub_knee_from_ellipse(r_p1, z_p1, r_p3, z_p3)
         hub_profile = np.array([
             [r_rim, _z(0.05288)],                       # outlet inner rim (passage bottom)
-            [r_p1, _z(VANE_HUB_P1[1])],
-            [r_p2, _z(VANE_HUB_P2[1])],
-            [r_p3, _z(VANE_HUB_P3[1])],                 # roof break (z == z_mid_top)
+            [r_p1, z_p1],
+            [r_p2, z_p2],
+            [r_p3, z_p3],                               # roof break (z == z_mid_top)
         ], dtype=float)
         _throat = _revolve_open(np, trimesh, _densify(np, hub_profile), cx, cy)   # throat, no roof
         _hub_surface = np.vstack([hub_profile, [d_last / 2.0, _z(VANE_HUB_P3[1])]])

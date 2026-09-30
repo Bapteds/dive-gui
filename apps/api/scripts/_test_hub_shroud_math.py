@@ -6,6 +6,8 @@ import buildChamber as B
 
 meta = {"outletInnerR": 0.29573, "outletOuterR": 0.65500}
 ok = True
+KR = 1.0 - np.sqrt(2.0) / 2.0     # 0.292893: knee radial fraction (45 deg ellipse point)
+KZ = np.sqrt(2.0) / 2.0           # 0.707107: knee vertical fraction
 
 
 def check(c, m):
@@ -14,21 +16,46 @@ def check(c, m):
     ok = ok and c
 
 
-# 1) At baseline rims, the 3 points reproduce the measured baseline radii.
+# 1) At baseline rims, P1/P3 reproduce the measured radii; P2 = 45 deg ellipse point.
 r_rim, p1, p2, p3 = B._hub_point_radii(0.29573, 0.65500, meta)
 check(abs(r_rim - 0.29573) < 1e-9, "baseline rim == R_hub0")
 check(abs(p1 - 0.29548) < 1e-9, "baseline P1 == 0.29548")
-check(abs(p2 - 0.39274) < 1e-9, "baseline P2 == 0.39274")
 check(abs(p3 - 0.61465) < 1e-4, "baseline P3 == 0.61465 (= 0.9384*R_shroud0, to ratio precision)")
+check(abs(p2 - 0.38896) < 1e-5, "baseline P2 == 0.38896 (P1 + 0.292893*(P3-P1))")
 
 # 2) Move rule at X1=1800 (R_shroud=0.900), ratio 0.45 -> R_hub=0.405, dr=+0.10927.
 r_rim, p1, p2, p3 = B._hub_point_radii(0.405, 0.900, meta)
 dr = 0.405 - 0.29573
 check(abs(r_rim - 0.405) < 1e-9, "rim tracks R_hub_new")
 check(abs(p1 - (0.29548 + dr)) < 1e-9, "P1 moves full dr")
-check(abs(p2 - (0.39274 + dr / 2)) < 1e-9, "P2 moves half dr")
+check(abs(p2 - (p1 + KR * (p3 - p1))) < 1e-9, "P2 = P1 + 0.292893*(P3-P1)")
 check(abs(p3 - 0.9384 * 0.900) < 1e-9, "P3 = P3_ratio * R_shroud_new (X1 only)")
 check(p3 > p2 > p1, "monotonic at X1=1800")
+
+# 3) Sweep Runner 700..2420 mm x ratio {0.35, 0.45, 0.50} (clamp ignored): never folds.
+bad = []
+for d_mm in range(700, 2421, 20):
+    for ratio in (0.35, 0.45, 0.50):
+        Rs = d_mm / 2000.0
+        _, q1, q2, q3 = B._hub_point_radii(ratio * Rs, Rs, meta)
+        if not (q1 < q2 < q3):
+            bad.append((d_mm, ratio, q1, q2, q3))
+check(not bad, "p1 < p2 < p3 over 700..2420 mm x {0.35, 0.45, 0.50}%s"
+      % ("" if not bad else " (first fail %r)" % (bad[0],)))
+
+# 4) Knee helper: 45 deg point of the quarter ellipse centred at (r_P3, z_P1).
+r2, z2 = B._hub_knee_from_ellipse(0.29548, 0.22608, 0.61465, 0.64565)
+check(abs(r2 - 0.38896) < 1e-5, "knee r == 0.38896 at baseline")
+check(abs(z2 - 0.52276) < 1e-5, "knee z == 0.52276 at baseline (z_P1 + 0.707107*dz)")
+check(abs(((r2 - 0.61465) / (0.61465 - 0.29548)) ** 2
+          + ((z2 - 0.22608) / (0.64565 - 0.22608)) ** 2 - 1.0) < 1e-9,
+      "knee lies on the construction ellipse")
+for args in ((0.5, 0.2, 0.5, 0.6), (0.5, 0.2, 0.4, 0.6), (0.3, 0.6, 0.6, 0.6)):
+    try:
+        B._hub_knee_from_ellipse(*args)
+        check(False, "degenerate shoulder %r refused" % (args,))
+    except ValueError as e:
+        check("hub shoulder degenerate" in str(e), "degenerate shoulder %r refused" % (args,))
 
 # --- shroud fillet ---
 for Rs in (0.65500, 0.900, 1.10):

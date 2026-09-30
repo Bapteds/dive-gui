@@ -736,6 +736,45 @@ def test_vane_skin_stays_on_the_guide_vanes_patch(build, name):
     assert (azimuthal(gv) > 0.35).mean() > 0.5
 
 
+# --- hub shoulder knee (spec 2026-09-30-hub-shoulder-knee-ellipse) ---------------
+# P2 is the 45 deg point of the P1-P3 quarter ellipse, so the shoulder rim -> P1 ->
+# P2 -> P3 -> roof never folds back. The old half-rate P2 folded from ~1961 mm at
+# ratio 0.50 (P1 overtook P2).
+
+
+def test_hub_shoulder_is_monotonic_at_large_runner_diameter(build):
+    import numpy as np
+
+    # stepped-vanes scaled to LE 3.95 m (a 2420 mm runner machine) so the outlet is
+    # not clamped: Runner 2420 at ratio 0.50, the worst old fold.
+    with open(os.path.join(HERE, "params", "stepped-vanes.json")) as fh:
+        base = json.load(fh)
+    k = 3.95 / base["dLast"]
+    override = {key: base[key] * k for key in (
+        "length", "width", "height", "distFromSideChamfer1", "chamferLength1",
+        "chamferWidth1", "chamferLength2", "chamferWidth2", "distFromEnd", "dLast",
+        "hMiddle", "hMiddlePlusFirst", "hLast")}
+    override.update(outletOuterD=2.42, outletRatio=0.50)
+    result = build("stepped-vanes", params_override=override)
+    assert result.exit_code == 0, f"builder failed:\n{result.stderr}"
+    assert "hub shoulder" not in result.stdout + result.stderr   # the old fold warning
+    assert result.load_stl().is_watertight
+
+    # Meridional silhouette of the hub patch: min radius per 2 mm z bin. The duct
+    # (rim -> P1, a 0.25 mm inward lean) then the shoulder up to the roof must
+    # never step inward by more than 1 mm as z rises.
+    hub = _patch_mesh(result, "hub")
+    axis = _patch_mesh(result, "outlet").vertices.mean(axis=0)
+    fc = hub.vertices[hub.faces].mean(axis=1)
+    r = np.hypot(fc[:, 0] - axis[0], fc[:, 1] - axis[1])
+    z = fc[:, 2]
+    edges = np.arange(z.min(), z.max() + 2e-3, 2e-3)
+    idx = np.digitize(z, edges)
+    rmin = np.array([r[idx == i].min() for i in np.unique(idx)])
+    worst = float((np.maximum.accumulate(rmin) - rmin).max())
+    assert worst <= 1e-3, f"hub shoulder steps inward by {worst * 1e3:.1f} mm"
+
+
 # --- guide vane count (any integer from 8 to 32) -------------------------------
 # With n vanes every blade is scaled by min(1, 16/n) about its pivot (same pivot
 # radius; above 16 the solidity is kept, below 16 the blade keeps its 16-vane
