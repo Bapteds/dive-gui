@@ -123,8 +123,15 @@ export function OptimisationTab({ projectId, onOpenSolver }: OptimisationTabProp
           />
         </section>
       ) : (
-        <div className="grid grid-cols-1 gap-5 lg:min-h-0 lg:flex-1 lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[18rem_minmax(0,1fr)]">
-          {list.length > 0 && (
+        <div
+          className={cn(
+            'grid grid-cols-1 gap-5 lg:min-h-0 lg:flex-1',
+            // The creation / edit form takes the full width (the list returns on
+            // Cancel or save); otherwise the list pane sits next to the study.
+            !formOpen && 'lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[18rem_minmax(0,1fr)]',
+          )}
+        >
+          {list.length > 0 && !formOpen && (
             <section
               aria-labelledby="studies-title"
               className="h-fit rounded-md border border-border bg-surface lg:max-h-full lg:overflow-auto lg:overscroll-contain"
@@ -165,7 +172,7 @@ export function OptimisationTab({ projectId, onOpenSolver }: OptimisationTabProp
           <div
             className={cn(
               'flex min-w-0 flex-col gap-6 lg:min-h-0 lg:overflow-auto lg:overscroll-contain',
-              list.length === 0 && 'lg:col-span-2',
+              (list.length === 0 || formOpen) && 'lg:col-span-2',
             )}
           >
             {form ??

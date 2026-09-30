@@ -284,6 +284,8 @@ Hook for the BC overlay. `ApplyBoundaryInput` = `{ request: ApplyBoundaryConditi
 ## `apps/web/src/features/optimisation/StudyCreateForm.tsx`
 **Role**: inline create / edit form: study name, base design (chamber save or chamber of this mesh), parameters table with live range preview (`computeParamSpace`, per-key band, table limit note, relation warnings), objective (weighted / Pareto, weights, vortex metric), reference session, cores, budgets, Advanced (sampler, seed, keep best / last). Client validation mirrors the API; first invalid control focused. One orange CTA ("Create study" / "Save changes").
 
+**Fieldsets (2026-09-30)**: `min-w-0` on every fieldset (default `min-inline-size: min-content` let the 560 px parameters table overflow the card); the form is shown full width by `OptimisationTab` (list hidden while it is open).
+
 ## `apps/web/src/features/optimisation/StudyCreateForm.test.tsx`
 **Covers**: band preview on the grid, table limit, zero weights refused, Pareto hides the weights, create body.
 
