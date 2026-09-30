@@ -24,7 +24,6 @@ import {
   chamberBodyKey,
   chamberBuildErrorMessage,
   chamberFormSchema,
-  chamberInputToConstraints,
   chamberInputToSpiralLength,
   chamberSpiralLengthBody,
   chamberInputToFormValues,
@@ -343,7 +342,7 @@ export function ChamberPage() {
             snapshot={saveSnapshot}
             onLoad={(save) => {
               reset(chamberInputToFormValues(save.snapshot));
-              setConstraints(chamberInputToConstraints(save.snapshot));
+              setConstraints(save.snapshot.constraints ?? {});
               setSpiralLength(chamberInputToSpiralLength(save.snapshot));
               // The loaded save is a DIFFERENT configuration: everything tied
               // to the previous build (viewer, exports, notices) is stale now.
