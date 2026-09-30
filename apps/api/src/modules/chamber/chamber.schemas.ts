@@ -64,7 +64,7 @@ export const chamberBuildSchema = z
     // builds only. A different angle => a different cached build.
     vaneAngleDeg: z.number().finite().min(45).max(55).default(50),
     // Number of guide vanes: any whole number 8..32, 16 being the asset (each chord
-    // scaled by 16/n about its pivot, same solidity). Guide-vane builds only. Any
+    // scaled by min(1, 16/n) about its pivot). Guide-vane builds only. Any
     // count but 16 => a different cached build; 16 keeps the historical key
     // (resolveGeometryParams omits it). The builder refuses a count whose blades
     // leave the distributor passage.

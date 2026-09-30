@@ -2470,10 +2470,12 @@ export type ChamberVariant = (typeof CHAMBER_VARIANTS)[number];
 
 /**
  * Guide vane counts the builder accepts: any whole number from MIN to MAX (spec
- * 2026-09-29-guide-vane-count-any). 16 is the committed asset; with n vanes each
- * blade's chord is scaled by 16/n about its pivot so the cascade solidity and the
- * pivot radius stay the same. Mirrors VANE_COUNT_MIN / _MAX of buildChamber.py,
- * which also refuses a count whose blades leave the distributor passage.
+ * 2026-09-29-guide-vane-count-any, amended 2026-09-30). 16 is the committed asset;
+ * with n vanes each blade's chord is scaled by min(1, 16/n) about its pivot: above
+ * 16 the cascade solidity stays the same, below 16 the blade keeps its 16-vane size
+ * (lower solidity, wider throat); the pivot radius never moves. Mirrors
+ * VANE_COUNT_MIN / _MAX of buildChamber.py, which keeps a safety-net refusal for a
+ * count whose blades leave the distributor passage.
  */
 export const CHAMBER_VANE_COUNT_MIN = 8;
 export const CHAMBER_VANE_COUNT_MAX = 32;
@@ -2680,10 +2682,11 @@ export interface ChamberInput {
   vaneAngleDeg?: number;
   /**
    * Number of guide vanes: any whole number from 8 to 32 (CHAMBER_VANE_COUNT_MIN /
-   * _MAX), 16 being the asset. With n vanes each blade's chord is scaled by 16/n
-   * about its own pivot, so the cascade solidity and the pivot radius stay the
-   * same; the angular step is 360°/n. The builder refuses a count whose blades
-   * leave the distributor passage (past LE Ø/2 or inside the hub rim). Only
+   * _MAX), 16 being the asset. With n vanes each blade's chord is scaled by
+   * min(1, 16/n) about its own pivot (above 16 same solidity, below 16 the 16-vane
+   * blade), the pivot radius stays the same and the angular step is 360°/n. The
+   * builder keeps a safety-net refusal for blades leaving the distributor passage
+   * (past LE Ø/2 or inside the hub rim). Only
    * affects guide-vane builds (ignored, and left out of the build key, when
    * guideVanes is false or the count is 16). Geometry-only (not part of the
    * empirical model). Default 16.

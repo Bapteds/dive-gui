@@ -46,7 +46,7 @@ export interface ChamberFormValues {
   feetEnabled: boolean;
   /** Absolute guide-vane open angle (deg, 45..55; asset baked at 50°); each blade swings about its spindle. Guide-vane builds only. */
   vaneAngleDeg: number;
-  /** Number of guide vanes (whole number 8..32, default 16; chord x 16/n, same solidity). Guide-vane builds only. */
+  /** Number of guide vanes (whole number 8..32, default 16; chord x min(1, 16/n)). Guide-vane builds only. */
   vaneCount: number;
   /** Outlet inner/outer diameter ratio (0.35..0.50, default 0.45). Guide-vane builds only. */
   outletRatio: number;

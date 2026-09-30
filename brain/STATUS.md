@@ -2,14 +2,14 @@
 
 > Snapshot to read at the start of a session. **Rewrite it** (do not stack) as soon as the state changes: branch, work in progress, verification, open threads.
 > Detailed history: `brain/changelog/`. Bugs and debt: `brain/known-issues.md`.
-> Last updated: 2026-09-29.
+> Last updated: 2026-09-30.
 
 ## 1. Where we are
 
 - **Chamber Creation v2 + CFD loop merged into `main`** (2026-09-29, merge `9e92400` of `feat/chamber-v2-cfd-loop`, at the user's request). Work order WS-A to WS-I:
   - **Done (on `main`)** (each with its approved spec in `brain/specs/2026-09-29-*`, tests and brain update):
     - WS-A guide-vane pocket vs Runner case Ø (5 mm snap with warning, junction labels) + WS-A v2: Runner case Ø below LE Ø builds a 20 mm ledge under the shroud brim, refused only below Runner Ø + 20 mm;
-    - WS-B Guide vane count, now any whole number 8 to 32 (chord × 16/n, same pivot radius; blades leaving the passage refused, 11 to 13 minimum on the test machines; branch `worktree-agent-a841f1e42daa5f408`, not merged);
+    - WS-B Guide vane count, now any whole number 8 to 32 (branch `feat/guide-vane-count-any`, not merged); chord min(1, 16/n) since 2026-09-30 (below 16 the 16-vane blade: every count builds, vaned STEP at 8 / 13 in about 30 s; worktree branch `worktree-agent-abda8d52e36f8b19d`, not merged);
     - WS-C v2 Cone chamfer: 45° foot chamfer on the LE part in both designs, part widened by the chamfer size above it (the first top-rim version was removed at the user's request);
     - WS-E Semi-spiral casing (cached `designSemiSpiral.py` step, nose + plank = new `tongue` patch, Feet off; unticking it restores Chamfer);
     - WS-F Meshing session → project (`POST /projects/:id/mesh/from-meshing`, "Send to project" dialog, chamber patch types forced).
