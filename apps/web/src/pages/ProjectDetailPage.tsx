@@ -244,7 +244,7 @@ function ProjectTabs({ project }: { project: Project }) {
       onValueChange={(value) => setView(value as ProjectView)}
       className="flex w-full flex-col gap-6 lg:min-h-0 lg:flex-1"
     >
-      <TabsList className="shrink-0">
+      <TabsList className="shrink-0 overflow-x-auto overflow-y-hidden whitespace-nowrap [scrollbar-width:thin] max-xl:[&_svg]:hidden">
         <TabsTrigger value="detail">
           <Info strokeWidth={1.75} aria-hidden="true" />
           Detail
@@ -269,10 +269,7 @@ function ProjectTabs({ project }: { project: Project }) {
         <CaseFilesSection projectId={project.id} className="lg:min-h-0 lg:flex-1" />
       </TabsContent>
 
-      <TabsContent
-        value="visualize"
-        className="mt-0 data-[state=active]:flex lg:min-h-0 lg:flex-1"
-      >
+      <TabsContent value="visualize" className="mt-0 data-[state=active]:flex lg:min-h-0 lg:flex-1">
         {/* Mount the panel only when the tab is open: it triggers the server
             build, so it must not run while the user is on Detail. */}
         {view === 'visualize' && (
@@ -282,10 +279,7 @@ function ProjectTabs({ project }: { project: Project }) {
         )}
       </TabsContent>
 
-      <TabsContent
-        value="assemble"
-        className="mt-0 data-[state=active]:flex lg:min-h-0 lg:flex-1"
-      >
+      <TabsContent value="assemble" className="mt-0 data-[state=active]:flex lg:min-h-0 lg:flex-1">
         {/* Mount only when open: the workspace loads three.js and builds each
             source's preview on the server, so it must not run on other tabs. */}
         {view === 'assemble' && (
@@ -507,7 +501,11 @@ function ViewerLoading() {
       role="status"
       aria-live="polite"
     >
-      <Loader2 className="size-5 animate-spin text-text-secondary" strokeWidth={1.75} aria-hidden="true" />
+      <Loader2
+        className="size-5 animate-spin text-text-secondary"
+        strokeWidth={1.75}
+        aria-hidden="true"
+      />
       <span className="sr-only">Loading the 3D viewer</span>
     </div>
   );
@@ -560,7 +558,10 @@ function ProjectSettingsMenu({ project, canManage }: { project: Project; canMana
                 Manage collaborators
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem destructive onSelect={() => setTimeout(() => setDeleteOpen(true), 0)}>
+              <DropdownMenuItem
+                destructive
+                onSelect={() => setTimeout(() => setDeleteOpen(true), 0)}
+              >
                 <Trash2 strokeWidth={1.75} aria-hidden="true" />
                 Delete project
               </DropdownMenuItem>
@@ -689,7 +690,9 @@ function DeleteProjectDialog({
       toast.success('Project deleted.');
       navigate('/projects', { replace: true });
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+      toast.error(
+        err instanceof ApiError ? err.message : 'Something went wrong. Please try again.',
+      );
     }
   };
 
@@ -765,7 +768,9 @@ function AddCollaboratorForm({ projectId }: { projectId: string }) {
         setFocus('email');
         return;
       }
-      toast.error(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+      toast.error(
+        err instanceof ApiError ? err.message : 'Something went wrong. Please try again.',
+      );
     }
   });
 
@@ -805,7 +810,9 @@ function RemoveCollaboratorButton({
       await removeCollaborator.mutateAsync(collaborator.id);
       toast.success('Collaborator removed.');
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+      toast.error(
+        err instanceof ApiError ? err.message : 'Something went wrong. Please try again.',
+      );
     }
   };
 

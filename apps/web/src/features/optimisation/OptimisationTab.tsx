@@ -91,8 +91,8 @@ export function OptimisationTab({ projectId, onOpenSolver }: OptimisationTabProp
   ) : null;
 
   return (
-    <div className="flex w-full flex-col gap-6 lg:min-h-0 lg:flex-1 lg:overflow-auto lg:overscroll-contain">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div data-tab-root className="flex w-full flex-col gap-5 lg:min-h-0 lg:flex-1">
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
           <h2 className="text-xl font-semibold tracking-[-0.01em] text-text">Optimisation</h2>
           <p className="max-w-[75ch] text-sm text-text-secondary">
@@ -123,17 +123,18 @@ export function OptimisationTab({ projectId, onOpenSolver }: OptimisationTabProp
           />
         </section>
       ) : (
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(14rem,3fr)_minmax(0,9fr)]">
+        <div className="grid grid-cols-1 gap-5 lg:min-h-0 lg:flex-1 lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[18rem_minmax(0,1fr)]">
           {list.length > 0 && (
             <section
               aria-labelledby="studies-title"
-              className="h-fit rounded-md border border-border bg-surface"
+              className="h-fit rounded-md border border-border bg-surface lg:max-h-full lg:overflow-auto lg:overscroll-contain"
             >
               <h3
                 id="studies-title"
-                className="border-b border-border px-4 py-3 text-sm font-semibold text-text"
+                className="sticky top-0 border-b border-border bg-surface px-4 py-3 text-sm font-semibold text-text"
               >
-                Studies
+                Studies{' '}
+                <span className="font-normal tabular-nums text-text-secondary">{list.length}</span>
               </h3>
               <ul className="divide-y divide-border">
                 {list.map((s) => (
@@ -146,7 +147,7 @@ export function OptimisationTab({ projectId, onOpenSolver }: OptimisationTabProp
                       }}
                       aria-current={s.id === shownId && !formOpen ? 'true' : undefined}
                       className={cn(
-                        'flex w-full flex-col items-start gap-1.5 px-4 py-3 text-left text-sm transition-colors hover:bg-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring',
+                        'flex w-full scroll-mt-12 flex-col items-start gap-1.5 px-4 py-3 text-left text-sm transition-colors hover:bg-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring',
                         s.id === shownId && !formOpen && 'bg-primary-tint',
                       )}
                     >
@@ -161,7 +162,12 @@ export function OptimisationTab({ projectId, onOpenSolver }: OptimisationTabProp
               </ul>
             </section>
           )}
-          <div className="flex min-w-0 flex-col gap-6">
+          <div
+            className={cn(
+              'flex min-w-0 flex-col gap-6 lg:min-h-0 lg:overflow-auto lg:overscroll-contain',
+              list.length === 0 && 'lg:col-span-2',
+            )}
+          >
             {form ??
               (detail.isPending ? (
                 <Skeleton className="h-96 w-full rounded-md" />
@@ -190,12 +196,13 @@ export function OptimisationTab({ projectId, onOpenSolver }: OptimisationTabProp
 function OptimisationSkeleton() {
   return (
     <div
-      className="flex w-full flex-col gap-6 lg:min-h-0 lg:flex-1 lg:overflow-auto lg:overscroll-contain"
+      data-tab-root
+      className="flex w-full flex-col gap-5 lg:min-h-0 lg:flex-1"
       role="status"
       aria-label="Loading the optimisation studies"
     >
       <Skeleton className="h-7 w-40" />
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(14rem,3fr)_minmax(0,9fr)]">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[18rem_minmax(0,1fr)]">
         <Skeleton className="h-48 w-full rounded-md" />
         <Skeleton className="h-96 w-full rounded-md" />
       </div>

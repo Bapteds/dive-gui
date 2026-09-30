@@ -1,5 +1,10 @@
+import { useRef } from 'react';
 import type { StudyEvaluation, StudyVortexMetric } from '@dive/shared';
-import { formatValue, niceTicks } from '@/features/solver/chartUtils';
+import {
+  formatValue,
+  niceTicks,
+  useMeasuredWidth,
+} from '@/features/solver/chartUtils';
 import { VORTEX_METRIC_LABEL, vortexOf } from './studyFormat';
 
 /**
@@ -11,36 +16,42 @@ import { VORTEX_METRIC_LABEL, vortexOf } from './studyFormat';
  * hit or dominated: never colour alone), and a collapsible table is the
  * screen-reader source of truth. Tokens only (brain/design/design-system.md
  * section 2); the best design gets the diamond node (section 1), once.
+ *
+ * Both charts render at their measured container width and a fixed height, so
+ * one viewBox unit is one pixel and labels keep their real size at any width.
  */
 
-const WIDTH = 560;
-const HEIGHT = 220;
-const PAD = { top: 20, right: 24, bottom: 36, left: 56 };
-const plotW = WIDTH - PAD.left - PAD.right;
+const HEIGHT = 240;
+const PAD = { top: 16, right: 20, bottom: 40, left: 56 };
 const plotH = HEIGHT - PAD.top - PAD.bottom;
+/** Below this width the chart would crush its labels: it scrolls sideways instead. */
+const MIN_WIDTH = 320;
 
 const summaryClass =
   'w-fit cursor-pointer rounded-sm text-text-secondary transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2';
 const th = 'px-2 py-1 font-medium text-text-secondary';
 
 function Axes({
+  width,
   yTicks,
   yOf,
   yLabel,
   xLabel,
 }: {
+  width: number;
   yTicks: number[];
   yOf: (v: number) => number;
   yLabel: string;
   xLabel: string;
 }) {
+  const plotW = width - PAD.left - PAD.right;
   return (
     <>
       {yTicks.map((t) => (
         <g key={t}>
           <line
             x1={PAD.left}
-            x2={WIDTH - PAD.right}
+            x2={width - PAD.right}
             y1={yOf(t)}
             y2={yOf(t)}
             stroke="var(--color-border)"
@@ -58,7 +69,7 @@ function Axes({
       ))}
       <line
         x1={PAD.left}
-        x2={WIDTH - PAD.right}
+        x2={width - PAD.right}
         y1={PAD.top + plotH}
         y2={PAD.top + plotH}
         stroke="var(--color-border-strong)"
@@ -75,7 +86,7 @@ function Axes({
       </text>
       <text
         x={PAD.left + plotW / 2}
-        y={HEIGHT - 4}
+        y={HEIGHT - 6}
         textAnchor="middle"
         className="fill-text-secondary text-[10px]"
       >
@@ -107,6 +118,9 @@ export function ObjectiveChart({
   evaluations: StudyEvaluation[];
   best: number | null;
 }) {
+  const box = useRef<HTMLDivElement>(null);
+  const width = Math.max(MIN_WIDTH, useMeasuredWidth(box, 560));
+  const plotW = width - PAD.left - PAD.right;
   const points = evaluations.filter(
     (e): e is StudyEvaluation & { objective: number } =>
       e.status === 'done' && e.objective !== null,
@@ -117,6 +131,13 @@ export function ObjectiveChart({
     );
   }
   const maxIndex = Math.max(1, ...evaluations.map((e) => e.index));
+  // Integer ticks on a regular step: one per evaluation while they fit (about 44 px
+  // each), else a nice step (2, 5, 10...) that never runs past the last index.
+  const xTicks = niceTicks(
+    0,
+    maxIndex,
+    Math.max(2, Math.min(maxIndex + 1, Math.floor(plotW / 44))),
+  ).filter((t) => Number.isInteger(t) && t >= 0 && t <= maxIndex);
   const values = points.map((p) => p.objective);
   const yTicks = niceTicks(Math.min(...values), Math.max(...values), 4);
   const yMin = yTicks[0];
@@ -138,50 +159,54 @@ export function ObjectiveChart({
     .join(', ')}.${best !== null ? ` Best: #${best}.` : ''}`;
 
   return (
-    <div className="flex flex-col gap-2">
-      <svg
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        className="h-auto w-full max-w-2xl"
-        role="img"
-        aria-label={summary}
-      >
-        <Axes yTicks={yTicks} yOf={yOf} yLabel="Objective J" xLabel="Evaluation" />
-        {[0, maxIndex].map((i) => (
-          <text
-            key={i}
-            x={xOf(i)}
-            y={PAD.top + plotH + 14}
-            textAnchor="middle"
-            className="fill-text-secondary text-[10px] tabular-nums"
-          >
-            {i}
-          </text>
-        ))}
-        {bestSoFar.length > 1 && (
-          <polyline
-            points={step}
-            fill="none"
-            stroke="var(--color-text-secondary)"
-            strokeWidth={1}
-            strokeDasharray="4 4"
-          />
-        )}
-        {points.map((p) =>
-          p.index === best ? (
-            <DiamondMark key={p.index} x={xOf(p.index)} y={yOf(p.objective)} />
-          ) : (
-            <circle
-              key={p.index}
-              cx={xOf(p.index)}
-              cy={yOf(p.objective)}
-              r={3.5}
-              fill={p.budgetHit ? 'var(--color-surface)' : 'var(--color-primary)'}
-              stroke="var(--color-primary)"
-              strokeWidth={1.5}
+    <div className="flex min-w-0 flex-col gap-2">
+      <div ref={box} className="w-full overflow-x-auto">
+        <svg
+          width={width}
+          height={HEIGHT}
+          viewBox={`0 0 ${width} ${HEIGHT}`}
+          className="block"
+          role="img"
+          aria-label={summary}
+        >
+          <Axes width={width} yTicks={yTicks} yOf={yOf} yLabel="Objective J" xLabel="Evaluation" />
+          {xTicks.map((i) => (
+            <text
+              key={i}
+              x={xOf(i)}
+              y={PAD.top + plotH + 14}
+              textAnchor="middle"
+              className="fill-text-secondary text-[10px] tabular-nums"
+            >
+              {i}
+            </text>
+          ))}
+          {bestSoFar.length > 1 && (
+            <polyline
+              points={step}
+              fill="none"
+              stroke="var(--color-text-secondary)"
+              strokeWidth={1}
+              strokeDasharray="4 4"
             />
-          ),
-        )}
-      </svg>
+          )}
+          {points.map((p) =>
+            p.index === best ? (
+              <DiamondMark key={p.index} x={xOf(p.index)} y={yOf(p.objective)} />
+            ) : (
+              <circle
+                key={p.index}
+                cx={xOf(p.index)}
+                cy={yOf(p.objective)}
+                r={3.5}
+                fill={p.budgetHit ? 'var(--color-surface)' : 'var(--color-primary)'}
+                stroke="var(--color-primary)"
+                strokeWidth={1.5}
+              />
+            ),
+          )}
+        </svg>
+      </div>
       <p className="text-xs text-text-secondary">
         Filled: converged. Hollow: stopped on the time budget. Diamond: best design. Dashed: best so
         far.
@@ -229,6 +254,9 @@ export function ParetoChart({
   front: number[];
   metric: StudyVortexMetric;
 }) {
+  const box = useRef<HTMLDivElement>(null);
+  const width = Math.max(MIN_WIDTH, useMeasuredWidth(box, 560));
+  const plotW = width - PAD.left - PAD.right;
   const points = evaluations.flatMap((e) => {
     const v = vortexOf(e, metric);
     return e.status === 'done' && e.headLoss !== null && v !== null
@@ -244,7 +272,7 @@ export function ParetoChart({
   const xTicks = niceTicks(
     Math.min(...points.map((p) => p.headLoss)),
     Math.max(...points.map((p) => p.headLoss)),
-    5,
+    Math.max(3, Math.min(6, Math.floor(plotW / 90))),
   );
   const yTicks = niceTicks(
     Math.min(...points.map((p) => p.vortex)),
@@ -267,53 +295,63 @@ export function ParetoChart({
     .join(', ')}.`;
 
   return (
-    <div className="flex flex-col gap-2">
-      <svg
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        className="h-auto w-full max-w-2xl"
-        role="img"
-        aria-label={summary}
-      >
-        <Axes yTicks={yTicks} yOf={yOf} yLabel={`${name} (${unit})`} xLabel="Head loss (m)" />
-        {xTicks.map((t) => (
-          <text
-            key={t}
-            x={xOf(t)}
-            y={PAD.top + plotH + 14}
-            textAnchor="middle"
-            className="fill-text-secondary text-[10px] tabular-nums"
-          >
-            {formatValue(t)}
-          </text>
-        ))}
-        {frontLine.includes(' ') && (
-          <polyline
-            points={frontLine}
-            fill="none"
-            stroke="var(--color-primary)"
-            strokeWidth={1.25}
+    <div className="flex min-w-0 flex-col gap-2">
+      <div ref={box} className="w-full overflow-x-auto">
+        <svg
+          width={width}
+          height={HEIGHT}
+          viewBox={`0 0 ${width} ${HEIGHT}`}
+          className="block"
+          role="img"
+          aria-label={summary}
+        >
+          <Axes
+            width={width}
+            yTicks={yTicks}
+            yOf={yOf}
+            yLabel={`${name} (${unit})`}
+            xLabel="Head loss (m)"
           />
-        )}
-        {points.map((p) => (
-          <g key={p.index}>
-            <circle
-              cx={xOf(p.headLoss)}
-              cy={yOf(p.vortex)}
-              r={3.5}
-              fill={p.onFront ? 'var(--color-primary)' : 'var(--color-surface)'}
-              stroke={p.onFront ? 'var(--color-primary)' : 'var(--color-text-secondary)'}
-              strokeWidth={1.5}
-            />
+          {xTicks.map((t) => (
             <text
-              x={xOf(p.headLoss) + 6}
-              y={yOf(p.vortex) - 6}
+              key={t}
+              x={xOf(t)}
+              y={PAD.top + plotH + 14}
+              textAnchor="middle"
               className="fill-text-secondary text-[10px] tabular-nums"
             >
-              #{p.index}
+              {formatValue(t)}
             </text>
-          </g>
-        ))}
-      </svg>
+          ))}
+          {frontLine.includes(' ') && (
+            <polyline
+              points={frontLine}
+              fill="none"
+              stroke="var(--color-primary)"
+              strokeWidth={1.25}
+            />
+          )}
+          {points.map((p) => (
+            <g key={p.index}>
+              <circle
+                cx={xOf(p.headLoss)}
+                cy={yOf(p.vortex)}
+                r={3.5}
+                fill={p.onFront ? 'var(--color-primary)' : 'var(--color-surface)'}
+                stroke={p.onFront ? 'var(--color-primary)' : 'var(--color-text-secondary)'}
+                strokeWidth={1.5}
+              />
+              <text
+                x={xOf(p.headLoss) + 6}
+                y={yOf(p.vortex) - 6}
+                className="fill-text-secondary text-[10px] tabular-nums"
+              >
+                #{p.index}
+              </text>
+            </g>
+          ))}
+        </svg>
+      </div>
       <p className="text-xs text-text-secondary">
         Filled and joined: Pareto front. Hollow: dominated.
       </p>
