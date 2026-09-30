@@ -177,6 +177,15 @@ Codes found in `runs.service`: 404 `RUN_NOT_FOUND`, 409 `NO_MESH`, 409 `RUN_IN_P
 | GET | `/api/v1/projects/:id/runs/:runId` | Visible | `getRunController` → `getRun` | `runIdParamSchema` | `200 { run }` |
 | GET | `/api/v1/projects/:id/runs/:runId/log` | Visible | `getRunLogController` → `getRunLog` | `runIdParamSchema` | `200` (run + residual series + log tail) |
 | POST | `/api/v1/projects/:id/runs/:runId/stop` | Visible | `stopRunController` → `stopRun` | `runIdParamSchema` | `200 { run }` |
+| GET | `/api/v1/projects/:id/mesh-origin` | Visible | `getMeshOriginController` → `mesh.service.getMeshOrigin` | `projectIdParamSchema` | `200 { origin }` (`MeshOrigin` or null) |
+| GET | `/api/v1/projects/:id/free-surface` | Visible | `getFreeSurfaceController` → `freeSurface.service.getFreeSurfaceOverview` | params + query `freeSurfaceSelectionSchema` (`lidPatch?`, `inletPatch?`, `sessionId?`) | `200 { checks, defaults, origin, jobs }` (`FreeSurfaceOverview`) |
+| POST | `/api/v1/projects/:id/free-surface` | Visible | `startFreeSurfaceController` → `startFreeSurfaceJob` | params + body `freeSurfaceStartSchema` (patches, `sourceSessionId`, kit settings, `iterations` 1/2/3) | `202 { job }`; 409 `FREE_SURFACE_IN_PROGRESS`, `RUN_IN_PROGRESS`; 422 `FREE_SURFACE_NOT_READY` (message = the failed check) |
+| GET | `/api/v1/projects/:id/free-surface/:jobId` | Visible | `getFreeSurfaceJobController` → `getFreeSurfaceJob` | `freeSurfaceJobParamSchema` | `200 { job }`; 404 |
+| POST | `/api/v1/projects/:id/free-surface/:jobId/stop` | Visible | `stopFreeSurfaceJobController` → `stopFreeSurfaceJob` | `freeSurfaceJobParamSchema` | `200 { job }` (idempotent) |
+| GET | `/api/v1/projects/:id/free-surface/:jobId/files/:name` | Visible | `downloadFreeSurfaceFileController` → `readFreeSurfaceFile` | `freeSurfaceFileParamSchema` | `200` attachment (`model/stl` / `image/png`); 404 for any name outside `domain_lidIter<k>.stl|png`, `lid_iter<k>.png` |
+| DELETE | `/api/v1/projects/:id/free-surface/:jobId` | Visible | `deleteFreeSurfaceJobController` → `deleteFreeSurfaceJob` | `freeSurfaceJobParamSchema` | `204`; 409 `FREE_SURFACE_IN_PROGRESS` while it runs |
+
+While a free-surface job runs for `:id`, `freeSurfaceLock` answers 409 `FREE_SURFACE_IN_PROGRESS` on `POST /runs`, `DELETE /files`, `POST /files/import`, `POST /cgns/convert`, `POST /meshes/merge`, `POST /mesh/from-meshing` (case target), `POST /boundary-conditions/apply`, `POST /mesh/backup/restore` (WS-I).
 
 ### Terminal (WebSocket)
 

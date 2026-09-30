@@ -107,6 +107,8 @@ snappy parallelism reuses `MPI_BIN`, `MPI_RUN_FLAGS`, `DECOMPOSE_METHOD` and `SO
 | `BUILD_CHAMBER_SCRIPT` | `''` | absent | Builder path. | Missing on disk: 500 `SCRIPT_MISSING`. | chamber |
 | `MIRROR_STEP_SCRIPT` | `''` | absent | Path of the mirrored STEP generator. | | chamber |
 | `CHAMBER_BUILD_TIMEOUT_MS` | `600000` | absent | Timeout of a build, a STEP generation or a mirror. | | chamber |
+| `LIDKIT_PYTHON_BIN` | `''` (= the `CHAMBER_PYTHON_BIN` value) | `""` | Interpreter of the vendored lid iteration kit (`scripts/lidkit/*.py`: numpy + scipy + shapely, matplotlib optional for figures). | since 2026-09-30 | free surface |
+| `LIDKIT_TIMEOUT_MS` | `900000` | `900000` | Timeout of one kit step of a free-surface job (lid export `postProcess`, surface, fit, figure). | since 2026-09-30 | free surface |
 | `CHAMBER_SPIRAL_TIMEOUT_MS` | `300000` | `300000` | Timeout of one semi-spiral casing optimisation (`designSemiSpiral.py`, 30 to 90 s, same interpreter as the builder); a timeout is a 502 `CHAMBER_BUILD_FAILED` naming the variable. | since 2026-09-29 | chamber |
 
 ## API: CFD-Post export (OpenFOAM to CGNS)

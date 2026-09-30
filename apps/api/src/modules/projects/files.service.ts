@@ -35,6 +35,7 @@ import {
   type CaseEntry,
 } from '../../lib/caseStorage';
 import { sanitizeRelative } from '../../lib/fileTreeStorage';
+import { clearMeshOrigin } from '../../lib/meshOriginStorage';
 import {
   BASE_FILE_PATHS,
   BOUNDARY_FILE,
@@ -129,6 +130,10 @@ export async function importCaseFiles(
     );
   } else {
     throw new AppError(400, 'NO_FILES_UPLOADED', 'No files were uploaded');
+  }
+  // Imported files may replace the case mesh: a recorded mesh origin is stale.
+  if (written.some((rel) => rel.startsWith('constant/polyMesh/'))) {
+    await clearMeshOrigin(projectId);
   }
 
   const entries = await listCaseTree(projectId);

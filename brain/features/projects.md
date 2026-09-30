@@ -2,10 +2,10 @@
 
 > **Status**: in production · **Updated**: 2026-09-29
 > **Specs**: no dedicated spec (history in `brain/changelog/2026-06.md` and `2026-08.md`) · **Codemaps**: `brain/codemap/api-projects.md` (`projects.{routes,controller,schemas,service}.ts`, `runs.service.stopProjectRuns`), `brain/codemap/api-lib.md` (`caseStorage`), `brain/codemap/web-core.md` (`ProjectsPage`, `ProjectDetailPage`, `ProjectEditPage`, `lib/api/projects.ts`, `RenameDialog`), `brain/codemap/web-features-projects.md` (`features/projects`)
-> **See also**: `brain/architecture/storage-layout.md` (`projects/<id>/`), `brain/architecture/data-model.md` (`Project`, `_ProjectCollaborators`), `brain/features/dashboard.md`, `brain/features/terminal.md`, `brain/features/admin-and-audit.md` (deletion of an owner); tab contents: `case-files.md`, `templates.md`, `mesh-library-and-conversion.md`, `merge-and-assembly.md`, `boundary-conditions.md`, `solver-and-runs.md`, `export-cfdpost.md`
+> **See also**: `brain/architecture/storage-layout.md` (`projects/<id>/`), `brain/architecture/data-model.md` (`Project`, `_ProjectCollaborators`), `brain/features/dashboard.md`, `brain/features/terminal.md`, `brain/features/admin-and-audit.md` (deletion of an owner); tab contents: `case-files.md`, `templates.md`, `mesh-library-and-conversion.md`, `merge-and-assembly.md`, `boundary-conditions.md`, `solver-and-runs.md`, `free-surface.md`, `export-cfdpost.md`
 
 ## 1. Purpose
-The project is the CFD workspace: an OpenFOAM case, its mesh library, its solver runs and its exports. This sheet covers the container itself: creation, list, rename, deletion, visibility rule, collaborators and detail page (header and tabs). The tab contents belong to their own sheets: `case-files.md` (Detail), `mesh-library-and-conversion.md` (Visualize), `merge-and-assembly.md` (Assemble), `solver-and-runs.md` (Solver), `export-cfdpost.md` (Export). Any signed-in user can create a project; they become its owner.
+The project is the CFD workspace: an OpenFOAM case, its mesh library, its solver runs and its exports. This sheet covers the container itself: creation, list, rename, deletion, visibility rule, collaborators and detail page (header and tabs). The tab contents belong to their own sheets: `case-files.md` (Detail), `mesh-library-and-conversion.md` (Visualize), `merge-and-assembly.md` (Assemble), `solver-and-runs.md` (Solver), `free-surface.md` (Free surface), `export-cfdpost.md` (Export). Any signed-in user can create a project; they become its owner.
 
 ## 2. User journey
 - **List** (`/projects`, nav `Projects`): creation form at the top (title field + orange CTA), then the table of visible projects, most recent first. Columns: title (link to `/projects/:id`), owner (`You` or email), creation date, `Rename` action (shown only to the owner or a super-admin, opens `RenameDialog`). States: skeleton, `ErrorState` "We could not load your projects.", `EmptyState` "No projects yet.". Toasts `Project created.` (the user stays on the list) and `Project renamed.`
@@ -22,9 +22,10 @@ The project is the CFD workspace: an OpenFOAM case, its mesh library, its solver
 | `Visualize` | `VisualizePanel` (3D viewer, lazy) | the case has a file under `constant/polyMesh/` OR the mesh library is not empty | `Import a polyMesh or a mesh part to enable 3D` |
 | `Assemble` | `AssemblyWorkspace` (lazy) | mesh library not empty | `Import a mesh part to enable assembly` |
 | `Solver` | `SolverTab` (lazy) | the case has a polyMesh | `Import a polyMesh to enable the solver` |
+| `Free surface` | `FreeSurfaceTab` (lazy, WS-I) | the case has a polyMesh | `Import a polyMesh to enable the free-surface tool` |
 | `Export` | `ExportTab` (lazy) | the case has a polyMesh | `Import a polyMesh to enable export` |
 
-  A disabled tab is wrapped in a `span tabIndex={0}` so that its tooltip stays reachable from the keyboard. Each lazy panel is mounted only when its tab is active (no 3D build or polling in the background); the active tab is local state, not in the URL, except the INITIAL tab: `?view=detail|visualize|assemble|solver|export` is read once at mount (an unknown value falls back to Detail) and then dropped from the URL (`setSearchParams({}, { replace: true })`). Used by the meshing hand-off, which lands on `/projects/:id?view=visualize` (2026-09-29).
+  A disabled tab is wrapped in a `span tabIndex={0}` so that its tooltip stays reachable from the keyboard. Each lazy panel is mounted only when its tab is active (no 3D build or polling in the background); the active tab is local state, not in the URL, except the INITIAL tab: `?view=detail|visualize|assemble|solver|freesurface|export` is read once at mount (an unknown value falls back to Detail) and then dropped from the URL (`setSearchParams({}, { replace: true })`). Used by the meshing hand-off, which lands on `/projects/:id?view=visualize` (2026-09-29).
 - **Case editor** (`/projects/:id/edit`, from the `Edit` button of `CaseFilesSection`): `ProjectEditPage` wires the project's file hooks onto the shared `FileTreeEditor` (see `case-files.md`).
 
 ## 3. Business rules and invariants
@@ -79,6 +80,7 @@ Creation: `CreateProjectForm` (zod `createProjectSchema`) → `useCreateProject`
 - 2026-06-22: project creation and list (owner-scoped), then owner + collaborators + super-admin visibility with 404, collaborators by email, detail page and deletion; delete button moved into a "Danger zone" then, the same day, into a gear menu (`490a1e1`). `brain/changelog/2026-06.md`, commit `179b55e`.
 - 2026-06-24: project details moved into the gear menu; `Visualize` tab (`brain/changelog/2026-06.md`); `Solver` tab (`ff025e7`).
 - 2026-06-25: `Export` tab (`a4b0b02`).
+- 2026-09-30: `Free surface` tab (WS-I, branch `feat/free-surface-tool`).
 - 2026-07-01: `Assemble` tab and mesh library in Visualize (`b627ac0`, `0f10a47`, `brain/changelog/2026-07.md`).
 - 2026-07-03: `Terminal` button in the header (`020a28a`, see `terminal.md`).
 - 2026-07-10: M3, deleting a project stops its solvers (`c32cf82`); unified `ErrorState` / `EmptyState` states (`b6175b4`).

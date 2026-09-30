@@ -15,6 +15,7 @@ import {
   Upload,
   UserPlus,
   Users,
+  Waves,
 } from 'lucide-react';
 import { PageHeader } from '@/components/common/PageHeader';
 import { EmptyState } from '@/components/common/EmptyState';
@@ -85,6 +86,16 @@ const SolverTab = lazy(() =>
  * The Export tab runs the OpenFOAM -> CGNS (CFD-Post) pipeline and shows its
  * report; code-split so its machinery only loads when the tab is opened.
  */
+/**
+ * The Free surface tab (lid iteration, WS-I) polls its job while one runs, so it
+ * is code-split and only mounted while open.
+ */
+const FreeSurfaceTab = lazy(() =>
+  import('@/features/freesurface/FreeSurfaceTab').then((module) => ({
+    default: module.FreeSurfaceTab,
+  })),
+);
+
 const ExportTab = lazy(() =>
   import('@/features/export/ExportTab').then((module) => ({ default: module.ExportTab })),
 );
@@ -180,7 +191,14 @@ export function ProjectDetailPage() {
  * Opening it swaps the whole detail body for the lazy-loaded Visualize panel
  * (mesh picker + 3D viewer), which fills the pinned region at lg+.
  */
-const PROJECT_VIEWS = ['detail', 'visualize', 'assemble', 'solver', 'export'] as const;
+const PROJECT_VIEWS = [
+  'detail',
+  'visualize',
+  'assemble',
+  'solver',
+  'freesurface',
+  'export',
+] as const;
 type ProjectView = (typeof PROJECT_VIEWS)[number];
 
 function isProjectView(value: string | null): value is ProjectView {
@@ -222,6 +240,7 @@ function ProjectTabs({ project }: { project: Project }) {
         <VisualizeTab disabled={!(hasPolyMesh || hasSources)} />
         <AssembleTab disabled={!hasSources} />
         <SolverTabTrigger disabled={!hasPolyMesh} />
+        <FreeSurfaceTabTrigger disabled={!hasPolyMesh} />
         <ExportTabTrigger disabled={!hasPolyMesh} />
       </TabsList>
 
@@ -268,6 +287,18 @@ function ProjectTabs({ project }: { project: Project }) {
         {view === 'solver' && (
           <Suspense fallback={<ViewerLoading />}>
             <SolverTab projectId={project.id} />
+          </Suspense>
+        )}
+      </TabsContent>
+
+      <TabsContent
+        value="freesurface"
+        className="mt-0 flex-col data-[state=active]:flex lg:min-h-0 lg:flex-1"
+      >
+        {/* Mount only when open: the tab polls a running free-surface job. */}
+        {view === 'freesurface' && (
+          <Suspense fallback={<ViewerLoading />}>
+            <FreeSurfaceTab projectId={project.id} onOpenSolver={() => setView('solver')} />
           </Suspense>
         )}
       </TabsContent>
@@ -376,6 +407,36 @@ function SolverTabTrigger({ disabled }: { disabled: boolean }) {
         </span>
       </TooltipTrigger>
       <TooltipContent>Import a polyMesh to enable the solver</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * The Free surface trigger (lid iteration, WS-I). Gated on the project having a
+ * mesh; the tab itself explains the other prerequisites (flat top patch,
+ * converged run, source meshing session).
+ */
+function FreeSurfaceTabTrigger({ disabled }: { disabled: boolean }) {
+  const trigger = (
+    <TabsTrigger value="freesurface" disabled={disabled}>
+      <Waves strokeWidth={1.75} aria-hidden="true" />
+      Free surface
+    </TabsTrigger>
+  );
+
+  if (!disabled) return trigger;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          className="inline-flex rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
+        >
+          {trigger}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>Import a polyMesh to enable the free-surface tool</TooltipContent>
     </Tooltip>
   );
 }

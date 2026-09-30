@@ -53,6 +53,7 @@ import {
   readChamberManifest,
   readChamberSpiral,
   readChamberWarnings,
+  writeChamberInput,
   writeChamberParams,
   writeChamberSpiralInput,
   writeChamberWarnings,
@@ -524,6 +525,7 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
   return withChamberLock(hash, async () => {
     // A cached build reports the warnings + STEP meta persisted at build time.
     if (await chamberGlbExists(hash)) {
+      await writeChamberInput(hash, input, true).catch(() => undefined);
       return {
         hash,
         outputs: responseOutputs,
@@ -543,6 +545,8 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
     }
     const paths = chamberPaths(hash);
     await writeChamberParams(hash, params);
+    // The ChamberInput behind this key (metadata only, not hashed).
+    await writeChamberInput(hash, input);
 
     const result = await runCommand({
       command: env.CHAMBER_PYTHON_BIN,

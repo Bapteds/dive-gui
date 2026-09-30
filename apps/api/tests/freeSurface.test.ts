@@ -13,8 +13,18 @@ import { app, authHeader, createTestUser, logicalCommand, resetDatabase } from '
 import { prisma } from '../src/lib/prisma';
 import { readCaseFile, writeCaseFile } from '../src/lib/caseStorage';
 import { setCommandRunner, type CommandResult, type CommandSpec } from '../src/lib/commandRunner';
-import { setStreamRunner, type StreamExit, type StreamHandle, type StreamSpec } from '../src/lib/streamRunner';
-import { createSession, sessionPolyMeshDir, writeConfig, writeStl } from '../src/lib/meshingStorage';
+import {
+  setStreamRunner,
+  type StreamExit,
+  type StreamHandle,
+  type StreamSpec,
+} from '../src/lib/streamRunner';
+import {
+  createSession,
+  sessionPolyMeshDir,
+  writeConfig,
+  writeStl,
+} from '../src/lib/meshingStorage';
 import { storageRoot } from '../src/lib/fileTreeStorage';
 import { setFieldPatchType } from '../src/lib/openfoamCase';
 import { reconcileOrphanFreeSurfaceJobs } from '../src/modules/projects/freeSurface.service';
@@ -85,7 +95,13 @@ function boundary(withAtmosphere = true): string {
 }
 
 function polyMeshFiles(withAtmosphere = true): Record<string, string> {
-  return { points: POINTS, faces: FACES, owner: OWNER, neighbour: NEIGHBOUR, boundary: boundary(withAtmosphere) };
+  return {
+    points: POINTS,
+    faces: FACES,
+    owner: OWNER,
+    neighbour: NEIGHBOUR,
+    boundary: boundary(withAtmosphere),
+  };
 }
 
 async function writePolyMesh(dir: string, withAtmosphere = true): Promise<void> {
@@ -157,14 +173,24 @@ async function makeProject(
   for (const [name, content] of Object.entries(polyMeshFiles(atmosphere))) {
     await writeCaseFile(project.id, `constant/polyMesh/${name}`, content);
   }
-  await request(app).post(`/api/v1/projects/${project.id}/runnable/scaffold`).set('Authorization', auth).expect(201);
+  await request(app)
+    .post(`/api/v1/projects/${project.id}/runnable/scaffold`)
+    .set('Authorization', auth)
+    .expect(201);
   if (slip && atmosphere) {
     const u = (await readCaseFile(project.id, '0/U'))!.toString('utf8');
     await writeCaseFile(project.id, '0/U', setFieldPatchType(u, 'atmosphere', 'slip'));
   }
   if (parentRun) {
     await prisma.run.create({
-      data: { projectId: project.id, solver: 'simpleFoam', status: 'converged', cores: 1, command: '', logPath: '' },
+      data: {
+        projectId: project.id,
+        solver: 'simpleFoam',
+        status: 'converged',
+        cores: 1,
+        command: '',
+        logPath: '',
+      },
     });
     await writeCaseFile(project.id, '100/U', 'parent result');
   }
@@ -175,7 +201,15 @@ async function makeProject(
 // --- Fakes ---------------------------------------------------------------------------
 
 function ok(spec: CommandSpec, stdout = 'OK'): CommandResult {
-  return { command: spec.command, args: spec.args, exitCode: 0, stdout, stderr: '', durationMs: 1, timedOut: false };
+  return {
+    command: spec.command,
+    args: spec.args,
+    exitCode: 0,
+    stdout,
+    stderr: '',
+    durationMs: 1,
+    timedOut: false,
+  };
 }
 
 function caseOf(args: string[], fallback: string): string {
@@ -212,7 +246,9 @@ function kitRunner(opts: KitFakeOptions): (spec: CommandSpec) => Promise<Command
       return ok(spec);
     }
     if (args[0] === '-c' && /matplotlib/.test(args[1] ?? '')) {
-      return opts.matplotlib === false ? { ...ok(spec), exitCode: 1, stderr: 'ModuleNotFoundError' } : ok(spec);
+      return opts.matplotlib === false
+        ? { ...ok(spec), exitCode: 1, stderr: 'ModuleNotFoundError' }
+        : ok(spec);
     }
     if (script.endsWith('lidkit_surface.py')) {
       const out = args[2];
@@ -293,7 +329,10 @@ function streamRunner(opts: StreamFakeOptions = {}): (spec: StreamSpec) => Strea
       }
       if (command === 'simpleFoam') {
         const caseDir = caseOf(args, spec.cwd);
-        await fs.writeFile(spec.logFile, 'Time = 1\nGAMG:  Solving for p, Initial residual = 0.2, Final residual = 1e-3, No Iterations 5\n');
+        await fs.writeFile(
+          spec.logFile,
+          'Time = 1\nGAMG:  Solving for p, Initial residual = 0.2, Final residual = 1e-3, No Iterations 5\n',
+        );
         if (opts.solverHangs) return;
         await fs.appendFile(spec.logFile, 'SIMPLE solution converged in 200 iterations\nEnd\n');
         await fs.mkdir(path.join(caseDir, '200'), { recursive: true });
@@ -311,7 +350,9 @@ function streamRunner(opts: StreamFakeOptions = {}): (spec: StreamSpec) => Strea
 // --- Helpers ------------------------------------------------------------------------
 
 function overview(f: Fixture, query = '') {
-  return request(app).get(`/api/v1/projects/${f.id}/free-surface${query}`).set('Authorization', f.auth);
+  return request(app)
+    .get(`/api/v1/projects/${f.id}/free-surface${query}`)
+    .set('Authorization', f.auth);
 }
 
 function start(f: Fixture, body: Record<string, unknown> = {}) {
@@ -321,7 +362,12 @@ function start(f: Fixture, body: Record<string, unknown> = {}) {
     .send({ lidPatch: 'atmosphere', inletPatch: 'inlet', sourceSessionId: f.sessionId, ...body });
 }
 
-async function waitForJob(f: Fixture, jobId: string, done: (job: Record<string, unknown>) => boolean, timeoutMs = 15000) {
+async function waitForJob(
+  f: Fixture,
+  jobId: string,
+  done: (job: Record<string, unknown>) => boolean,
+  timeoutMs = 15000,
+) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const res = await request(app)
@@ -329,14 +375,18 @@ async function waitForJob(f: Fixture, jobId: string, done: (job: Record<string, 
       .set('Authorization', f.auth);
     expect(res.status).toBe(200);
     if (done(res.body.job)) return res.body.job;
-    if (Date.now() > deadline) throw new Error(`job stuck at ${res.body.job.status}/${res.body.job.stage}`);
+    if (Date.now() > deadline)
+      throw new Error(`job stuck at ${res.body.job.status}/${res.body.job.stage}`);
     await new Promise((r) => setTimeout(r, 20));
   }
 }
 
 const terminal = (job: Record<string, unknown>) => job.status !== 'running';
 
-function check(body: { checks: { items: { id: string; status: string; message: string }[] } }, id: string) {
+function check(
+  body: { checks: { items: { id: string; status: string; message: string }[] } },
+  id: string,
+) {
   return body.checks.items.find((c) => c.id === id);
 }
 
@@ -361,7 +411,9 @@ describe('Free surface readiness', () => {
     expect(res.body.checks.lidPatch).toBe('atmosphere');
     expect(res.body.checks.inletPatch).toBe('inlet');
     expect(res.body.checks.zLid).toBeCloseTo(1, 6);
-    const flat = (res.body.checks.patches as { name: string; flat: boolean; z: number }[]).filter((p) => p.flat);
+    const flat = (res.body.checks.patches as { name: string; flat: boolean; z: number }[]).filter(
+      (p) => p.flat,
+    );
     expect(flat.map((p) => p.name)).toEqual(['atmosphere']);
     expect(res.body.defaults).toMatchObject({ iterations: 1, tolRmsMm: 3 });
     expect(res.body.jobs).toEqual([]);
@@ -456,7 +508,9 @@ describe('Free surface job', () => {
     expect(commands.filter((c) => c === 'lidkit_fitlid.py')).toHaveLength(1);
 
     // The case mesh now comes from the lid session; the solve used the new mesh.
-    const origin = await request(app).get(`/api/v1/projects/${f.id}/mesh-origin`).set('Authorization', f.auth);
+    const origin = await request(app)
+      .get(`/api/v1/projects/${f.id}/mesh-origin`)
+      .set('Authorization', f.auth);
     expect(origin.body.origin.sessionId).toBe(iterations[0].sessionId);
     const run = await prisma.run.findUnique({ where: { id: iterations[0].runId } });
     expect(run?.status).toBe('converged');
@@ -465,7 +519,14 @@ describe('Free surface job', () => {
 
     // The session's surfaces were replaced by the fitted solids, by name.
     const lidStl = await fs.readFile(
-      path.join(storageRoot(), 'meshing', iterations[0].sessionId, 'constant', 'triSurface', 'atmosphere.stl'),
+      path.join(
+        storageRoot(),
+        'meshing',
+        iterations[0].sessionId,
+        'constant',
+        'triSurface',
+        'atmosphere.stl',
+      ),
       'utf8',
     );
     expect(lidStl).toMatch(/solid atmosphere/);
@@ -519,16 +580,26 @@ describe('Free surface job', () => {
     const res = await start(f);
     expect(res.status).toBe(202);
     const jobId = res.body.job.id as string;
-    await waitForJob(f, jobId, (job) => job.stage === 'solving' && !!(job.iterations as { runId: string | null }[])[0]?.runId);
+    await waitForJob(
+      f,
+      jobId,
+      (job) =>
+        job.stage === 'solving' && !!(job.iterations as { runId: string | null }[])[0]?.runId,
+    );
 
     // Lock: manual run, second job, case reset, BC apply, mesh import (case).
-    const run = await request(app).post(`/api/v1/projects/${f.id}/runs`).set('Authorization', f.auth).send({});
+    const run = await request(app)
+      .post(`/api/v1/projects/${f.id}/runs`)
+      .set('Authorization', f.auth)
+      .send({});
     expect(run.status).toBe(409);
     expect(run.body.error.code).toBe('FREE_SURFACE_IN_PROGRESS');
     const again = await start(f);
     expect(again.status).toBe(409);
     expect(again.body.error.code).toBe('FREE_SURFACE_IN_PROGRESS');
-    const reset = await request(app).delete(`/api/v1/projects/${f.id}/files`).set('Authorization', f.auth);
+    const reset = await request(app)
+      .delete(`/api/v1/projects/${f.id}/files`)
+      .set('Authorization', f.auth);
     expect(reset.status).toBe(409);
     const send = await request(app)
       .post(`/api/v1/projects/${f.id}/mesh/from-meshing`)
@@ -576,7 +647,9 @@ describe('Free surface job', () => {
 
     const stl = await request(app).get(`${base}/domain_lidIter1.stl`).set('Authorization', f.auth);
     expect(stl.status).toBe(200);
-    expect(stl.headers['content-disposition']).toMatch(/attachment; filename="domain_lidIter1\.stl"/);
+    expect(stl.headers['content-disposition']).toMatch(
+      /attachment; filename="domain_lidIter1\.stl"/,
+    );
     expect(stl.text ?? stl.body.toString()).toMatch(/solid atmosphere/);
 
     for (const name of ['job.json', 'base.stl', '..%2Fjob.json', 'domain_lidIter9.stl']) {
@@ -597,7 +670,12 @@ describe('Free surface job', () => {
         status: 'running',
         stage: 'solving',
         iteration: 1,
-        settings: { lidPatch: 'atmosphere', inletPatch: 'inlet', sourceSessionId: f.sessionId, iterations: 1 },
+        settings: {
+          lidPatch: 'atmosphere',
+          inletPatch: 'inlet',
+          sourceSessionId: f.sessionId,
+          iterations: 1,
+        },
         zLid: 1,
         parentRunId: null,
         cores: 1,

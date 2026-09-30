@@ -26,12 +26,19 @@ vi.mock('@/components/ui/sonner', () => ({
 import * as api from '@/lib/api/projects';
 import { FreeSurfaceTab } from './FreeSurfaceTab';
 
-function overview(partial: Partial<FreeSurfaceOverview['checks']> = {}, jobs: FreeSurfaceJob[] = []): FreeSurfaceOverview {
+function overview(
+  partial: Partial<FreeSurfaceOverview['checks']> = {},
+  jobs: FreeSurfaceJob[] = [],
+): FreeSurfaceOverview {
   return {
     checks: {
       items: [
         { id: 'lidPatch', status: 'ok', message: 'Lid patch atmosphere is flat at z = 1.000 m.' },
-        { id: 'lidBc', status: 'warning', message: 'The lid is not slip (U: noSlip). The kit assumes a slip rigid lid.' },
+        {
+          id: 'lidBc',
+          status: 'warning',
+          message: 'The lid is not slip (U: noSlip). The kit assumes a slip rigid lid.',
+        },
         { id: 'inletPatch', status: 'ok', message: 'Inlet patch inlet.' },
         { id: 'parentRun', status: 'ok', message: 'Parent run converged.' },
         { id: 'sourceSession', status: 'ok', message: 'Source session Chamber mesh (cfMesh).' },
@@ -80,7 +87,16 @@ function job(partial: Partial<FreeSurfaceJob>): FreeSurfaceJob {
     parentRunId: 'r0',
     cores: 4,
     surfaces: [
-      { index: 0, zsMeanMm: -20, zsMinMm: -35, zsMaxMm: -2, residualRmsMm: 30, residualMaxMm: 60, lidFaces: 40, dp0Pa: null },
+      {
+        index: 0,
+        zsMeanMm: -20,
+        zsMinMm: -35,
+        zsMaxMm: -2,
+        residualRmsMm: 30,
+        residualMaxMm: 60,
+        lidFaces: 40,
+        dp0Pa: null,
+      },
     ],
     iterations: [
       {
@@ -190,8 +206,26 @@ describe('FreeSurfaceTab', () => {
       reason: 'Iterations done: the lid residual RMS is 5.0 mm (tolerance 3.0 mm).',
       finishedAt: '2026-09-30T11:00:00.000Z',
       surfaces: [
-        { index: 0, zsMeanMm: -20, zsMinMm: -35, zsMaxMm: -2, residualRmsMm: 30, residualMaxMm: 60, lidFaces: 40, dp0Pa: null },
-        { index: 1, zsMeanMm: -21, zsMinMm: -36, zsMaxMm: -3, residualRmsMm: 5, residualMaxMm: 9, lidFaces: 44, dp0Pa: 2842 },
+        {
+          index: 0,
+          zsMeanMm: -20,
+          zsMinMm: -35,
+          zsMaxMm: -2,
+          residualRmsMm: 30,
+          residualMaxMm: 60,
+          lidFaces: 40,
+          dp0Pa: null,
+        },
+        {
+          index: 1,
+          zsMeanMm: -21,
+          zsMinMm: -36,
+          zsMaxMm: -3,
+          residualRmsMm: 5,
+          residualMaxMm: 9,
+          lidFaces: 44,
+          dp0Pa: 2842,
+        },
       ],
       iterations: [
         {

@@ -109,6 +109,23 @@ export async function writeChamberParams(hash: string, params: ChamberParams): P
 }
 
 /**
+ * Write the ChamberInput that produced this build (input.json, next to
+ * params.json). Metadata only (WS-I §4, used by WS-H): it never enters the hash.
+ * `onlyIfMissing` keeps the first writer's copy on a cache hit.
+ */
+export async function writeChamberInput(
+  hash: string,
+  input: unknown,
+  onlyIfMissing = false,
+): Promise<void> {
+  const paths = chamberPaths(hash);
+  const file = path.join(paths.dir, 'input.json');
+  if (onlyIfMissing && (await statOrNull(file)) !== null) return;
+  await fs.mkdir(paths.dir, { recursive: true });
+  await fs.writeFile(file, JSON.stringify(input), 'utf8');
+}
+
+/**
  * Persist the geometry clamp warnings the builder emitted (warnings.json in the
  * build dir), so a later cache hit can report them without re-running the build.
  */

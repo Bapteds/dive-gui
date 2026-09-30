@@ -1,6 +1,6 @@
 # Index of every repository file
 
-> One line per file (592 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
+> One line per file (613 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
 
 Detail of a code file: open the sheet shown and search for the `## path/to/file` section. Documents: the description is their title and introduction line.
 
@@ -18,7 +18,6 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `eslint.config.js` : ESLint 9 "flat" configuration of the monorepo via `tseslint.config`. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package-lock.json` : npm lockfile for the whole monorepo (workspaces), used by `npm ci` in CI and in production. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package.json` : root of the `dive-turbinen` workspace (private, ESM, `engines.node >=20`). · [root-shared-mcp](codemap/root-shared-mcp.md)
-- `tools.tar` : **(undocumented: add a section in brain/codemap)**
 - `tsconfig.base.json` : Common TypeScript base: `target ES2022`, `strict`, `esModuleInterop`, `skipLibCheck`, `forceConsistentCasingInFileNames`, `resolveJsonModule`, `noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch`. · [root-shared-mcp](codemap/root-shared-mcp.md)
 
 ## `.claude`
@@ -115,11 +114,23 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/scripts/assets/guideVanes_outlet.stl` : Binary STL (~420 KB): the annular outlet face of the passage (hub to shroud, slightly conical), exported separately from CAD and recentered on its own axis. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/assets/guideVanes_walls.stl` : Binary STL (~9.7 MB): the passage wall shell (hub + shroud) at full resolution, without the outlet cap. · [api-scripts](codemap/api-scripts.md)
 
+## `apps/api/scripts/lidkit`
+
+- `apps/api/scripts/lidkit/lidkit_fitlid.py` : Vendored LID ITERATION KIT step 2 (unchanged from `documents/Tools/lidIterationKit/`): fits the lid solid of the flat multi-solid base STL to the smoothed height field z_s (walls follow, roof upstands, `tmin` clamp over … · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/lidkit/lidkit_post.py` : Post figure of lid iteration k (adapted from the kit's `lidkit_post.py`: same maths and panels, paths on the command line instead of the kit config): mesh lid, new z_s, residual map, residual history, optional ring secto … · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/lidkit/lidkit_surface.py` : Vendored LID ITERATION KIT step 1 (unchanged): z_s = Z_lid + (p_lid − p0_inlet)/g from the `lidSurfaces` export (`lid.vtk`, `inlet.vtk`), writes `zs_iter<j>.npy` (x, y, z_s, area) and `.json` (z_s statistics, lid residua … · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/lidkit/vtk_reader.py` : Vendored legacy ASCII VTK polydata reader (unchanged, numpy only) used by `lidkit_surface.py` and `lidkit_post.py`. · [api-scripts](codemap/api-scripts.md)
+
+## `apps/api/scripts/lidkit/templates`
+
+- `apps/api/scripts/lidkit/templates/lidSurfaces` : Vendored kit `surfaces` function object exporting the lid and inlet patches as legacy ASCII VTK (`p`, `U` face values); `@ATMOSPHERE@` / `@INLET@` substituted by `lidkit.renderLidSurfacesDict` and written to the case … · [api-scripts](codemap/api-scripts.md)
+
 ## `apps/api/scripts/tests`
 
 - `apps/api/scripts/tests/conftest.py` : infrastructure of the real geometry suite (no mocks). · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/tests/test_build_chamber.py` : the guarantees of `buildChamber.py` the API depends on: output contract (last stdout line `OK:`; `KO:` + exit code 1), watertight STL, golden volume (`GOLDEN`, tolerance `VOL_RTOL = 5e-3`), names and order of the manifes … · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/tests/test_design_semi_spiral.py` : `designSemiSpiral.py` with numpy + scipy only (runs without CadQuery: `conftest.py` skips only the builder tests). · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/tests/test_lidkit.py` : the vendored kit: `--flat` fit of a closed box reproduces the flat lid (no clamp, no upstand, no new open edge), `lidkit_surface.py` on a synthetic VTK pair gives the analytic z_s and p0, `lidkit_post.py` writes a PNG. · [api-scripts](codemap/api-scripts.md)
 
 ## `apps/api/scripts/tests/params`
 
@@ -161,10 +172,13 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/src/lib/cores.ts` : `coreBudget(): number` returns the maximum number of cores a parallel job may use: `env.SOLVER_TOTAL_CORES` if it is > 0, otherwise `os.cpus().length`. · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/exportStorage.ts` : storage of a project's CFD-Post export artifacts under `<STORAGE_DIR>/projects/<projectId>/export/`, sibling of `case/`, `cgns/`, `viz/`, `runs/`: producing or clearing an export does not touch the case, and a case reset … · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/fileTreeStorage.ts` : directory-tree storage core parameterized by an absolute root, shared by all facades. · [api-lib](codemap/api-lib.md)
+- `apps/api/src/lib/freeSurfaceStorage.ts` : Filesystem storage of the free-surface (lid iteration) jobs under `STORAGE_DIR/projects/<id>/freesurface/<jobId>/` (WS-I): `job.json`, the kit outputs and the download allow-list. · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/jwt.ts` : signing and verification of access JWTs (short-lived, `sub` + `role`) and refresh JWTs (long-lived, `sub` + `tokenVersion`, stored in an httpOnly cookie; a logout increments the version to revoke). · [api-lib](codemap/api-lib.md)
+- `apps/api/src/lib/lidkit.ts` : Glue between the free-surface job runner and the vendored LID ITERATION KIT (`apps/api/scripts/lidkit/`): interpreter and script paths, the `lidSurfaces` dict, the base / fitted multi-solid STL mapping to meshing-session … · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/logger.ts` : Minimal dependency-free console logger: `logger.info` / `warn` / `error(message, ...args)` prefix an ISO timestamp and the level (`[INFO]`, `[WARN]`, `[ERROR]`) and delegate to `console.log` / `console.warn` / … · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/meshBackupStorage.ts` : single-slot backup of a project's case, to make mesh edits reversible (patch renaming/retyping, autoPatch, merge, BC application). · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/meshImport.ts` : converts a single mesh file (`.cgns` or Fluent/Gmsh `.msh`) into the `constant/polyMesh` of a target case, with a step report. · [api-lib](codemap/api-lib.md)
+- `apps/api/src/lib/meshOriginStorage.ts` : The recorded origin of a project's current case mesh, `projects/<id>/mesh-origin.json` `{ sessionId, sessionName, engine, chamberHash, at }` (WS-I spec §4). · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/meshPatches.ts` : Pure, defensive parsing of the patch names of a cfMesh input surface, for the per-patch BC type editor. · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/meshPipelineRun.ts` : plumbing shared by the snappyHexMesh and cfMesh pipelines: shape of the step report, short-circuiting sequential runner (buffered or streaming to a log), and a preliminary "Allclean". · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/meshSourceVizStorage.ts` : 3D render cache of a mesh library source, under `projects/<id>/meshes/<meshId>/.viz/{patches.glb, manifest.json, edges.bin}`. · [api-lib](codemap/api-lib.md)
@@ -175,6 +189,8 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/src/lib/openfoamCase.ts` : purely textual OpenFOAM domain (no I/O). · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/openfoamCommand.ts` : single invocation point for OpenFOAM utilities and single failure rule. · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/password.ts` : `hashPassword(plain): Promise<string>` hashes with argon2id (library default parameters, salt included in the encoded hash). · [api-lib](codemap/api-lib.md)
+- `apps/api/src/lib/pipelineStages.ts` : Generic CFD-loop stages shared by the in-process job runners (WS-I free surface, WS-H optimisation): mesh new surfaces with a session's setup, send a session mesh to a project's case, solve the case, and await the meshin … · [api-lib](codemap/api-lib.md)
+- `apps/api/src/lib/polyMeshLevels.ts` : Per-patch face-centre height statistics of an ASCII polyMesh, streamed line by line (points kept in one `Float64Array`, only boundary faces examined). · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/prisma.ts` : Exports `prisma`, the single `PrismaClient` of the API (avoids multiple SQLite connection pools). · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/residualParser.ts` : pure parser of an OpenFOAM solver log into a time series of initial residuals plus convergence or divergence signals. · [api-lib](codemap/api-lib.md)
 - `apps/api/src/lib/role.ts` : Re-exports `ROLES` and `Role` from `@dive/shared`. · [api-lib](codemap/api-lib.md)
@@ -250,6 +266,9 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/src/modules/projects/files.controller.ts` : HTTP adapters for case files, and the shared multipart parser `parseCaseUpload` (reused by the CGNS, meshes, templates and meshing routes). · [api-projects](codemap/api-projects.md)
 - `apps/api/src/modules/projects/files.schemas.ts` : zod schemas for the case-file endpoints. · [api-projects](codemap/api-projects.md)
 - `apps/api/src/modules/projects/files.service.ts` : logic of a project's OpenFOAM case folder: tree, import, reset, zip, verification of mandatory files, base scaffolding and "Make runnable" per solver/turbulence model, synchronization of the `boundaryField`s with the mes … · [api-projects](codemap/api-projects.md)
+- `apps/api/src/modules/projects/freeSurface.controller.ts` : HTTP adapters of the Free surface tool (WS-I) and the project lock middleware. · [api-projects](codemap/api-projects.md)
+- `apps/api/src/modules/projects/freeSurface.schemas.ts` : zod schemas of the Free surface routes: `freeSurfaceStartSchema` (lid / inlet patch words, `sourceSessionId` slug, optional kit settings with bounds, `iterations` 1/2/3, `axis`, `rings` with r1 > r0, `datumY`) … · [api-projects](codemap/api-projects.md)
+- `apps/api/src/modules/projects/freeSurface.service.ts` : The Free surface (lid iteration) tool, WS-I: readiness checks (spec §2), job start / stop / delete / files, boot reconciliation, and the in-process job runner that re-implements the kit driver with argv-only commands (ex … · [api-projects](codemap/api-projects.md)
 - `apps/api/src/modules/projects/mesh.controller.ts` : HTTP adapters for the 3D viewer of the case mesh ("Visualize" tab) and for editing its patches / backup. · [api-projects](codemap/api-projects.md)
 - `apps/api/src/modules/projects/mesh.schemas.ts` : zod schemas for the actions on the case mesh. · [api-projects](codemap/api-projects.md)
 - `apps/api/src/modules/projects/mesh.service.ts` : 3D rendering of the case mesh (offline extraction of the boundary surfaces to GLB + JSON manifest, cached in the `viz/` store) and editing operations on `boundary` with propagation into the `0/` fields, single-slot backu … · [api-projects](codemap/api-projects.md)
@@ -300,16 +319,19 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/tests/dashboard.test.ts` : `GET /api/v1/dashboard`: shape of server metrics (`cpuPercent` between 0 and 100, `cores > 0`, `memTotalBytes > 0`), `activeRuns` with `projectTitle`, `recentRuns`, grouped `runCounts`, `recentProjects` with per-project … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/export.test.ts` : OpenFOAM → CGNS export (`POST/GET /projects/:id/export`, `GET …/export/download/:artifact`): 4 steps `inspect` → `convert` → `validate` → `cfdpost`, `profile` (`solver: simpleFoam`, `steady`, `incompressible` … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/fileTreeStorage.test.ts` : `comparePaths` from `src/lib/fileTreeStorage` (a folder and its children come before a prefix sibling: `0`, `0/p`, `0/U`, then `0.orig`) and `extractArchiveAt` ("H9" decompression cap: 413 `ARCHIVE_TOO_LARGE` before any … · [api-tests](codemap/api-tests.md)
+- `apps/api/tests/freeSurface.test.ts` : the Free surface tool (WS-I spec §10): readiness (ready + Z_lid + flat patches, no flat patch, not-slip warning, no parent run, no origin, stranger 404, 422 `FREE_SURFACE_NOT_READY`), one full iteration (202 then … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/globalSetup.ts` : vitest `globalSetup`, executed once before the whole suite. · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/helpers.ts` : utilities shared by all integration tests: single app instance, database reset, user factories, tokens, and the `logicalCommand` tool for fake OpenFOAM runners. · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/mesh.test.ts` : project mesh viewer (Visualize tab) and editing of the case mesh. · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/meshFromMeshing.test.ts` : `POST /projects/:id/mesh/from-meshing` (WS-F), 14 tests: 401; 404 for a stranger (case untouched), unknown session; 422 bad target, unsafe `sessionId`, blank name; super-admin allowed; 409 `MESH_IN_PROGRESS` via … · [api-tests](codemap/api-tests.md)
+- `apps/api/tests/meshOrigin.test.ts` : `mesh-origin.json` written by from-meshing (case target, not library), cleared by a case import and by reset, 404 for a stranger, chamber hash carried from `importChamberIntoMeshing`; `input.json` written by a chamber bu … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/meshPatches.test.ts` : Pure unit tests of `src/lib/meshPatches`: `parseFmsPatches` reads names and types from the FMS header (`[]` without a patch block); `parseStlSolidNames` lists the `solid`s of a multi-solid ASCII STL ( … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/meshTransform.test.ts` : `transformMeshPoints` and `isIdentityTransform` from `src/lib/meshTransform`, the server half of the parity proof with the three.js preview. · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/meshes.test.ts` : multi-mesh library and assembly pipeline (`/projects/:id/meshes/**`). · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/meshing.test.ts` : standalone Meshing (`/api/v1/meshing/**`, STL → snappyHexMesh or cfMesh → polyMesh). · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/meshingStorage.test.ts` : helpers of `src/lib/meshingStorage`: `slugifySessionName` (lowercase, accents removed, fallback `session`), `sanitizeStlName` (safe basename, `.stl` extension forced, traversal removed, fallback `surface.stl`) … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/openfoamCase.test.ts` : `collapseBoundaryToSinglePatch` (a single `defaultFaces`, `nFaces` summed, minimum `startFace`, header kept), `removeEmptyBoundaryPatches` (removes 0-face patches and renumbers, including dashed names; `only` filter) … · [api-tests](codemap/api-tests.md)
+- `apps/api/tests/pipelineStages.test.ts` : `awaitRunTerminal` (resolved by finalize; immediate on a terminal row) and `awaitMeshingTerminal` (resolved by the meshing finalizer; immediate on an idle / finished session). · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/projectFiles.test.ts` : case files of a project (`/projects/:id/files/**`): empty tree, 401, 404 for an outsider; folder import (bare polyMesh placed under `constant/polyMesh/`); 400 `NO_FILES_UPLOADED`; zip import; 400 `INVALID_ARCHIVE` for a … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/projects.test.ts` : `POST /api/v1/projects` (401, 201 with `ownerId` not serialized but actually stored, 422 blank title), `PATCH /projects/:id` (rename, 422, 404 for an outsider without leaking existence), `GET /projects` (only one's own p … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/projectsAccess.test.ts` : visibility (project hidden from a non-member, visible to an added collaborator, super-admin sees everything), `GET /projects/:id` (404 `NOT_FOUND` for a non-member, `owner` and `collaborators` for the owner), `DELETE` (2 … · [api-tests](codemap/api-tests.md)
@@ -508,6 +530,13 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/web/src/features/files/folderImport.test.ts` : `groupPickedFolder` (null if empty, grouping by immediate child, folders before files then alphabetical order, fallback to the name without prefix) and `uploadPath` (root stripped by default, kept on request, bare name u … · [web-features-platform](codemap/web-features-platform.md)
 - `apps/web/src/features/files/folderImport.ts` : pure logic for grouping a folder selection. · [web-features-platform](codemap/web-features-platform.md)
 
+## `apps/web/src/features/freesurface`
+
+- `apps/web/src/features/freesurface/FreeSurfaceTab.test.tsx` : readiness list + measured Z_lid + flat-only lid select, Start disabled on a blocking check, iterations control in the start body, progress stepper (`aria-current`, Solver link, Stop), results table + chart table alternat … · [web-features-projects](codemap/web-features-projects.md)
+- `apps/web/src/features/freesurface/FreeSurfaceTab.tsx` : The project's `Free surface` tab (WS-I): Setup panel (readiness checks with icon + text, lid / inlet / source-session selects re-querying the checks, measured Z_lid, iterations `SegmentedRadioGroup`, tolerance, Advanced … · [web-features-projects](codemap/web-features-projects.md)
+- `apps/web/src/features/freesurface/ResidualPerIterationChart.tsx` : Hand-made SVG of the lid residual RMS per iteration (Parent, It. · [web-features-projects](codemap/web-features-projects.md)
+- `apps/web/src/features/freesurface/useFreeSurface.ts` : TanStack Query hooks of the Free surface tab. · [web-features-projects](codemap/web-features-projects.md)
+
 ## `apps/web/src/features/meshing`
 
 - `apps/web/src/features/meshing/CfMeshConfigForm.perPatch.test.tsx` : the tri-state semantics of per-patch layers in `CfMeshConfigForm` (unchecked: `noLayerPatches`; checked without Customize: nothing, mirror of the global block; Customize: a `perPatch` entry), the read-only display of "li … · [web-features-meshing-solver](codemap/web-features-meshing-solver.md)
@@ -684,7 +713,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `brain/codemap/web-features-assemble-chamber.md` : Codemap: web features: assemble + chamber : Scope: `apps/web/src/features/assemble/`, `apps/web/src/features/chamber/` · Updated: 2026-09-28
 - `brain/codemap/web-features-meshing-solver.md` : Codemap: Web: meshing + solver features : Scope: `apps/web/src/features/meshing/`, `apps/web/src/features/solver/` · Updated: 2026-09-28
 - `brain/codemap/web-features-platform.md` : Codemap: web features (platform) : Scope: `apps/web/src/features/{account,admin,auth,dashboard,export,files,templates,terminal,visualize}/` · Updated: 2026-09-28
-- `brain/codemap/web-features-projects.md` : Codemap: web / features / projects : Scope: `apps/web/src/features/projects/` · Updated: 2026-09-28
+- `brain/codemap/web-features-projects.md` : Codemap: web / features / projects : Scope: `apps/web/src/features/projects/`, `apps/web/src/features/freesurface/` (Free surface tab, WS-I) · Updated: 2026-09-30
 
 ## `brain/conventions`
 
@@ -710,6 +739,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `brain/features/chamber-creation.md` : Feature · Chamber Creation
 - `brain/features/dashboard.md` : Feature · Dashboard (Home "command center")
 - `brain/features/export-cfdpost.md` : Feature · CFD-Post export (OpenFOAM to CGNS)
+- `brain/features/free-surface.md` : Feature · Free surface (lid iteration)
 - `brain/features/mcp-server.md` : Feature · MCP server (`apps/mcp`)
 - `brain/features/merge-and-assembly.md` : Feature · Merge and multi-part assembly
 - `brain/features/mesh-library-and-conversion.md` : Feature · Mesh library, conversion and 3D viewer

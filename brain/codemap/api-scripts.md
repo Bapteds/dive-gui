@@ -33,6 +33,7 @@ Binary STL (~9.7 MB): the passage wall shell (hub + shroud) at full resolution, 
 **Covers**: infrastructure of the real geometry suite (no mocks).
 **Technique**: `HAS_GEOMETRY_ENV` tests the import of `cadquery` and `trimesh`; otherwise `pytest_collection_modifyitems` marks everything as skipped with a pointer to `requirements-geometry.txt` (CI is authoritative). `run_builder(params_path, out_dir, name, step=False)` runs `sys.executable buildChamber.py <params> <out> [--step]` exactly like the API, timeout `BUILD_TIMEOUT_S = 600`. `BuildResult` (dataclass) exposes `exit_code`, `stdout`, `stderr`, `out_dir`, and the accessors `manifest`, `build_meta` (None if `build-meta.json` is missing), `export_path(*parts)`, `load_stl()`. The session fixture `build(name, params_override=None, step=False)` loads `params/<name>.json`, merges the override into a temporary `params.json`, and caches by the key `name:step=...:override` (each build costs tens of seconds).
 **Notable cases**: a build is launched only once per session and per combination. Since 2026-09-29 only the builder tests are skipped without CadQuery (`CADQUERY_FREE_MODULES` = `test_design_semi_spiral.py` still runs) and `pytest_configure` registers the `slow` marker (semi-spiral optimiser runs).
+**WS-I (2026-09-30)**: `test_lidkit.py` added to `CADQUERY_FREE_MODULES`.
 
 ## `apps/api/scripts/tests/params/hollow-vanes-overrides.json`
 Real parameters (`hollow` variant, `guideVanes: true`, `feetEnabled: false`, `partScale` 1, overrides `dFirst` 2.92 / `dMiddle` 2.23126, `outletOuterD` 1.68, `outletRatio` 0.45, `simplifyGenerator: false`). Reproduces the blade-skin / hub vote tie that "speckled" the vanes.
@@ -259,6 +260,7 @@ Pinned environment of the geometry suite (mirror of the local WSL CadQuery venv)
 
 ## `apps/api/scripts/requirements.txt`
 Version floors of the runtime dependencies, per script: `vtk>=9.2` (CgnsToVtk, CgnsInspect; `FoamToCgns.py` excluded because ParaView), `h5py>=3.0` (CgnsMergeTime), `pyvista>=0.43`, `trimesh>=4.0`, `numpy>=1.24` (extractPatches), then for `CHAMBER_PYTHON_BIN` (separate venv) `cadquery>=2.4`, `manifold3d>=2.3`, `networkx>=3.0`, `shapely>=2.0`, `scipy>=1.10` (since 2026-09-29: vaned builds and `designSemiSpiral.py`; K8 closed).
+**WS-I (2026-09-30)**: `matplotlib>=3.7` (optional, free-surface figures).
 
 ## `apps/api/tests/fixtures/CgnsToVtk.py`
 Never-executed stub (`sys.exit("stub: ...")`): the conversion checks that the script exists before launching python, and `apps/api/vitest.config.ts` points `CGNS_TO_VTK_SCRIPT` at this file while injecting a fake command runner.
@@ -307,3 +309,22 @@ Folder of business sources of truth and templates, not executed by the applicati
 | `documents/old/csv_to_boundaryData.py` | Identical copy of `apps/api/scripts/csv_to_boundaryData.py`. | Cited by templates 3 and 4. |
 
 **Notes**: the code comments refer to the BC templates as `documents/*_BCs*.txt` whereas they live in `documents/old/` (drifted path). The `documents/old/` folder and the script copy are not referenced by exact path.
+
+## `apps/api/scripts/lidkit/lidkit_fitlid.py`
+**Role**: Vendored LID ITERATION KIT step 2 (unchanged from `documents/Tools/lidIterationKit/`): fits the lid solid of the flat multi-solid base STL to the smoothed height field z_s (walls follow, roof upstands, `tmin` clamp over submerged tops, protruding vertical solids cut), writes the fitted STL, a JSON report (`--report`) and an optional check figure (`--figure`, matplotlib); `--flat` = regression. numpy + scipy + shapely. Run by `freeSurface.service` under `LIDKIT_PYTHON_BIN`. Does not follow the `OK:` / `KO:` contract (failure = non-zero exit via `assert`).
+
+## `apps/api/scripts/lidkit/lidkit_post.py`
+**Role**: Post figure of lid iteration k (adapted from the kit's `lidkit_post.py`: same maths and panels, paths on the command line instead of the kit config): mesh lid, new z_s, residual map, residual history, optional ring sector profiles. `lidkit_post.py <lid.vtk> <work_dir> <k> <out.png> --z-lid --tol [--name] [--axis= --rings=]`; writes the PNG atomically + a JSON; `OK:` / `KO:` contract, imports inside `main()`. numpy + matplotlib.
+
+## `apps/api/scripts/lidkit/lidkit_surface.py`
+**Role**: Vendored LID ITERATION KIT step 1 (unchanged): z_s = Z_lid + (p_lid − p0_inlet)/g from the `lidSurfaces` export (`lid.vtk`, `inlet.vtk`), writes `zs_iter<j>.npy` (x, y, z_s, area) and `.json` (z_s statistics, lid residual RMS / max, optional rings / datum). numpy.
+
+## `apps/api/scripts/lidkit/templates/lidSurfaces`
+Vendored kit `surfaces` function object exporting the lid and inlet patches as legacy ASCII VTK (`p`, `U` face values); `@ATMOSPHERE@` / `@INLET@` substituted by `lidkit.renderLidSurfacesDict` and written to the case `system/lidSurfaces`.
+
+## `apps/api/scripts/lidkit/vtk_reader.py`
+Vendored legacy ASCII VTK polydata reader (unchanged, numpy only) used by `lidkit_surface.py` and `lidkit_post.py`.
+
+## `apps/api/scripts/tests/test_lidkit.py`
+**Covers**: the vendored kit: `--flat` fit of a closed box reproduces the flat lid (no clamp, no upstand, no new open edge), `lidkit_surface.py` on a synthetic VTK pair gives the analytic z_s and p0, `lidkit_post.py` writes a PNG.
+**Technique**: real scripts via `subprocess` under the test interpreter; skipped without numpy / scipy / shapely (post test also needs matplotlib). Listed in `CADQUERY_FREE_MODULES` (runs without CadQuery).

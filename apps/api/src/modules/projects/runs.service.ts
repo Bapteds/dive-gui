@@ -98,6 +98,47 @@ function runExclusive<T>(key: string, fn: () => Promise<T>): Promise<T> {
   return result;
 }
 
+/**
+ * Completion waiters (awaitRunTerminal), keyed by run id. Woken by every terminal
+ * write of this module; awaitRunTerminal also re-reads the row on a timer, so a
+ * status set elsewhere (boot reconciliation, project deletion) is still seen.
+ */
+const runWaiters = new Map<string, Set<() => void>>();
+
+/** Wake the waiters of a run that just reached (or may have reached) a terminal state. */
+function notifyRunSettled(runId: string): void {
+  const waiters = runWaiters.get(runId);
+  if (!waiters) return;
+  runWaiters.delete(runId);
+  for (const wake of waiters) wake();
+}
+
+/**
+ * Resolve with the run once it is terminal (converged / completed / diverged /
+ * failed / stopped). Resolved by finalizeRun (and the other terminal writes of
+ * this module); falls back to re-reading the row every `pollMs`. Resolves at once
+ * for a row that is already terminal. Used by the pipeline stages (WS-I, WS-H).
+ * @throws 404 RUN_NOT_FOUND when the row does not exist (or disappears).
+ */
+export async function awaitRunTerminal(runId: string, pollMs = 2000): Promise<PublicRun> {
+  for (;;) {
+    const row = await prisma.run.findUnique({ where: { id: runId } });
+    if (!row) throw new AppError(404, 'RUN_NOT_FOUND', 'Run not found');
+    if (isTerminalRunStatus(row.status as RunStatus)) return toPublicRun(row);
+    await new Promise<void>((resolve) => {
+      const waiters = runWaiters.get(runId) ?? new Set<() => void>();
+      const wake = (): void => {
+        clearTimeout(timer);
+        waiters.delete(wake);
+        resolve();
+      };
+      const timer = setTimeout(wake, pollMs);
+      waiters.add(wake);
+      runWaiters.set(runId, waiters);
+    });
+  }
+}
+
 /** Keep the catch-up log tail bounded on the wire while preserving the useful end. */
 const LOG_TAIL_CHARS = 20000;
 
@@ -279,6 +320,7 @@ async function finalizeRun(
     where: { id: runId, status: { in: [...ACTIVE_RUN_STATUSES] } },
     data: { status, reason, exitCode: exit.exitCode, pid: null, finishedAt: new Date() },
   });
+  notifyRunSettled(runId);
 }
 
 /** Mark a run failed with a reason — best-effort, and only while it is still active. */
@@ -287,6 +329,7 @@ async function failRun(runId: string, reason: string): Promise<void> {
     where: { id: runId, status: { in: [...ACTIVE_RUN_STATUSES] } },
     data: { status: 'failed', reason: reason.slice(0, 800), pid: null, finishedAt: new Date() },
   });
+  notifyRunSettled(runId);
 }
 
 /**
@@ -596,6 +639,7 @@ export async function stopRun(
       where: { id: runId, status: { in: [...ACTIVE_RUN_STATUSES] } },
       data: { status: 'stopped', reason: 'Stopped by user', finishedAt: new Date(), pid: null },
     });
+    notifyRunSettled(runId);
   }
 
   const updated = await prisma.run.findFirst({ where: { id: runId, projectId } });

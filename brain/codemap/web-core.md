@@ -325,6 +325,7 @@ Exports `getDashboard(): Promise<DashboardData>` (`GET /dashboard`, server metri
 - Solver: `getRunnable(id)`, `scaffoldSolver(id, solver?, turbulence?)`, `startRun(id, { solver?, cores? })` (`cores` sent only if > 1), `listRuns(id)`, `getRunLog(id, runId)`, `stopRun(id, runId)`.
 **Used by**: `features/projects/*`, `features/visualize/*`, `features/solver/*`, `features/export/*`, `HomePage` (`stopRun` directly).
 **Notes**: file paths are passed as a `?path=` query encoded with `encodeURIComponent`. Tool-driven pipelines (autoPatch, export, conversion) resolve with a `success: false` report instead of rejecting: the UI must test `success`, not only `onError`.
+**WS-I (2026-09-30)**: `FreeSurfaceSelection`, `getFreeSurface(id, selection)`, `startFreeSurface`, `getFreeSurfaceJob`, `stopFreeSurfaceJob`, `deleteFreeSurfaceJob`, `downloadFreeSurfaceFile` (blob).
 
 ## `apps/web/src/lib/api/templates.ts`
 **Role**: shared file templates (`/templates`); file responses reuse the case file types.
@@ -409,6 +410,7 @@ Exports `cn(...inputs: ClassValue[]): string` = `twMerge(clsx(inputs))`: class m
 **Exports**: `ProjectDetailPage()`. Internals: `ProjectTabs`, `VisualizeTab`, `AssembleTab`, `SolverTabTrigger`, `ExportTabTrigger` (disabled triggers wrapped in a `span tabIndex={0}` + `Tooltip`), `ViewerLoading`, `BackLink`, `ProjectSettingsMenu`, `ProjectDetailsDialog`, `ManageCollaboratorsDialog`, `DeleteProjectDialog`, `AddCollaboratorForm` (codes `USER_NOT_FOUND`, `COLLABORATOR_EXISTS` surfaced on the field), `RemoveCollaboratorButton`, `formatDateTime`.
 **Depends on**: `useProjectQuery`, `useAddCollaborator`, `useDeleteProject`, `useRemoveCollaborator`, `useCaseFilesQuery`, `useMeshesQuery`, `CaseFilesSection`, `ProjectTerminalButton`; `lazy` for `VisualizePanel`, `SolverTab`, `ExportTab`, `AssemblyWorkspace`.
 **Notes**: initial tab read once from `?view=` (`PROJECT_VIEWS`, `isProjectView`; unknown value → Detail), then the param is dropped with `setSearchParams({}, { replace: true })` (meshing hand-off lands on `?view=visualize`). Gating: Visualize if there is a polyMesh (`constant/polyMesh/`) or a non-empty library; Assemble if the library is non-empty; Solver and Export if there is a polyMesh. Each lazy panel is only mounted when its tab is active (`view === ...`) so as not to trigger builds/polls. Dialogs opened from the menu are deferred with `setTimeout(..., 0)` (Radix focus/`aria-hidden` race). `canManage` = owner or super-admin.
+**WS-I (2026-09-30)**: view `freesurface` (tab `Free surface`, `Waves` icon, `FreeSurfaceTabTrigger` disabled without a polyMesh with a tooltip, lazy `FreeSurfaceTab` mounted only when open, `onOpenSolver` switches to the Solver tab).
 
 ## `apps/web/src/pages/ProjectDetailPage.test.tsx`
 **Covers**: disabling/enabling of the Visualize and Solver tabs depending on whether a polyMesh exists; opening a tab replaces the Detail body; `?view=visualize` opens Visualize at mount, an unknown `?view=` falls back to Detail.

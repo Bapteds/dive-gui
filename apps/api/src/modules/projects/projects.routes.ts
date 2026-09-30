@@ -62,6 +62,7 @@ import {
   getMeshEdgesController,
   getMeshGeometryController,
   getMeshManifestController,
+  getMeshOriginController,
   meshFromMeshingController,
   rebuildMeshController,
   renameMeshPatchController,
@@ -83,6 +84,21 @@ import {
   runExportController,
 } from './export.controller';
 import { exportArtifactParamSchema } from './export.schemas';
+import {
+  deleteFreeSurfaceJobController,
+  downloadFreeSurfaceFileController,
+  freeSurfaceLock,
+  getFreeSurfaceController,
+  getFreeSurfaceJobController,
+  startFreeSurfaceController,
+  stopFreeSurfaceJobController,
+} from './freeSurface.controller';
+import {
+  freeSurfaceFileParamSchema,
+  freeSurfaceJobParamSchema,
+  freeSurfaceSelectionSchema,
+  freeSurfaceStartSchema,
+} from './freeSurface.schemas';
 import {
   autoPatchSchema,
   editPatchesSchema,
@@ -175,11 +191,13 @@ export function createProjectsRouter(): Router {
   router.delete(
     '/:id/files',
     validate({ params: projectIdParamSchema }),
+    freeSurfaceLock(),
     asyncHandler(resetCaseController),
   );
   router.post(
     '/:id/files/import',
     validate({ params: projectIdParamSchema }),
+    freeSurfaceLock(),
     parseCaseUpload,
     asyncHandler(importCaseFilesController),
   );
@@ -276,6 +294,7 @@ export function createProjectsRouter(): Router {
   router.post(
     '/:id/cgns/convert',
     validate({ params: projectIdParamSchema, body: convertCgnsSchema }),
+    freeSurfaceLock(),
     asyncHandler(convertCgnsController),
   );
 
@@ -308,6 +327,7 @@ export function createProjectsRouter(): Router {
   router.post(
     '/:id/meshes/merge',
     validate({ params: projectIdParamSchema, body: mergePlanSchema }),
+    freeSurfaceLock(),
     asyncHandler(mergeMeshesController),
   );
   // Disassemble: the applied-assembly record (or null). A static sub-path, so it is
@@ -420,6 +440,7 @@ export function createProjectsRouter(): Router {
   router.post(
     '/:id/mesh/from-meshing',
     validate({ params: projectIdParamSchema, body: meshFromMeshingSchema }),
+    freeSurfaceLock((req) => (req.body as { target?: string }).target !== 'library'),
     asyncHandler(meshFromMeshingController),
   );
   // "Boundary conditions" overlay: apply a component BC preset (Turbine / Pipe /
@@ -428,6 +449,7 @@ export function createProjectsRouter(): Router {
   router.post(
     '/:id/boundary-conditions/apply',
     validate({ params: projectIdParamSchema }),
+    freeSurfaceLock(),
     parseBoundaryUpload,
     asyncHandler(applyBoundaryConditionsController),
   );
@@ -446,7 +468,47 @@ export function createProjectsRouter(): Router {
   router.post(
     '/:id/mesh/backup/restore',
     validate({ params: projectIdParamSchema }),
+    freeSurfaceLock(),
     asyncHandler(restoreMeshBackupController),
+  );
+  // Where the case mesh came from (meshing hand-off, WS-I §4), or null.
+  router.get(
+    '/:id/mesh-origin',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(getMeshOriginController),
+  );
+
+  // Free surface (lid iteration) tool, WS-I: readiness + jobs. While a job runs,
+  // freeSurfaceLock answers 409 on manual runs and case / mesh mutations.
+  router.get(
+    '/:id/free-surface',
+    validate({ params: projectIdParamSchema, query: freeSurfaceSelectionSchema }),
+    asyncHandler(getFreeSurfaceController),
+  );
+  router.post(
+    '/:id/free-surface',
+    validate({ params: projectIdParamSchema, body: freeSurfaceStartSchema }),
+    asyncHandler(startFreeSurfaceController),
+  );
+  router.get(
+    '/:id/free-surface/:jobId',
+    validate({ params: freeSurfaceJobParamSchema }),
+    asyncHandler(getFreeSurfaceJobController),
+  );
+  router.post(
+    '/:id/free-surface/:jobId/stop',
+    validate({ params: freeSurfaceJobParamSchema }),
+    asyncHandler(stopFreeSurfaceJobController),
+  );
+  router.get(
+    '/:id/free-surface/:jobId/files/:name',
+    validate({ params: freeSurfaceFileParamSchema }),
+    asyncHandler(downloadFreeSurfaceFileController),
+  );
+  router.delete(
+    '/:id/free-surface/:jobId',
+    validate({ params: freeSurfaceJobParamSchema }),
+    asyncHandler(deleteFreeSurfaceJobController),
   );
 
   // OpenFOAM -> CGNS export for CFD-Post ("Export" tab). POST runs the 4-step
@@ -497,6 +559,7 @@ export function createProjectsRouter(): Router {
   router.post(
     '/:id/runs',
     validate({ params: projectIdParamSchema, body: startRunSchema }),
+    freeSurfaceLock(),
     asyncHandler(startRunController),
   );
   router.get(

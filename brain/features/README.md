@@ -24,6 +24,7 @@
 | `merge-and-assembly.md` | Conformal merge, multi-part 3D assembly, non-conformal coupling, disassemble | Merge meshes, Assemble tab |
 | `boundary-conditions.md` | Boundary conditions per object type, MRF / Moving Rotor, draft-tube CSV | Case files → Boundary conditions |
 | `solver-and-runs.md` | Solver catalog, setup, Easy/Advanced config, turbulence, TopoSet, serial/MPI runs, live residuals | Solver tab |
+| `free-surface.md` | Free surface from a rigid-lid run, lid iteration by remeshing (lidIterationKit), mesh origin | Free surface tab |
 | `export-cfdpost.md` | OpenFOAM → transient CGNS export for Ansys CFD-Post | Export tab |
 
 ## Standalone tools

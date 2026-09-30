@@ -49,6 +49,7 @@ Single operational error class of the API. `AppError(status, code, message, deta
 - `clearCase(projectId): Promise<void>`. `rm -rf` of `case/` only.
 **Depends on**: `fileTreeStorage`. **Used by**: `meshBackupStorage`, `vizStorage`, and the services `boundary`, `conversion`, `export`, `files`, `mesh`, `meshes`, `projects`, `runs`, `terminal.gateway`, `templates`, `users`.
 **Notes**: all relative paths go through `sanitizeRelative` + `confineJoin` in the core.
+**WS-I (2026-09-30)**: `replaceCasePolyMesh` and `clearCase` (now async) also delete `mesh-origin.json` (`clearMeshOrigin`).
 
 ## `apps/api/src/lib/cfMeshDicts.ts`
 **Role**: pure rendering of `system/meshDict` for `cartesianMesh` (cfMesh) and resolution of the base cell size. Kept separate from `snappyDicts` because cfMesh reads a single `surfaceFile`, in absolute sizes (meters), with a different layer vocabulary. Testable without OpenFOAM.
@@ -93,6 +94,7 @@ Single operational error class of the API. `AppError(status, code, message, deta
 - `StoredChamberManifest` + `readChamberManifest(hash)`. `manifest.json` (`MeshPatch[]` array) plus `generatedAt` from the mtime.
 **Depends on**: `fileTreeStorage`, `CHAMBER_DIRNAME` (`'chamber'`) from `@dive/shared`. **Used by**: `modules/chamber/chamber.service.ts`, `modules/meshing/meshing.service.ts`.
 **Notes**: this module writes neither GLB, manifest nor exports: those come from the Python scripts (`buildChamber.py`, `mirrorStep.py`) launched by `chamber.service`, which serializes builds with an in-memory lock per hash (`withChamberLock`). The header comment lists neither `warnings.json` nor `build-meta.json`.
+**WS-I (2026-09-30)**: `writeChamberInput(hash, input, onlyIfMissing?)` writes `input.json` (the `ChamberInput`, metadata only, never hashed) next to `params.json`.
 
 ## `apps/api/src/lib/commandRunner.ts`
 **Role**: injectable wrapper of `child_process.execFile` for one-shot tools. Never rejects: non-zero exit, timeout or missing binary become a structured `CommandResult`. Arguments passed as real argv (never a shell).
@@ -145,6 +147,16 @@ Single operational error class of the API. `AppError(status, code, message, deta
 **Depends on**: `adm-zip`, `config/env`, `AppError`. **Used by**: all `*Storage` facades, plus `meshing.service`, `files.service`, `templates.service`.
 **Notes**: `sanitizeRelative` and `confineJoin` return the `INVALID_ARCHIVE` code even outside an archive context (reading or moving a file). `zipTreeAt` reads via `path.join(root, entry.path)` without re-confining (the paths come from `listTree`). `writeNormalizedAt` assumes a normalizer that is 1:1 with the entries (alignment by index).
 
+## `apps/api/src/lib/freeSurfaceStorage.ts`
+**Role**: Filesystem storage of the free-surface (lid iteration) jobs under `STORAGE_DIR/projects/<id>/freesurface/<jobId>/` (WS-I): `job.json`, the kit outputs and the download allow-list.
+**Exports**:
+- `jobDirAbsolute(projectId, jobId)`: job directory (ids validated by `assertSafeId`).
+- `newJobId()`: sortable id `fs-<base36 time>-<rand>`.
+- `writeJob(projectId, job)`: atomic write of `job.json` (unique tmp + rename). `readJob(projectId, jobId)`: the job or null. `listJobs(projectId)`: newest first. `deleteJobDir(projectId, jobId)`.
+- `listProjectsWithJobs()`: project ids having a `freesurface/` dir (boot reconciliation).
+- `jobFileAbsolute(projectId, jobId, name)`: absolute path of an allow-listed file (`isFreeSurfaceFileName`: `domain_lidIter<k>.stl|png` under `geometry/`, `lid_iter<k>.png`), null otherwise.
+**Used by**: `freeSurface.service.ts`.
+
 ## `apps/api/src/lib/jwt.ts`
 **Role**: signing and verification of access JWTs (short-lived, `sub` + `role`) and refresh JWTs (long-lived, `sub` + `tokenVersion`, stored in an httpOnly cookie; a logout increments the version to revoke).
 **Exports**:
@@ -154,6 +166,18 @@ Single operational error class of the API. `AppError(status, code, message, deta
 - `verifyAccessToken(token)` / `verifyRefreshToken(token)`. `jwt.verify` then a shape and `type` guard; `AppError(401, 'UNAUTHENTICATED', ...)` otherwise.
 **Depends on**: `jsonwebtoken`, `config/env`, `AppError`, `role.isRole`. **Used by**: `middleware/requireAuth.ts`, `middleware/requireRole.ts`, `modules/auth/auth.service.ts`, `modules/projects/terminal.gateway.ts`.
 **Notes**: the `type` field prevents using a refresh token as an access token (on top of distinct secrets).
+
+## `apps/api/src/lib/lidkit.ts`
+**Role**: Glue between the free-surface job runner and the vendored LID ITERATION KIT (`apps/api/scripts/lidkit/`): interpreter and script paths, the `lidSurfaces` dict, the base / fitted multi-solid STL mapping to meshing-session files, and pure readers. Spawns nothing.
+**Exports**:
+- `lidkitPython()`: `LIDKIT_PYTHON_BIN`, else `CHAMBER_PYTHON_BIN`. `lidkitScript(name)`: absolute path of `lidkit_surface.py` / `lidkit_fitlid.py` / `lidkit_post.py`.
+- `renderLidSurfacesDict(lid, inlet)`: the kit template `templates/lidSurfaces` with `@ATMOSPHERE@` / `@INLET@` substituted.
+- `readSessionSolids(sessionId)`: the session STL files as named solids (2+ named solids keep their names, else one solid named after the file stem via `foamWord`, de-duplicated with `_`; FMS ignored). `buildBaseStl(files)`: the multi-solid ASCII base STL. `splitFittedStl(fitted, files, lidPatch)`: the fitted STL back into per-file ASCII STLs by solid name (unknown solids join the lid's file).
+- `solidZStats(triangles)`: vertex z min / max / mean (Z_lid).
+- `listTimeDirs(caseDir)`: numeric time directories, ascending.
+- `readDp0(caseDir)`: Δp₀ = last common `inlet_p0_flux` − `outlet_p0_flux` `surfaceFieldValue.dat` value, or null (WS-G monitors).
+- `parseMeshCells(log)`: last `cells:` count of a checkMesh log.
+**Used by**: `freeSurface.service.ts`.
 
 ## `apps/api/src/lib/logger.ts`
 Minimal dependency-free console logger: `logger.info` / `warn` / `error(message, ...args)` prefix an ISO timestamp and the level (`[INFO]`, `[WARN]`, `[ERROR]`) and delegate to `console.log` / `console.warn` / `console.error`. Also exports the `Logger` type. Used by `audit`, `middleware/errorHandler.ts`, `server.ts`, `meshing.service`, `runs.service`, `terminal.gateway`. Note: `streamRunner` writes directly via `console.error` without going through it.
@@ -177,6 +201,11 @@ Minimal dependency-free console logger: `logger.info` / `warn` / `error(message,
 - `convertMeshFileToCase(caseDir, srcAbs, format, workDir): Promise<MeshImportConversion>`. Creates `caseDir`, writes the missing `system/{controlDict,fvSchemes,fvSolution}` via `renderBaseFile`, then: CGNS: `CGNS_PYTHON_BIN CgnsToVtk.py <cgns> <workDir>/<stem>.vtk` (fails if the VTK is not produced), `vtkUnstructuredToFoam -case <caseDir> <vtk>`, `checkMesh`; MSH: `FLUENT_TO_FOAM_BIN <msh> -case <caseDir> [-scale s]`, `checkMesh`. Short-circuits with `skipped` steps. Does not throw on a tool failure.
 **Depends on**: `commandRunner`, `openfoamCommand`, `openfoamCase.renderBaseFile`, `config/env`. **Used by**: `modules/projects/meshes.service.ts`.
 **Notes**: env: `CGNS_PYTHON_BIN`, `CGNS_TO_VTK_SCRIPT` (otherwise `apps/api/scripts/CgnsToVtk.py`), `VTK_TO_FOAM_BIN`, `FLUENT_TO_FOAM_BIN`, `FLUENT_TO_FOAM_SCALE`, `CHECK_MESH_BIN`, `CONVERSION_STEP_TIMEOUT_MS` (per step). The Python step does not use the OpenFOAM bashrc. `tail`, `toStep`, `skipped`, `finalize` duplicate those in `meshPipelineRun`.
+
+## `apps/api/src/lib/meshOriginStorage.ts`
+**Role**: The recorded origin of a project's current case mesh, `projects/<id>/mesh-origin.json` `{ sessionId, sessionName, engine, chamberHash, at }` (WS-I spec §4).
+**Exports**: `readMeshOrigin(projectId)` (null when absent / invalid), `writeMeshOrigin(projectId, origin)` (atomic), `clearMeshOrigin(projectId)` (never throws).
+**Used by**: `mesh.service` (write after the from-meshing case hand-off, `getMeshOrigin`), `caseStorage` (`replaceCasePolyMesh`, `clearCase` clear it), `files.service.importCaseFiles`, `conversion.service`, `freeSurface.service`.
 
 ## `apps/api/src/lib/meshPatches.ts`
 Pure, defensive parsing of the patch names of a cfMesh input surface, for the per-patch BC type editor. `parseFmsPatches(buffer): FmsPatch[]` reads the first 64 KB as latin1, finds `<n> ( name type name type … )` and returns up to `n` pairs `{ name, type }`. `parseStlSolidNames(buffer): string[]` returns the `solid <name>` names of an ASCII STL, and `[]` for a binary STL (detected by the exact size `84 + n*50`). No exception on malformed input. Also exports `FmsPatch`. Used by `modules/meshing/meshing.service.ts`.
@@ -253,6 +282,7 @@ Pure, defensive parsing of the patch names of a cfMesh input surface, for the pe
 - `writeConfig` / `readConfig`. `config.json` autosaved from the form.
 **Depends on**: `fileTreeStorage`, constants `FMS_EXTENSION` / `STL_EXTENSION` / `MESHING_ENGINES`. **Used by**: `meshingVizStorage`, `modules/meshing/meshing.service.ts`.
 **Notes**: `writeStl` does not use `sanitizeRelative` but its own `sanitizeStlName` then `confineJoin`. The header comment does not mention `config.json`, `mesh.log` or `status.json` (they are documented further down in the file). Session access is not tied to a user at the storage level.
+**WS-I (2026-09-30)**: `MeshingMeta.origin?: MeshingSessionOrigin` (`{ chamberHash }`), kept by `readMeta` / `renameSession`; `setSessionOrigin(sessionId, origin)` writes it.
 
 ## `apps/api/src/lib/meshingVizStorage.ts`
 **Role**: 3D render cache of a meshing session's resulting mesh, `meshing/<sessionId>/.viz/{patches.glb, manifest.json, edges.bin}`. Near-verbatim copy of `meshSourceVizStorage`.
@@ -331,6 +361,24 @@ Pure, defensive parsing of the patch names of a cfMesh input surface, for the pe
 ## `apps/api/src/lib/password.ts`
 `hashPassword(plain): Promise<string>` hashes with argon2id (library default parameters, salt included in the encoded hash). `verifyPassword(hash, plain): Promise<boolean>` returns `false` instead of throwing on a malformed hash. No plaintext password is ever stored or logged. Used by `auth.service` and `users.service`.
 
+## `apps/api/src/lib/pipelineStages.ts`
+**Role**: Generic CFD-loop stages shared by the in-process job runners (WS-I free surface, WS-H optimisation): mesh new surfaces with a session's setup, send a session mesh to a project's case, solve the case, and await the meshing / solver runs. Reuses the public service functions (same gates).
+**Exports**:
+- `awaitRunTerminal(runId, pollMs?)`: re-export of `runs.service.awaitRunTerminal`. `awaitMeshingTerminal(sessionId, pollMs?)`: re-export of `meshing.service.awaitMeshingTerminal`.
+- `sessionMeshingConfig(sessionId)`: the last run config (`run.json`), else the autosaved `config.json`, else null.
+- `meshSessionWithSurfaces(sourceSessionId, name, surfaces)`: `copySessionSetup` + overwrite the surfaces by file name + `startMeshingRun` with the source config; returns `{ sessionId, name }` once started. 404 unknown source, 409 `MESHING_NOT_MESHED` without a config.
+- `sendSessionToCase(viewer, projectId, sessionId)`: `importMeshFromMeshing` case target.
+- `solveCase(viewer, projectId, cores, onStarted?)`: `startRun` then `awaitRunTerminal`; `onStarted(runId)` runs as soon as the row exists.
+**Used by**: `freeSurface.service.ts` (WS-H later).
+
+## `apps/api/src/lib/polyMeshLevels.ts`
+**Role**: Per-patch face-centre height statistics of an ASCII polyMesh, streamed line by line (points kept in one `Float64Array`, only boundary faces examined). Finds the flat horizontal top patch (the rigid lid) of the free-surface tool.
+**Exports**:
+- `parseBoundaryEntries(content)`: name / type / nFaces / startFace of every boundary patch.
+- `readPatchLevels(polyMeshDir, tol = 0.001)`: `PatchLevel[]` (`flat` = face centres within ±tol of one z AND every Newell normal within 0.99 of vertical; `z` mean, `zMin`, `zMax`), or null when the mesh is missing, binary or unreadable. Handles `faceList` and `faceCompactList`, block / line comments and the FoamFile header.
+**Used by**: `freeSurface.service.ts` (cached in `freesurface/patch-levels.json`).
+**Notes**: binary / gzip meshes are not supported (the readiness check blocks with its own message).
+
 ## `apps/api/src/lib/prisma.ts`
 Exports `prisma`, the single `PrismaClient` of the API (avoids multiple SQLite connection pools). Used by `audit`, `middleware/requireAuth.ts` and the services `audit`, `auth`, `chamber-saves`, `dashboard`, `projects`, `runs`, `templates`, `users`, as well as `terminal.gateway`.
 
@@ -395,6 +443,7 @@ Re-exports `ROLES` and `Role` from `@dive/shared`. `isRole(value): value is Role
 - `mergeStlFilesToAscii(triSurfaceDirAbs, names, outAbs): Promise<{ triangles }>`. Reads each file, re-emits ASCII facets (normal recomputed from the winding if the stored one is zero or non-finite), writes `outAbs`. Throws `Error` if a file is unreadable or has no triangle.
 **Used by**: `cfMeshPipeline`, `modules/meshing/meshing.service.ts`.
 **Notes**: `isBinaryStl` is duplicated from `stlBounds`. Names are joined with `path.join` without confinement (they come from `listStl`, already sanitized).
+**WS-I (2026-09-30)**: also exports `Triangle`, `StlSolid`, `parseStlSolids(buffer)` (ASCII solids with their names, binary = one unnamed solid), `foamWord` and `emitSolid` (used by `lidkit.ts`).
 
 ## `apps/api/src/lib/streamRunner.ts`
 **Role**: injectable, never-throwing runner for long processes (solver, streamed meshing steps). It `spawn`s the process, redirects stdout and stderr in append mode to a log file (observable live, bounded by disk, kept with no client connected) and immediately returns a handle.

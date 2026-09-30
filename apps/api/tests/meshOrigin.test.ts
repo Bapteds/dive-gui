@@ -71,7 +71,9 @@ describe('Mesh origin', () => {
     const { auth, id } = await makeProject();
     const sessionId = await makeMeshedSession('Origin session');
 
-    const empty = await request(app).get(`/api/v1/projects/${id}/mesh-origin`).set('Authorization', auth);
+    const empty = await request(app)
+      .get(`/api/v1/projects/${id}/mesh-origin`)
+      .set('Authorization', auth);
     expect(empty.status).toBe(200);
     expect(empty.body.origin).toBeNull();
 
@@ -81,7 +83,9 @@ describe('Mesh origin', () => {
       .send({ sessionId, target: 'case' })
       .expect(200);
 
-    const res = await request(app).get(`/api/v1/projects/${id}/mesh-origin`).set('Authorization', auth);
+    const res = await request(app)
+      .get(`/api/v1/projects/${id}/mesh-origin`)
+      .set('Authorization', auth);
     expect(res.status).toBe(200);
     expect(res.body.origin).toMatchObject({
       sessionId,
@@ -100,7 +104,9 @@ describe('Mesh origin', () => {
       .set('Authorization', auth)
       .send({ sessionId, target: 'library' })
       .expect(200);
-    const res = await request(app).get(`/api/v1/projects/${id}/mesh-origin`).set('Authorization', auth);
+    const res = await request(app)
+      .get(`/api/v1/projects/${id}/mesh-origin`)
+      .set('Authorization', auth);
     expect(res.body.origin).toBeNull();
   });
 
@@ -117,14 +123,15 @@ describe('Mesh origin', () => {
     // A case import (folder upload) replaces the mesh: the origin is stale.
     const boundary = '----diveOriginTest';
     const multipart = Buffer.from(
-      `--${boundary}
-Content-Disposition: form-data; name="files"; filename="polyMesh/boundary"
-` +
-        `Content-Type: application/octet-stream
-
-${BOUNDARY}
---${boundary}--
-`,
+      [
+        `--${boundary}`,
+        'Content-Disposition: form-data; name="files"; filename="polyMesh/boundary"',
+        'Content-Type: application/octet-stream',
+        '',
+        BOUNDARY,
+        `--${boundary}--`,
+        '',
+      ].join('\r\n'),
     );
     await request(app)
       .post(`/api/v1/projects/${id}/files/import`)
@@ -143,7 +150,10 @@ ${BOUNDARY}
       .set('Authorization', auth)
       .send({ sessionId, target: 'case' })
       .expect(200);
-    await request(app).delete(`/api/v1/projects/${id}/files`).set('Authorization', auth).expect(200);
+    await request(app)
+      .delete(`/api/v1/projects/${id}/files`)
+      .set('Authorization', auth)
+      .expect(200);
     const afterReset = await request(app)
       .get(`/api/v1/projects/${id}/mesh-origin`)
       .set('Authorization', auth);
@@ -171,7 +181,12 @@ ${BOUNDARY}
     const created = await request(app)
       .post('/api/v1/meshing/from-chamber')
       .set('Authorization', auth)
-      .send({ mode: 'new', chamberHash: 'abcdabcdabcdabcd', name: 'Chamber mesh', engine: 'cfmesh' })
+      .send({
+        mode: 'new',
+        chamberHash: 'abcdabcdabcdabcd',
+        name: 'Chamber mesh',
+        engine: 'cfmesh',
+      })
       .expect(201);
     const sessionId = created.body.session.id as string;
     expect((await readMeta(sessionId))?.origin).toEqual({ chamberHash: 'abcdabcdabcdabcd' });
@@ -188,7 +203,9 @@ ${BOUNDARY}
       .set('Authorization', auth)
       .send({ sessionId, target: 'case' })
       .expect(200);
-    const res = await request(app).get(`/api/v1/projects/${id}/mesh-origin`).set('Authorization', auth);
+    const res = await request(app)
+      .get(`/api/v1/projects/${id}/mesh-origin`)
+      .set('Authorization', auth);
     expect(res.body.origin.chamberHash).toBe('abcdabcdabcdabcd');
   });
 });
@@ -199,7 +216,15 @@ describe('Chamber build input.json', () => {
     await fs.mkdir(path.join(outDir, 'exports'), { recursive: true });
     await fs.writeFile(path.join(outDir, 'chamber.glb'), Buffer.from('glTF-fake'));
     await fs.writeFile(path.join(outDir, 'manifest.json'), '[]');
-    return { command: spec.command, args: spec.args, exitCode: 0, stdout: 'OK:', stderr: '', durationMs: 1, timedOut: false };
+    return {
+      command: spec.command,
+      args: spec.args,
+      exitCode: 0,
+      stdout: 'OK:',
+      stderr: '',
+      durationMs: 1,
+      timedOut: false,
+    };
   };
 
   it('writes the ChamberInput next to params.json without changing the hash', async () => {
@@ -207,7 +232,10 @@ describe('Chamber build input.json', () => {
     const auth = authHeader(await createTestUser());
     setCommandRunner(successRunner);
     const body = { x1: 1450, x2: 7.85, x3: 8 };
-    const res = await request(app).post('/api/v1/chamber/build').set('Authorization', auth).send(body);
+    const res = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(body);
     expect(res.status).toBe(200);
     const hash = res.body.hash;
     expect(typeof hash).toBe('string');
@@ -218,7 +246,10 @@ describe('Chamber build input.json', () => {
     expect(params).not.toHaveProperty('input');
 
     // A second identical build is a cache hit with the same key.
-    const again = await request(app).post('/api/v1/chamber/build').set('Authorization', auth).send(body);
+    const again = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(body);
     expect(again.body.hash).toBe(hash);
   });
 });

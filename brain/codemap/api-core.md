@@ -62,6 +62,7 @@ Prisma lock: `provider = "sqlite"`.
 - `env: Readonly<Env>`: 71 variables (server, JWT, CORS, storage and upload limits, OpenFOAM/Python/ParaView toolchains, snappy and cfMesh meshing, merge, chamber, CFD-Post export, solver runs and MPI, proxy, terminal, seed).
 - Internal: `PROD_SECRET_MIN_LENGTH = 32`, `DEV_PLACEHOLDER_SECRETS` (the two sample JWT secrets and `ChangeMe!2026`).
 **Notes**: in `production`, `superRefine` requires JWT secrets of at least 32 characters, different from each other and not equal to the placeholders, and rejects the placeholder seed password. `SEED_ADMIN_*` are mandatory even to start the server. `MESH_PYTHON_BIN` and `CHAMBER_PYTHON_BIN` have a platform-dependent default (`python` on Windows). Four variables are declared but never read: `STITCH_TOL`, `NCC_COUPLE_BIN`, `FOAM_DICTIONARY_BIN`, `POST_PROCESS_BIN`. Full table in `brain/architecture/configuration.md`.
+**WS-I (2026-09-30)**: `LIDKIT_PYTHON_BIN` (default `''` = the `CHAMBER_PYTHON_BIN` value) and `LIDKIT_TIMEOUT_MS` (900000).
 
 ## `apps/api/src/middleware/asyncHandler.ts`
 Exports `asyncHandler(handler): RequestHandler`: wraps a possibly asynchronous handler and forwards any rejected promise to `next`, so that `errorHandler` runs. Used by all routers (including around `requireAuth`, which is itself asynchronous).
@@ -188,6 +189,7 @@ Exports `createChamberRouter(): Router`, mounted on `/api/v1/chamber`, entirely 
 - Internal: `withChamberLock(hash, fn)` (mutex via promise chain, in process memory), `extractBuilderWarnings`, `buildChamberScript`, `mirrorStepScript`, `summarizeFailure(result, action)` (a `KO:` line is shown alone as "Cannot <action>. …"; otherwise spawn / timeout / exit-code messages with a "Technical details" tail), `resolveGeometryParams` (default length `2 × width`, `outletOuterD = X1`, `dFirst`/`dMiddle` not scaled, hollow variant: generator parameters taken from `computeChamberGeneratorDims`, heights omitted if `simplifyGenerator`, `coneChamferEnabled: true` + `coneChamferSize` (m, from `chamberConeChamferMm`, blank = `CHAMBER_CONE_CHAMFER_SIZE_MM`) passed only when the Cone chamfer is on, both designs; `vaneCount` passed only when guide vanes and not 16, so 16-vane and vane-less keys never change), `generateStep`, `generateMirroredStep`.
 **Depends on**: `@dive/shared`, `lib/commandRunner`, `lib/chamberStorage`, `config/env`. **Used by**: `chamber.controller`; `lib/chamberStorage.readChamberExport` also serves `meshing.service` (transfer into a session).
 **Notes**: `x4` never enters the hash (only resolved dimensions do). The lock is process-local: several API instances could build the same hash in parallel.
+**WS-I (2026-09-30)**: `buildChamber` writes `input.json` (`writeChamberInput`) next to `params.json`, on a cache hit only when missing; not part of the hash.
 
 ## `apps/api/src/modules/dashboard/dashboard.controller.ts`
 Exports `getDashboardController`: builds the `Viewer` and responds `200` with `getDashboard(viewer)`.
@@ -237,6 +239,7 @@ Exports `createMeshingRouter()`, mounted on `/api/v1/meshing`, behind `requireAu
 - `getResultManifest(id)` (409 `NO_MESH` without polyMesh; builds the render via `extractPatches.py` if stale; 500 `SCRIPT_MISSING`, 502 `MESH_BUILD_FAILED`), `getResultGeometry(id)` (409 `MESH_NOT_BUILT`), `getResultEdges(id)`, `downloadSessionZip(id)`.
 **Depends on**: `lib/meshingStorage`, `lib/meshingVizStorage`, `lib/snappyPipeline`, `lib/cfMeshPipeline`, `lib/stlBounds`, `lib/meshPatches`, `lib/stlMerge`, `lib/chamberStorage`, `lib/cores`, `lib/commandRunner`, `adm-zip`. **Used by**: `meshing.controller`, `server.ts` (reconciliation).
 **Notes**: the active run registry is in memory: a restart loses the processes (hence the reconciliation). `reconcileOrphanMeshingRuns` returns the number of ids listed by `listRunningSessionIds`, not the number actually modified.
+**WS-I (2026-09-30)**: `importChamberIntoMeshing` records `origin.chamberHash` in the session meta (`setSessionOrigin`); `awaitMeshingTerminal(sessionId, pollMs = 2000)` resolves with the final status (or `idle`), woken by the run finalizer and the handle-less stop, status poll fallback.
 
 ## `apps/api/src/modules/templates/templates.controller.ts`
 **Role**: adapters for shared file templates, plus three handlers mounted on the projects router.
@@ -290,10 +293,12 @@ Global augmentation of `Express.Request`: `user?: PublicUser & { role: Role }` (
 ## `apps/api/src/server.ts`
 **Role**: process bootstrap. Creates the app, launches `reconcileOrphanRuns()` (active solver runs from a previous process set to `failed`) and `reconcileOrphanMeshingRuns()` without awaiting them, listens on `env.PORT`, then `attachTerminalGateway(server)` (no-op if `TERMINAL_ENABLED` is `false`).
 **Depends on**: `app`, `config/env`, `lib/logger`, `projects/runs.service`, `meshing/meshing.service`, `projects/terminal.gateway`.
+**WS-I (2026-09-30)**: also runs `reconcileOrphanFreeSurfaceJobs()` at boot.
 
 ## `apps/api/.env.example`
 **Since 2026-09-29**: a `Chamber Creation` block documents `CHAMBER_SPIRAL_TIMEOUT_MS=300000` (the other chamber variables are still missing, K33).
 Template of the API environment variables, grouped by feature with operational comments (target Debian, OpenFOAM ESI, xvfb for pvbatch, OpenMPI flags, terminal disabled by default, `TRUST_PROXY`, seed). Eleven schema variables are missing from it (`MAX_UPLOAD_TOTAL_MB`, `MAX_ARCHIVE_UNCOMPRESSED_MB`, `BLOCK_MESH_BIN`, `SURFACE_FEATURE_BIN`, `SNAPPY_HEX_MESH_BIN`, `SNAPPY_STEP_TIMEOUT_MS`, `CHAMBER_PYTHON_BIN`, `BUILD_CHAMBER_SCRIPT`, `MIRROR_STEP_SCRIPT`, `CHAMBER_BUILD_TIMEOUT_MS`, `SOLVER_DECOMPOSE_TIMEOUT_MS`), despite the "Keep this in sync" instruction in `env.ts`. The `NCC_COUPLE_BIN` comment still describes the OpenFOAM.org v12 utility, whereas the current coupling is a textual cyclicAMI retyping.
+**WS-I (2026-09-30)**: documents `LIDKIT_PYTHON_BIN` and `LIDKIT_TIMEOUT_MS`.
 
 ## `apps/api/package.json`
 **Role**: package `@dive/api` (CommonJS). Scripts: `dev` (`tsx watch src/server.ts`), `postinstall` and `prisma:generate` (`prisma generate`), `build` (generate + `tsc`), `start` (`prisma migrate deploy && node dist/server.js`), `typecheck`, `test` (`vitest run`), `db:migrate` (`prisma migrate dev`), `db:deploy`, `db:seed`, `db:reset` (`prisma migrate reset --force`).

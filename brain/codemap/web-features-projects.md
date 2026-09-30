@@ -1,6 +1,6 @@
 # Codemap: web / features / projects
 
-> Scope: `apps/web/src/features/projects/**` · Updated: 2026-09-28
+> Scope: `apps/web/src/features/projects/**`, `apps/web/src/features/freesurface/**` (Free surface tab, WS-I) · Updated: 2026-09-30
 
 ## Overview
 Front-end "project" feature: everything related to a project's OpenFOAM case, seen from the detail page (`pages/ProjectDetailPage.tsx`) and the edit page (`pages/ProjectEditPage.tsx`).
@@ -256,3 +256,19 @@ Hook for the BC overlay. `ApplyBoundaryInput` = `{ request: ApplyBoundaryConditi
 - `useRemoveCollaborator(id)`: `userId`, DELETE `/projects/:id/collaborators/:userId`; writes the detail, invalidates the list.
 **Used by**: `pages/ProjectsPage.tsx`, `pages/ProjectDetailPage.tsx`, `pages/ProjectEditPage.tsx`.
 **Notes**: `projectsQueryKey` is the prefix of every key in the feature; `invalidateQueries({ queryKey: ['projects'] })` (non-exact) therefore also invalidates trees, contents, meshes, plans, etc. of all cached projects on every creation, rename, deletion or collaborator change. `useDeleteProject` does not remove the caches of the deleted project.
+
+## `apps/web/src/features/freesurface/FreeSurfaceTab.test.tsx`
+**Covers**: readiness list + measured Z_lid + flat-only lid select, Start disabled on a blocking check, iterations control in the start body, progress stepper (`aria-current`, Solver link, Stop), results table + chart table alternative.
+**Technique**: `@/lib/api/projects` mocked, QueryClient without retries, no router.
+
+## `apps/web/src/features/freesurface/FreeSurfaceTab.tsx`
+**Role**: The project's `Free surface` tab (WS-I): Setup panel (readiness checks with icon + text, lid / inlet / source-session selects re-querying the checks, measured Z_lid, iterations `SegmentedRadioGroup`, tolerance, Advanced `<details>`, one orange Start), Progress panel (stepper Export → Solve, meshing-session link, Open the Solver tab, Stop), Results panel (status, reason, notes, "Results per iteration" table, fitted STL download, residual chart, figures fetched on demand, delete with confirmation), previous runs list, skeleton and `ErrorState`.
+**Exports**: `FreeSurfaceTab({ projectId, onOpenSolver? })`.
+**Depends on**: `useFreeSurface.ts`, `ResidualPerIterationChart`, `@/lib/api/projects` (`downloadFreeSurfaceFile`). On a job's end it invalidates `['projects', id, 'files' | 'runs' | 'runnable']`.
+**Notes**: visual contract `brain/design/design-system.md` sections 2, 4 and 6.
+
+## `apps/web/src/features/freesurface/ResidualPerIterationChart.tsx`
+**Role**: Hand-made SVG of the lid residual RMS per iteration (Parent, It. 1..n) with the tolerance as a dashed line, direct value labels, `role="img"` summary and a "Show residual values" `<details>` table. **Exports**: `ResidualPerIterationChart({ surfaces, tolRmsMm })`.
+
+## `apps/web/src/features/freesurface/useFreeSurface.ts`
+**Role**: TanStack Query hooks of the Free surface tab. **Exports**: keys `freeSurfaceQueryKey`, `freeSurfaceOverviewQueryKey(projectId, selection)`, `freeSurfaceJobQueryKey(projectId, jobId)`; `useFreeSurfaceQuery` (keepPreviousData, polls 2 s while a job runs), `useFreeSurfaceJobQuery` (polls while running or without data), `useStartFreeSurface` (sets the job, invalidates the overviews), `useStopFreeSurface`, `useDeleteFreeSurface`.

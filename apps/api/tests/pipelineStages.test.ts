@@ -9,7 +9,12 @@ import request from 'supertest';
 import { app, authHeader, createTestUser, logicalCommand, resetDatabase } from './helpers';
 import { prisma } from '../src/lib/prisma';
 import { writeCaseFile } from '../src/lib/caseStorage';
-import { setStreamRunner, type StreamExit, type StreamHandle, type StreamSpec } from '../src/lib/streamRunner';
+import {
+  setStreamRunner,
+  type StreamExit,
+  type StreamHandle,
+  type StreamSpec,
+} from '../src/lib/streamRunner';
 import { createSession, writeConfig, writeMeshStatus, writeStl } from '../src/lib/meshingStorage';
 import { awaitMeshingTerminal, awaitRunTerminal } from '../src/lib/pipelineStages';
 import { startMeshingRun } from '../src/modules/meshing/meshing.service';
@@ -29,7 +34,10 @@ function delayedSolver(delayMs: number): (spec: StreamSpec) => StreamHandle {
     const onExit = (async (): Promise<StreamExit> => {
       await fs.mkdir(path.dirname(spec.logFile), { recursive: true });
       await new Promise((r) => setTimeout(r, delayMs));
-      await fs.writeFile(spec.logFile, 'Time = 1\nSIMPLE solution converged in 1 iterations\nEnd\n');
+      await fs.writeFile(
+        spec.logFile,
+        'Time = 1\nSIMPLE solution converged in 1 iterations\nEnd\n',
+      );
       return { exitCode: 0, signal: null };
     })();
     return { pid: 77, onExit, stop: () => undefined };
@@ -65,7 +73,8 @@ const CFMESH_CONFIG = {
   cores: 1,
 } as unknown as MeshingConfig;
 
-const STL = 'solid walls\n facet normal 0 0 1\n  outer loop\n   vertex 0 0 0\n   vertex 1 0 0\n   vertex 0 1 0\n  endloop\n endfacet\nendsolid walls\n';
+const STL =
+  'solid walls\n facet normal 0 0 1\n  outer loop\n   vertex 0 0 0\n   vertex 1 0 0\n   vertex 0 1 0\n  endloop\n endfacet\nendsolid walls\n';
 
 beforeEach(async () => {
   await resetDatabase();
@@ -81,7 +90,9 @@ describe('awaitRunTerminal', () => {
       await writeCaseFile(project.id, `constant/polyMesh/${name}`, name);
     }
     await writeCaseFile(project.id, 'constant/polyMesh/boundary', BOUNDARY);
-    await request(app).post(`/api/v1/projects/${project.id}/runnable/scaffold`).set('Authorization', auth);
+    await request(app)
+      .post(`/api/v1/projects/${project.id}/runnable/scaffold`)
+      .set('Authorization', auth);
 
     setStreamRunner(delayedSolver(150));
     const started = await request(app)
@@ -97,7 +108,13 @@ describe('awaitRunTerminal', () => {
     const user = await createTestUser({ email: 'stages2@dive-turbinen.test' });
     const project = await prisma.project.create({ data: { title: 'P', ownerId: user.id } });
     const row = await prisma.run.create({
-      data: { projectId: project.id, solver: 'simpleFoam', status: 'failed', command: '', logPath: '' },
+      data: {
+        projectId: project.id,
+        solver: 'simpleFoam',
+        status: 'failed',
+        command: '',
+        logPath: '',
+      },
     });
     const run = await awaitRunTerminal(row.id);
     expect(run.status).toBe('failed');
