@@ -120,6 +120,8 @@ Implement nothing without an explicit request from the user.
 
 - **Stop during run setup (to verify)**: while writing the WS-F tests (2026-09-29, native Windows), a Stop sent right after a meshing run started, before its first tool was live, seemed to be lost and the run hung. Reproduced as a flaky failure on `main` too (2026-09-29, native Windows): `apps/api/tests/meshing.test.ts` "stops a running mesh and records it stopped" and "rejects a second run while one is already in progress (409), then stops it" time out at 15 s in 0 to 2 of every run (same rate on `main` and on `feat/chamber-v2-cfd-loop`), so it predates WS-F. Cause not investigated. To verify on Linux / CI and on the Debian server.
 
+- **`meshingStorage.test.ts` torn-status test fails on native Windows (to verify)**: found 2026-09-30 while running the full API suite for WS-G (branch `feat/solver-convergence-vortex`, which does not touch `lib/meshingStorage.ts`): "writeMeshStatus / readMeshStatus > a concurrent reader never observes a torn status mid-rewrite (atomic replace)" failed in the full run and again when run alone with `meshing.test.ts`. Probably the Windows rename-over-open-file semantics; not checked on `main`, Linux or CI. Cause not investigated.
+
 ## 7. Findings from the 2026-09-28 mapping (code reading, not reproduced)
 
 Noted while reading the entire code base to build the codemaps. **None has been verified at runtime**: confirm (red test) before fixing. Fix nothing without a request.

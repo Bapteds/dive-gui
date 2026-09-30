@@ -136,6 +136,7 @@ snappy parallelism reuses `MPI_BIN`, `MPI_RUN_FLAGS`, `DECOMPOSE_METHOD` and `SO
 | `DECOMPOSE_METHOD` | `scotch` | same | `decomposeParDict` method. | `hierarchical` or `simple` if scotch is missing (coefficients generated). | runs, `lib/snappyPipeline` |
 | `SOLVER_TOTAL_CORES` | `0` | `0` | Global core budget, across all projects (0 = number of logical cores). | Exceeded: 409 `NOT_ENOUGH_CORES`. Also the cap offered by the Meshing page. Tests: `8`. | `lib/cores`, files |
 | `SOLVER_DECOMPOSE_TIMEOUT_MS` | `1800000` | absent | Timeout of `decomposePar` / `reconstructPar` for a parallel run. | | runs |
+| `POSTPROCESS_TIMEOUT_MS` | `1800000` | `1800000` | Timeout of the on-demand vortex metrics (`postProcess -func diveVortexMetrics -latestTime`, compiles the coded function object on first use). | Beyond: 502 `POSTPROCESS_FAILED`. Added 2026-09-30 (WS-G). | criteria |
 
 ## API: project terminal
 
