@@ -1,6 +1,6 @@
 # Codemap: web / features / projects
 
-> Scope: `apps/web/src/features/projects/**`, `apps/web/src/features/freesurface/**` (Free surface tab, WS-I) · Updated: 2026-09-30
+> Scope: `apps/web/src/features/projects/**`, `apps/web/src/features/freesurface/**` (Free surface tab, WS-I), `apps/web/src/features/optimisation/**` (Optimisation tab, WS-H) · Updated: 2026-09-30
 
 ## Overview
 Front-end "project" feature: everything related to a project's OpenFOAM case, seen from the detail page (`pages/ProjectDetailPage.tsx`) and the edit page (`pages/ProjectEditPage.tsx`).
@@ -272,3 +272,28 @@ Hook for the BC overlay. `ApplyBoundaryInput` = `{ request: ApplyBoundaryConditi
 
 ## `apps/web/src/features/freesurface/useFreeSurface.ts`
 **Role**: TanStack Query hooks of the Free surface tab. **Exports**: keys `freeSurfaceQueryKey`, `freeSurfaceOverviewQueryKey(projectId, selection)`, `freeSurfaceJobQueryKey(projectId, jobId)`; `useFreeSurfaceQuery` (keepPreviousData, polls 2 s while a job runs), `useFreeSurfaceJobQuery` (polls while running or without data), `useStartFreeSurface` (sets the job, invalidates the overviews), `useStopFreeSurface`, `useDeleteFreeSurface`.
+
+## `apps/web/src/features/optimisation/OptimisationTab.tsx`
+**Role**: the project's Optimisation tab (WS-H): studies list (status badge, counted / max), the shown study (`StudyPanel`, running one first) or the inline `StudyCreateForm` (create / edit draft); skeleton, `ErrorState`, empty state with "New study".
+**Depends on**: `useStudies`, `useChamberSavesQuery`. **Used by**: `pages/ProjectDetailPage.tsx` (view `optimisation`).
+
+## `apps/web/src/features/optimisation/StudyCreateForm.tsx`
+**Role**: inline create / edit form: study name, base design (chamber save or chamber of this mesh), parameters table with live range preview (`computeParamSpace`, per-key band, table limit note, relation warnings), objective (weighted / Pareto, weights, vortex metric), reference session, cores, budgets, Advanced (sampler, seed, keep best / last). Client validation mirrors the API; first invalid control focused. One orange CTA ("Create study" / "Save changes").
+
+## `apps/web/src/features/optimisation/StudyCreateForm.test.tsx`
+**Covers**: band preview on the grid, table limit, zero weights refused, Pareto hides the weights, create body.
+
+## `apps/web/src/features/optimisation/StudyPanel.tsx`
+**Role**: one study: status badge (`StudyStatusBadge`, exported), owner-only controls (Start / Resume orange, Pause, Edit, Delete with confirmation), Export CSV, running evaluation stepper (Build, Mesh, Transfer, Configure, Solve) with session link and Solver tab button, search space, best design with "Open in Chamber" (router state `chamberInput`), evaluations table, charts.
+
+## `apps/web/src/features/optimisation/StudyPanel.test.tsx`
+**Covers**: stepper of the running evaluation + Pause, owner Start and read-only member, evaluations table (infeasible reason, budget flag, best), chart table alternatives.
+
+## `apps/web/src/features/optimisation/StudyCharts.tsx`
+**Role**: hand-made SVG `ObjectiveChart` (objective per evaluation, best-so-far step line, diamond for the best) and `ParetoChart` (head loss against the picked vortex metric, front joined), each with a "Show … values" table.
+
+## `apps/web/src/features/optimisation/studyFormat.ts`
+**Role**: `VORTEX_METRIC_LABEL` (name + unit per metric) and `vortexOf(evaluation, metric)`.
+
+## `apps/web/src/features/optimisation/useStudies.ts`
+**Role**: React Query hooks: keys `['projects', id, 'studies', 'list' | 'setup' | 'detail', studyId]`, `useStudiesQuery` / `useStudyQuery` (poll 3 s while running or pausing), `useStudySetupQuery`, `useCreateStudy`, `useUpdateStudy`, `useStudyControl` (start / stop / resume), `useDeleteStudy`, `isStudyActive`.

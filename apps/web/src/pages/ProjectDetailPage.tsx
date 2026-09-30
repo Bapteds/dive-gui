@@ -11,6 +11,7 @@ import {
   Loader2,
   Play,
   Settings,
+  Target,
   Trash2,
   Upload,
   UserPlus,
@@ -93,6 +94,16 @@ const SolverTab = lazy(() =>
 const FreeSurfaceTab = lazy(() =>
   import('@/features/freesurface/FreeSurfaceTab').then((module) => ({
     default: module.FreeSurfaceTab,
+  })),
+);
+
+/**
+ * The Optimisation tab (WS-H) polls a running study, so it is code-split and only
+ * mounted while open.
+ */
+const OptimisationTab = lazy(() =>
+  import('@/features/optimisation/OptimisationTab').then((module) => ({
+    default: module.OptimisationTab,
   })),
 );
 
@@ -197,6 +208,7 @@ const PROJECT_VIEWS = [
   'assemble',
   'solver',
   'freesurface',
+  'optimisation',
   'export',
 ] as const;
 type ProjectView = (typeof PROJECT_VIEWS)[number];
@@ -241,6 +253,10 @@ function ProjectTabs({ project }: { project: Project }) {
         <AssembleTab disabled={!hasSources} />
         <SolverTabTrigger disabled={!hasPolyMesh} />
         <FreeSurfaceTabTrigger disabled={!hasPolyMesh} />
+        <TabsTrigger value="optimisation">
+          <Target strokeWidth={1.75} aria-hidden="true" />
+          Optimisation
+        </TabsTrigger>
         <ExportTabTrigger disabled={!hasPolyMesh} />
       </TabsList>
 
@@ -299,6 +315,18 @@ function ProjectTabs({ project }: { project: Project }) {
         {view === 'freesurface' && (
           <Suspense fallback={<ViewerLoading />}>
             <FreeSurfaceTab projectId={project.id} onOpenSolver={() => setView('solver')} />
+          </Suspense>
+        )}
+      </TabsContent>
+
+      <TabsContent
+        value="optimisation"
+        className="mt-0 flex-col data-[state=active]:flex lg:min-h-0 lg:flex-1"
+      >
+        {/* Mount only when open: the tab polls a running optimisation study. */}
+        {view === 'optimisation' && (
+          <Suspense fallback={<ViewerLoading />}>
+            <OptimisationTab projectId={project.id} onOpenSolver={() => setView('solver')} />
           </Suspense>
         )}
       </TabsContent>

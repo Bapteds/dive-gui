@@ -178,6 +178,21 @@ function summarizeFailure(result: CommandResult, action = 'build the chamber'): 
 }
 
 /**
+ * The error of a failed build step (WS-H spec §10 Q7): a `KO:` line is the tool
+ * REFUSING the design (a geometry that does not fit), answered 422
+ * CHAMBER_REFUSED so callers (the optimisation loop) can tell it from a crash;
+ * anything else (spawn error, timeout, crash, missing output) stays 502
+ * CHAMBER_BUILD_FAILED. Same message either way.
+ */
+function buildFailure(result: CommandResult, message: string): AppError {
+  const refused =
+    !result.spawnError && !result.timedOut && /^KO:\s*\S/m.test(result.stderr || '');
+  return refused
+    ? new AppError(422, 'CHAMBER_REFUSED', message)
+    : new AppError(502, 'CHAMBER_BUILD_FAILED', message);
+}
+
+/**
  * Tag of the spiral method + settings, folded into the spiral cache key. Mirrors
  * ALGORITHM in scripts/designSemiSpiral.py: change both when the method changes.
  */
@@ -281,7 +296,7 @@ function summarizeSpiralFailure(result: CommandResult): string {
  * so concurrent builds sharing a spiral optimise it once. The builder never
  * optimises; it gets the frozen vertices through the build params.
  *
- * @throws 500 SCRIPT_MISSING / 502 CHAMBER_BUILD_FAILED on tooling failures.
+ * @throws 500 SCRIPT_MISSING, 422 CHAMBER_REFUSED (KO: refusal), 502 CHAMBER_BUILD_FAILED.
  */
 async function designSpiral(inputs: ChamberSpiralInputs): Promise<DesignedSpiral> {
   const key = spiralHash(inputs);
@@ -304,7 +319,7 @@ async function designSpiral(inputs: ChamberSpiralInputs): Promise<DesignedSpiral
       timeoutMs: env.CHAMBER_SPIRAL_TIMEOUT_MS,
     });
     if (result.spawnError || result.timedOut || result.exitCode !== 0) {
-      throw new AppError(502, 'CHAMBER_BUILD_FAILED', summarizeSpiralFailure(result));
+      throw buildFailure(result, summarizeSpiralFailure(result));
     }
     const designed = parseSpiralResult(await readChamberSpiral(key), inputs);
     if (!designed) {
@@ -452,7 +467,8 @@ function resolveGeometryParams(
  * outputs (for the table). Idempotent: identical inputs reuse the cached build.
  *
  * @throws 500 SCRIPT_MISSING if the builder is not on disk.
- * @throws 502 CHAMBER_BUILD_FAILED if the run errors or produces no GLB.
+ * @throws 422 CHAMBER_REFUSED when the builder or the spiral designer refuses (KO: line).
+ * @throws 502 CHAMBER_BUILD_FAILED if the run errors otherwise or produces no GLB.
  */
 export async function buildChamber(input: ChamberInput): Promise<ChamberBuildResult> {
   // Semi-spiral casing: the rows the spiral derives read 'from spiral' (no
@@ -567,7 +583,7 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
       result.exitCode !== 0 ||
       !(await pathExists(paths.glb))
     ) {
-      throw new AppError(502, 'CHAMBER_BUILD_FAILED', summarizeFailure(result));
+      throw buildFailure(result, summarizeFailure(result));
     }
 
     // Surface the builder's clamp/fallback warnings and persist them alongside

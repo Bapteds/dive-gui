@@ -8,13 +8,14 @@ The database is a **SQLite** file driven by **Prisma 5** (`DATABASE_URL`, by def
 - lists and objects are `String` fields holding JSON (`Template.tags`, `ChamberSave.snapshot`, `AuditLog.metadata`);
 - dates are returned as ISO 8601 by the serialization functions (`toPublicUser`, `toPublicProject`, etc.).
 
-Six models plus one implicit join table. The whole business tree is attached to `User` through cascades, except `AuditLog`, deliberately without a foreign key.
+Eight models plus one implicit join table. The whole business tree is attached to `User` through cascades, except `AuditLog`, deliberately without a foreign key.
 
 ```
 User ─┬─< Project (ownerId, CASCADE) ─< Run (projectId, CASCADE)
       ├─<> Project via _ProjectCollaborators (CASCADE on both sides)
       ├─< Template (ownerId, CASCADE)
-      └─< ChamberSave (ownerId, CASCADE)
+      ├─< ChamberSave (ownerId, CASCADE)
+      └─< Study (ownerId, CASCADE) >─ Project (projectId, CASCADE); Study ─< Evaluation (studyId, CASCADE)
 AuditLog (actorId / targetId without FK)
 ```
 
@@ -105,6 +106,43 @@ Named, shared save of a `POST /chamber/build` body (the geometry stays in the ha
 
 Indexes: unique on `name`, `@@index([ownerId])`.
 
+### `Study` (WS-H)
+One optimisation study run in a project (its work project). JSON columns are Strings; enumerations validated by zod and mirrored in `@dive/shared`.
+
+| Field | Type | Role |
+|-------|------|------|
+| `id` | String (cuid) | Primary key. |
+| `name` | String | 1..120, not unique. |
+| `ownerId` / `projectId` | String | FK `User.id` / `Project.id`, both **`onDelete: Cascade`**. |
+| `baseSource` / `baseLabel` / `baseInput` | String | `save` or `meshOrigin`, its label, the JSON `ChamberInput`. |
+| `paramSpace` | String | JSON `ParamRange[]` (50 mm grid). |
+| `bandPct` | Float | Default 10. |
+| `objectives` / `weights` | String | JSON (headLoss + vortex, min) / `{ headLoss, vortex }` (default 0.5 / 0.5). |
+| `mode` / `sampler` / `seed` / `vortexMetric` | String / String / Int? / String | `weighted` or `pareto`; `tpe`, `nsga2`, `random`; `maskedQVolume` or `omegaRms`. |
+| `maxEvaluations` / `maxDurationHours` | Int (30) / Float? | Budgets. |
+| `keepBest` / `keepLast` | Int (3 / 2) | Meshing sessions kept. |
+| `meshingSourceId` / `solverSetup` | String | Reference session id / JSON `{ cores }`. |
+| `criteria` / `normalisation` | String? | Criteria snapshot (first start) / baseline `{ headLoss, vortex }`. |
+| `status` / `reason` | String / String? | `draft`, `running`, `pausing`, `paused`, `completed`, `failed`. |
+| `startedAt` / `finishedAt` / `createdAt` / `updatedAt` | DateTime | |
+
+Indexes: `ownerId`, `projectId`, `status`.
+
+### `Evaluation` (WS-H)
+One evaluated design. Index 0 = baseline; an interrupted evaluation is re-run in place.
+
+| Field | Type | Role |
+|-------|------|------|
+| `id` / `studyId` / `index` | String / String / Int | FK `Study.id` **cascade**; unique `(studyId, index)`. |
+| `designParams` | String | JSON values of the picked keys (mm). |
+| `chamberHash`, `meshingSessionId`, `meshingSessionName`, `sessionDeleted` | String? / Boolean | Build and meshing session (deleted by disk hygiene). |
+| `projectId`, `runId` | String? | No FK (runs are purged with the project). |
+| `dp0`, `headLoss`, `maskedQVolume`, `omegaRms`, `objective` | Float? | Pa, m, m³, 1/s, weighted objective. |
+| `status` / `stage` / `refusalReason` / `runStatus` / `budgetHit` / `warnings` | | `pending`, a stage, `done`, `infeasible`, `failed`, `interrupted`; last stage; reason; run status; time budget flag; JSON `string[]`. |
+| `startedAt` / `finishedAt` / `createdAt` / `updatedAt` | DateTime | |
+
+Index `(studyId, status)`.
+
 ### `AuditLog`
 Append-only log of authentication and administration actions. Never modified or deleted by the application.
 
@@ -123,8 +161,9 @@ Indexes: `createdAt`, `actorId`, `targetId`. **No foreign key**, so that it surv
 
 | Action | Database effect | Off-database effect |
 |--------|-----------|-----------------|
-| Delete a `User` (`users.service.deleteUser`) | Cascade: their `Project` (hence their `Run` and collaborator links), their `Template`, their `ChamberSave`, their collaboration links on other users' projects. `AuditLog` intact. | Before deletion: `stopProjectRuns` on each owned project. After: best-effort deletion of the storage of their projects and templates. Shared chamber saves disappear without warning. |
-| Delete a `Project` (`projects.service.deleteProject`) | Cascade: `Run`, collaborator links. | `stopProjectRuns` before, `removeProjectStorage` after (best-effort). |
+| Delete a `User` (`users.service.deleteUser`) | Cascade: their `Project` (hence their `Run` and collaborator links), their `Template`, their `ChamberSave`, their `Study` rows (and the studies of their projects), their collaboration links on other users' projects. `AuditLog` intact. | Before deletion: `stopProjectRuns` on each owned project and `cleanupStudies` (their studies and those of their projects). After: best-effort deletion of the storage of their projects and templates. Shared chamber saves disappear without warning. |
+| Delete a `Project` (`projects.service.deleteProject`) | Cascade: `Run`, `Study` (and `Evaluation`), collaborator links. | `stopProjectRuns` and `cleanupStudies` (pause the running study, remove the studies' meshing sessions and `studies/<id>/`) before, `removeProjectStorage` after (best-effort). |
+| Delete a `Study` (`studies.service.deleteStudy`) | Cascade: `Evaluation`. | Pauses the study first (waits for the runner), removes its meshing sessions and `studies/<id>/`. |
 | Delete a `Template` | Row only. | `removeTemplateStorage` best-effort. |
 | Delete a `ChamberSave` | `deleteMany` (idempotent). | None (the hash-keyed build stays cached). |
 
@@ -141,6 +180,7 @@ Indexes: `createdAt`, `actorId`, `targetId`. **No foreign key**, so that it surv
 | 2026-07-02 | `20260702130000_add_template_tags` | `Template.tags` non-null TEXT, default `'[]'`. |
 | 2026-07-03 | `20260703120000_add_run_cores` | `Run.cores` non-null INTEGER, default 1. |
 | 2026-08-31 | `20260831142110_chamber_saves` | `ChamberSave` table, unique `name`, `ownerId` index, cascading FK. |
+| 2026-09-30 | `20260930085427_optimisation_studies` | `Study` (cascading FKs owner + project, indexes owner / project / status) and `Evaluation` (cascading FK study, unique `(studyId, index)`, index `(studyId, status)`), WS-H. |
 
 Applying them: `npm run db:migrate` (`prisma migrate dev`) in development, `prisma migrate deploy` at startup in production (`start` script of `@dive/api`). The test database does not use migrations: the vitest `globalSetup` runs `prisma db push --force-reset` on `prisma/test.db` (according to the CI comment).
 

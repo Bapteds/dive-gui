@@ -189,6 +189,25 @@ While a free-surface job runs for `:id`, `freeSurfaceLock` answers 409 `FREE_SUR
 
 `POST /runs` also answers 422 `CRITERIA_INVALID` when the saved convergence criteria no longer fit the mesh (they are re-installed before every spawn).
 
+### Optimisation studies (WS-H)
+Spec `brain/specs/2026-09-29-optimisation-loop-design.md` (§0). Visible = the project's visibility (404 otherwise); Control = study owner or super-admin (403 `FORBIDDEN`).
+
+| Method | Path | Access | Controller → service | Validation | Response |
+|---|---|---|---|---|---|
+| GET | `/api/v1/projects/:id/studies` | Visible | `listStudiesController` → `listStudies` | params | `200 { studies }` (newest first) |
+| GET | `/api/v1/projects/:id/studies/setup` | Visible | `studySetupController` → `getStudySetup` | params | `200 StudySetup` (mesh origin + its `input.json`, meshed sessions, defaults, running study) |
+| POST | `/api/v1/projects/:id/studies` | Visible | `createStudyController` → `createStudy` | body `createStudySchema` | `201 { study }` (draft); 422 `VALIDATION_ERROR` (empty range, BF1 / BF2, weights, unknown save, no mesh-origin chamber, bad reference session) |
+| GET | `/api/v1/projects/:id/studies/:studyId` | Visible | `getStudyController` → `getStudyDetail` | `studyParamSchema` | `200 { study, evaluations, best, paretoFront }` |
+| PATCH | `/api/v1/projects/:id/studies/:studyId` | Control | `updateStudyController` → `updateStudy` | body `updateStudySchema` | `200 { study }`; 409 `STUDY_NOT_DRAFT` |
+| POST | `/api/v1/projects/:id/studies/:studyId/start` | Control | `startStudyController` → `startStudy` | params | `202 { study }`; 409 `STUDY_NOT_DRAFT`, `STUDY_IN_PROGRESS`, `FREE_SURFACE_IN_PROGRESS`, `RUN_IN_PROGRESS`; 422 non-steady solver / reference session |
+| POST | `/api/v1/projects/:id/studies/:studyId/stop` | Control | `stopStudyController` → `stopStudy` | params | `200 { study }` (pause, idempotent) |
+| POST | `/api/v1/projects/:id/studies/:studyId/resume` | Control | `resumeStudyController` → `startStudy(…, 'resume')` | params | `202 { study }`; 409 `STUDY_NOT_PAUSED` + the start codes |
+| DELETE | `/api/v1/projects/:id/studies/:studyId` | Control | `deleteStudyController` → `deleteStudy` | params | `204` (pauses first; removes sessions + archive) |
+| GET | `/api/v1/projects/:id/studies/:studyId/evaluations/:index` | Visible | `getEvaluationController` → `getEvaluation` | `evaluationParamSchema` | `200 { evaluation, metrics }`; 404 |
+| GET | `/api/v1/projects/:id/studies/:studyId/export.csv` | Visible | `exportStudyCsvController` → `exportStudyCsv` | params | `200` attachment `text/csv` |
+
+While a study runs on `:id`, `studyLock` answers 409 `STUDY_IN_PROGRESS` on the `freeSurfaceLock` routes and on `POST /:id/free-surface`. `POST /chamber/build` answers 422 `CHAMBER_REFUSED` when the builder (or the semi-spiral designer) refuses the design with a `KO:` line (a crash stays 502 `CHAMBER_BUILD_FAILED`).
+
 ### Convergence criteria and vortex metrics (WS-G)
 Codes found in `criteria.service`: 409 `RUN_IN_PROGRESS`, 409 `NO_RESULTS`, 422 `CRITERIA_INVALID`, 502 `POSTPROCESS_FAILED`. Spec: `brain/specs/2026-09-30-solver-convergence-vorticity-design.md`.
 

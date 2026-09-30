@@ -4,6 +4,7 @@ import {
   CHAMBER_FORM_DEFAULTS,
   casingVelocity,
   chamberBodyKey,
+  chamberBuildErrorMessage,
   chamberFormSchema,
   chamberInputToConstraints,
   chamberInputToFormValues,
@@ -11,6 +12,7 @@ import {
   semiSpiralToggle,
   type ChamberFormValues,
 } from './chamberForm';
+import { ApiError } from '@/lib/api/client';
 
 /**
  * chamberFormSchema tests: the defaults are self-consistent, the hollow variant
@@ -459,5 +461,21 @@ describe('old saves with BF constraints or BF relations', () => {
       }),
     ).toEqual({ chamferLength1: { exact: 1200 } });
     expect(chamberInputToConstraints(base)).toEqual({});
+  });
+});
+
+describe('chamberBuildErrorMessage', () => {
+  it('shows a builder refusal (CHAMBER_REFUSED, 422) with the same message as before', () => {
+    const refused = new ApiError(
+      'CHAMBER_REFUSED',
+      'Cannot build the chamber. The guide vanes do not fit.',
+      422,
+    );
+    expect(chamberBuildErrorMessage(refused)).toBe(
+      'Cannot build the chamber. The guide vanes do not fit.',
+    );
+    const crash = new ApiError('CHAMBER_BUILD_FAILED', 'The chamber builder stopped.', 502);
+    expect(chamberBuildErrorMessage(crash)).toBe('The chamber builder stopped.');
+    expect(chamberBuildErrorMessage(new Error('boom'))).toBe('Could not generate the chamber.');
   });
 });

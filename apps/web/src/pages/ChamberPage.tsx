@@ -1,4 +1,5 @@
-import { Suspense, lazy, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader2, Send } from 'lucide-react';
@@ -14,7 +15,6 @@ import type {
   ChamberOutputKey,
   ChamberSpiralSummary,
 } from '@/lib/api/types';
-import { ApiError } from '@/lib/api/client';
 import { buildChamber as buildChamberRequest, type ChamberExportKind } from '@/lib/api/chamber';
 import { toast } from '@/components/ui/sonner';
 import { PageHeader } from '@/components/common/PageHeader';
@@ -22,6 +22,7 @@ import { ChamberInputsForm, type ChamberAutoDims } from '@/features/chamber/Cham
 import {
   CHAMBER_FORM_DEFAULTS,
   chamberBodyKey,
+  chamberBuildErrorMessage,
   chamberFormSchema,
   chamberInputToConstraints,
   chamberInputToFormValues,
@@ -90,6 +91,21 @@ export function ChamberPage() {
   // Semi-spiral quality + derived box of the LAST build (kept in step with `hash`).
   const [lastSpiral, setLastSpiral] = useState<ChamberSpiralSummary | null>(null);
   const build = useBuildChamber();
+
+  // "Open in Chamber" from an optimisation study (WS-H) hands a design over in
+  // the router state: load it like a save, once, then drop it from history so
+  // a reload or Back does not re-apply it over the user's edits.
+  const location = useLocation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    const handed = (location.state as { chamberInput?: ChamberInput } | null)?.chamberInput;
+    if (!handed) return;
+    reset(chamberInputToFormValues(handed));
+    setConstraints(chamberInputToConstraints(handed));
+    navigate(location.pathname, { replace: true, state: null });
+    // Only when a new hand-off arrives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
 
   const values = watch();
   // The last build's spiral only describes the CURRENT inputs while nothing
@@ -232,7 +248,7 @@ export function ChamberPage() {
           }
         },
         onError: (err) => {
-          const message = err instanceof ApiError ? err.message : 'Could not generate the chamber.';
+          const message = chamberBuildErrorMessage(err);
           // Both places: the persistent notices panel and the top-right toast.
           // The previous build's warnings would sit confusingly under the new
           // red errors — clear them (nothing new was built).

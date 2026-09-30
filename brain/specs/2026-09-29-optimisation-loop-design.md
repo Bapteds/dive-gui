@@ -1,7 +1,7 @@
 # Chamber optimisation loop (WS-H) — design
 
 **Date:** 2026-09-29
-**Status:** approved (2026-09-29), amended 2026-09-30 (§0); implementation after WS-G + WS-I
+**Status:** approved (2026-09-29), amended 2026-09-30 (§0); implemented 2026-09-30 on branch `feat/optimisation-loop` (not merged; plan `brain/plans/2026-09-30-optimisation-loop.md`)
 **Sequencing:** implementation starts **only after WS-F and WS-G are implemented on branch `feat/chamber-v2-cfd-loop`** (WS-G also validated on the Debian server).
 **Feature:** new "Optimisation" feature chaining Chamber Creation → Meshing → Project case → Boundary conditions → Solver → metrics
 **Scope:** Prisma (2 tables) + API (new `studies` module, an in-process orchestrator, a Python suggestion script) + web (study page) + tests. **No change** to `buildChamber.py`, to the meshing pipelines, to the BC presets or to the solver internals: the loop only calls existing services.

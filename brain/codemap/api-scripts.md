@@ -328,3 +328,9 @@ Vendored legacy ASCII VTK polydata reader (unchanged, numpy only) used by `lidki
 ## `apps/api/scripts/tests/test_lidkit.py`
 **Covers**: the vendored kit: `--flat` fit of a closed box reproduces the flat lid (no clamp, no upstand, no new open edge), `lidkit_surface.py` on a synthetic VTK pair gives the analytic z_s and p0, `lidkit_post.py` writes a PNG.
 **Technique**: real scripts via `subprocess` under the test interpreter; skipped without numpy / scipy / shapely (post test also needs matplotlib). Listed in `CADQUERY_FREE_MODULES` (runs without CadQuery).
+
+## `apps/api/scripts/optimiseSuggest.py`
+**Role**: next design of an optimisation study (WS-H spec §5): reads a request JSON (`space`, `sampler`, `seed`, `mode`, `history`), rebuilds an in-memory Optuna study from the history (`create_trial` + `add_trial`: done = COMPLETE, infeasible = COMPLETE with a violated constraint and the worst values, failed = FAIL, off-grid entries skipped), asks one trial and prints `OK: {"params": …}` (`KO:` + exit 1, usage exit 2). Samplers TPE (multivariate, `constraints_func`), NSGA-II (population 10), random; the seed is offset by the history length. Runs under `OPTIM_PYTHON_BIN` (optuna ≥ 3.0).
+
+## `apps/api/scripts/tests/test_optimise_suggest.py`
+**Covers**: usage exit 2, `KO:` on a bad request, seeded determinism on the 50 mm grid, history with FAIL / infeasible / off-grid entries, the random sampler moving on with the history, NSGA-II Pareto mode. Skipped without optuna.

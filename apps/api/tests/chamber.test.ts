@@ -1204,6 +1204,45 @@ describe('Chamber Creation', () => {
     expect(res.body.error.code).toBe('CHAMBER_BUILD_FAILED');
   });
 
+  // WS-H spec §10 Q7: a builder refusal (a `KO:` line) is the design's fault, a
+  // 422 CHAMBER_REFUSED the optimisation loop records as an infeasible trial; a
+  // crash without a `KO:` line stays a 502 CHAMBER_BUILD_FAILED.
+  it('answers 422 CHAMBER_REFUSED when the builder refuses the design (KO: line)', async () => {
+    setCommandRunner(async (spec) => ({
+      ...ok(spec),
+      exitCode: 1,
+      stdout: '',
+      stderr: 'KO: the guide vanes do not fit between the runner case and the casing\n',
+    }));
+    const auth = authHeader(await createTestUser());
+    const res = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(BUILD)
+      .expect(422);
+    expect(res.body.error.code).toBe('CHAMBER_REFUSED');
+    expect(res.body.error.message).toBe(
+      'Cannot build the chamber. The guide vanes do not fit between the runner case and the casing',
+    );
+  });
+
+  it('keeps 502 CHAMBER_BUILD_FAILED for a builder crash without a KO: line', async () => {
+    setCommandRunner(async (spec) => ({
+      ...ok(spec),
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Traceback (most recent call last):\n  ZeroDivisionError: float division by zero\n',
+    }));
+    const auth = authHeader(await createTestUser());
+    const res = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send(BUILD)
+      .expect(502);
+    expect(res.body.error.code).toBe('CHAMBER_BUILD_FAILED');
+    expect(res.body.error.message).toMatch(/stopped unexpectedly \(exit code 1\)/);
+  });
+
   it('rejects an out-of-range input', async () => {
     const auth = authHeader(await createTestUser());
     await request(app)
@@ -1410,8 +1449,9 @@ describe('Chamber Creation', () => {
         return successRunner(spec);
       });
       const auth = authHeader(await createTestUser());
-      const res = await post(auth, SPIRAL).expect(502);
-      expect(res.body.error.code).toBe('CHAMBER_BUILD_FAILED');
+      // A spiral KO: line is a design refusal too (WS-H, CHAMBER_REFUSED).
+      const res = await post(auth, SPIRAL).expect(422);
+      expect(res.body.error.code).toBe('CHAMBER_REFUSED');
       expect(res.body.error.message).toBe(
         'Cannot build the chamber. The semi-spiral casing does not fit in B Kammer (4450 mm): the narrowest valid spiral for these inputs is 5012 mm wide. Raise B Kammer to at least 5012 mm.',
       );

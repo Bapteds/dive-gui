@@ -35,6 +35,9 @@ Adds `Run.cores` (INTEGER, not null, default 1).
 ## `apps/api/prisma/migrations/20260831142110_chamber_saves/migration.sql`
 Creates `ChamberSave` (`id`, `name`, `ownerId` cascading to `User`, `snapshot` TEXT, timestamps), the unique index `ChamberSave_name_key` and the index `ChamberSave_ownerId_idx`.
 
+## `apps/api/prisma/migrations/20260930085427_optimisation_studies/migration.sql`
+**Role**: creates `Study` (owner FK cascade, project FK cascade, JSON String columns, status / mode / sampler / vortexMetric defaults, indexes on owner, project, status) and `Evaluation` (study FK cascade, unique `(studyId, index)`, index `(studyId, status)`), WS-H.
+
 ## `apps/api/prisma/migrations/migration_lock.toml`
 Prisma lock: `provider = "sqlite"`.
 
@@ -48,6 +51,7 @@ Prisma lock: `provider = "sqlite"`.
 - `ChamberSave`: unique `name`, `snapshot` (JSON of `ChamberInput`), `owner` (cascade).
 - `AuditLog`: append-only log, denormalized actor and target, no foreign key.
 **Used by**: `lib/prisma` (client), all Prisma services. Full details in `brain/architecture/data-model.md`.
+**WS-H (2026-09-30)**: models `Study` and `Evaluation` (optimisation studies), relations `User.studies` ("StudyOwner") and `Project.studies`.
 
 ## `apps/api/prisma/seed.ts`
 **Role**: idempotently provisions the permanent super-admin. Reads `SEED_ADMIN_EMAIL` (trim + lowercase), `SEED_ADMIN_PASSWORD`, `SEED_ADMIN_NAME` from `env`, hashes the password (argon2 via `lib/password`) and runs an `upsert` on the email.
@@ -63,6 +67,7 @@ Prisma lock: `provider = "sqlite"`.
 - Internal: `PROD_SECRET_MIN_LENGTH = 32`, `DEV_PLACEHOLDER_SECRETS` (the two sample JWT secrets and `ChangeMe!2026`).
 **Notes**: in `production`, `superRefine` requires JWT secrets of at least 32 characters, different from each other and not equal to the placeholders, and rejects the placeholder seed password. `SEED_ADMIN_*` are mandatory even to start the server. `MESH_PYTHON_BIN` and `CHAMBER_PYTHON_BIN` have a platform-dependent default (`python` on Windows). Four variables are declared but never read: `STITCH_TOL`, `NCC_COUPLE_BIN`, `FOAM_DICTIONARY_BIN`, `POST_PROCESS_BIN`. Full table in `brain/architecture/configuration.md`.
 **WS-I (2026-09-30)**: `LIDKIT_PYTHON_BIN` (default `''` = the `CHAMBER_PYTHON_BIN` value) and `LIDKIT_TIMEOUT_MS` (900000).
+**WS-H (2026-09-30)**: `OPTIM_PYTHON_BIN` (empty ⇒ `MESH_PYTHON_BIN`), `OPTIMISE_SUGGEST_SCRIPT` (empty ⇒ bundled `scripts/optimiseSuggest.py`), `OPTIM_SUGGEST_TIMEOUT_MS` (60 s).
 
 ## `apps/api/src/middleware/asyncHandler.ts`
 Exports `asyncHandler(handler): RequestHandler`: wraps a possibly asynchronous handler and forwards any rejected promise to `next`, so that `errorHandler` runs. Used by all routers (including around `requireAuth`, which is itself asynchronous).
@@ -190,6 +195,7 @@ Exports `createChamberRouter(): Router`, mounted on `/api/v1/chamber`, entirely 
 **Depends on**: `@dive/shared`, `lib/commandRunner`, `lib/chamberStorage`, `config/env`. **Used by**: `chamber.controller`; `lib/chamberStorage.readChamberExport` also serves `meshing.service` (transfer into a session).
 **Notes**: `x4` never enters the hash (only resolved dimensions do). The lock is process-local: several API instances could build the same hash in parallel.
 **WS-I (2026-09-30)**: `buildChamber` writes `input.json` (`writeChamberInput`) next to `params.json`, on a cache hit only when missing; not part of the hash.
+**WS-H (2026-09-30)**: `buildFailure(result, message)`: a `KO:` line from the builder or the semi-spiral designer answers 422 `CHAMBER_REFUSED` (same message); spawn error, timeout, crash or missing GLB stay 502 `CHAMBER_BUILD_FAILED`.
 
 ## `apps/api/src/modules/dashboard/dashboard.controller.ts`
 Exports `getDashboardController`: builds the `Viewer` and responds `200` with `getDashboard(viewer)`.
@@ -281,6 +287,7 @@ Exports `roleSchema` (re-export), `createUserSchema` (`fullName`, `email`, `pass
 - `deleteUser(id, actor)`. 409 `PROTECTED_ACCOUNT`, `SELF_DELETE_FORBIDDEN`; stops runs of owned projects, deletes the user (database cascade), best-effort cleanup of storage for owned projects and templates; audit `USER_DELETED`.
 **Depends on**: `lib/prisma`, `lib/password`, `lib/audit`, `lib/caseStorage`, `lib/templateStorage`, `projects/runs.service.stopProjectRuns`. **Used by**: `users.controller`.
 **Notes**: deleting a user also cascade-deletes their chamber saves, even though they are shared with the team.
+**WS-H (2026-09-30)**: `deleteUser` calls `cleanupStudies({ OR: [{ ownerId }, { project: { ownerId } }] })` before the cascade.
 
 ## `apps/api/src/types/express.d.ts`
 Global augmentation of `Express.Request`: `user?: PublicUser & { role: Role }` (set by `requireAuth`) and `validated?: { body?, params?, query? }` (set by `validate`).
@@ -294,6 +301,7 @@ Global augmentation of `Express.Request`: `user?: PublicUser & { role: Role }` (
 **Role**: process bootstrap. Creates the app, launches `reconcileOrphanRuns()` (active solver runs from a previous process set to `failed`) and `reconcileOrphanMeshingRuns()` without awaiting them, listens on `env.PORT`, then `attachTerminalGateway(server)` (no-op if `TERMINAL_ENABLED` is `false`).
 **Depends on**: `app`, `config/env`, `lib/logger`, `projects/runs.service`, `meshing/meshing.service`, `projects/terminal.gateway`.
 **WS-I (2026-09-30)**: also runs `reconcileOrphanFreeSurfaceJobs()` at boot.
+**WS-H (2026-09-30)**: boot calls `reconcileOrphanStudies()` (a study left running is paused).
 
 ## `apps/api/.env.example`
 **Since 2026-09-29**: a `Chamber Creation` block documents `CHAMBER_SPIRAL_TIMEOUT_MS=300000` (the other chamber variables are still missing, K33).

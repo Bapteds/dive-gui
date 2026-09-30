@@ -18,6 +18,7 @@ import {
   computeChamberGeneratorDims,
 } from '@dive/shared';
 import type { ChamberConstraint, ChamberInput, ChamberOutput, ChamberVariant } from '@dive/shared';
+import { ApiError } from '@/lib/api/client';
 
 /**
  * Form contract for the chamber inputs, kept apart from the component file so
@@ -415,4 +416,14 @@ export function casingVelocity(
   const widthMm = Math.round(outputs.find((o) => o.key === 'width')!.final);
   const error = chamberSpiralVelocityRefusal(input, outputs);
   return { value: error ? null : chamberSpiralVelocityOf(input, outputs), widthMm, error };
+}
+
+/**
+ * The message shown when a build fails. Every API refusal carries a
+ * client-safe message: a builder refusal (422 CHAMBER_REFUSED, a `KO:` line,
+ * since WS-H), a pre-builder refusal (422 VALIDATION_ERROR) and a crash
+ * (502 CHAMBER_BUILD_FAILED) all show it as is; anything else gets a generic line.
+ */
+export function chamberBuildErrorMessage(err: unknown): string {
+  return err instanceof ApiError ? err.message : 'Could not generate the chamber.';
 }

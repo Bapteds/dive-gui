@@ -314,6 +314,9 @@ Exports `getDashboard(): Promise<DashboardData>` (`GET /dashboard`, server metri
 **Exports**: `listMeshingSessions()`, `createMeshingSession(name, engine)`, `copyMeshingSession(body: CopySessionBody)`, `transferChamberToMeshing(body: FromChamberBody)` (`POST /meshing/from-chamber`), `getMeshingSession(id)`, `renameMeshingSession(id, name)` (`PATCH`), `deleteMeshingSession(id)`, `uploadStl(id, files)` (field `files`, STL or FMS), `deleteStl(id, name)`, `getStlBuffer(id, name): Promise<ArrayBuffer>`, `runSnappy(id, config)` (starts a background job, 409 `MESH_IN_PROGRESS` if one is already active), `getMeshingLog(id)` (poll), `stopMeshing(id)`, `saveMeshingConfig(id, config)` (`PUT /config`, autosave), `getMeshingManifest(id)`, `getMeshingGeometry(id)`, `getMeshingEdges(id)` (`null` if empty or 404), `getSessionZip(id): Promise<Blob>`.
 **Used by**: `features/meshing/*`, `MeshingSessionPage` (`getSessionZip` directly).
 
+## `apps/web/src/lib/api/studies.ts`
+**Role**: client of `/projects/:id/studies[...]` (WS-H): `listStudies`, `getStudySetup`, `createStudy`, `updateStudy`, `getStudy`, `startStudy`, `stopStudy`, `resumeStudy`, `deleteStudy`, `getStudyEvaluation`, `downloadStudyCsv` (blob).
+
 ## `apps/web/src/lib/api/projects.ts`
 **Role**: the largest module: projects, OpenFOAM case files, 3D viewer, CGNS export, template application, solver.
 **Exports** (grouped):
@@ -377,6 +380,7 @@ Exports `cn(...inputs: ClassValue[]): string` = `twMerge(clsx(inputs))`: class m
 **Exports**: `ChamberPage()` (named + `default`).
 **Depends on**: `react-hook-form` + `zodResolver(chamberFormSchema)` (`mode: 'onChange'`), `computeChamberOutputs` from `@dive/shared` (client-side computation), `features/chamber/*` (`ChamberInputsForm`, `chamberForm` helpers, `ChamberSavesMenu`, `ChamberOutputsTable`, `ChamberBuildWarnings`, `ChamberExportButtons`, `SendToMeshingDialog`, `useBuildChamber`), `buildChamber` directly, `ChamberViewer` as `lazy` (three.js).
 **Notes**: local state `constraints`, `hash`, `offerMirror`, `lastBuildInput`, `buildWarnings`, `buildErrors`, `sendOpen`. Errors (inverted Min > Max detected client-side, server refusal, invalid form) go both to the notes panel and to a toast. `isStale` compares the `chamberBodyKey` of the current form and of the last build (key order differs between `watch()` and the zod output). `onExportDownloaded` silently re-POSTs the last body after a STEP download to pick up new warnings. Loading a save resets all build-related state. `FIELD_LABELS` is recreated on every render.
+**WS-H (2026-09-30)**: loads a `chamberInput` handed over in the router state ("Open in Chamber" of a study) like a save, then clears the state; build errors go through `chamberBuildErrorMessage`.
 
 ## `apps/web/src/pages/HomePage.tsx`
 **Role**: `/` dashboard pinned to the viewport from `lg` up: KPI strip (CPU, memory, active solvers, total runs), panel of running solvers (can be stopped), outcomes donut, grid of recent projects.
@@ -411,6 +415,7 @@ Exports `cn(...inputs: ClassValue[]): string` = `twMerge(clsx(inputs))`: class m
 **Depends on**: `useProjectQuery`, `useAddCollaborator`, `useDeleteProject`, `useRemoveCollaborator`, `useCaseFilesQuery`, `useMeshesQuery`, `CaseFilesSection`, `ProjectTerminalButton`; `lazy` for `VisualizePanel`, `SolverTab`, `ExportTab`, `AssemblyWorkspace`.
 **Notes**: initial tab read once from `?view=` (`PROJECT_VIEWS`, `isProjectView`; unknown value → Detail), then the param is dropped with `setSearchParams({}, { replace: true })` (meshing hand-off lands on `?view=visualize`). Gating: Visualize if there is a polyMesh (`constant/polyMesh/`) or a non-empty library; Assemble if the library is non-empty; Solver and Export if there is a polyMesh. Each lazy panel is only mounted when its tab is active (`view === ...`) so as not to trigger builds/polls. Dialogs opened from the menu are deferred with `setTimeout(..., 0)` (Radix focus/`aria-hidden` race). `canManage` = owner or super-admin.
 **WS-I (2026-09-30)**: view `freesurface` (tab `Free surface`, `Waves` icon, `FreeSurfaceTabTrigger` disabled without a polyMesh with a tooltip, lazy `FreeSurfaceTab` mounted only when open, `onOpenSolver` switches to the Solver tab).
+**WS-H (2026-09-30)**: tab `Optimisation` (view `optimisation`, lazy `OptimisationTab`, always enabled).
 
 ## `apps/web/src/pages/ProjectDetailPage.test.tsx`
 **Covers**: disabling/enabling of the Visualize and Solver tabs depending on whether a polyMesh exists; opening a tab replaces the Detail body; `?view=visualize` opens Visualize at mount, an unknown `?view=` falls back to Detail.

@@ -241,6 +241,33 @@ export async function installCriteriaForRun(projectId: string): Promise<void> {
   await installCriteria(projectId, criteria, patches, applicable);
 }
 
+/**
+ * The project's effective criteria (saved, else the defaults resolved on the
+ * current mesh patches) and whether the case solver takes them. No access check:
+ * the optimisation study service (WS-H) snapshots them at study start.
+ */
+export async function resolveProjectCriteria(
+  projectId: string,
+): Promise<{ criteria: CfdCriteriaSettings; applicable: boolean }> {
+  const patches = await boundaryPatches(projectId);
+  return {
+    criteria: await resolveCriteria(projectId, patches),
+    applicable: criteriaApplicable(await caseSolver(projectId)),
+  };
+}
+
+/**
+ * Write a criteria snapshot back as the project's saved settings (WS-H: the
+ * study re-installs its snapshot before each solve; startRun then installs it
+ * into the case). No access check, no mesh validation (startRun validates).
+ */
+export async function writeProjectCriteria(
+  projectId: string,
+  settings: CfdCriteriaSettings,
+): Promise<void> {
+  await writeStoredCriteria(projectId, settings);
+}
+
 /** The latest numeric time directory > 0 of the case, or null. */
 async function latestResultTime(projectId: string): Promise<string | null> {
   let names: string[];
