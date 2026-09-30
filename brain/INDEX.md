@@ -1,6 +1,6 @@
 # Index of every repository file
 
-> One line per file (656 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
+> One line per file (657 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
 
 Detail of a code file: open the sheet shown and search for the `## path/to/file` section. Documents: the description is their title and introduction line.
 
@@ -99,7 +99,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/scripts/CgnsMergeTime.py` : merges the per-time-step HDF5 CGNS files (ParaView's `out_<i>.cgns`) into ONE transient CGNS readable by Ansys CFD-Post (`BaseIterativeData` / `ZoneIterativeData` / `FlowSolutionPointers` nodes). · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/CgnsToVtk.py` : converts a CGNS (ADF or HDF5) into pure-topology legacy ASCII VTK for `vtkUnstructuredToFoam`. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/FoamToCgns.py` : exports a solved OpenFOAM case to CGNS for CFD-Post (cell-centered data, polyhedra not decomposed). · [api-scripts](codemap/api-scripts.md)
-- `apps/api/scripts/_test_hub_shroud_math.py` : Standalone unit test (outside pytest: the `_` prefix prevents its collection) of the pure functions `_hub_point_radii` and `_shroud_fillet_profile` of `buildChamber.py`, imported as the `buildChamber` module (to be run f … · [api-scripts](codemap/api-scripts.md)
+- `apps/api/scripts/_test_hub_shroud_math.py` : Standalone unit test (outside pytest: the `_` prefix prevents its collection) of the pure functions `_hub_point_radii`, `_hub_knee_from_ellipse` and `_shroud_fillet_profile` of `buildChamber.py`, imported as the … · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/_verify_outlet_ratio.py` : manual check of a vaned build: outlet sizing and preservation of the hub/shroud profiles. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/bakeVaneBladeProfile.py` : offline (one-time) tool that extracts the clean NURBS vane profile from the SolidWorks STEP and writes it to `assets/guideVanes_blade_profile.json`, registered onto the mid-height section of `guideVanes_blade.stl`. · [api-scripts](codemap/api-scripts.md)
 - `apps/api/scripts/buildChamber.py` : "one-shot" geometry builder of the Chamber Creation feature. · [api-scripts](codemap/api-scripts.md)
@@ -870,6 +870,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `brain/specs/2026-09-29-semi-spiral-casing-design.md` : Semi-spiral casing option (Chamber Creation) — design
 - `brain/specs/2026-09-29-vane-pocket-runner-case-design.md` : Guide-vane pocket robust to Runner case Ø close to or below LE Ø : Area: python (`apps/api/scripts/buildChamber.py`), shared + API (early refusal), tests
 - `brain/specs/2026-09-30-free-surface-tool-design.md` : Free-surface (lid iteration) tool (WS-I) — design
+- `brain/specs/2026-09-30-hub-shoulder-knee-ellipse-design.md` : Guide-vane hub shoulder — knee P2 from the P1–P3 quarter ellipse — design
 - `brain/specs/2026-09-30-solver-convergence-vorticity-design.md` : Solver convergence criteria + vortex metrics (WS-G) — design
 - `brain/specs/2026-09-30-spiral-length-design.md` : Semi-spiral casing: editable Length (Min / Max / Exact)
 

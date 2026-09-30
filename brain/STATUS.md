@@ -14,7 +14,7 @@
     - WS-C v2 Cone chamfer: 45° foot chamfer on the LE part in both designs, part widened by the chamfer size above it (the first top-rim version was removed at the user's request);
     - WS-E Semi-spiral casing (cached `designSemiSpiral.py` step, nose + plank = new `tongue` patch, Feet off; unticking it restores Chamfer);
     - WS-F Meshing session → project (`POST /projects/:id/mesh/from-meshing`, "Send to project" dialog, chamber patch types forced).
-  - **Decided, no code**: WS-D hub shoulder: keep the current rule (the small-Ø fold is logged in `known-issues.md`).
+  - **Hub shoulder fold fixed (2026-09-30, branch `fix/chamber-hub-knee-ellipse`)**: knee P2 = 45° point of the P1–P3 quarter ellipse (spec `2026-09-30-hub-shoulder-knee-ellipse-design.md`), supersedes the WS-D "keep the rule" decision; the `hub shoulder non-monotonic` warning is gone. **Deploy: purge `$STORAGE_DIR/chamber/*`.**
   - **Done 2026-09-30 (on `main`)**: WS-G convergence criteria + vortex metrics in the Solver tab (SimplePDrop default, robust, residuals; Δp₀ and vortex charts; spec `2026-09-30-solver-convergence-vorticity-design.md`); WS-I Free surface project tab (lid iteration by remeshing, 1 to 3 iterations; spec `2026-09-30-free-surface-tool-design.md`); Casing flow velocity read-only, derived from B Kammer. Everything touching OpenFOAM (coded function objects, `postProcess`, the kit scripts, a real iteration) is **to validate on the Debian server**.
   - **Done 2026-09-30 (on `main`)**: WS-H optimisation loop in the project **Optimisation** tab (Prisma migration `20260930085427_optimisation_studies`, Optuna ask/tell via `optimiseSuggest.py`, the project is the work project and keeps its own solver setup / BCs; spec §0). **Deploy**: back up the database (migration applies at the service restart), install `optuna` for `OPTIM_PYTHON_BIN` (defaults to `MESH_PYTHON_BIN`), then validate one real 3-evaluation study on the server.
   - **Still to do (after the merge)**: browser pass (A, B, C, E, F), CI run (geometry job), and at deploy **purge `$STORAGE_DIR/chamber/*`** (`buildChamber.py` changed; the live `.env` has `STORAGE_DIR="./storage"`, relative to the service working directory, so probably `/home/app/apps/api/storage/chamber/*`: to confirm) plus a real snappy chamber session sent to a project on the server.
@@ -23,6 +23,8 @@
 - **Brain**: reorganized on 2026-09-28 (`brain/`, English, generated `INDEX.md`, playbooks, zone rules, `Stop` hook).
 
 ## 2. Last known verification
+
+Hub knee ellipse (branch `fix/chamber-hub-knee-ellipse`, 2026-09-30, `C:/cqv`): geometry suite 140/140 with CadQuery 2.8.0 (`C:/cqv`, 20 min 34 s; every GOLDEN within `VOL_RTOL`, none updated); `_test_hub_shroud_math.py` ALL PASS; API chamber + chamberModel 136/136, web chamber 135/135, typecheck clean. Browser not checked.
 
 Chord cap min(1, 16/n) + corner chamfers at 45° (worktree branch `worktree-agent-abda8d52e36f8b19d`, 2026-09-30): geometry 123/123 with CadQuery 2.8.0 (`C:/cqv`, 97 builder + 26 spiral-module, 18 min 26 s; every GOLDEN unchanged), API chamber suites 136/136, web chamber 127/127, typecheck clean, lint 0 errors; vaned STEP 28 s at 8 vanes, 36 s at 13.
 
@@ -47,7 +49,7 @@ On a workstation without OpenFOAM, ParaView or CadQuery, CFD actions answer "not
 
 ## 4. Open threads (nothing is requested)
 
-See `brain/known-issues.md` §6 and §7: hub shoulder monotonicity, visual pass of Simplify Generator, STL normals, saves cascade, multi-instance build lock. Audit side: 22 MEDIUM and 21 LOW open, and product decision C2 (shared projects of a deleted account).
+See `brain/known-issues.md` §6 and §7: hub P3 / P1-height rules vs a real 2420 mm design, visual pass of Simplify Generator, STL normals, saves cascade, multi-instance build lock. Audit side: 22 MEDIUM and 21 LOW open, and product decision C2 (shared projects of a deleted account).
 
 **Questions waiting for a user decision** (raised on 2026-09-28):
 - Name of the `outlet` patch placed on the middle cylinder in Closed generator without guide vanes (`known-issues.md` §6).
