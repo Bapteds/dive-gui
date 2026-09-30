@@ -1,10 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { RotateCcw, Square, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/sonner';
 import { ApiError } from '@/lib/api/client';
+import {
+  DEFAULT_CFD_CRITERIA,
+  type ConvergenceSettings,
+  type RunMonitors,
+  type VortexMetricsSample,
+} from '@dive/shared';
 import type { ResidualSample, RunStatus, RunSummary } from '@/lib/api/types';
 import { ResidualChart } from './ResidualChart';
+import { PressureDropChart } from './PressureDropChart';
+import { VortexChart } from './VortexChart';
+import { useComputeVortex, useCriteriaQuery } from './useCriteria';
 import { SolverSetupWizard } from './SolverSetupWizard';
 import { SolverConfigPanel } from './SolverConfigPanel';
 import { RunHistory } from './RunHistory';
@@ -171,6 +180,20 @@ function RunnablePanel({
   const active = isRunActive(liveRun?.status);
   const series = logQuery.data?.series ?? [];
   const logTail = logQuery.data?.logTail ?? '';
+  const monitors = logQuery.data?.monitors ?? EMPTY_MONITORS;
+
+  // Convergence criteria (WS-G): the chart settings (window, band, rho), whether
+  // they apply to this solver, and the on-demand vortex computation.
+  const criteria = useCriteriaQuery(projectId);
+  const computeVortex = useComputeVortex(projectId);
+  const [onDemand, setOnDemand] = useState<{ runId: string; sample: VortexMetricsSample } | null>(
+    null,
+  );
+  const vortexSamples = useMemo(() => {
+    if (!onDemand || onDemand.runId !== liveRun?.id) return monitors.vortex;
+    const rest = monitors.vortex.filter((s) => s.time !== onDemand.sample.time);
+    return [...rest, onDemand.sample].sort((a, b) => a.time - b.time);
+  }, [monitors.vortex, onDemand, liveRun?.id]);
 
   const startRun = useStartRun(projectId);
   const stopRun = useStopRun(projectId);
@@ -178,6 +201,17 @@ function RunnablePanel({
   const handleRun = async (cores: number) => {
     try {
       await startRun.mutateAsync({ cores });
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+    }
+  };
+
+  const handleComputeVortex = async () => {
+    if (!liveRun) return;
+    try {
+      const sample = await computeVortex.mutateAsync();
+      setOnDemand({ runId: liveRun.id, sample });
+      toast.success(`Vortex metrics computed at iteration ${sample.time}.`);
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
     }
@@ -213,6 +247,12 @@ function RunnablePanel({
         logTail={logTail}
         stopPending={stopRun.isPending}
         onStop={() => void handleStop()}
+        monitors={monitors}
+        vortexSamples={vortexSamples}
+        convergence={criteria.data?.criteria.convergence ?? DEFAULT_CFD_CRITERIA.convergence}
+        criteriaApplicable={criteria.data?.applicable ?? false}
+        computingVortex={computeVortex.isPending}
+        onComputeVortex={() => void handleComputeVortex()}
       />
 
       <section className="flex flex-col gap-2">
@@ -235,6 +275,12 @@ function LiveRun({
   logTail,
   stopPending,
   onStop,
+  monitors,
+  vortexSamples,
+  convergence,
+  criteriaApplicable,
+  computingVortex,
+  onComputeVortex,
 }: {
   run: RunSummary | null;
   active: boolean;
@@ -242,7 +288,16 @@ function LiveRun({
   logTail: string;
   stopPending: boolean;
   onStop: () => void;
+  monitors: RunMonitors;
+  vortexSamples: VortexMetricsSample[];
+  convergence: ConvergenceSettings;
+  criteriaApplicable: boolean;
+  computingVortex: boolean;
+  onComputeVortex: () => void;
 }) {
+  const showPressureDrop = monitors.pressureDrop.length > 0 || monitors.criterion !== null;
+  // The vortex chart shows its data, or (terminal run) the on-demand computation.
+  const showVortex = vortexSamples.length > 0 || (!active && criteriaApplicable);
   const lastIteration = series.length > 0 ? series[series.length - 1].time : null;
 
   return (
@@ -286,10 +341,30 @@ function LiveRun({
         </p>
       )}
 
+      {run && showPressureDrop && (
+        <PressureDropChart
+          samples={monitors.pressureDrop}
+          criterion={monitors.criterion}
+          convergence={convergence}
+        />
+      )}
+
+      {run && showVortex && (
+        <VortexChart
+          samples={vortexSamples}
+          canCompute={!active}
+          computing={computingVortex}
+          onCompute={onComputeVortex}
+        />
+      )}
+
       {run && <RunLog text={logTail} live={active} />}
     </div>
   );
 }
+
+/** Monitors of a log payload without any (older API, or before the first poll). */
+const EMPTY_MONITORS: RunMonitors = { pressureDrop: [], criterion: null, vortex: [] };
 
 /** A terminal-state banner: icon + a human message (color + icon + word). */
 function RunBanner({ status, reason }: { status: RunStatus; reason: string | null }) {

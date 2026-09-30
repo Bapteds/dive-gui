@@ -305,6 +305,10 @@ const envSchema = z
     // Timeout (ms) for the parallel pre/post steps (decomposePar / reconstructPar),
     // separate from the long solver runtime. Default 30 min.
     SOLVER_DECOMPOSE_TIMEOUT_MS: z.coerce.number().int().positive().default(1800000),
+    // Timeout (ms) of the on-demand post-process of the Solver tab ("Compute at
+    // latest time": postProcess -latestTime with the diveVortexMetrics function
+    // object, which compiles on first use). Default 30 min.
+    POSTPROCESS_TIMEOUT_MS: z.coerce.number().int().positive().default(1800000),
     // Number of trusted reverse-proxy hops in front of the API. 0 = trust none
     // (default, correct for direct exposure / local dev). Set to 1 behind a
     // single proxy/load balancer so the login rate-limiter keys on the real

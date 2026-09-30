@@ -47,6 +47,7 @@ import {
 } from '@/features/projects/foamModel';
 import { CaseFileEditor } from '@/features/projects/CaseFileEditor';
 import { SolverBrowserDialog } from './SolverBrowserDialog';
+import { ConvergenceSettings } from './ConvergenceSettings';
 import { useScaffoldSolver } from './useRuns';
 
 /**
@@ -225,6 +226,7 @@ export function SolverConfigPanel({
             Configure
           </Button>
         </div>
+        <ConvergenceSettings projectId={projectId} active={active} />
       </div>
 
       <Dialog open={configOpen} onOpenChange={setConfigOpen}>

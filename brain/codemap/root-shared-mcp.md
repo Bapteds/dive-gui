@@ -160,6 +160,13 @@ Extends `tsconfig.base.json`; `module`/`moduleResolution` `NodeNext` (hence impo
 - `RESIDUAL_FIELDS = ['Ux', 'Uy', 'Uz', 'p', 'k', 'omega', 'epsilon', 'nuTilda']`, `ResidualField`. Chart order and palette.
 - `ResidualSample` (`time`, `values: Partial<Record<string, number>>`).
 
+### Convergence criteria and vortex metrics (WS-G)
+- `CONVERGENCE_METHODS` (`simplePDrop`, `robust`, `residuals`), `VORTEX_VELOCITY_FIELDS` (`U`, `Urel`).
+- `cfdCriteriaSchema` (zod: `convergence` { method, inletPatch / outletPatch restricted to `[A-Za-z0-9_.:-]*`, rho, simplePDrop { window, devTol, nPass }, robust { W, tolMean, K, resTol } }, `vortex` { enabled, velocityField, qThreshold, wallDistance, qCrit, vMin, interval, writeFields }), types `CfdCriteriaSettings`, `ConvergenceSettings`, `VortexMetricsSettings`.
+- `DEFAULT_CFD_CRITERIA` (the user's tool defaults: window 100, devTol 0.03, nPass 100, W 100, tolMean 50 Pa, K 2, resTol 1e-3, rho 1000, qThreshold 5, wallDistance 0.03 m, qCrit 5, vMin 0, interval 50).
+- `criteriaApplicable(solver)`: steady + incompressible catalog entry.
+- API shapes: `CfdCriteriaResponse`, `SaveCfdCriteriaResponse`, `VortexOnDemandResponse`; monitors `PressureDropSample`, `SimplePDropProgress`, `RobustProgress`, `CriterionProgress`, `VortexMetricsSample`, `RunMonitors`.
+
 ### Chamber: empirical model X1..X3
 - `CHAMBER_DIRNAME = 'chamber'`, `CHAMBER_UNIT = 'mm'`.
 - `CHAMBER_INPUT_RANGES`: x1 700..2420, x2 1.8..14.9, x3 1..23.
@@ -212,7 +219,7 @@ Extends `tsconfig.base.json`; `module`/`moduleResolution` `NodeNext` (hence impo
 - `runnerCaseClearanceRefusal(input, outputs): string | null` (WS-A v2, spec 2026-09-29-runner-case-below-le; replaced `runnerCaseBelowLeRefusal`) + `CHAMBER_RUNNER_CASE_OUTLET_CLEARANCE_MM = 20` (mirrors `RUNNER_CASE_OUTLET_CLEARANCE`) + `CHAMBER_RUNNER_CASE_SNAP_MM = 5` (mirrors `SNAP_D_TOL`, the builder's flush snap). Guide vanes and a typed `dFirst`: message when `partScale × dFirst < x1 + 20` ("With guide vanes the runner case must clear the outlet: Runner case Ø (…[, … at Part scale s]) must be at least Runner Ø + 20 mm (…). Increase Runner case Ø, clear it (auto ≈ …), or turn Guide vanes off."), else null (below LE Ø the builder adds the ledge). Called by `chamber.service.buildChamber` (422).
 
 ### Server error codes
-- `SERVER_ERROR_CODES`, `ServerErrorCode`. List of `{ error: { code } }` envelope codes known to the web client (which adds its own transport codes). `MESH_IN_PROGRESS` and `MESHING_NOT_MESHED` added on 2026-09-29.
+- `SERVER_ERROR_CODES`, `ServerErrorCode`. List of `{ error: { code } }` envelope codes known to the web client (which adds its own transport codes). `MESH_IN_PROGRESS` and `MESHING_NOT_MESHED` added on 2026-09-29; `CRITERIA_INVALID`, `NO_RESULTS`, `POSTPROCESS_FAILED` on 2026-09-30 (WS-G).
 **Notes**: inconsistencies found with the API. Codes declared but never emitted by `apps/api/src`: `CONVERSION_FAILED`, `MESH_MERGE_FAILED`, `BC_APPLY_FAILED`. Codes emitted but missing from the list: `NAME_TAKEN` (chamber saves), `ENGINE_MISMATCH` and `MESH_IN_PROGRESS` (meshing), `NOT_ENOUGH_CORES` and `TOO_MANY_CORES` (runs), `ARCHIVE_TOO_LARGE` (archives), as well as `INTERNAL_SERVER_ERROR` and `ERROR` (errorHandler defaults).
 
 ## `packages/shared/package.json`

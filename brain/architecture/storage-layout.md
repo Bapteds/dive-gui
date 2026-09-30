@@ -34,6 +34,7 @@ Nothing under `STORAGE_DIR` is purged by a periodic job: deletion is always trig
 │   │   ├── assembly.json                 AppliedAssembly (applied assembly)
 │   │   └── .work/                        transient merge workspace (+ from-meshing-<ts>-<rand>/ staging)
 │   ├── runs/<runId>/solver.log           solver log (runStorage)
+│   ├── cfd-criteria.json                 convergence criteria + vortex metrics settings (criteria.service, WS-G)
 │   ├── viz/{patches.glb, manifest.json, edges.bin}   case render (vizStorage)
 │   ├── export/                           CFD-Post export (exportStorage)
 │   │   ├── out.cgns | out_<i>.cgns       produced CGNS (one time or series)
@@ -107,6 +108,12 @@ The folder names `viz`, `runs`, `export`, `chamber` come from shared constants (
 - **Read by**: `readRunLog(projectId, runId, fromByte, maxBytes)` for the live stream and catch-up, then `residualParser`.
 - **Format**: ASCII text, read by byte offsets.
 - **Lifecycle**: never purged individually; deleted with the project. Survives a case reset. Reads bounded to `SOLVER_LOG_MAX_BYTES` (32 MiB by default) on the hot path.
+
+### `projects/<id>/cfd-criteria.json`
+- **Written by**: `criteria.service.saveCriteria` (`PUT /projects/:id/criteria`), atomically (tmp + rename), JSON `CfdCriteriaSettings` (`convergence`, `vortex`).
+- **Read by**: `criteria.service` (GET, install at every run start, on-demand vortex metrics); an absent or invalid file means the defaults resolved on the mesh patches (`defaultCfdCriteria`).
+- **Effect on the case**: the install writes `case/system/{pressureLossMonitors, SimplePDropConvergence | convergenceControl, diveVortexMetrics}`, the managed `#include` lines of `case/system/controlDict` `functions { }`, and comments `residualControl` out of `case/system/fvSolution` for the robust criterion. The solver writes `case/postProcessing/{inlet_p0_flux, outlet_p0_flux, inlet_flux, outlet_flux, diveVortexMetrics}/` and, at write times with `writeFields`, `Q`, `vorticity`, `wallDistance`, `Qfiltered` in the time directories (to validate on the Debian server).
+- **Lifecycle**: outside `case/`, so it survives a case reset; deleted with the project.
 
 ### `projects/<id>/viz/`
 - **Written by**: `mesh.service.buildViz` (`MESH_PYTHON_BIN extractPatches.py <caseDir> <glb> <manifest>`, timeout `MESH_BUILD_TIMEOUT_MS`), which creates the folder; a missing GLB after exit 0 is treated as a failure (502 `MESH_BUILD_FAILED`).

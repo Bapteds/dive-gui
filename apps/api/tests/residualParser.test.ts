@@ -82,6 +82,31 @@ describe('parseResiduals', () => {
     expect(parseResiduals(TWO_ITERATIONS).foamError).toBe(false);
   });
 
+  it('recognises the pressure-drop convergence banners of the DIVE function objects', () => {
+    const simple = parseResiduals(
+      `${TWO_ITERATIONS}\nSimplePDropConvergence: CONVERGED. Writing and stopping.\n`,
+    );
+    expect(simple.converged).toBe(true);
+    expect(simple.convergedBy).toBe('simplePDrop');
+
+    const robust = parseResiduals(
+      `${TWO_ITERATIONS}\nconvergenceControl: CONVERGED (Dp0 stationary + residuals) @ iteration 400\n`,
+    );
+    expect(robust.converged).toBe(true);
+    expect(robust.convergedBy).toBe('robust');
+
+    const residual = parseResiduals(`${TWO_ITERATIONS}\nSIMPLE solution converged in 2 iterations\n`);
+    expect(residual.converged).toBe(true);
+    expect(residual.convergedBy).toBe('residuals');
+
+    // A progress line is not a banner.
+    const progress = parseResiduals(
+      'SimplePDropConvergence: dp0 = 1 Pa, mean = 1 Pa, dev = 0 %, consecutive = 3/100\n',
+    );
+    expect(progress.converged).toBe(false);
+    expect(progress.convergedBy).toBeNull();
+  });
+
   it('returns empty for input with no residual blocks', () => {
     const parsed = parseResiduals('hello\nworld\n');
     expect(parsed.samples).toHaveLength(0);

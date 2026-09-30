@@ -1,7 +1,7 @@
 # Solver convergence criteria + vortex metrics (WS-G) — design
 
 **Date:** 2026-09-30
-**Status:** approved (user decisions 2026-09-30, see §9)
+**Status:** approved (user decisions 2026-09-30, see §9); implemented on branch `feat/solver-convergence-vortex` (2026-09-30, not merged; OpenFOAM side to validate on the Debian server)
 **Replaces:** the uncommitted WS-G draft of 2026-09-29 (`2026-09-29-solver-convergence-criteria-design.md` cited by the WS-H spec never landed in the repository; this file is its replacement).
 **Feature:** `brain/features/solver-and-runs.md` (Solver tab of a project).
 **Sources (user tools, stored in `documents/Tools/`):** `ConvergenceFunctions/` (`SimplePDropConvergence`, `convergenceControl`, `pressureLossMonitors`, `plotConvergence.py`), `VorticityFunction/` (`postVorticity.sh`, Q-core RMS method: `vorticityRMSFields`, `topoSetDict.vorticityRMS`, `vorticityRMSMetric`, `calculateVorticityRMS.py`).

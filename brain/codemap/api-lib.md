@@ -65,6 +65,20 @@ Single operational error class of the API. `AppError(status, code, message, deta
 **Depends on**: `cfMeshDicts`, `snappyDicts` (minimal dicts), `stlMerge`, `meshPipelineRun`, `openfoamCommand`, `config/env`. **Used by**: `modules/meshing/meshing.service.ts`.
 **Notes**: env: `CARTESIAN_MESH_BIN`, `CHECK_MESH_BIN`, `SURFACE_FEATURE_EDGES_BIN`, `CFMESH_STEP_TIMEOUT_MS`. The choice to merge in TypeScript (not `surfaceAdd`) is motivated by unreliable behavior on the deployment machine. Files in `.work` do not appear as input surfaces.
 
+## `apps/api/src/lib/cfdCriteria.ts`
+**Role**: pure renderers for the solver convergence criteria and vortex metrics (WS-G, spec `brain/specs/2026-09-30-solver-convergence-vorticity-design.md`). Embeds the user's `documents/Tools/ConvergenceFunctions` files verbatim and substitutes only their USER INPUTS; renders DIVE's own `diveVortexMetrics` coded function object; manages the `#include` lines of controlDict `functions { }` and the residualControl comment-out.
+**Exports**:
+- `MANAGED_INCLUDES` (`pressureLossMonitors`, `SimplePDropConvergence`, `convergenceControl`, `diveVortexMetrics`, in include order), `ManagedInclude`, `DIVE_RESIDUAL_MARKER`.
+- `cppScalar(value)`. C++ scalar literal (`50.0`, `1e-3`, `0.03`), the tools' own spelling so the defaults render byte-identical.
+- `renderPressureLossMonitors(c)` (patch names in `name  inlet;` / `name  outlet;`, `rhoInf`), `renderSimplePDropConvergence(c)` (inletPatch, outletPatch, window, devTol, nPass), `renderConvergenceControl(c)` (inletPatch, outletPatch, W, tolMean, K, resTol, and the `*1000.0` kinematic-to-Pa factor = `rho`), `renderDiveVortexMetrics(v)` (interval, velocity field, qThreshold, wallDistance, qCrit, vMin, writeFields). A template drift throws.
+- `defaultCfdCriteria(patches)`. `DEFAULT_CFD_CRITERIA` with `inlet`/`outlet` when present, else the first two `patch`-type patches; fewer than two ⇒ method `residuals`.
+- `patchProblem(c, patchNames)`. Message when a patch is empty, unknown, or inlet = outlet; else null.
+- `planCriteriaInstall(settings, patchNames): CriteriaInstallPlan` (`files`, `includes`, `residualControl: 'disable' | 'restore'`). Monitors for the pressure methods, and for `residuals` + vortex on when the patch pair is usable. Throws 422 `CRITERIA_INVALID` for a pressure method with a bad pair.
+- `readManagedIncludes(controlDict)`, `setManagedIncludes(controlDict, includes)`. Removes every managed include line, inserts the wanted ones first in `functions { }` (created before the footer when missing and needed); unrelated entries untouched; idempotent.
+- `disableResidualControl(fvSolution)` / `restoreResidualControl(fvSolution)`. Wraps the first `residualControl { }` block in `/* DIVE convergence: residualControl disabled (robust criterion)\n … \n*/` and restores it verbatim (`*/` inside the block escaped as `*\/`). Idempotent.
+**Depends on**: `@dive/shared` (`DEFAULT_CFD_CRITERIA`, types), `AppError`. **Used by**: `modules/projects/criteria.service.ts`.
+**Notes**: `tests/cfdCriteria.test.ts` compares the renders byte for byte with `documents/Tools/ConvergenceFunctions/*`: regenerate the embedded template strings when the user updates a tool. The vortex FO uses v2406-safe API only (`fvc::grad`, `fvc::curl`, `wallDist::New(mesh).y()`, `mesh.V()`, `reduce`), runs every `interval` iterations (`codeExecute`) and at write times (`codeWrite`, then writes `Q`, `vorticity`, `wallDistance`, `Qfiltered` with explicit current-time IOobjects), logs `diveVortexMetrics: time=… qVolume=… maskedQVolume=… omegaRms=… coreVolume=… coreCells=…` and appends rows to `postProcessing/diveVortexMetrics/<startTime>/vortexMetrics.dat` (`vortexMetrics_postProcess.dat` under `postProcess`). Compilation and output: to validate on the Debian server.
+
 ## `apps/api/src/lib/cgnsStorage.ts`
 **Role**: `fileTreeStorage` facade on `<STORAGE_DIR>/projects/<projectId>/cgns/`, which stores the CGNS sources (and the intermediate `.vtk` of the conversion) away from the case so that a case reset does not touch them. Uploaded names are flattened into a single segment.
 **Exports**:
@@ -259,6 +273,14 @@ Pure, defensive parsing of the patch names of a cfMesh input surface, for the pe
 **Exports**: `MeshingVizPaths`, `StoredMeshingVizManifest`, `meshingVizDir(sessionId)`, `meshingVizPaths(sessionId)`, `readMeshingVizGlb`, `readMeshingVizEdges`, `readMeshingVizManifest`, `meshingVizIsStale(sessionId)` (GLB or edges missing, or the resulting polyMesh's `boundary`/`points` newer than the GLB).
 **Depends on**: `meshingStorage`. **Used by**: `modules/meshing/meshing.service.ts`.
 
+## `apps/api/src/lib/monitorParser.ts`
+**Role**: pure parser of the WS-G monitor lines of a solver log (or a `postProcess` output): pressure drop per iteration, latest criterion progress, vortex metrics. Used by the run log payload and the on-demand vortex computation.
+**Exports**:
+- `parseMonitors(log, maxPoints = 4000): RunMonitors`. `surfaceFieldValue inlet_p0_flux|outlet_p0_flux write:` blocks (tolerant `weighted…(…) [of] pTotal = v`) paired per `Time =` iteration ⇒ `pressureDrop` (`dp0 = inlet - outlet`, Pa); fallback on the `dp0` printed by `SimplePDropConvergence` when no monitor pair is recognised; last `SimplePDropConvergence` line (filling or check) or `convergenceControl @ t: drift=… trend=… maxRes=… [mean:y slope:n res:y] pass p/K` line ⇒ `criterion`; `diveVortexMetrics:` lines ⇒ `vortex` (last line per time kept, sorted).
+- `downsampleSeries(samples, maxPoints = 4000)`. Generic version of the residual downsampling (recent half dense).
+**Depends on**: `@dive/shared` types. **Used by**: `runs.service.getRunLog`, `criteria.service.computeVortexOnDemand`.
+**Notes**: the exact v2406 wording of the `surfaceFieldValue` log lines is to validate on the server.
+
 ## `apps/api/src/lib/openfoamCase.ts`
 **Role**: purely textual OpenFOAM domain (no I/O). It defines the lists of required files, generates the `system/`, `constant/` dictionaries and the `0/` fields (generic skeleton or runnable case per solver, sensitive to the turbulence model), renders the BC presets per role and per DIVE component (turbine, pipe, draft tube, chamber), renders MRF / dynamicMesh / decomposeParDict, and provides tolerant parsers and surgical rewrites of `constant/polyMesh/boundary`, `cellZones` and the `boundaryField` blocks. Consumed by the file, mesh, BC and run services.
 **Depends on**: `@dive/shared` (`CONSTRAINT_PATCH_TYPES`, `GRAVITY`, `OBJECT_TYPE_TURBULENCE`, `SOLVER_CATALOG`, `turbulenceFieldsFor`, `turbulenceWallBc`, types `BoundaryConditionValues`, `ConfigurableSolverId`, `DrivingMode`, `ObjectType`). **Used by**: `meshImport`, `snappyPipeline` and the services `boundary`, `files`, `mesh`, `meshes`, `runs`.
@@ -337,8 +359,8 @@ Exports `prisma`, the single `PrismaClient` of the API (avoids multiple SQLite c
 ## `apps/api/src/lib/residualParser.ts`
 **Role**: pure parser of an OpenFOAM solver log into a time series of initial residuals plus convergence or divergence signals. The same parser serves the live stream and the full catch-up, so a reload rebuilds exactly the live view.
 **Exports**:
-- `ParsedResiduals`. `{ samples: ResidualSample[], diverged, converged, foamError, lastTime }`.
-- `parseResiduals(log): ParsedResiduals`. One sample per `Time = <n>` header (fallback index if not finite); for each `Solving for <field>, Initial residual = <v>` line: `nan`/`inf` (any case) sets `diverged` and does not record the point; a leading `(` is stripped (ESI vector residuals); a non-numeric token is ignored (not a divergence). `converged` on `solution converged in N iterations`; `foamError` on `FOAM FATAL`, `Floating point exception` or `#0 Foam::error`. Samples without values are discarded.
+- `ParsedResiduals`. `{ samples: ResidualSample[], diverged, converged, convergedBy, foamError, lastTime }`; `convergedBy` is `'residuals'`, `'simplePDrop'` or `'robust'` (null without a banner).
+- `parseResiduals(log): ParsedResiduals`. One sample per `Time = <n>` header (fallback index if not finite); for each `Solving for <field>, Initial residual = <v>` line: `nan`/`inf` (any case) sets `diverged` and does not record the point; a leading `(` is stripped (ESI vector residuals); a non-numeric token is ignored (not a divergence). `converged` on `solution converged in N iterations` (`convergedBy: residuals`) or on the WS-G banners `SimplePDropConvergence: CONVERGED` / `convergenceControl: CONVERGED` (`simplePDrop` / `robust`, which win over an earlier residual banner); `foamError` on `FOAM FATAL`, `Floating point exception` or `#0 Foam::error`. Samples without values are discarded.
 - `downsampleResiduals(samples, maxPoints = 4000)`. Keeps the recent half dense and decimates the history at a regular step.
 **Depends on**: type `ResidualSample`. **Used by**: `modules/projects/runs.service.ts`.
 **Notes**: only the initial residual is kept (the final one is a linear solver detail). Do not mark an unreadable token as "diverged": that caused false diagnoses on runs that had reached their maximum iteration count.

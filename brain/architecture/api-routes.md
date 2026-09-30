@@ -175,8 +175,19 @@ Codes found in `runs.service`: 404 `RUN_NOT_FOUND`, 409 `NO_MESH`, 409 `RUN_IN_P
 | GET | `/api/v1/projects/:id/runs` | Visible | `listRunsController` → `listRuns` | params | `200 { runs }` |
 | POST | `/api/v1/projects/:id/runs` | Visible | `startRunController` → `startRun` | params + body `startRunSchema` (`solver?` ∈ `SOLVER_IDS`, `cores?` 1..1024 coerced) | `201 { run }` |
 | GET | `/api/v1/projects/:id/runs/:runId` | Visible | `getRunController` → `getRun` | `runIdParamSchema` | `200 { run }` |
-| GET | `/api/v1/projects/:id/runs/:runId/log` | Visible | `getRunLogController` → `getRunLog` | `runIdParamSchema` | `200` (run + residual series + log tail) |
+| GET | `/api/v1/projects/:id/runs/:runId/log` | Visible | `getRunLogController` → `getRunLog` | `runIdParamSchema` | `200` (run + residual series + log tail + `monitors` { pressureDrop, criterion, vortex }) |
 | POST | `/api/v1/projects/:id/runs/:runId/stop` | Visible | `stopRunController` → `stopRun` | `runIdParamSchema` | `200 { run }` |
+
+`POST /runs` also answers 422 `CRITERIA_INVALID` when the saved convergence criteria no longer fit the mesh (they are re-installed before every spawn).
+
+### Convergence criteria and vortex metrics (WS-G)
+Codes found in `criteria.service`: 409 `RUN_IN_PROGRESS`, 409 `NO_RESULTS`, 422 `CRITERIA_INVALID`, 502 `POSTPROCESS_FAILED`. Spec: `brain/specs/2026-09-30-solver-convergence-vorticity-design.md`.
+
+| Method | Path | Access | Controller → service | Validation | Response | Notable codes |
+|---------|--------|-------|----------------------|------------|---------|---------------|
+| GET | `/api/v1/projects/:id/criteria` | Visible | `getCriteriaController` → `getCriteria` | params | `200 { criteria, patches, applicable, installed }` | 404 |
+| PUT | `/api/v1/projects/:id/criteria` | Visible | `saveCriteriaController` → `saveCriteria` | params + body `saveCriteriaSchema` (= shared `cfdCriteriaSchema`) | `200 { criteria, installed }` | 409 `RUN_IN_PROGRESS`, 422 `CRITERIA_INVALID`, 422 `VALIDATION_ERROR` |
+| POST | `/api/v1/projects/:id/criteria/vortex` | Visible | `computeVortexController` → `computeVortexOnDemand` | params | `200 { vortex }` (postProcess at the latest time) | 409 `RUN_IN_PROGRESS`, 409 `NO_RESULTS`, 502 `POSTPROCESS_FAILED` |
 
 ### Terminal (WebSocket)
 

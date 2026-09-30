@@ -97,6 +97,12 @@ import {
   scaffoldSolverSchema,
 } from './files.schemas';
 import { runIdParamSchema, startRunSchema } from './runs.schemas';
+import {
+  computeVortexController,
+  getCriteriaController,
+  saveCriteriaController,
+} from './criteria.controller';
+import { saveCriteriaSchema } from './criteria.schemas';
 import { cgnsNameQuerySchema, convertCgnsSchema } from './conversion.schemas';
 import {
   meshIdParamSchema,
@@ -513,6 +519,25 @@ export function createProjectsRouter(): Router {
     '/:id/runs/:runId/stop',
     validate({ params: runIdParamSchema }),
     asyncHandler(stopRunController),
+  );
+
+  // Convergence criteria + vortex metrics ("Solver" tab, WS-G): per-project
+  // settings installed into the case on save and at every run start, and the
+  // on-demand vortex metrics at the latest time.
+  router.get(
+    '/:id/criteria',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(getCriteriaController),
+  );
+  router.put(
+    '/:id/criteria',
+    validate({ params: projectIdParamSchema, body: saveCriteriaSchema }),
+    asyncHandler(saveCriteriaController),
+  );
+  router.post(
+    '/:id/criteria/vortex',
+    validate({ params: projectIdParamSchema }),
+    asyncHandler(computeVortexController),
   );
 
   return router;

@@ -1,3 +1,10 @@
+import type {
+  CfdCriteriaResponse,
+  CfdCriteriaSettings,
+  SaveCfdCriteriaResponse,
+  VortexMetricsSample,
+  VortexOnDemandResponse,
+} from '@dive/shared';
 import { ApiError, apiClient } from './client';
 import type {
   ApplyDecision,
@@ -428,4 +435,25 @@ export async function getRunLog(id: string, runId: string): Promise<RunLogPayloa
 export async function stopRun(id: string, runId: string): Promise<RunSummary> {
   const data = await apiClient.post<RunResponse>(`/projects/${id}/runs/${runId}/stop`);
   return data.run;
+}
+
+// ---- Convergence criteria + vortex metrics ("Solver" tab, WS-G) ----
+
+/** Read the project's convergence criteria (or defaults), mesh patches and applicability. */
+export async function getCriteria(id: string): Promise<CfdCriteriaResponse> {
+  return apiClient.get<CfdCriteriaResponse>(`/projects/${id}/criteria`);
+}
+
+/** Save the convergence criteria (installed into the case for steady incompressible solvers). */
+export async function saveCriteria(
+  id: string,
+  criteria: CfdCriteriaSettings,
+): Promise<SaveCfdCriteriaResponse> {
+  return apiClient.put<SaveCfdCriteriaResponse>(`/projects/${id}/criteria`, criteria);
+}
+
+/** Compute the vortex metrics at the latest time (postProcess on the server). */
+export async function computeVortexMetrics(id: string): Promise<VortexMetricsSample> {
+  const data = await apiClient.post<VortexOnDemandResponse>(`/projects/${id}/criteria/vortex`);
+  return data.vortex;
 }

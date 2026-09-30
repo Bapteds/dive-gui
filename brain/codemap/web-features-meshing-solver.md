@@ -1,11 +1,11 @@
 # Codemap: Web: meshing + solver features
 
-> Scope: `apps/web/src/features/meshing/**`, `apps/web/src/features/solver/**` · Updated: 2026-09-28
+> Scope: `apps/web/src/features/meshing/**`, `apps/web/src/features/solver/**` · Updated: 2026-09-30
 
 ## Overview
 Two independent front-end features that share the same "background job + polling" model.
 **Meshing**: standalone mesh sessions (engine `snappy` or `cfmesh`, fixed at creation). `useMeshing.ts` holds all the TanStack Query hooks (keys under `['meshing', ...]`, endpoints `/meshing/*`). The pages `apps/web/src/pages/MeshingPage.tsx` and `MeshingSessionPage.tsx` (out of scope) orchestrate: STL/FMS upload, config form (`SnappyConfigForm` or `CfMeshConfigForm`, autosave debounced 800 ms), run launch, live log (via `RunLog` from the solver feature), then 3D preview (`StlViewer` before meshing, `MeshResultViewer` after).
-**Solver**: the "Solver" tab of a project (`SolverTab`, lazy-loaded by `ProjectDetailPage`). Flow: `useRunnableQuery` decides between the setup wizard (`SolverSetupWizard`: solver, turbulence, then the `SolverFilesStep` file editor), the "not runnable" gate, or the runnable panel (`SolverConfigPanel` + live run with `ResidualChart`/`RunLog` + `RunHistory`). Runs are polled every 1,200 ms while active (`useRuns.ts`, keys under `['projects', id, ...]`).
+**Solver**: the "Solver" tab of a project (`SolverTab`, lazy-loaded by `ProjectDetailPage`). Flow: `useRunnableQuery` decides between the setup wizard (`SolverSetupWizard`: solver, turbulence, then the `SolverFilesStep` file editor), the "not runnable" gate, or the runnable panel (`SolverConfigPanel` with its `ConvergenceSettings` section + live run with `ResidualChart`, `PressureDropChart`, `VortexChart`, `RunLog` + `RunHistory`). Convergence criteria (WS-G) go through `useCriteria.ts` (key `['projects', id, 'criteria']`). Runs are polled every 1,200 ms while active (`useRuns.ts`, keys under `['projects', id, ...]`).
 Two project tools also live in `solver/` but are mounted by `features/projects/CaseFilesSection.tsx`: `TopoSetDialog` (writes `system/topoSetDict`) and `TurbulenceCalculatorDialog` (k/epsilon/omega seeds).
 Case file edits go through `features/projects/useCaseFiles` + `features/projects/foamModel` (splicing a value into the OpenFOAM dictionary while preserving the rest).
 
@@ -97,6 +97,26 @@ Case file edits go through `features/projects/useCaseFiles` + `features/projects
 - Prefix pitfall: `invalidateQueries({ queryKey: ['meshing'] })` (list) matches by prefix every active meshing query (details, log, manifest, glb, edges, STL buffers) and refetches them. Same for `meshingSessionKey(id)`, which covers the session's log and STL buffers. No invalidation uses `exact: true`.
 - The `useStartMeshing` comment says the log is "reset", but it is an invalidation (refetch), not a reset of the data.
 
+## `apps/web/src/features/solver/ConvergenceSettings.test.tsx`
+**Covers**: collapsed by default with a method summary; simple criterion fields at the tool defaults and patch selects; robust fields with the residual floor help; Save sends the edited criteria (band in % converted back to a fraction, patch, vortex field); invalid value blocks the save with a message; vortex fields hidden when tracking is off; non-applicable solver message; every control locked while a run is active.
+**Technique**: `vi.mock('@/lib/api/projects')` (`getCriteria`, `saveCriteria` echo) and the toast; real `QueryClient`.
+
+## `apps/web/src/features/solver/ConvergenceSettings.tsx`
+**Role**: the "Convergence criteria" section of `SolverConfigPanel` (WS-G): an inline disclosure (collapsed header states the method and whether vortex metrics are on) with the method radios (`RadioCardGroup`: SimplePDropConvergence, convergenceControl, residualControl), the method's numeric fields with unit and help (deviation band edited in %), inlet / outlet `NativeSelect`, density, the Vortex metrics block (checkbox, velocity field, Q threshold, wall distance, Q core threshold, minimum cell volume, interval, write fields) and one secondary `Save criteria` button.
+**Exports**:
+- `ConvergenceSettings` (props: `projectId`, `active`). `useCriteriaQuery` (skeleton, `ErrorState` + retry, "Convergence criteria apply to steady incompressible solvers (simpleFoam)." when not applicable); internal `CriteriaForm` (`useSaveCriteria`, string form state, per-field validation with focus on the first error, re-seeded from the server only when not dirty, status line "Unsaved changes." / "Installed in the case…").
+**Depends on**: `useCriteria`, `RadioCardGroup`, `NativeSelect`, `Button`, `ErrorState`, `toast`, `@dive/shared`. **Used by**: `SolverConfigPanel`.
+**Notes**: the zone's single orange CTA stays `Run solver`; the whole form is a `fieldset disabled` while a run is active. The help text under the residual gate is the tool README's resTol caveat.
+
+## `apps/web/src/features/solver/PressureDropChart.test.tsx`
+**Covers**: empty state; latest Δp₀ in Pa and head in m (`Δp₀ / (ρ g)`); simple progress ("34 / 100 consecutive iterations within ±3 %"), window filling, robust check line; "Last 500 iterations" zoom (range in the SVG label); values table.
+
+## `apps/web/src/features/solver/PressureDropChart.tsx`
+**Role**: hand-made SVG chart of the pressure drop Δp₀ per iteration (WS-G): Δp₀ (solid blue), trailing mean over the criterion window (dashed grey, computed client-side by index) and, for `simplePDrop`, the ±devTol band (blue tint); header with the latest Δp₀ (Pa), the head H (m) and the criterion progress; `SegmentedRadioGroup` zoom "All iterations" / "Last 500 iterations"; legend and a "Show pressure drop values" table (last 100 rows).
+**Exports**: `PressureDropChart` (props: `samples`, `criterion`, `convergence`).
+**Depends on**: `chartUtils`, `SegmentedRadioGroup`, `GRAVITY`. **Used by**: `SolverTab` (`LiveRun`).
+**Notes**: the trailing mean uses the downsampled series (exact below 4,000 points); the settings are the project's current ones, not a snapshot of the run.
+
 ## `apps/web/src/features/solver/RadioCardGroup.tsx`
 **Role**: accessible group of "radio cards" (real radios hidden as `sr-only` inside a `fieldset`/`legend`, native keyboard navigation). Selection in brand blue (tint + border + filled dot), never in orange.
 **Exports**:
@@ -148,7 +168,7 @@ Component `RunStatusBadge({ status, className = '' })`: pill (border + tinted ba
   - `AdvancedConfig`: `ApplicationField` (free `application` field written to `system/controlDict`) + selection of a real config file (`useCaseFilesQuery`, filtered by `isConfigFile`, order: the catalog's `requiredFiles` or `DEFAULT_SOLVER_FILES`, then the rest sorted) and `RawFileEditor`.
   - `RawFileEditor`: `CaseFileEditor` (CodeMirror) with a local draft and 600 ms debounced autosave; `RawSaveStatus` (Save failed / Saving… / Editing… / All changes saved).
   - `ModeToggle` / `ModeButton` (`aria-pressed`), `BaseSetupHint`, `ManualEasyNote`, `clampCores`, `readStoredCores`, `writeStoredCores`, `DEFAULT_SOLVER_FILES`, `isConfigFile`.
-**Depends on**: `useScaffoldSolver` (`./useRuns`), `useCaseFileContentQuery` / `useCaseFilesQuery` / `useSaveCaseFile` / `caseFileContentQueryKey` (`features/projects/useCaseFiles`), `foamModel`, `CaseFileEditor`, `SolverBrowserDialog`, `getCaseFileContent`, catalogs from `@/lib/api/types`, `toast`. **Used by**: `SolverTab` (`RunnablePanel`).
+**Depends on**: `ConvergenceSettings` (rendered under the solver summary, locked while active), `useScaffoldSolver` (`./useRuns`), `useCaseFileContentQuery` / `useCaseFilesQuery` / `useSaveCaseFile` / `caseFileContentQueryKey` (`features/projects/useCaseFiles`), `foamModel`, `CaseFileEditor`, `SolverBrowserDialog`, `getCaseFileContent`, catalogs from `@/lib/api/types`, `toast`. **Used by**: `SolverTab` (`RunnablePanel`).
 **Notes**:
 - The dialog ignores "outside" clicks coming from portaled content (popper, menu, dialog, alertdialog) so it does not close when the solver browser is open.
 - `RawFileEditor` only reloads the draft when `path` changes (fix H4: the save echo no longer overwrites typing). Consequence to verify: if the open file is rewritten elsewhere while the editor is mounted (for example `Apply` in `ChangeSolver`, which invalidates `['projects', id, 'files']` and therefore the content), `query.data` changes, the draft stays the old one and the autosave effect sends it back to the server, which could undo the scaffold rewrite.
@@ -176,7 +196,7 @@ Component `RunStatusBadge({ status, className = '' })`: pill (border + tinted ba
 - Warning if an LES model is chosen with a `steady` regime solver.
 
 ## `apps/web/src/features/solver/SolverTab.test.tsx`
-**Covers**: the full wizard journey (`simpleFoam` + `kOmegaSST` defaults, scaffold then `syncBoundaries`, opening "Edit case files"), choosing `pimpleFoam` via the browser and `realizableKE` at step 2, the runnable panel (config, `Configure` button, cores, empty history, `startRun('p1', { cores: 1 })`), a parallel run on 4 cores, persistence of cores after unmount/remount (localStorage), applying a turbulence model via the scaffold from the config overlay (without `saveCaseFileContent`), and the display of a converged run (badge, banner, "Show residual values" button).
+**Covers**: the full wizard journey (`simpleFoam` + `kOmegaSST` defaults, scaffold then `syncBoundaries`, opening "Edit case files"), choosing `pimpleFoam` via the browser and `realizableKE` at step 2, the runnable panel (config, `Configure` button, cores, empty history, `startRun('p1', { cores: 1 })`), a parallel run on 4 cores, persistence of cores after unmount/remount (localStorage), applying a turbulence model via the scaffold from the config overlay (without `saveCaseFileContent`), the display of a converged run (badge, banner, "Show residual values" button), the WS-G convergence section and pressure drop / vortex charts with "Compute at latest time" on a terminal run, and the criteria locked (no compute) while a run is active.
 **Technique**: `vi.mock('@/lib/api/projects')` (runnable, scaffold, syncBoundaries, runs, log, case files) and `vi.mock` of the toast; real `QueryClient` (`retry: false`); `createMemoryRouter` + `RouterProvider` for the `useBlocker` of `FileTreeEditor`; `localStorage.clear()` before each test; default `controlDict` content for all files.
 **Notable cases**: no real polling or network. `pimpleFoam` is targeted via the unique text "URANS" in the browser.
 
@@ -187,12 +207,20 @@ Component `RunStatusBadge({ status, className = '' })`: pill (border + tinted ba
 - Internal:
   - `NotRunnableGate` (list of missing files + CTA `Configure the solver`).
   - `SolverSkeleton`.
-  - `RunnablePanel`: `useRunsQuery`, current run = `runs.data[0]`, `useRunLogQuery(projectId, currentRun.id)`. The freshest status comes from the log payload, with fallback to the list. `useStartRun` (`mutateAsync({ cores })`), `useStopRun` (`mutateAsync(currentRun.id)`), error toasts. Renders `SolverConfigPanel`, `LiveRun`, History section.
-  - `LiveRun`: `role="status"` badge, `Elapsed`, last iteration, `Stop run` button (danger-tinted secondary) if active, `RunBanner` if terminal, `ResidualChart`, `RunLog`.
+  - `RunnablePanel`: `useRunsQuery`, current run = `runs.data[0]`, `useRunLogQuery(projectId, currentRun.id)`. The freshest status comes from the log payload, with fallback to the list. `useStartRun` (`mutateAsync({ cores })`), `useStopRun` (`mutateAsync(currentRun.id)`), error toasts. WS-G: `useCriteriaQuery` (chart settings, `applicable`), `useComputeVortex` (the on-demand sample is merged into the run's vortex series, success / error toast), `monitors` from the log payload (`EMPTY_MONITORS` fallback). Renders `SolverConfigPanel`, `LiveRun`, History section.
+  - `LiveRun`: `role="status"` badge, `Elapsed`, last iteration, `Stop run` button (danger-tinted secondary) if active, `RunBanner` if terminal, `ResidualChart`, `PressureDropChart` (when the log has a pressure drop or a criterion line), `VortexChart` (when it has samples, or on a terminal run of an applicable solver for "Compute at latest time"), `RunLog`.
   - `RunBanner`: message per status (or `run.reason`), `role="alert"` for `failed`.
   - `Elapsed`: re-renders every second while active; `formatClock` (`mm:ss` or `h:mm:ss`).
 **Depends on**: `useRuns`, `SolverSetupWizard`, `SolverConfigPanel`, `ResidualChart`, `RunHistory`, `RunLog`, `RunStatusBadge`, `runStatusMeta`, `toast`. **Used by**: `pages/ProjectDetailPage.tsx` (lazy import), test `SolverTab.test.tsx`.
 **Notes**: `runnable` is not re-invalidated by `useStartRun`; after the wizard, it is `useScaffoldSolver` (`setQueryData`) and `useSyncBoundaries` (invalidation of `['projects', id, 'runnable']`) that bring `runnable` up to date.
+
+## `apps/web/src/features/solver/VortexChart.test.tsx`
+**Covers**: empty state; latest masked Q volume (m³) and RMS vorticity (1/s); "Compute at latest time" shown only with `canCompute` and calling `onCompute`; values table.
+
+## `apps/web/src/features/solver/VortexChart.tsx`
+**Role**: hand-made SVG chart of the vortex metrics (WS-G): masked Q volume on the left axis (solid blue, round markers) and RMS vorticity in the Q core on the right axis (dashed brand orange stroke, square markers), both axes labelled with their unit; header with the latest values and iteration; secondary "Compute at latest time" button; legend and "Show vortex metric values" table.
+**Exports**: `VortexChart` (props: `samples`, `canCompute`, `computing`, `onCompute`).
+**Depends on**: `chartUtils`, `Button`. **Used by**: `SolverTab` (`LiveRun`).
 
 ## `apps/web/src/features/solver/TopoSetDialog.tsx`
 **Role**: project tool (button in the "Case files" bar) that writes `system/topoSetDict`, read by `topoSet` to create cellSets / cellZones (e.g. the rotor cellZone of a Frozen Rotor). Never runs `topoSet`: that step stays manual on the OpenFOAM server.
@@ -222,6 +250,9 @@ Component `RunStatusBadge({ status, className = '' })`: pill (border + tinted ba
 ## `apps/web/src/features/solver/TurbulencePicker.tsx`
 Component `TurbulencePicker({ value, onChange, disabled = false, name = 'turbulence' })`: one `RadioCardGroup` per approach in `TURBULENCE_APPROACHES` (Laminar/DNS, RANS, LES/DES), fed by `TURBULENCE_MODELS` filtered by `simulationType`. All groups share the same `name`: only one model selected overall. An empty group is not rendered. Used by `SolverSetupWizard` (step 2).
 
+## `apps/web/src/features/solver/chartUtils.ts`
+Helpers of the WS-G SVG charts: `useMeasuredWidth(ref, initial = 680)` (ResizeObserver), `niceTicks(min, max, count)` (1/2/5 steps), `formatValue(v)` (4 significant digits, exponent below 1e-3 or from 1e7), `iterationTicks(xMin, xMax, count)`. `ResidualChart` keeps its own log-axis code.
+
 ## `apps/web/src/features/solver/runStatusMeta.ts`
 **Role**: shared presentation of a `RunStatus` (label, lucide icon, spin, badge classes), used by the badge and the banner. Palette: primary blue for `running`, success for `converged`, orange family (`text-cta` for AA) for `completed` and `diverged`, danger for `failed`, neutral for `queued` / `stopped`.
 **Exports**:
@@ -229,6 +260,15 @@ Component `TurbulencePicker({ value, onChange, disabled = false, name = 'turbule
 - `runStatusMeta: Record<RunStatus, RunStatusMeta>` (queued, running, converged, completed, diverged, failed, stopped).
 **Used by**: `RunStatusBadge`, `SolverTab` (`RunBanner`).
 **Notes**: `pages/MeshingSessionPage.tsx` defines its own local `runStatusMeta` table instead of reusing this one.
+
+## `apps/web/src/features/solver/useCriteria.ts`
+**Role**: TanStack Query hooks of the convergence criteria (WS-G).
+**Exports**:
+- `criteriaQueryKey(projectId)` = `['projects', projectId, 'criteria']`.
+- `useCriteriaQuery(projectId, enabled?)` (`GET /projects/:id/criteria`, `staleTime` 10 s).
+- `useSaveCriteria(projectId)` (`PUT`; `setQueryData` with the echo, invalidates `['projects', id, 'files']` since system/ files were rewritten).
+- `useComputeVortex(projectId)` (`POST /criteria/vortex`, resolves the `VortexMetricsSample`).
+**Used by**: `ConvergenceSettings`, `SolverTab`.
 
 ## `apps/web/src/features/solver/useRuns.ts`
 **Role**: TanStack Query hooks for the Solver tab. The server pushes nothing: the client polls while a run is active, then stops (idle tab stays quiet). Each poll is a full authenticated GET (survives reloads).
