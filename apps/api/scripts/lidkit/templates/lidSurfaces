@@ -1,0 +1,18 @@
+// lidSurfaces — LID ITERATION KIT: export the lid (free-surface) patch and the inlet patch as legacy ASCII VTK with the
+// face values of p and U.  lidkit_surface.py reads postProcessing/lidSurfaces/<t>/{lid,inlet}.vtk.
+//   postProcess -func lidSurfaces -latestTime
+lidSurfaces
+{
+    type            surfaces;
+    libs            (sampling);
+    writeControl    writeTime;
+    surfaceFormat   vtk;
+    formatOptions   { vtk { legacy true; format ascii; } }
+    fields          (p U);
+    interpolationScheme cell;
+    surfaces
+    (
+        lid     { type patch; patches (@ATMOSPHERE@); interpolate false; }
+        inlet   { type patch; patches (@INLET@);      interpolate false; }
+    );
+}

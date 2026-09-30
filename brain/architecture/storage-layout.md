@@ -42,12 +42,18 @@ Nothing under `STORAGE_DIR` is purged by a periodic job: deletion is always trig
 │   │   ├── convert.py                    copy of the conversion script
 │   │   ├── profile.json  validation.json
 │   │   ├── session.cse  LOAD_CFDPOST.md  REPORT.md
-│   └── backups/                          single backup slot (meshBackupStorage)
-│       ├── case/                         full copy of case/
-│       └── mesh-backup.json              { createdAt, updatedAt, kind: original|manual }
+│   ├── backups/                          single backup slot (meshBackupStorage)
+│   │   ├── case/                         full copy of case/
+│   │   └── mesh-backup.json              { createdAt, updatedAt, kind: original|manual }
+│   ├── mesh-origin.json                  { sessionId, sessionName, engine, chamberHash, at } (meshOriginStorage, WS-I)
+│   └── freesurface/                      free-surface jobs (freeSurfaceStorage, WS-I)
+│       ├── patch-levels.json             flatness cache of the case patches (key = mesh files size + mtime)
+│       └── <jobId>/                      job.json (atomic), base.stl, export_iter<j>/{lid,inlet}.vtk,
+│                                         zs_iter<j>.{npy,json}, geometry/domain_lidIter<k>.{stl,json,png},
+│                                         lid_iter<j>.{png,json}, logs/
 ├── templates/<templateId>/files/<free tree>   file templates (templateStorage)
 ├── meshing/<sessionId>/                  standalone meshing session = OpenFOAM case (meshingStorage)
-│   ├── meta.json                         { id, name, engine, createdAt }
+│   ├── meta.json                         { id, name, engine, createdAt, origin?: { chamberHash } }
 │   ├── config.json                       autosaved form config
 │   ├── run.json                          last MeshingRun (step report)
 │   ├── status.json                       run state (written via status.json.tmp + rename)
@@ -60,6 +66,7 @@ Nothing under `STORAGE_DIR` is purged by a periodic job: deletion is always trig
 │   └── .viz/{patches.glb, manifest.json, edges.bin}   result render (meshingVizStorage)
 └── chamber/<hash16>/                     global chamber generator cache (chamberStorage)
     ├── params.json                       resolved parameters (input of buildChamber.py)
+    ├── input.json                        the ChamberInput behind the key (metadata, not hashed; WS-I)
     ├── chamber.glb                       render (one node per patch) = "built" marker
     ├── manifest.json                     MeshPatch[]
     ├── edges.bin                         float32 edge segments
@@ -130,6 +137,15 @@ The folder names `viz`, `runs`, `export`, `chamber` come from shared constants (
 - **Read by**: `readBackupMeta`, `backupExists`, `restoreBackup` (`clearCase` then reverse copy).
 - **Lifecycle**: a single slot; `createdAt` preserved across overwrites.
 - **Atomicity**: none. A crash during `writeBackup` leaves a partial copy with an old `mesh-backup.json` still present; a crash during `restoreBackup` leaves an empty or partial `case/`.
+
+### `projects/<id>/mesh-origin.json`
+- **Written by**: `mesh.service.importMeshFromMeshing` (case target) after `replaceCasePolyMesh` (atomic tmp + rename).
+- **Deleted by**: `caseStorage.replaceCasePolyMesh` and `clearCase` (reset, backup restore), `files.service.importCaseFiles` when a `constant/polyMesh/` file is written, the CGNS conversion (after `vtkUnstructuredToFoam`).
+- **Read by**: `GET /projects/:id/mesh-origin`, the free-surface readiness (default source session), WS-H.
+
+### `projects/<id>/freesurface/`
+- **Written by**: `freeSurface.service` (job runner) through `freeSurfaceStorage` (`writeJob` tmp + rename) and the kit scripts (outputs in the job dir).
+- **Lifecycle**: one directory per job, removed by `DELETE …/free-surface/:jobId` or with the project; a job left `running` is set `interrupted` at boot.
 
 ### `templates/<templateId>/files/`
 - **Written by**: `templateStorage` from `templates.service` (folder upload, zip, editing, move).

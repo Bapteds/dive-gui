@@ -206,6 +206,14 @@ const envSchema = z
     // builder). 30 to 90 s per run; the result is cached under
     // <STORAGE_DIR>/chamber-spiral/, so only a new set of spiral inputs pays it.
     CHAMBER_SPIRAL_TIMEOUT_MS: z.coerce.number().int().positive().default(300000),
+    // --- Free surface tool (project tab, WS-I) ---------------------------------
+    // Interpreter of the vendored lid iteration kit (scripts/lidkit/*.py: numpy +
+    // scipy + shapely, matplotlib optional for the figures). Empty => the
+    // CHAMBER_PYTHON_BIN value (that venv already has numpy + scipy + shapely).
+    LIDKIT_PYTHON_BIN: z.string().default(''),
+    // Wall-clock timeout (ms) of one kit step (postProcess lid export, surface,
+    // fit, figure). The mesh and the solve have their own limits.
+    LIDKIT_TIMEOUT_MS: z.coerce.number().int().positive().default(900000),
     // --- Draft-tube inlet profile (boundary-condition overlay) ----------------
     // The DraftTube object type maps a runner-exit velocity profile onto its inlet
     // via timeVaryingMappedFixedValue, which reads constant/boundaryData (NOT a CSV

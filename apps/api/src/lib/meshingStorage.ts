@@ -35,6 +35,13 @@ export interface MeshingMeta {
   engine: MeshingEngine;
   /** ISO 8601 creation timestamp. */
   createdAt: string;
+  /** Where the surfaces came from (a chamber build, WS-I §4); absent on older sessions. */
+  origin?: MeshingSessionOrigin;
+}
+
+/** The recorded source of a session's surfaces. */
+export interface MeshingSessionOrigin {
+  chamberHash: string;
 }
 
 /** Files produced/checked to decide whether a run yielded a usable polyMesh. */
@@ -157,6 +164,21 @@ export async function copySessionSetup(sourceId: string, name?: string): Promise
   return meta;
 }
 
+/**
+ * Record where the session's surfaces came from (additive meta.json field).
+ * Returns the updated metadata, or null when the session is absent.
+ */
+export async function setSessionOrigin(
+  sessionId: string,
+  origin: MeshingSessionOrigin,
+): Promise<MeshingMeta | null> {
+  const meta = await readMeta(sessionId);
+  if (!meta) return null;
+  const updated: MeshingMeta = { ...meta, origin };
+  await writeMeta(updated);
+  return updated;
+}
+
 /** Read one session's metadata, or null when absent/unreadable. */
 export async function readMeta(sessionId: string): Promise<MeshingMeta | null> {
   try {
@@ -168,7 +190,17 @@ export async function readMeta(sessionId: string): Promise<MeshingMeta | null> {
     const engine = MESHING_ENGINES.includes(parsed.engine as MeshingEngine)
       ? (parsed.engine as MeshingEngine)
       : 'snappy';
-    return { id: parsed.id, name: parsed.name, engine, createdAt: parsed.createdAt };
+    const origin =
+      parsed.origin && typeof parsed.origin.chamberHash === 'string'
+        ? { chamberHash: parsed.origin.chamberHash }
+        : undefined;
+    return {
+      id: parsed.id,
+      name: parsed.name,
+      engine,
+      createdAt: parsed.createdAt,
+      ...(origin ? { origin } : {}),
+    };
   } catch {
     return null;
   }

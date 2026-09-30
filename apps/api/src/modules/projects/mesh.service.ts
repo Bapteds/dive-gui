@@ -45,6 +45,7 @@ import {
   type MeshBackupInfo,
   type MeshFromMeshingResult,
   type MeshManifest,
+  type MeshOrigin,
   type MeshPatchEdit,
   type MeshPatchSetting,
 } from '@dive/shared';
@@ -82,6 +83,7 @@ import {
   writeBackup,
 } from '../../lib/meshBackupStorage';
 import { clearAppliedAssembly, meshWorkRoot } from '../../lib/meshStorage';
+import { readMeshOrigin, writeMeshOrigin } from '../../lib/meshOriginStorage';
 import { assertProjectVisible, type Viewer } from './projects.service';
 import { scaffoldCase, syncBoundaryFields } from './files.service';
 
@@ -895,6 +897,14 @@ export async function importMeshFromMeshing(
       : null;
 
     await replaceCasePolyMesh(projectId, staged);
+    // Record where the case mesh came from (replaceCasePolyMesh cleared any older record).
+    await writeMeshOrigin(projectId, {
+      sessionId: session.id,
+      sessionName: session.name,
+      engine: session.engine,
+      chamberHash: session.origin?.chamberHash ?? null,
+      at: new Date().toISOString(),
+    });
     // The case mesh is no longer an applied assembly: Disassemble must not offer a
     // stale plan.
     await clearAppliedAssembly(projectId);
@@ -931,4 +941,14 @@ export async function importMeshFromMeshing(
   } finally {
     await fs.rm(stageRoot, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+/**
+ * The recorded origin of the project's current case mesh (GET
+ * /projects/:id/mesh-origin), or null when the mesh did not come from a meshing
+ * session or was replaced since. @throws 404 NOT_FOUND if the project is not visible.
+ */
+export async function getMeshOrigin(viewer: Viewer, projectId: string): Promise<MeshOrigin | null> {
+  await assertProjectVisible(viewer, projectId);
+  return readMeshOrigin(projectId);
 }

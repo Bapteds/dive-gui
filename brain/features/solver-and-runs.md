@@ -67,6 +67,9 @@ Immediate `queued` response, then `launchParallelRun` in the background: "Decomp
 ### Stop
 `useStopRun` → `POST /runs/:runId/stop` → `stopRun` (see §3); `onExit` then triggers `finalizeRun`, which classifies as `stopped`.
 
+### Completion hook (WS-I)
+`awaitRunTerminal(runId)` resolves with the run once terminal: woken by `finalizeRun`, `failRun` and the handle-less stop, with a row poll fallback (2 s); already-terminal rows resolve at once. Used by `lib/pipelineStages.solveCase` (free-surface job). While a free-surface job runs, `POST /runs` answers 409 `FREE_SURFACE_IN_PROGRESS` (`brain/features/free-surface.md`).
+
 ### Reconciliation at boot (H1)
 `server.ts` launches `reconcileOrphanRuns()` without awaiting it: for each active run with a `pid`, `killOrphanIfOurs` reads `/proc/<pid>/cmdline`, only kills if the command line contains the case folder (SIGTERM then SIGKILL after the grace period; no-op outside Linux), then all active rows go to `failed` ("Interrupted by a server restart"). The log is kept.
 

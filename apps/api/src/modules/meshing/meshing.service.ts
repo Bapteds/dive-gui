@@ -58,6 +58,7 @@ import {
   readMeta,
   renameSession,
   readRun,
+  setSessionOrigin,
   readStl,
   sessionCaseDir,
   sessionDirAbsolute,
@@ -258,7 +259,10 @@ export async function importChamberIntoMeshing(input: FromChamberInput): Promise
     const meta = await copySessionSetup(input.sourceId, input.name);
     sessionId = meta.id;
   }
-  return addStlFiles(sessionId, uploads);
+  const session = await addStlFiles(sessionId, uploads);
+  // Remember the chamber build (the mesh origin carries it to the project, WS-I §4).
+  await setSessionOrigin(sessionId, { chamberHash: input.chamberHash });
+  return session;
 }
 
 /** Delete a session entirely. @throws 404 when absent. */
@@ -401,6 +405,46 @@ const activeMeshRuns = new Map<string, ActiveMeshRun>();
 /** Keep the polled log tail bounded on the wire while preserving the useful end. */
 const LOG_TAIL_CHARS = 20000;
 
+/** Completion waiters (awaitMeshingTerminal), keyed by session id. */
+const meshWaiters = new Map<string, Set<() => void>>();
+
+/** Wake the waiters of a session whose run just ended. */
+function notifyMeshingSettled(sessionId: string): void {
+  const waiters = meshWaiters.get(sessionId);
+  if (!waiters) return;
+  meshWaiters.delete(sessionId);
+  for (const wake of waiters) wake();
+}
+
+/**
+ * Resolve with the session's run status once no run of it is executing: the
+ * terminal status.json status (`succeeded` / `failed` / `stopped`), or `idle`
+ * for a session never meshed. Woken by the run finalizer; falls back to
+ * re-reading the status every `pollMs`. Used by the pipeline stages (WS-I, WS-H).
+ */
+export async function awaitMeshingTerminal(
+  sessionId: string,
+  pollMs = 2000,
+): Promise<MeshingRunStatus | 'idle'> {
+  for (;;) {
+    const state = await readMeshStatus(sessionId);
+    if (!activeMeshRuns.has(sessionId) && state?.status !== 'running') {
+      return state?.status ?? 'idle';
+    }
+    await new Promise<void>((resolve) => {
+      const waiters = meshWaiters.get(sessionId) ?? new Set<() => void>();
+      const wake = (): void => {
+        clearTimeout(timer);
+        waiters.delete(wake);
+        resolve();
+      };
+      const timer = setTimeout(wake, pollMs);
+      waiters.add(wake);
+      meshWaiters.set(sessionId, waiters);
+    });
+  }
+}
+
 /** Is a run for this session currently executing in this process? */
 export function isMeshRunActive(sessionId: string): boolean {
   return activeMeshRuns.has(sessionId);
@@ -493,6 +537,7 @@ async function finishMeshingRun(
   ).catch(() => undefined);
 
   activeMeshRuns.delete(sessionId);
+  notifyMeshingSettled(sessionId);
 }
 
 /**
@@ -556,6 +601,7 @@ export async function startMeshingRun(
       startedAt,
       finishedAt: new Date().toISOString(),
     }).catch(() => undefined);
+    notifyMeshingSettled(sessionId);
   });
 
   return { session: await assembleSession(meta), status: state };
@@ -614,6 +660,7 @@ export async function stopMeshingRun(sessionId: string): Promise<{ session: Mesh
         startedAt: state.startedAt,
         finishedAt: new Date().toISOString(),
       });
+      notifyMeshingSettled(sessionId);
     }
   }
   return { session: await assembleSession(meta) };

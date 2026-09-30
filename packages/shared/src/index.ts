@@ -673,6 +673,253 @@ export interface MeshFromMeshingResult {
 }
 
 /**
+ * Where the project's CURRENT case mesh came from, when it was sent from a meshing
+ * session (`POST /projects/:id/mesh/from-meshing`, case target). Stored as
+ * `projects/<id>/mesh-origin.json`; any other case-mesh replacement (import,
+ * conversion, merge, restore, reset) deletes it. `GET /projects/:id/mesh-origin`.
+ */
+export interface MeshOrigin {
+  sessionId: string;
+  sessionName: string;
+  engine: MeshingEngine;
+  /** The chamber build the session was filled from (`importChamberIntoMeshing`), if any. */
+  chamberHash: string | null;
+  /** ISO 8601 time of the hand-off. */
+  at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Free surface (lid iteration) tool, WS-I (spec 2026-09-30-free-surface-tool-design)
+// ---------------------------------------------------------------------------
+
+/** Allowed iteration counts (1 by default, 2 and 3 optional). */
+export const FREE_SURFACE_ITERATION_COUNTS = [1, 2, 3] as const;
+export type FreeSurfaceIterationCount = (typeof FREE_SURFACE_ITERATION_COUNTS)[number];
+
+/**
+ * Stages of one iteration, persisted before each starts. `exporting` + `surface`
+ * read the solution of iteration `iteration` (0 = the parent run); `fitting` to
+ * `solving` build iteration `iteration` (1..n).
+ */
+export const FREE_SURFACE_STAGES = [
+  'exporting',
+  'surface',
+  'fitting',
+  'meshing',
+  'transferring',
+  'solving',
+] as const;
+export type FreeSurfaceStage = (typeof FREE_SURFACE_STAGES)[number];
+
+/** Job lifecycle. Only `running` is active. */
+export const FREE_SURFACE_JOB_STATUSES = [
+  'running',
+  'converged',
+  'completed',
+  'failed',
+  'stopped',
+  'interrupted',
+] as const;
+export type FreeSurfaceJobStatus = (typeof FREE_SURFACE_JOB_STATUSES)[number];
+
+/** Is a free-surface job status still active? */
+export function isFreeSurfaceJobActive(status: FreeSurfaceJobStatus | undefined): boolean {
+  return status === 'running';
+}
+
+/** The kit's numeric settings (lengths in metres, tolerance in mm). */
+export interface FreeSurfaceNumericSettings {
+  iterations: FreeSurfaceIterationCount;
+  /** Converged when the lid residual RMS drops below this (mm). */
+  tolRmsMm: number;
+  /** Gaussian smoothing radius of z_s (m). */
+  smooth: number;
+  /** Minimum water over submerged tops (m). */
+  tmin: number;
+  /** Max lid boundary edge length (m). */
+  sub: number;
+  /** Interior Steiner point spacing (m). */
+  steiner: number;
+  /** Steiner points kept this far from the boundary (m). */
+  clear: number;
+  /** Cut solids that poke through the lid at the fitted surface. */
+  cut: boolean;
+  /** Machine axis [x, y] for the ring sector statistics (optional). */
+  axis: [number, number] | null;
+  /** Rings [[r0, r1], ...] about the axis (m). */
+  rings: Array<[number, number]>;
+  /** Level datum: mean z_s over y < datumY (optional). */
+  datumY: number | null;
+}
+
+/** Everything a job runs with (the kit config, minus the paths). */
+export interface FreeSurfaceSettings extends FreeSurfaceNumericSettings {
+  /** The flat horizontal top patch (the rigid lid); also the upstand patch. */
+  lidPatch: string;
+  /** The inlet patch (p0 reference). */
+  inletPatch: string;
+  /** The meshing session that produced the case mesh (its surfaces = the flat base STL). */
+  sourceSessionId: string;
+}
+
+/** Defaults of the kit (`templates/config_template.json`). */
+export const FREE_SURFACE_DEFAULTS: FreeSurfaceNumericSettings = {
+  iterations: 1,
+  tolRmsMm: 3.0,
+  smooth: 0.1,
+  tmin: 0.02,
+  sub: 0.08,
+  steiner: 0.07,
+  clear: 0.08,
+  cut: true,
+  axis: null,
+  rings: [],
+  datumY: null,
+};
+
+/** One readiness check of the Free surface tab (spec §2). */
+export type FreeSurfaceCheckId =
+  | 'lidPatch'
+  | 'lidBc'
+  | 'inletPatch'
+  | 'parentRun'
+  | 'sourceSession'
+  | 'solver';
+
+export interface FreeSurfaceCheck {
+  id: FreeSurfaceCheckId;
+  /** `blocking` disables Start; `warning` does not. */
+  status: 'ok' | 'warning' | 'blocking';
+  message: string;
+}
+
+/** A case boundary patch with its flatness (face centres within ±1 mm of one z). */
+export interface FreeSurfacePatchLevel {
+  name: string;
+  type: string;
+  nFaces: number;
+  /** Flat AND horizontal. */
+  flat: boolean;
+  /** Mean face-centre z (m), null when the mesh could not be read. */
+  z: number | null;
+}
+
+/** A meshing session the user can pick as the source of the case mesh. */
+export interface FreeSurfaceSessionOption {
+  id: string;
+  name: string;
+  engine: MeshingEngine;
+}
+
+/** The readiness payload (`checks` of `GET /projects/:id/free-surface`). */
+export interface FreeSurfaceChecks {
+  items: FreeSurfaceCheck[];
+  /** No blocking check. */
+  ready: boolean;
+  patches: FreeSurfacePatchLevel[];
+  /** The resolved selection (query or defaults). */
+  lidPatch: string | null;
+  inletPatch: string | null;
+  sourceSessionId: string | null;
+  /** Meshed sessions the source can be picked from. */
+  sessions: FreeSurfaceSessionOption[];
+  /** Z_lid measured on the lid surface of the source session (m). */
+  zLid: number | null;
+  /** The case's solver (controlDict application). */
+  solver: string | null;
+  /** The parent run (the project's latest run). */
+  parentRun: { id: string; status: RunStatus; cores: number } | null;
+}
+
+/** Statistics of one surface estimate z_s (`zs_iter<j>.json`), j = 0 for the parent. */
+export interface FreeSurfaceSurfaceStats {
+  index: number;
+  zsMeanMm: number;
+  zsMinMm: number;
+  zsMaxMm: number;
+  residualRmsMm: number;
+  residualMaxMm: number;
+  lidFaces: number;
+  /** Δp₀ from the inlet_p0_flux / outlet_p0_flux monitors when present, else null. */
+  dp0Pa: number | null;
+}
+
+/** The fit report of one iteration (`geometry/domain_lidIter<k>.json`). */
+export interface FreeSurfaceFitStats {
+  lidFaces: number;
+  lidZMinMm: number;
+  lidZMaxMm: number;
+  clampedLidPoints: number;
+  upstandFacets: number;
+  cutSolids: number;
+  openEdges: number;
+  baseOpenEdges: number;
+}
+
+/** One iteration k (1..n): the fitted geometry, its mesh and its solve. */
+export interface FreeSurfaceIteration {
+  index: number;
+  sessionId: string | null;
+  sessionName: string | null;
+  runId: string | null;
+  fit: FreeSurfaceFitStats | null;
+  meshCells: number | null;
+  /** Downloadable files of this iteration (allow-listed names). */
+  files: string[];
+}
+
+/** A free-surface job (`job.json`). */
+export interface FreeSurfaceJob {
+  id: string;
+  status: FreeSurfaceJobStatus;
+  stage: FreeSurfaceStage | null;
+  /** See FREE_SURFACE_STAGES for the meaning per stage. */
+  iteration: number;
+  settings: FreeSurfaceSettings;
+  /** Measured lid plane height (m). */
+  zLid: number;
+  parentRunId: string | null;
+  cores: number;
+  surfaces: FreeSurfaceSurfaceStats[];
+  iterations: FreeSurfaceIteration[];
+  notes: string[];
+  reason: string | null;
+  /** The stage that failed (status `failed`). */
+  failedStage: FreeSurfaceStage | null;
+  stopRequested: boolean;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+}
+
+/** `GET /projects/:id/free-surface`. */
+export interface FreeSurfaceOverview {
+  checks: FreeSurfaceChecks;
+  defaults: FreeSurfaceNumericSettings;
+  origin: MeshOrigin | null;
+  /** Newest first. */
+  jobs: FreeSurfaceJob[];
+}
+
+/** Body of `POST /projects/:id/free-surface`. */
+export type FreeSurfaceStartRequest = Pick<
+  FreeSurfaceSettings,
+  'lidPatch' | 'inletPatch' | 'sourceSessionId'
+> &
+  Partial<FreeSurfaceNumericSettings>;
+
+/**
+ * Downloadable job files: the fitted STL and its check figure per iteration, and
+ * the post figure per surface estimate.
+ */
+export const FREE_SURFACE_FILE_PATTERN = /^(domain_lidIter[1-9]\d{0,2}\.(stl|png)|lid_iter\d{1,3}\.png)$/;
+
+/** Is `name` an allow-listed job file name? */
+export function isFreeSurfaceFileName(name: string): boolean {
+  return FREE_SURFACE_FILE_PATTERN.test(name);
+}
+
+/**
  * One conformal connection to make: fuse patch `aPatch` of mesh `aMeshId` to
  * patch `bPatch` of mesh `bMeshId`. The two patches must be geometrically
  * coincident; stitchMesh turns their faces into an internal interface so flow
@@ -3628,6 +3875,8 @@ export const SERVER_ERROR_CODES = [
   'BC_APPLY_FAILED',
   'NOT_RUNNABLE',
   'RUN_IN_PROGRESS',
+  'FREE_SURFACE_IN_PROGRESS',
+  'FREE_SURFACE_NOT_READY',
   'MESH_IN_PROGRESS',
   'MESHING_NOT_MESHED',
   'RUN_NOT_FOUND',

@@ -31,6 +31,7 @@ import {
   type FileEntry,
   type MoveResult,
 } from './fileTreeStorage';
+import { clearMeshOrigin } from './meshOriginStorage';
 
 /** A single node in a project's case tree. */
 export type CaseEntry = FileEntry;
@@ -177,19 +178,26 @@ export function removeProjectStorage(projectId: string): Promise<void> {
  * `srcPolyMeshDir` (an absolute constant/polyMesh directory the caller built, e.g.
  * the merge work master or a staged meshing-session mesh). The old polyMesh is
  * removed first so no stale file (a zone file the new mesh lacks) survives. The
- * rest of the case (system/, 0/, constant/*) is untouched.
+ * rest of the case (system/, 0/, constant/*) is untouched. The recorded mesh
+ * origin (mesh-origin.json) is dropped: a caller that knows the new origin (the
+ * meshing hand-off) writes it again afterwards.
  */
 export async function replaceCasePolyMesh(
   projectId: string,
   srcPolyMeshDir: string,
 ): Promise<void> {
+  await clearMeshOrigin(projectId);
   const destPolyMesh = path.join(caseRootFor(projectId), 'constant', 'polyMesh');
   await fs.rm(destPolyMesh, { recursive: true, force: true });
   await fs.mkdir(path.dirname(destPolyMesh), { recursive: true });
   await fs.cp(srcPolyMeshDir, destPolyMesh, { recursive: true });
 }
 
-/** Remove all of a project's case files (the case dir is recreated on next import). */
-export function clearCase(projectId: string): Promise<void> {
-  return clearTreeAt(caseRootFor(projectId));
+/**
+ * Remove all of a project's case files (the case dir is recreated on next import).
+ * Also forgets the recorded mesh origin (reset and backup restore go through here).
+ */
+export async function clearCase(projectId: string): Promise<void> {
+  await clearMeshOrigin(projectId);
+  await clearTreeAt(caseRootFor(projectId));
 }

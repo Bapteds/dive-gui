@@ -103,6 +103,10 @@ Single test of `GET /api/v1/config` without authentication: returns exactly `{ t
 **Covers** (unit): `comparePaths` from `src/lib/fileTreeStorage` (a folder and its children come before a prefix sibling: `0`, `0/p`, `0/U`, then `0.orig`) and `extractArchiveAt` ("H9" decompression cap: 413 `ARCHIVE_TOO_LARGE` before any write, normal extraction under the cap).
 **Technique**: archives built with `AdmZip`; nonexistent root to prove that no write happens; writes into `./test-storage/h9-ok` without cleaning it up.
 
+## `apps/api/tests/freeSurface.test.ts`
+**Covers**: the Free surface tool (WS-I spec §10): readiness (ready + Z_lid + flat patches, no flat patch, not-slip warning, no parent run, no origin, stranger 404, 422 `FREE_SURFACE_NOT_READY`), one full iteration (202 then `completed`, session `<source>-lid1`, mesh origin, stale time dir removed, surfaces replaced by name), 2 iterations with early convergence, figures skipped without matplotlib, meshing failure (`failedStage: meshing`), lock (runs, second start, reset, from-meshing, delete) + stop during solving + delete, file allow-list, boot reconciliation.
+**Technique**: `setCommandRunner` fake writing the `postProcess` export and the kit outputs; `setStreamRunner` fake for cartesianMesh / checkMesh / simpleFoam (hang mode); one-cell ASCII cube polyMesh with a flat `atmosphere` patch.
+
 ## `apps/api/tests/globalSetup.ts`
 **Role**: vitest `globalSetup`, executed once before the whole suite. Runs `npx prisma db push --force-reset --skip-generate --accept-data-loss` with `cwd` = API root and `DATABASE_URL=file:./test.db`, which recreates `apps/api/prisma/test.db` from the schema. The dev database is never touched.
 **Exports**:
@@ -139,6 +143,10 @@ Single test of `GET /api/v1/config` without authentication: returns exactly `{ t
 ## `apps/api/tests/meshFromMeshing.test.ts`
 **Covers**: `POST /projects/:id/mesh/from-meshing` (WS-F), 14 tests: 401; 404 for a stranger (case untouched), unknown session; 422 bad target, unsafe `sessionId`, blank name; super-admin allowed; 409 `MESH_IN_PROGRESS` via `status.json` and via the in-process registry; 409 `MESHING_NOT_MESHED` without `neighbour`; 409 `RUN_IN_PROGRESS` (case) while library stays allowed; case on an empty project (byte-identical copy incl. `cellZones` and `sets/`, session `system/` and `mesh.log` not copied, no backup, scaffold note, non-wall `inlet` BC, staging removed); case on a configured project (original backup taken once, `inlet` BC kept, new `outlet` default, `assembly.json` cleared, `vizIsStale` flips to true); patch retyping + zero-face `domainBoundary` removal (constraint `cyclicAMI` and non-chamber names untouched, empty `outlet` kept); populated `domainBoundary` kept; library target (slug, `-2`, default name = session name, kind `meshing` in `GET /meshes`, `origin.sessionId`, mesher types kept, case untouched).
 **Technique**: sessions written on disk with `createSession` + the five polyMesh files; hanging `setStreamRunner` fake for the registry case (waits for `$ blockMesh` in the log before stopping it); `setStreamRunner(null)` in `afterEach`; `test-storage` purged per test.
+
+## `apps/api/tests/meshOrigin.test.ts`
+**Covers**: `mesh-origin.json` written by from-meshing (case target, not library), cleared by a case import and by reset, 404 for a stranger, chamber hash carried from `importChamberIntoMeshing`; `input.json` written by a chamber build without changing the hash.
+**Technique**: session meshes written straight to disk, raw multipart import, faked chamber builder.
 
 ## `apps/api/tests/meshPatches.test.ts`
 Pure unit tests of `src/lib/meshPatches`: `parseFmsPatches` reads names and types from the FMS header (`[]` without a patch block); `parseStlSolidNames` lists the `solid`s of a multi-solid ASCII STL (`['rotor', 'stator']`) and returns `[]` for a binary STL.
@@ -177,6 +185,10 @@ Pure unit tests of `src/lib/meshPatches`: `parseFmsPatches` reads names and type
 
 ## `apps/api/tests/openfoamCase.test.ts`
 **Covers** (pure): `collapseBoundaryToSinglePatch` (a single `defaultFaces`, `nFaces` summed, minimum `startFace`, header kept), `removeEmptyBoundaryPatches` (removes 0-face patches and renumbers, including dashed names; `only` filter), `forceChamberPatchTypes` (chamber contract, constraint and unknown names untouched, idempotent), `parseBoundaryPatches` (ignores the header, deduplicates), `renderBaseFile` and `BASE_FILE_PATHS`, model-sensitive `fieldBcBody` (k-omega, k-epsilon, Spalart-Allmaras → `nutUSpaldingWallFunction`, constraints copied over, no wall function without a model), `normalizeCasePaths` from `caseStorage` (bare polyMesh placed under `constant/`, wrapper folder removed, traversal rejected), `parseCellZoneNames` / `renameCellZone`.
+
+## `apps/api/tests/pipelineStages.test.ts`
+**Covers**: `awaitRunTerminal` (resolved by finalize; immediate on a terminal row) and `awaitMeshingTerminal` (resolved by the meshing finalizer; immediate on an idle / finished session).
+**Technique**: delayed fake stream runners.
 
 ## `apps/api/tests/projectFiles.test.ts`
 **Covers**: case files of a project (`/projects/:id/files/**`): empty tree, 401, 404 for an outsider; folder import (bare polyMesh placed under `constant/polyMesh/`); 400 `NO_FILES_UPLOADED`; zip import; 400 `INVALID_ARCHIVE` for a zip-slip entry `../../evil.txt`; reset `DELETE /files`; `GET /files/verify` (`missingBase`, `canScaffold`, `hasMesh`); `POST /files/scaffold` (creates the base files without overwriting existing ones, checked by re-reading the downloaded zip); zip download (404 if empty); collaborator allowed to import, super-admin allowed to verify; content read (404, 400 traversal, 413 `FILE_TOO_LARGE` beyond 2 MB); `PUT` write (404 if missing); `POST` creation (409 `FILE_EXISTS`, 422 blank path); deletion of a file or a folder; `POST /files/move` (empty source folder pruned, folder move, 409, 400 into itself, 404).

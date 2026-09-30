@@ -11,7 +11,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 type Vec3 = [number, number, number];
-interface Triangle {
+/** One STL facet (stored normal + three vertices). */
+export interface Triangle {
   normal: Vec3;
   v: [Vec3, Vec3, Vec3];
 }
@@ -68,8 +69,37 @@ function parseTriangles(buffer: Buffer): Triangle[] {
   return isBinaryStl(buffer) ? parseBinary(buffer) : parseAscii(buffer.toString('utf8'));
 }
 
+/** One `solid` of an STL: its declared name (null when unnamed / binary) and facets. */
+export interface StlSolid {
+  name: string | null;
+  triangles: Triangle[];
+}
+
+/** One `solid <name> … endsolid` block of an ASCII STL. */
+const SOLID_RE = /^[ \t]*solid\b[ \t]*([^\r\n]*)\r?\n([\s\S]*?)^[ \t]*endsolid\b[^\r\n]*/gm;
+
+/**
+ * Split an STL into its solids, in file order. An ASCII STL yields one entry per
+ * `solid` block (name = the first word after `solid`, null when absent); a binary
+ * STL (no solid names) yields one unnamed solid. Used by the free-surface tool to
+ * build the multi-solid base STL and to split the fitted one back per file.
+ */
+export function parseStlSolids(buffer: Buffer): StlSolid[] {
+  if (isBinaryStl(buffer)) return [{ name: null, triangles: parseBinary(buffer) }];
+  const text = buffer.toString('utf8');
+  const solids: StlSolid[] = [];
+  SOLID_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = SOLID_RE.exec(text)) !== null) {
+    const name = m[1].trim().split(/\s+/)[0] || null;
+    solids.push({ name, triangles: parseAscii(m[2]) });
+  }
+  if (solids.length === 0) solids.push({ name: null, triangles: parseAscii(text) });
+  return solids;
+}
+
 /** Reduce a file stem to a valid OpenFOAM word (patch name): letters, digits, `_`. */
-function foamWord(stem: string): string {
+export function foamWord(stem: string): string {
   const word = stem
     .normalize('NFKD')
     .replace(/\p{Diacritic}/gu, '')
@@ -109,7 +139,7 @@ function faceNormal(t: Triangle): Vec3 {
 }
 
 /** Emit one `solid … endsolid` block for a named region. */
-function emitSolid(name: string, tris: Triangle[]): string {
+export function emitSolid(name: string, tris: Triangle[]): string {
   const out: string[] = [`solid ${name}`];
   for (const t of tris) {
     const n = faceNormal(t);

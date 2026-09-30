@@ -41,7 +41,7 @@ def pytest_configure(config):
 
 
 # Tests that only need numpy + scipy (no CadQuery) and so always run.
-CADQUERY_FREE_MODULES = {"test_design_semi_spiral.py"}
+CADQUERY_FREE_MODULES = {"test_design_semi_spiral.py", "test_lidkit.py"}
 
 
 def pytest_collection_modifyitems(config, items):

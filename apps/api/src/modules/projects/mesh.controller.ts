@@ -11,6 +11,7 @@ import {
   getMeshEdges,
   getMeshGeometry,
   getMeshManifest,
+  getMeshOrigin,
   importMeshFromMeshing,
   rebuildMesh,
   renameMeshPatch,
@@ -107,6 +108,12 @@ export async function meshFromMeshingController(req: Request, res: Response): Pr
     req.body as MeshFromMeshingInput,
   );
   res.status(200).json({ result });
+}
+
+/** GET /projects/:id/mesh-origin — where the case mesh came from (or null). */
+export async function getMeshOriginController(req: Request, res: Response): Promise<void> {
+  const origin = await getMeshOrigin(requireViewer(req), req.params.id);
+  res.status(200).json({ origin });
 }
 
 /** GET /projects/:id/mesh/backup — status of the single backup slot (or null). */

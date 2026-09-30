@@ -4,6 +4,9 @@ import type {
   SaveCfdCriteriaResponse,
   VortexMetricsSample,
   VortexOnDemandResponse,
+  FreeSurfaceJob,
+  FreeSurfaceOverview,
+  FreeSurfaceStartRequest,
 } from '@dive/shared';
 import { ApiError, apiClient } from './client';
 import type {
@@ -456,4 +459,67 @@ export async function saveCriteria(
 export async function computeVortexMetrics(id: string): Promise<VortexMetricsSample> {
   const data = await apiClient.post<VortexOnDemandResponse>(`/projects/${id}/criteria/vortex`);
   return data.vortex;
+}
+
+// ---------------------------------------------------------------------------
+// Free surface (lid iteration) tool, WS-I
+// ---------------------------------------------------------------------------
+
+/** Selection the readiness checks are computed for (all optional: server defaults). */
+export interface FreeSurfaceSelection {
+  lidPatch?: string;
+  inletPatch?: string;
+  sessionId?: string;
+}
+
+/** Readiness, defaults, mesh origin and jobs of the Free surface tab. */
+export async function getFreeSurface(
+  id: string,
+  selection: FreeSurfaceSelection = {},
+): Promise<FreeSurfaceOverview> {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(selection)) {
+    if (value) query.set(key, value);
+  }
+  const qs = query.toString();
+  return apiClient.get<FreeSurfaceOverview>(`/projects/${id}/free-surface${qs ? `?${qs}` : ''}`);
+}
+
+/** Start a free-surface job (202). */
+export async function startFreeSurface(
+  id: string,
+  body: FreeSurfaceStartRequest,
+): Promise<FreeSurfaceJob> {
+  const data = await apiClient.post<{ job: FreeSurfaceJob }>(`/projects/${id}/free-surface`, body);
+  return data.job;
+}
+
+/** One free-surface job. */
+export async function getFreeSurfaceJob(id: string, jobId: string): Promise<FreeSurfaceJob> {
+  const data = await apiClient.get<{ job: FreeSurfaceJob }>(`/projects/${id}/free-surface/${jobId}`);
+  return data.job;
+}
+
+/** Stop a free-surface job (idempotent). */
+export async function stopFreeSurfaceJob(id: string, jobId: string): Promise<FreeSurfaceJob> {
+  const data = await apiClient.post<{ job: FreeSurfaceJob }>(
+    `/projects/${id}/free-surface/${jobId}/stop`,
+  );
+  return data.job;
+}
+
+/** Remove a finished free-surface job and its files. */
+export async function deleteFreeSurfaceJob(id: string, jobId: string): Promise<void> {
+  await apiClient.delete<void>(`/projects/${id}/free-surface/${jobId}`);
+}
+
+/** Download an allow-listed job file (fitted STL, figures). */
+export async function downloadFreeSurfaceFile(
+  id: string,
+  jobId: string,
+  name: string,
+): Promise<Blob> {
+  return apiClient.getBlob(
+    `/projects/${id}/free-surface/${jobId}/files/${encodeURIComponent(name)}`,
+  );
 }

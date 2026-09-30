@@ -42,6 +42,7 @@ import { assertProjectVisible, type Viewer } from './projects.service';
 import { scaffoldCase, verifyCase, type CaseVerification } from './files.service';
 import { applyTemplate, getTemplate } from '../templates/templates.service';
 import type { ConvertCgnsInput } from './conversion.schemas';
+import { clearMeshOrigin } from '../../lib/meshOriginStorage';
 
 /** Public description of a stored CGNS source file. */
 export interface CgnsFileInfo {
@@ -320,6 +321,8 @@ export async function convertCgnsToFoam(
   const r2 = await runCommand({ ...plan2, timeoutMs });
   const step2 = toStep('vtkToFoam', plan2.display, r2);
   steps.push(step2);
+  // vtkUnstructuredToFoam rewrote constant/polyMesh: a recorded mesh origin is stale.
+  await clearMeshOrigin(projectId);
 
   if (step2.status !== 'success') {
     steps.push(skippedStep('checkMesh', planCheckMeshDisplay(caseDir)));

@@ -5,6 +5,7 @@ import { logger } from './lib/logger';
 import { reconcileOrphanRuns } from './modules/projects/runs.service';
 import { reconcileOrphanMeshingRuns } from './modules/meshing/meshing.service';
 import { attachTerminalGateway } from './modules/projects/terminal.gateway';
+import { reconcileOrphanFreeSurfaceJobs } from './modules/projects/freeSurface.service';
 
 const app = createApp();
 
@@ -23,6 +24,13 @@ reconcileOrphanMeshingRuns()
     if (count > 0) logger.warn(`Reconciled ${count} interrupted mesh run(s) to failed`);
   })
   .catch((err) => logger.error('Mesh run reconciliation failed', err));
+
+// Free-surface jobs run in this process too: one left 'running' is interrupted.
+reconcileOrphanFreeSurfaceJobs()
+  .then((count) => {
+    if (count > 0) logger.warn(`Reconciled ${count} interrupted free-surface job(s)`);
+  })
+  .catch((err) => logger.error('Free-surface job reconciliation failed', err));
 
 const server = app.listen(env.PORT, () => {
   logger.info(`API listening on http://localhost:${env.PORT}`);
