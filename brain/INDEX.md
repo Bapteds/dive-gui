@@ -1,6 +1,6 @@
 # Index of every repository file
 
-> One line per file (589 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
+> One line per file (590 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
 
 Detail of a code file: open the sheet shown and search for the `## path/to/file` section. Documents: the description is their title and introduction line.
 
@@ -15,6 +15,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `AGENTS.md` : instructions common to every AI agent (project, session protocol, golden rules, commands, brain map, design in brief). · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `CLAUDE.md` : Claude Code entry point: imports `AGENTS.md` (`@AGENTS.md`) and adds the Claude-specific parts (memory, changelog hook, UI skills, index, Windows shells). · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `README.md` : technical reference for humans (architecture, prerequisites, dev, configuration, Debian deployment, CFD tools per feature, commands, auth, REST API, links to the brain). · [root-shared-mcp](codemap/root-shared-mcp.md)
+- `brain.zip` : **(undocumented: add a section in brain/codemap)**
 - `eslint.config.js` : ESLint 9 "flat" configuration of the monorepo via `tseslint.config`. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package-lock.json` : npm lockfile for the whole monorepo (workspaces), used by `npm ci` in CI and in production. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package.json` : root of the `dive-turbinen` workspace (private, ESM, `engines.node >=20`). · [root-shared-mcp](codemap/root-shared-mcp.md)
