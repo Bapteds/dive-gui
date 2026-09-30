@@ -4,6 +4,7 @@ import {
   CHAMBER_FORM_DEFAULTS,
   chamberBodyKey,
   chamberFormSchema,
+  chamberInputToConstraints,
   chamberInputToFormValues,
   computeChamberAutoDims,
   semiSpiralToggle,
@@ -49,19 +50,26 @@ describe('chamberFormSchema', () => {
     ['vaneAngleDeg above 55', { vaneAngleDeg: 56 }],
     ['outletRatio below 0.35', { outletRatio: 0.34 }],
     ['outletRatio above 0.50', { outletRatio: 0.51 }],
-    ['a vane count of 17', { vaneCount: 17 as unknown as 16 }],
+    ['a vane count of 7', { vaneCount: 7 }],
+    ['a vane count of 33', { vaneCount: 33 }],
+    ['a fractional vane count', { vaneCount: 12.5 }],
+    ['a blank vane count', { vaneCount: Number.NaN }],
   ] as const)('rejects %s', (_label, patch) => {
     expect(parse({ ...CHAMBER_FORM_DEFAULTS, ...patch }).success).toBe(false);
   });
 
-  it('defaults the guide vane count to 16 and accepts 16 or 18', () => {
+  it('defaults the guide vane count to 16 and accepts any whole number from 8 to 32', () => {
     expect(CHAMBER_FORM_DEFAULTS.vaneCount).toBe(16);
-    expect(parse({ ...CHAMBER_FORM_DEFAULTS, vaneCount: 18 }).success).toBe(true);
-    const bad = parse({ ...CHAMBER_FORM_DEFAULTS, vaneCount: 17 as unknown as 16 });
-    expect(bad.success).toBe(false);
-    if (!bad.success) {
-      const issue = bad.error.issues.find((i) => i.path.join('.') === 'vaneCount');
-      expect(issue?.message).toBe('Choose 16 or 18 vanes');
+    for (const vaneCount of [8, 12, 16, 17, 18, 32]) {
+      expect(parse({ ...CHAMBER_FORM_DEFAULTS, vaneCount }).success).toBe(true);
+    }
+    for (const vaneCount of [7, 33, 12.5, Number.NaN]) {
+      const bad = parse({ ...CHAMBER_FORM_DEFAULTS, vaneCount });
+      expect(bad.success).toBe(false);
+      if (!bad.success) {
+        const issue = bad.error.issues.find((i) => i.path.join('.') === 'vaneCount');
+        expect(issue?.message).toBe('Enter a whole number from 8 to 32');
+      }
     }
   });
 
@@ -120,6 +128,12 @@ describe('chamberInputToFormValues', () => {
   it('loads an old save without a vane count as 16 vanes', () => {
     const loaded = chamberInputToFormValues({ x1: 1450, x2: 7.85, x3: 8, guideVanes: true });
     expect(loaded.vaneCount).toBe(16);
+  });
+
+  it.each([16, 18, 24])('loads a save with %i vanes as is', (vaneCount) => {
+    const loaded = chamberInputToFormValues({ x1: 1450, x2: 7.85, x3: 8, guideVanes: true, vaneCount });
+    expect(loaded.vaneCount).toBe(vaneCount);
+    expect(parse(loaded).success).toBe(true);
   });
 
   it('keeps saved per-relation toggles and defaults the missing ones', () => {
@@ -391,5 +405,36 @@ describe('semiSpiralToggle (Chamfer off with the spiral, restored when it goes)'
       set: {},
       savedChamfer: null,
     });
+  });
+});
+
+// Corner chamfers always at 45° (spec 2026-09-29-corner-chamfer-45): an old
+// save may carry a BF constraint or a disabled BF relation; it loads without
+// error and both are dropped silently.
+describe('old saves with BF constraints or BF relations', () => {
+  const base: ChamberInput = { x1: 1450, x2: 7.85, x3: 8 };
+
+  it('drops the BF relations from the form values', () => {
+    const loaded = chamberInputToFormValues({
+      ...base,
+      relations: { chamferWidth1: false, chamferWidth2: false, chamferLength2: false },
+    });
+    expect(loaded.relations).not.toHaveProperty('chamferWidth1');
+    expect(loaded.relations).not.toHaveProperty('chamferWidth2');
+    expect(loaded.relations.chamferLength2).toBe(false);
+  });
+
+  it('drops the BF constraints and keeps the others', () => {
+    expect(
+      chamberInputToConstraints({
+        ...base,
+        constraints: {
+          chamferWidth1: { exact: 999 },
+          chamferWidth2: { min: 10 },
+          chamferLength1: { exact: 1200 },
+        },
+      }),
+    ).toEqual({ chamferLength1: { exact: 1200 } });
+    expect(chamberInputToConstraints(base)).toEqual({});
   });
 });

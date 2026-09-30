@@ -147,6 +147,9 @@ describe('ChamberInputsForm', () => {
   it('shows the active relation count and disables Configure when the master is off', () => {
     const { rerender } = render(<Harness onValid={() => {}} />);
     const defaultOn = CHAMBER_RELATIONS.filter((rel) => rel.defaultOn).length;
+    // BF1 = LF1 and BF2 = LF2 are permanent (spec 2026-09-29-corner-chamfer-45):
+    // 7 toggleable relations, all on by default.
+    expect(screen.getByRole('button', { name: /\(7\/7 on\)/ })).toBeEnabled();
     expect(
       screen.getByRole('button', {
         name: new RegExp(`\\(${defaultOn}/${CHAMBER_RELATIONS.length} on\\)`),
@@ -277,23 +280,36 @@ describe('ChamberInputsForm', () => {
   );
 
   it.each(['stepped', 'hollow'] as const)(
-    'offers a Guide vane count select (16 or 18) in the %s design',
+    'offers a Guide vane count number field (8 to 32, step 1) in the %s design',
     (variant) => {
       render(<Harness onValid={() => {}} variant={variant} defaults={{ variant }} />);
-      const select = screen.getByLabelText('Guide vane count') as HTMLSelectElement;
-      expect(select.tagName).toBe('SELECT');
-      expect(Array.from(select.options).map((o) => o.value)).toEqual(['16', '18']);
-      expect(select.value).toBe('16');
+      const input = screen.getByLabelText('Guide vane count') as HTMLInputElement;
+      expect(input.tagName).toBe('INPUT');
+      expect(input.type).toBe('number');
+      expect(input.min).toBe('8');
+      expect(input.max).toBe('32');
+      expect(input.step).toBe('1');
+      expect(input.value).toBe('16');
+      expect(screen.getByText('Guide-vane builds only')).toBeInTheDocument();
     },
   );
 
-  it('submits the chosen guide vane count as a number', async () => {
+  it('submits the typed guide vane count as a number', async () => {
     const onValid = vi.fn();
     render(<Harness onValid={onValid} />);
-    fireEvent.change(screen.getByLabelText('Guide vane count'), { target: { value: '18' } });
+    fireEvent.change(screen.getByLabelText('Guide vane count'), { target: { value: '24' } });
     fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
     await waitFor(() => expect(onValid).toHaveBeenCalledTimes(1));
-    expect((onValid.mock.calls[0][0] as ChamberFormValues).vaneCount).toBe(18);
+    expect((onValid.mock.calls[0][0] as ChamberFormValues).vaneCount).toBe(24);
+  });
+
+  it.each(['7', '33', '12.5', ''])('blocks a guide vane count of "%s" with the form message', async (value) => {
+    const onValid = vi.fn();
+    render(<Harness onValid={onValid} />);
+    fireEvent.change(screen.getByLabelText('Guide vane count'), { target: { value } });
+    fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
+    expect(await screen.findByText('Enter a whole number from 8 to 32')).toBeInTheDocument();
+    expect(onValid).not.toHaveBeenCalled();
   });
 
   it('submits a typed Power (x4) as a number and a blank one as undefined (auto)', async () => {

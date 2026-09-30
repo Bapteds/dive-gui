@@ -5,6 +5,8 @@ import {
   CHAMBER_INPUT_RANGES,
   CHAMBER_RELATIONS,
   CHAMBER_SPIRAL_FLOW_RANGE,
+  CHAMBER_VANE_COUNT_MAX,
+  CHAMBER_VANE_COUNT_MIN,
   type ChamberVariant,
 } from '@dive/shared';
 import { cn } from '@/lib/utils';
@@ -348,12 +350,17 @@ export function ChamberInputsForm({
         <Field
           label="Guide vane count"
           error={errors.vaneCount?.message}
-          helperText="Guide-vane builds only: 18 vanes get a chord 16/18 as long (same solidity)"
+          helperText="Guide-vane builds only"
         >
-          <NativeSelect {...register('vaneCount', { valueAsNumber: true })}>
-            <option value="16">16</option>
-            <option value="18">18</option>
-          </NativeSelect>
+          <Input
+            type="number"
+            inputMode="numeric"
+            autoComplete="off"
+            step="1"
+            min={CHAMBER_VANE_COUNT_MIN}
+            max={CHAMBER_VANE_COUNT_MAX}
+            {...register('vaneCount', { valueAsNumber: true })}
+          />
         </Field>
         <Field
           label="Vane angle (°)"

@@ -2315,6 +2315,13 @@ export interface ChamberRelation {
    * propagate a user-driven partner's value verbatim.
    */
   empirical?: boolean;
+  /**
+   * Permanent identity (spec 2026-09-29-corner-chamfer-45): always applied,
+   * whatever `relationsMaster` or `relations` say, and the output ignores any
+   * Min / Max / Exact of its own. Kept out of CHAMBER_RELATIONS (the relations
+   * menu). Used by BF1 = LF1 and BF2 = LF2 so the corner chamfers stay at 45°.
+   */
+  permanent?: boolean;
 }
 
 /**
@@ -2368,8 +2375,8 @@ export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
   // P5: chamferWidth1. relation = LF1.
   { key: 'chamferWidth1', label: 'BF1', form: 'linear', cvError: 20.6, confidence: 'Moderate',
     coeffs: { a: -2.009758353, b: 0.9116908157, c: 16.38088606, d: -19.61930855 },
-    relation: { kind: 'combination', defaultOn: true, label: '= LF1',
-      description: 'BF1 = LF1 (chamfer 1 width equals its length).',
+    relation: { kind: 'combination', defaultOn: true, label: '= LF1', permanent: true,
+      description: 'BF1 = LF1 (chamfer 1 width equals its length: 45° corner, always).',
       terms: [{ key: 'chamferLength1', coeff: 1 }] } },
   // P6: chamferLength2. relation = LF1 (both chamfers equal).
   { key: 'chamferLength2', label: 'LF2', form: 'linear', cvError: 18.6, confidence: 'Moderate',
@@ -2380,8 +2387,8 @@ export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
   // P7: chamferWidth2. relation = LF2.
   { key: 'chamferWidth2', label: 'BF2', form: 'linear', cvError: 22.0, confidence: 'Moderate',
     coeffs: { a: 1207.055875, b: -0.137521288, c: -128.8078895, d: 79.76891504 },
-    relation: { kind: 'combination', defaultOn: true, label: '= LF2',
-      description: 'BF2 = LF2 (chamfer 2 width equals its length).',
+    relation: { kind: 'combination', defaultOn: true, label: '= LF2', permanent: true,
+      description: 'BF2 = LF2 (chamfer 2 width equals its length: 45° corner, always).',
       terms: [{ key: 'chamferLength2', coeff: 1 }] } },
   // P8: distFromEnd. relation = LF1 + LF2 (chamfered part).
   { key: 'distFromEnd', label: 'LT', form: 'linear', cvError: 27.2, confidence: 'Moderate',
@@ -2423,9 +2430,20 @@ export interface ChamberRelationInfo {
   defaultOn: boolean;
 }
 
-/** The toggleable relations, in output order — the per-relation dropdown iterates this. */
+/**
+ * Outputs driven by a PERMANENT identity (BF1 = LF1, BF2 = LF2; spec
+ * 2026-09-29-corner-chamfer-45): never toggleable, never constrained. The
+ * Parameters table shows them read-only; loading a save drops their constraints.
+ */
+export const CHAMBER_PERMANENT_RELATION_KEYS: readonly ChamberOutputKey[] =
+  CHAMBER_OUTPUT_SPECS.filter((s) => s.relation?.permanent).map((s) => s.key);
+
+/**
+ * The toggleable relations, in output order — the per-relation dropdown iterates
+ * this. Permanent identities (BF1 = LF1, BF2 = LF2) are not listed: 7 entries.
+ */
 export const CHAMBER_RELATIONS: readonly ChamberRelationInfo[] = CHAMBER_OUTPUT_SPECS.filter(
-  (s) => s.relation,
+  (s) => s.relation && !s.relation.permanent,
 ).map((s) => ({
   key: s.key,
   label: s.label,
@@ -2469,14 +2487,18 @@ export const CHAMBER_VARIANTS = ['stepped', 'hollow'] as const;
 export type ChamberVariant = (typeof CHAMBER_VARIANTS)[number];
 
 /**
- * Guide vane counts the builder accepts (spec 2026-09-29-guide-vane-count). 16 is
- * the committed asset; with 18 each blade's chord is scaled by 16/18 about its pivot
- * so the cascade solidity and the pivot radius stay the same.
+ * Guide vane counts the builder accepts: any whole number from MIN to MAX (spec
+ * 2026-09-29-guide-vane-count-any, amended 2026-09-30). 16 is the committed asset;
+ * with n vanes each blade's chord is scaled by min(1, 16/n) about its pivot: above
+ * 16 the cascade solidity stays the same, below 16 the blade keeps its 16-vane size
+ * (lower solidity, wider throat); the pivot radius never moves. Mirrors
+ * VANE_COUNT_MIN / _MAX of buildChamber.py, which keeps a safety-net refusal for a
+ * count whose blades leave the distributor passage.
  */
-export const CHAMBER_VANE_COUNTS = [16, 18] as const;
-export type ChamberVaneCount = (typeof CHAMBER_VANE_COUNTS)[number];
+export const CHAMBER_VANE_COUNT_MIN = 8;
+export const CHAMBER_VANE_COUNT_MAX = 32;
 /** Default guide vane count (the asset's own count). */
-export const CHAMBER_VANE_COUNT_DEFAULT: ChamberVaneCount = 16;
+export const CHAMBER_VANE_COUNT_DEFAULT = 16;
 
 /** Default wall thickness (mm) of the hollow last cylinder in the 'hollow' variant. */
 export const CHAMBER_WALL_THICKNESS_MM = 50;
@@ -2624,17 +2646,23 @@ export interface ChamberInput {
    * cannot change a cache key by itself). Geometry-only.
    */
   x4?: number;
+  /**
+   * Per-output Min / Max / Exact. Ignored on BF1 / BF2 (chamferWidth1/2), which
+   * always equal LF1 / LF2 (CHAMBER_PERMANENT_RELATION_KEYS).
+   */
   constraints?: Partial<Record<ChamberOutputKey, ChamberConstraint>>;
   /**
-   * Master switch for ALL structural relations (a hard override). When false,
-   * every relation is forced off and each output uses its own X1/X2/X3 fit,
-   * regardless of `relations`. Default true.
+   * Master switch for the toggleable structural relations (a hard override).
+   * When false, every toggleable relation is forced off and each output uses its
+   * own X1/X2/X3 fit, regardless of `relations`; the permanent BF1 = LF1 and
+   * BF2 = LF2 stay on. Default true.
    */
   relationsMaster?: boolean;
   /**
    * Per-relation on/off, keyed by the driven output. Only consulted when
    * `relationsMaster` is not false. A missing entry uses the relation's own
-   * default (all ship on). Keys without a relation are ignored.
+   * default (all ship on). Keys without a relation, and the permanent BF1 / BF2
+   * identities, are ignored.
    */
   relations?: Partial<Record<ChamberOutputKey, boolean>>;
   /** Cylinder design (default 'stepped'). */
@@ -2677,13 +2705,17 @@ export interface ChamberInput {
    */
   vaneAngleDeg?: number;
   /**
-   * Number of guide vanes: 16 (the asset) or 18. With 18 each blade's chord is
-   * scaled by 16/18 about its own pivot, so the cascade solidity and the pivot
-   * radius stay the same; the angular step is 360°/n. Only affects guide-vane
-   * builds (ignored, and left out of the build key, when guideVanes is false).
-   * Geometry-only (not part of the empirical model). Default 16.
+   * Number of guide vanes: any whole number from 8 to 32 (CHAMBER_VANE_COUNT_MIN /
+   * _MAX), 16 being the asset. With n vanes each blade's chord is scaled by
+   * min(1, 16/n) about its own pivot (above 16 same solidity, below 16 the 16-vane
+   * blade), the pivot radius stays the same and the angular step is 360°/n. The
+   * builder keeps a safety-net refusal for blades leaving the distributor passage
+   * (past LE Ø/2 or inside the hub rim). Only
+   * affects guide-vane builds (ignored, and left out of the build key, when
+   * guideVanes is false or the count is 16). Geometry-only (not part of the
+   * empirical model). Default 16.
    */
-  vaneCount?: ChamberVaneCount;
+  vaneCount?: number;
   /**
    * Outlet inner/outer diameter ratio (0.35..0.50, default 0.45). The outlet's
    * OUTER diameter is X1 (see resolveGeometryParams); the inner diameter is
@@ -2915,11 +2947,14 @@ function resolveChamberFinal(
  */
 export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
   const { x1, x2, x3, constraints } = input;
-  // Hard master override: when false, EVERY relation is off. Otherwise each
-  // relation follows its per-key toggle, defaulting to its own defaultOn.
+  // Hard master override: when false, EVERY toggleable relation is off. Otherwise
+  // each relation follows its per-key toggle, defaulting to its own defaultOn. A
+  // permanent identity (BF1 = LF1, BF2 = LF2) is always on.
   const masterOn = input.relationsMaster !== false;
   const relationOn = (spec: ChamberOutputSpec): boolean =>
-    masterOn && !!spec.relation && (input.relations?.[spec.key] ?? spec.relation.defaultOn);
+    !!spec.relation &&
+    (spec.relation.permanent === true ||
+      (masterOn && (input.relations?.[spec.key] ?? spec.relation.defaultOn)));
 
   const byKey = new Map<ChamberOutputKey, ChamberOutput>();
   const setOutput = (
@@ -2930,7 +2965,8 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
     relationLabel?: string,
     inheritsUserDriven = false,
   ) => {
-    const con = constraints?.[spec.key] ?? {};
+    // A permanent identity ignores any Min / Max / Exact on its own output.
+    const con = spec.relation?.permanent ? {} : (constraints?.[spec.key] ?? {});
     // An empirical estimate snaps to the manufacturing grid; a true identity
     // driven by a user-entered partner propagates that value verbatim. The
     // user's Min/Max then clamp the snapped value (a bitten clamp yields the

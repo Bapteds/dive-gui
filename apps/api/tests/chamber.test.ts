@@ -15,6 +15,10 @@ import { storageRoot } from '../src/lib/fileTreeStorage';
 
 /** A valid build body (mid-range inputs; length auto = 2 x width, variant default). */
 const BUILD = { x1: 1450, x2: 7.85, x3: 8 };
+// Build keys of { ...BUILD, guideVanes: true } with 16 and 18 vanes, frozen on the
+// WS-B code (16 or 18 only): the free vane count must not move them.
+const VANE_HASH_16 = 'fed61c76dc7ce595';
+const VANE_HASH_18 = '06b19c34f39b6070';
 
 const MANIFEST = [
   { name: 'inlet', type: 'patch', nFaces: 1, edgeOffset: 0, edgeCount: 0 },
@@ -674,6 +678,34 @@ describe('Chamber Creation', () => {
     expect(oWidth.model).toBeCloseTo(4444.44, 0);
   });
 
+  it('builds the corner chamfers at 45° whatever a BF constraint or relation says', async () => {
+    // Spec 2026-09-29-corner-chamfer-45: BF1 = LF1 and BF2 = LF2 always, so a
+    // BF Exact (or an old save's disabled BF relation) changes nothing.
+    const params: Record<string, unknown>[] = [];
+    setCommandRunner(recordingBuilder(params));
+    const auth = authHeader(await createTestUser());
+    const post = (body: object) =>
+      request(app).post('/api/v1/chamber/build').set('Authorization', auth).send(body).expect(200);
+
+    const plain = await post(BUILD);
+    const pinned = await post({
+      ...BUILD,
+      constraints: { chamferWidth1: { exact: 999 }, chamferWidth2: { max: 100 } },
+      relations: { chamferWidth1: false, chamferWidth2: false },
+    });
+    expect(pinned.body.hash).toBe(plain.body.hash);
+    expect(params).toHaveLength(1);
+    expect(params[0].chamferWidth1).toBe(params[0].chamferLength1);
+    expect(params[0].chamferWidth2).toBe(params[0].chamferLength2);
+
+    // Relations master off: LF2 is its own fit, BF still follows each LF.
+    await post({ ...BUILD, relationsMaster: false });
+    expect(params).toHaveLength(2);
+    expect(params[1].chamferWidth1).toBe(params[1].chamferLength1);
+    expect(params[1].chamferWidth2).toBe(params[1].chamferLength2);
+    expect(params[1].chamferLength2).not.toBe(params[1].chamferLength1);
+  });
+
   it('accepts a foot angle and keys the build on it', async () => {
     setCommandRunner(successRunner);
     const auth = authHeader(await createTestUser());
@@ -819,12 +851,52 @@ describe('Chamber Creation', () => {
     expect(n18.body.hash).toBe(plain.body.hash);
   });
 
-  it('rejects a vane count other than 16 or 18', async () => {
+  it('accepts any whole vane count from 8 to 32 and passes it to the builder', async () => {
+    const seen: Record<string, unknown>[] = [];
+    setCommandRunner(async (spec) => {
+      seen.push(JSON.parse(await fs.readFile(spec.args[1], 'utf8')));
+      return successRunner(spec);
+    });
+    const auth = authHeader(await createTestUser());
+    const hashes = new Set<string>();
+    for (const vaneCount of [8, 17, 32]) {
+      const res = await request(app)
+        .post('/api/v1/chamber/build')
+        .set('Authorization', auth)
+        .send({ ...BUILD, guideVanes: true, vaneCount })
+        .expect(200);
+      hashes.add(res.body.hash);
+    }
+    expect(hashes.size).toBe(3);
+    expect(seen.map((p) => p.vaneCount)).toEqual([8, 17, 32]);
+  });
+
+  it('keeps the historical build keys of the 16- and 18-vane builds', async () => {
+    // Frozen before the free vane count (spec 2026-09-29-guide-vane-count-any):
+    // 16 omits the key and 18 passes it exactly as WS-B did, so no cached build moves.
+    setCommandRunner(successRunner);
+    const auth = authHeader(await createTestUser());
+    const vanes = { ...BUILD, guideVanes: true };
+    const n16 = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...vanes, vaneCount: 16 })
+      .expect(200);
+    const n18 = await request(app)
+      .post('/api/v1/chamber/build')
+      .set('Authorization', auth)
+      .send({ ...vanes, vaneCount: 18 })
+      .expect(200);
+    expect(n16.body.hash).toBe(VANE_HASH_16);
+    expect(n18.body.hash).toBe(VANE_HASH_18);
+  });
+
+  it.each([7, 33, 12.5, '16'])('rejects a vane count of %s (whole numbers from 8 to 32 only)', async (vaneCount) => {
     const auth = authHeader(await createTestUser());
     const res = await request(app)
       .post('/api/v1/chamber/build')
       .set('Authorization', auth)
-      .send({ ...BUILD, guideVanes: true, vaneCount: 17 })
+      .send({ ...BUILD, guideVanes: true, vaneCount })
       .expect(422);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
   });
