@@ -109,7 +109,9 @@ export function ChamberExportButtons({
                 <Download className="size-4" strokeWidth={1.75} aria-hidden="true" />
                 Download STEP
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => void download('stepMirrored', 'chamber-mirrored.step')}>
+              <DropdownMenuItem
+                onSelect={() => void download('stepMirrored', 'chamber-mirrored.step')}
+              >
                 <FlipHorizontal2 className="size-4" strokeWidth={1.75} aria-hidden="true" />
                 Change rotational direction
               </DropdownMenuItem>

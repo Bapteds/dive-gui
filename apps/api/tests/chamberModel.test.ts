@@ -4,6 +4,7 @@
 // Exact clamp + Status behave like the calculator.
 import { describe, expect, it } from 'vitest';
 import {
+  CHAMBER_RELATIONS,
   CHAMBER_GENERATOR_FRAME_DIAMETERS_MM,
   CHAMBER_SPIRAL_CLEARANCE_M,
   CHAMBER_SPIRAL_DERIVED_KEYS,
@@ -75,7 +76,9 @@ describe('computeChamberOutputs', () => {
       6,
     );
     // LE = 255.16 + 3.4954 x HLE is a fitted formula: its result re-snaps to the grid.
-    expect(m.get('dLast')!.final).toBe(snapToChamberGrid(255.16 + 3.4954 * m.get('hMiddle')!.final));
+    expect(m.get('dLast')!.final).toBe(
+      snapToChamberGrid(255.16 + 3.4954 * m.get('hMiddle')!.final),
+    );
     // A relation-sourced value carries 'from relation' + its label.
     expect(m.get('height')!.status).toBe('from relation');
     expect(m.get('height')!.relationLabel).toBe('= LEB + LEOW');
@@ -171,7 +174,9 @@ describe('computeChamberOutputs', () => {
   });
 
   it('honors an Exact on the LEB identity and propagates it into Height', () => {
-    const m = byKey(computeChamberOutputs({ ...BASE, constraints: { hMiddlePlusFirst: { exact: 1500 } } }));
+    const m = byKey(
+      computeChamberOutputs({ ...BASE, constraints: { hMiddlePlusFirst: { exact: 1500 } } }),
+    );
     expect(m.get('hMiddlePlusFirst')!.final).toBe(1500);
     expect(m.get('hMiddlePlusFirst')!.status).toBe('set exact');
     // Height = LEB + LEOW reads LEB's overridden FINAL.
@@ -269,7 +274,9 @@ describe('computeChamberOutputs', () => {
 
     it('clamps against the snapped value, and an unbitten Max leaves the snap', () => {
       // Width base fit ≈ 4444.44 → snaps to 4450.
-      const capped = byKey(computeChamberOutputs({ ...BASE, constraints: { width: { max: 4430 } } }));
+      const capped = byKey(
+        computeChamberOutputs({ ...BASE, constraints: { width: { max: 4430 } } }),
+      );
       expect(capped.get('width')!.final).toBe(4430);
       expect(capped.get('width')!.status).toBe('capped at max');
       const free = byKey(computeChamberOutputs({ ...BASE, constraints: { width: { max: 4460 } } }));
@@ -344,9 +351,7 @@ describe('computeChamberOutputs', () => {
     });
 
     it('never flags any other output', () => {
-      const m = byKey(
-        computeChamberOutputs({ ...BASE, constraints: { height: { exact: 4200 } } }),
-      );
+      const m = byKey(computeChamberOutputs({ ...BASE, constraints: { height: { exact: 4200 } } }));
       for (const [key, output] of m) {
         if (key !== 'hLast') expect(output.noEffect).toBeFalsy();
       }
@@ -455,7 +460,9 @@ describe('blankGeneratorHeightRefusal (blank generator height)', () => {
 
   it('leaves a typed height, a taller cone and the domed design to the builder', () => {
     expect(refusal({ ...BASE, ...H(1800), centralHeight: 500 })).toBeNull();
-    expect(refusal({ ...BASE, ...H(1800), ...SIMPLIFY, hollowLength: 200, centralHeight: 500 })).toBeNull();
+    expect(
+      refusal({ ...BASE, ...H(1800), ...SIMPLIFY, hollowLength: 200, centralHeight: 500 }),
+    ).toBeNull();
     expect(refusal({ ...BASE, ...H(1800), ...SIMPLIFY, hollowLength: 1500 })).toBeNull();
     expect(refusal({ ...BASE, ...H(1800), variant: 'hollow', hollowLength: 200 })).toBeNull();
   });
@@ -593,9 +600,13 @@ describe('semi-spiral casing helpers (spec 2026-09-29-semi-spiral-casing)', () =
     );
     const narrow = { ...input, constraints: { width: { exact: 1000 } } };
     const msg = chamberSpiralVelocityRefusal(narrow, at(1000));
-    expect(msg).toMatch(/^B Kammer \(1000 mm\) is too narrow for the casing; it must stay between 0\.3 and 3 m\/s\. Set B Kammer between \d+ and \d+ mm\.$/);
+    expect(msg).toMatch(
+      /^B Kammer \(1000 mm\) is too narrow for the casing; it must stay between 0\.3 and 3 m\/s\. Set B Kammer between \d+ and \d+ mm\.$/,
+    );
     const huge = { ...input, constraints: { width: { exact: 60000 } } };
-    expect(chamberSpiralVelocityRefusal(huge, at(60000))).toMatch(/gives a casing flow velocity of 0\.\d+ m\/s/);
+    expect(chamberSpiralVelocityRefusal(huge, at(60000))).toMatch(
+      /gives a casing flow velocity of 0\.\d+ m\/s/,
+    );
   });
 
   it('counts the cone chamfer widening in the widest part (spec 2026-09-29-cone-foot-chamfer)', () => {
@@ -605,9 +616,10 @@ describe('semi-spiral casing helpers (spec 2026-09-29-semi-spiral-casing)', () =
     // Runner case flush with LE: the widened LE part (LE Ø + 2 x size) is the widest.
     const flush = { ...input, dFirst: dLast };
     expect(chamberSpiralInputs(flush, outputs).D_LE).toBeCloseTo((dLast * 1.1) / 1000, 12);
-    expect(
-      chamberSpiralInputs({ ...flush, coneChamferEnabled: true }, outputs).D_LE,
-    ).toBeCloseTo(((dLast + 100) * 1.1) / 1000, 12);
+    expect(chamberSpiralInputs({ ...flush, coneChamferEnabled: true }, outputs).D_LE).toBeCloseTo(
+      ((dLast + 100) * 1.1) / 1000,
+      12,
+    );
     expect(
       chamberSpiralInputs({ ...flush, coneChamferEnabled: true, coneChamferSize: 30 }, outputs)
         .D_LE,
@@ -618,9 +630,10 @@ describe('semi-spiral casing helpers (spec 2026-09-29-semi-spiral-casing)', () =
         .D_LE,
     ).toBeCloseTo((dLast * 1.1) / 1000, 12);
     // The auto runner case (1.147 x LE) still wins over a 50 mm widening.
-    expect(
-      chamberSpiralInputs({ ...input, coneChamferEnabled: true }, outputs).D_LE,
-    ).toBeCloseTo((1.14703 * dLast * 1.1) / 1000, 12);
+    expect(chamberSpiralInputs({ ...input, coneChamferEnabled: true }, outputs).D_LE).toBeCloseTo(
+      (1.14703 * dLast * 1.1) / 1000,
+      12,
+    );
   });
 
   it('ignores constraints left on the derived rows while the spiral is on', () => {
@@ -720,7 +733,9 @@ describe('semi-spiral Length Min / Max / Exact (spec 2026-09-30-spiral-length)',
   it('reads the limits only with the spiral on; Exact sets both; flags an inverted range', () => {
     const none = { minMm: null, maxMm: null, inverted: false };
     expect(chamberSpiralLengthLimits(SPIRAL_BASE)).toEqual(none);
-    expect(chamberSpiralLengthLimits({ ...BASE, spiralLength: { min: 5000, max: 6000 } })).toEqual(none);
+    expect(chamberSpiralLengthLimits({ ...BASE, spiralLength: { min: 5000, max: 6000 } })).toEqual(
+      none,
+    );
     expect(
       chamberSpiralLengthLimits({ ...SPIRAL_BASE, spiralLength: { min: 5000, max: 6000 } }),
     ).toEqual({ minMm: 5000, maxMm: 6000, inverted: false });

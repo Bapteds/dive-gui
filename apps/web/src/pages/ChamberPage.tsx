@@ -105,7 +105,7 @@ export function ChamberPage() {
     const handed = (location.state as { chamberInput?: ChamberInput } | null)?.chamberInput;
     if (!handed) return;
     reset(chamberInputToFormValues(handed));
-    setConstraints(chamberInputToConstraints(handed));
+    setConstraints(handed.constraints ?? {});
     setSpiralLength(chamberInputToSpiralLength(handed));
     navigate(location.pathname, { replace: true, state: null });
     // Only when a new hand-off arrives.
@@ -200,9 +200,7 @@ export function ChamberPage() {
 
   // The current form as a build body for the saved-builds Save button (null
   // while the form is invalid, which disables saving an unbuildable state).
-  const saveSnapshot = isValid
-    ? { ...values, constraints, spiralLength: spiralLengthBody }
-    : null;
+  const saveSnapshot = isValid ? { ...values, constraints, spiralLength: spiralLengthBody } : null;
 
   const onSpiralLengthChange = (field: keyof ChamberConstraint, value: number | undefined) => {
     setSpiralLength((prev) => {

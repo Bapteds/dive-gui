@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import {
   applyChamberSpiralToOutputs,
   computeChamberOutputs,
@@ -235,7 +235,12 @@ describe('ChamberOutputsTable', () => {
             outputs={applyChamberSpiralToOutputs(OUTPUTS, null)}
             constraints={{}}
             onConstraintChange={() => {}}
-            spiral={{ on: true, summary: null, length: { min: 7000, max: 6000 }, onLengthChange: () => {} }}
+            spiral={{
+              on: true,
+              summary: null,
+              length: { min: 7000, max: 6000 },
+              onLengthChange: () => {},
+            }}
           />,
         );
         expect(screen.getByLabelText('Length minimum')).toHaveValue(7000);
@@ -256,7 +261,12 @@ describe('ChamberOutputsTable', () => {
             outputs={applyChamberSpiralToOutputs(OUTPUTS, extended.boxMm)}
             constraints={{}}
             onConstraintChange={() => {}}
-            spiral={{ on: true, summary: extended, length: { min: 5000 }, onLengthChange: () => {} }}
+            spiral={{
+              on: true,
+              summary: extended,
+              length: { min: 5000 },
+              onLengthChange: () => {},
+            }}
           />,
         );
         expect(lengthRow()).toHaveTextContent('5,000');
@@ -283,7 +293,12 @@ describe('ChamberOutputsTable', () => {
             outputs={applyChamberSpiralToOutputs(OUTPUTS, SUMMARY.boxMm)}
             constraints={{}}
             onConstraintChange={() => {}}
-            spiral={{ on: true, summary: SUMMARY, length: { exact: 4400 }, onLengthChange: () => {} }}
+            spiral={{
+              on: true,
+              summary: SUMMARY,
+              length: { exact: 4400 },
+              onLengthChange: () => {},
+            }}
           />,
         );
         expect(within(lengthRow()).getByText('set exact')).toBeInTheDocument();

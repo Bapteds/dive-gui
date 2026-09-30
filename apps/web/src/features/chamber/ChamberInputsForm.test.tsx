@@ -303,14 +303,17 @@ describe('ChamberInputsForm', () => {
     expect((onValid.mock.calls[0][0] as ChamberFormValues).vaneCount).toBe(24);
   });
 
-  it.each(['7', '33', '12.5', ''])('blocks a guide vane count of "%s" with the form message', async (value) => {
-    const onValid = vi.fn();
-    render(<Harness onValid={onValid} />);
-    fireEvent.change(screen.getByLabelText('Guide vane count'), { target: { value } });
-    fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
-    expect(await screen.findByText('Enter a whole number from 8 to 32')).toBeInTheDocument();
-    expect(onValid).not.toHaveBeenCalled();
-  });
+  it.each(['7', '33', '12.5', ''])(
+    'blocks a guide vane count of "%s" with the form message',
+    async (value) => {
+      const onValid = vi.fn();
+      render(<Harness onValid={onValid} />);
+      fireEvent.change(screen.getByLabelText('Guide vane count'), { target: { value } });
+      fireEvent.click(screen.getByRole('button', { name: 'Generate chamber' }));
+      expect(await screen.findByText('Enter a whole number from 8 to 32')).toBeInTheDocument();
+      expect(onValid).not.toHaveBeenCalled();
+    },
+  );
 
   it('submits a typed Power (x4) as a number and a blank one as undefined (auto)', async () => {
     const onValid = vi.fn();
@@ -354,17 +357,22 @@ describe('ChamberInputsForm', () => {
     it('shows the casing flow velocity read-only, derived from B Kammer', async () => {
       render(<Harness onValid={() => {}} />);
       fireEvent.click(screen.getByLabelText(/Semi-spiral casing/));
-      const velocity = (await screen.findByLabelText('Casing flow velocity (m/s)')) as HTMLInputElement;
+      const velocity = (await screen.findByLabelText(
+        'Casing flow velocity (m/s)',
+      )) as HTMLInputElement;
       expect(velocity.readOnly).toBe(true);
       expect(velocity.value).toBe('0.923');
       expect(screen.getByText(/From B Kammer \(6150 mm\)/)).toBeInTheDocument();
     });
 
     it('shows the out-of-range message under the velocity', async () => {
-      const error = 'B Kammer (1000 mm) is too narrow for the casing; it must stay between 0.3 and 3 m/s. Set B Kammer between 3550 and 7250 mm.';
+      const error =
+        'B Kammer (1000 mm) is too narrow for the casing; it must stay between 0.3 and 3 m/s. Set B Kammer between 3550 and 7250 mm.';
       render(<Harness onValid={() => {}} casingVelocity={{ value: null, widthMm: 1000, error }} />);
       fireEvent.click(screen.getByLabelText(/Semi-spiral casing/));
-      const velocity = (await screen.findByLabelText('Casing flow velocity (m/s)')) as HTMLInputElement;
+      const velocity = (await screen.findByLabelText(
+        'Casing flow velocity (m/s)',
+      )) as HTMLInputElement;
       expect(velocity.value).toBe('');
       expect(screen.getByText(error)).toBeInTheDocument();
     });

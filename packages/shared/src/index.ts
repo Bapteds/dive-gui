@@ -912,7 +912,8 @@ export type FreeSurfaceStartRequest = Pick<
  * Downloadable job files: the fitted STL and its check figure per iteration, and
  * the post figure per surface estimate.
  */
-export const FREE_SURFACE_FILE_PATTERN = /^(domain_lidIter[1-9]\d{0,2}\.(stl|png)|lid_iter\d{1,3}\.png)$/;
+export const FREE_SURFACE_FILE_PATTERN =
+  /^(domain_lidIter[1-9]\d{0,2}\.(stl|png)|lid_iter\d{1,3}\.png)$/;
 
 /** Is `name` an allow-listed job file name? */
 export function isFreeSurfaceFileName(name: string): boolean {
@@ -2108,58 +2109,301 @@ export interface SolverInfo {
 /** The full ESI v2406 solver library (drives the selection overlay). */
 export const SOLVER_LIBRARY: SolverInfo[] = [
   // Incompressible
-  { id: 'simpleFoam', label: 'Steady-state, incompressible (RANS)', summary: 'Time-averaged single-phase flow that settles to a steady solution.', category: 'incompressible', regime: 'steady' },
-  { id: 'pimpleFoam', label: 'Transient, incompressible (URANS)', summary: 'Time-accurate single-phase flow for unsteady dynamics.', category: 'incompressible', regime: 'transient' },
-  { id: 'pisoFoam', label: 'Transient, incompressible (PISO)', summary: 'Transient single-phase flow with the PISO pressure-velocity loop.', category: 'incompressible', regime: 'transient' },
-  { id: 'icoFoam', label: 'Transient laminar (icoFoam)', summary: 'Transient laminar Newtonian flow. The classic lid-driven cavity solver.', category: 'incompressible', regime: 'transient' },
-  { id: 'nonNewtonianIcoFoam', label: 'Transient laminar, non-Newtonian', summary: 'Transient laminar flow with a non-Newtonian rheology model.', category: 'incompressible', regime: 'transient' },
-  { id: 'potentialFoam', label: 'Potential flow', summary: 'Inviscid potential flow, usually used to initialise a velocity field.', category: 'incompressible' },
-  { id: 'SRFSimpleFoam', label: 'Steady, single rotating frame (SRF)', summary: 'Steady incompressible flow in one rotating reference frame (SRF).', category: 'incompressible', regime: 'steady' },
-  { id: 'porousSimpleFoam', label: 'Steady, incompressible + porous', summary: 'Steady incompressible flow with porous-media momentum sources.', category: 'incompressible', regime: 'steady' },
-  { id: 'adjointShapeOptimizationFoam', label: 'Adjoint shape optimisation', summary: 'Adjoint-based shape optimisation for steady incompressible flow.', category: 'incompressible', regime: 'steady' },
+  {
+    id: 'simpleFoam',
+    label: 'Steady-state, incompressible (RANS)',
+    summary: 'Time-averaged single-phase flow that settles to a steady solution.',
+    category: 'incompressible',
+    regime: 'steady',
+  },
+  {
+    id: 'pimpleFoam',
+    label: 'Transient, incompressible (URANS)',
+    summary: 'Time-accurate single-phase flow for unsteady dynamics.',
+    category: 'incompressible',
+    regime: 'transient',
+  },
+  {
+    id: 'pisoFoam',
+    label: 'Transient, incompressible (PISO)',
+    summary: 'Transient single-phase flow with the PISO pressure-velocity loop.',
+    category: 'incompressible',
+    regime: 'transient',
+  },
+  {
+    id: 'icoFoam',
+    label: 'Transient laminar (icoFoam)',
+    summary: 'Transient laminar Newtonian flow. The classic lid-driven cavity solver.',
+    category: 'incompressible',
+    regime: 'transient',
+  },
+  {
+    id: 'nonNewtonianIcoFoam',
+    label: 'Transient laminar, non-Newtonian',
+    summary: 'Transient laminar flow with a non-Newtonian rheology model.',
+    category: 'incompressible',
+    regime: 'transient',
+  },
+  {
+    id: 'potentialFoam',
+    label: 'Potential flow',
+    summary: 'Inviscid potential flow, usually used to initialise a velocity field.',
+    category: 'incompressible',
+  },
+  {
+    id: 'SRFSimpleFoam',
+    label: 'Steady, single rotating frame (SRF)',
+    summary: 'Steady incompressible flow in one rotating reference frame (SRF).',
+    category: 'incompressible',
+    regime: 'steady',
+  },
+  {
+    id: 'porousSimpleFoam',
+    label: 'Steady, incompressible + porous',
+    summary: 'Steady incompressible flow with porous-media momentum sources.',
+    category: 'incompressible',
+    regime: 'steady',
+  },
+  {
+    id: 'adjointShapeOptimizationFoam',
+    label: 'Adjoint shape optimisation',
+    summary: 'Adjoint-based shape optimisation for steady incompressible flow.',
+    category: 'incompressible',
+    regime: 'steady',
+  },
   // Compressible
-  { id: 'rhoSimpleFoam', label: 'Steady-state, compressible (RANS)', summary: 'Time-averaged compressible flow with heat, settling to steady.', category: 'compressible', regime: 'steady' },
-  { id: 'rhoPimpleFoam', label: 'Transient, compressible (RANS)', summary: 'Time-accurate compressible flow with heat, for unsteady dynamics.', category: 'compressible', regime: 'transient' },
-  { id: 'rhoPorousSimpleFoam', label: 'Steady, compressible + porous', summary: 'Steady compressible flow with porous zones and heat transfer.', category: 'compressible', regime: 'steady' },
+  {
+    id: 'rhoSimpleFoam',
+    label: 'Steady-state, compressible (RANS)',
+    summary: 'Time-averaged compressible flow with heat, settling to steady.',
+    category: 'compressible',
+    regime: 'steady',
+  },
+  {
+    id: 'rhoPimpleFoam',
+    label: 'Transient, compressible (RANS)',
+    summary: 'Time-accurate compressible flow with heat, for unsteady dynamics.',
+    category: 'compressible',
+    regime: 'transient',
+  },
+  {
+    id: 'rhoPorousSimpleFoam',
+    label: 'Steady, compressible + porous',
+    summary: 'Steady compressible flow with porous zones and heat transfer.',
+    category: 'compressible',
+    regime: 'steady',
+  },
   // High-speed / supersonic
-  { id: 'rhoCentralFoam', label: 'Density-based, high-speed', summary: 'Density-based compressible solver for shocks (Kurganov-Tadmor).', category: 'supersonic', regime: 'transient' },
-  { id: 'sonicFoam', label: 'Transient, trans/supersonic', summary: 'Transient compressible flow through the transonic and supersonic range.', category: 'supersonic', regime: 'transient' },
+  {
+    id: 'rhoCentralFoam',
+    label: 'Density-based, high-speed',
+    summary: 'Density-based compressible solver for shocks (Kurganov-Tadmor).',
+    category: 'supersonic',
+    regime: 'transient',
+  },
+  {
+    id: 'sonicFoam',
+    label: 'Transient, trans/supersonic',
+    summary: 'Transient compressible flow through the transonic and supersonic range.',
+    category: 'supersonic',
+    regime: 'transient',
+  },
   // Heat transfer & buoyancy
-  { id: 'buoyantSimpleFoam', label: 'Steady, buoyant (natural convection)', summary: 'Steady compressible flow driven by buoyancy (natural convection).', category: 'heatTransfer', regime: 'steady' },
-  { id: 'buoyantPimpleFoam', label: 'Transient, buoyant', summary: 'Transient compressible flow driven by buoyancy and heat.', category: 'heatTransfer', regime: 'transient' },
-  { id: 'chtMultiRegionFoam', label: 'Conjugate heat transfer (CHT)', summary: 'Coupled heat transfer across solid and fluid regions.', category: 'heatTransfer' },
+  {
+    id: 'buoyantSimpleFoam',
+    label: 'Steady, buoyant (natural convection)',
+    summary: 'Steady compressible flow driven by buoyancy (natural convection).',
+    category: 'heatTransfer',
+    regime: 'steady',
+  },
+  {
+    id: 'buoyantPimpleFoam',
+    label: 'Transient, buoyant',
+    summary: 'Transient compressible flow driven by buoyancy and heat.',
+    category: 'heatTransfer',
+    regime: 'transient',
+  },
+  {
+    id: 'chtMultiRegionFoam',
+    label: 'Conjugate heat transfer (CHT)',
+    summary: 'Coupled heat transfer across solid and fluid regions.',
+    category: 'heatTransfer',
+  },
   // Free surface (VoF)
-  { id: 'interFoam', label: 'Two-phase free surface (VoF)', summary: 'Two incompressible phases with a sharp interface (Volume of Fluid).', category: 'freeSurface', regime: 'transient' },
-  { id: 'interIsoFoam', label: 'Two-phase VoF (isoAdvector)', summary: 'interFoam with the geometric isoAdvector interface capturing scheme.', category: 'freeSurface', regime: 'transient' },
-  { id: 'multiphaseInterFoam', label: 'Many-phase free surface (VoF)', summary: 'More than two incompressible phases with sharp interfaces (VoF).', category: 'freeSurface', regime: 'transient' },
-  { id: 'interPhaseChangeFoam', label: 'Two-phase VoF + cavitation', summary: 'Two-phase VoF with phase change, for cavitation.', category: 'freeSurface', regime: 'transient' },
-  { id: 'compressibleInterFoam', label: 'Two-phase compressible free surface', summary: 'Two compressible phases with a sharp free surface.', category: 'freeSurface', regime: 'transient' },
-  { id: 'driftFluxFoam', label: 'Drift-flux mixture', summary: 'Mixture drift-flux for settling suspensions (sludge, sediment).', category: 'freeSurface', regime: 'transient' },
-  { id: 'potentialFreeSurfaceFoam', label: 'Potential free surface', summary: 'Incompressible flow with a linearised potential free surface.', category: 'freeSurface', regime: 'transient' },
+  {
+    id: 'interFoam',
+    label: 'Two-phase free surface (VoF)',
+    summary: 'Two incompressible phases with a sharp interface (Volume of Fluid).',
+    category: 'freeSurface',
+    regime: 'transient',
+  },
+  {
+    id: 'interIsoFoam',
+    label: 'Two-phase VoF (isoAdvector)',
+    summary: 'interFoam with the geometric isoAdvector interface capturing scheme.',
+    category: 'freeSurface',
+    regime: 'transient',
+  },
+  {
+    id: 'multiphaseInterFoam',
+    label: 'Many-phase free surface (VoF)',
+    summary: 'More than two incompressible phases with sharp interfaces (VoF).',
+    category: 'freeSurface',
+    regime: 'transient',
+  },
+  {
+    id: 'interPhaseChangeFoam',
+    label: 'Two-phase VoF + cavitation',
+    summary: 'Two-phase VoF with phase change, for cavitation.',
+    category: 'freeSurface',
+    regime: 'transient',
+  },
+  {
+    id: 'compressibleInterFoam',
+    label: 'Two-phase compressible free surface',
+    summary: 'Two compressible phases with a sharp free surface.',
+    category: 'freeSurface',
+    regime: 'transient',
+  },
+  {
+    id: 'driftFluxFoam',
+    label: 'Drift-flux mixture',
+    summary: 'Mixture drift-flux for settling suspensions (sludge, sediment).',
+    category: 'freeSurface',
+    regime: 'transient',
+  },
+  {
+    id: 'potentialFreeSurfaceFoam',
+    label: 'Potential free surface',
+    summary: 'Incompressible flow with a linearised potential free surface.',
+    category: 'freeSurface',
+    regime: 'transient',
+  },
   // Multiphase (Euler-Euler)
-  { id: 'multiphaseEulerFoam', label: 'Euler-Euler multiphase', summary: 'Interpenetrating phases: bubble columns, fluidised beds, boiling.', category: 'multiphaseEuler', regime: 'transient' },
-  { id: 'reactingTwoPhaseEulerFoam', label: 'Two-phase Euler + reactions', summary: 'Two Euler-Euler phases with mass transfer, reactions and heat.', category: 'multiphaseEuler', regime: 'transient' },
+  {
+    id: 'multiphaseEulerFoam',
+    label: 'Euler-Euler multiphase',
+    summary: 'Interpenetrating phases: bubble columns, fluidised beds, boiling.',
+    category: 'multiphaseEuler',
+    regime: 'transient',
+  },
+  {
+    id: 'reactingTwoPhaseEulerFoam',
+    label: 'Two-phase Euler + reactions',
+    summary: 'Two Euler-Euler phases with mass transfer, reactions and heat.',
+    category: 'multiphaseEuler',
+    regime: 'transient',
+  },
   // Combustion & reactions
-  { id: 'reactingFoam', label: 'Combustion (detailed chemistry)', summary: 'Compressible reacting flow with detailed finite-rate chemistry.', category: 'combustion', regime: 'transient' },
-  { id: 'rhoReactingFoam', label: 'Combustion (density-based)', summary: 'Density-based compressible combustion with chemistry.', category: 'combustion', regime: 'transient' },
-  { id: 'XiFoam', label: 'Premixed combustion', summary: 'Premixed and partially premixed turbulent combustion (Xi model).', category: 'combustion', regime: 'transient' },
-  { id: 'fireFoam', label: 'Fire and spray', summary: 'Fire, pool fires and spray combustion with radiation.', category: 'combustion', regime: 'transient' },
-  { id: 'chemFoam', label: 'Single-cell chemistry', summary: 'Zero-dimensional chemistry for validating a reaction mechanism.', category: 'combustion', regime: 'transient' },
+  {
+    id: 'reactingFoam',
+    label: 'Combustion (detailed chemistry)',
+    summary: 'Compressible reacting flow with detailed finite-rate chemistry.',
+    category: 'combustion',
+    regime: 'transient',
+  },
+  {
+    id: 'rhoReactingFoam',
+    label: 'Combustion (density-based)',
+    summary: 'Density-based compressible combustion with chemistry.',
+    category: 'combustion',
+    regime: 'transient',
+  },
+  {
+    id: 'XiFoam',
+    label: 'Premixed combustion',
+    summary: 'Premixed and partially premixed turbulent combustion (Xi model).',
+    category: 'combustion',
+    regime: 'transient',
+  },
+  {
+    id: 'fireFoam',
+    label: 'Fire and spray',
+    summary: 'Fire, pool fires and spray combustion with radiation.',
+    category: 'combustion',
+    regime: 'transient',
+  },
+  {
+    id: 'chemFoam',
+    label: 'Single-cell chemistry',
+    summary: 'Zero-dimensional chemistry for validating a reaction mechanism.',
+    category: 'combustion',
+    regime: 'transient',
+  },
   // Particles (Lagrangian)
-  { id: 'DPMFoam', label: 'Dense discrete particles (DPM)', summary: 'Dense Lagrangian particles two-way coupled to a carrier fluid.', category: 'particle', regime: 'transient' },
-  { id: 'MPPICFoam', label: 'Dense particle cloud (MP-PIC)', summary: 'Dense particle cloud without resolving inter-particle collisions.', category: 'particle', regime: 'transient' },
-  { id: 'reactingParcelFoam', label: 'Reacting Lagrangian parcels', summary: 'Reacting Lagrangian parcels (sprays, droplets) in a reacting gas.', category: 'particle', regime: 'transient' },
+  {
+    id: 'DPMFoam',
+    label: 'Dense discrete particles (DPM)',
+    summary: 'Dense Lagrangian particles two-way coupled to a carrier fluid.',
+    category: 'particle',
+    regime: 'transient',
+  },
+  {
+    id: 'MPPICFoam',
+    label: 'Dense particle cloud (MP-PIC)',
+    summary: 'Dense particle cloud without resolving inter-particle collisions.',
+    category: 'particle',
+    regime: 'transient',
+  },
+  {
+    id: 'reactingParcelFoam',
+    label: 'Reacting Lagrangian parcels',
+    summary: 'Reacting Lagrangian parcels (sprays, droplets) in a reacting gas.',
+    category: 'particle',
+    regime: 'transient',
+  },
   // Basic & scalar transport
-  { id: 'laplacianFoam', label: 'Laplace / diffusion', summary: 'Solves the Laplace equation: pure diffusion of a scalar.', category: 'basic', regime: 'transient' },
-  { id: 'scalarTransportFoam', label: 'Passive scalar transport', summary: 'Transports a passive scalar through a frozen velocity field.', category: 'basic', regime: 'transient' },
+  {
+    id: 'laplacianFoam',
+    label: 'Laplace / diffusion',
+    summary: 'Solves the Laplace equation: pure diffusion of a scalar.',
+    category: 'basic',
+    regime: 'transient',
+  },
+  {
+    id: 'scalarTransportFoam',
+    label: 'Passive scalar transport',
+    summary: 'Transports a passive scalar through a frozen velocity field.',
+    category: 'basic',
+    regime: 'transient',
+  },
   // Solid mechanics
-  { id: 'solidDisplacementFoam', label: 'Linear-elastic solid stress', summary: 'Small-strain linear-elastic stress and displacement in a solid.', category: 'solid', regime: 'transient' },
+  {
+    id: 'solidDisplacementFoam',
+    label: 'Linear-elastic solid stress',
+    summary: 'Small-strain linear-elastic stress and displacement in a solid.',
+    category: 'solid',
+    regime: 'transient',
+  },
   // Electromagnetics
-  { id: 'electrostaticFoam', label: 'Electrostatics', summary: 'Electrostatic potential with charge density transport.', category: 'electromagnetics', regime: 'transient' },
-  { id: 'mhdFoam', label: 'Magnetohydrodynamics', summary: 'Incompressible conducting fluid coupled to a magnetic field (MHD).', category: 'electromagnetics', regime: 'transient' },
-  { id: 'magneticFoam', label: 'Magnetostatics', summary: 'Magnetic field of a set of permanent magnets.', category: 'electromagnetics' },
+  {
+    id: 'electrostaticFoam',
+    label: 'Electrostatics',
+    summary: 'Electrostatic potential with charge density transport.',
+    category: 'electromagnetics',
+    regime: 'transient',
+  },
+  {
+    id: 'mhdFoam',
+    label: 'Magnetohydrodynamics',
+    summary: 'Incompressible conducting fluid coupled to a magnetic field (MHD).',
+    category: 'electromagnetics',
+    regime: 'transient',
+  },
+  {
+    id: 'magneticFoam',
+    label: 'Magnetostatics',
+    summary: 'Magnetic field of a set of permanent magnets.',
+    category: 'electromagnetics',
+  },
   // Rarefied / molecular
-  { id: 'dsmcFoam', label: 'Rarefied gas (DSMC)', summary: 'Direct Simulation Monte Carlo for rarefied and high-Knudsen gas.', category: 'molecular', regime: 'transient' },
+  {
+    id: 'dsmcFoam',
+    label: 'Rarefied gas (DSMC)',
+    summary: 'Direct Simulation Monte Carlo for rarefied and high-Knudsen gas.',
+    category: 'molecular',
+    regime: 'transient',
+  },
 ];
 
 /**
@@ -2776,68 +3020,198 @@ export interface ChamberOutputSpec {
  */
 export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
   // P1: width. Refines from a measured B1 (P3).
-  { key: 'width', label: 'B Kammer', form: 'linear', cvError: 18.8, confidence: 'Moderate',
+  {
+    key: 'width',
+    label: 'B Kammer',
+    form: 'linear',
+    cvError: 18.8,
+    confidence: 'Moderate',
     coeffs: { a: 3501.480486, b: -0.01990289598, c: -104.4968392, d: 224.0149301 },
-    relation: { kind: 'refine', defaultOn: true, partner: 'distFromSideChamfer1',
-      label: 'refine from B1', description: 'Sharpen B Kammer from a measured B1 (its Exact); R² 0.51 → 0.81.',
-      refineCoeffs: { a: 1101.528235, b: 0.5004560281, c: -19.97360475, d: 78.2136825, p: 0.976665205 } } },
+    relation: {
+      kind: 'refine',
+      defaultOn: true,
+      partner: 'distFromSideChamfer1',
+      label: 'refine from B1',
+      description: 'Sharpen B Kammer from a measured B1 (its Exact); R² 0.51 → 0.81.',
+      refineCoeffs: {
+        a: 1101.528235,
+        b: 0.5004560281,
+        c: -19.97360475,
+        d: 78.2136825,
+        p: 0.976665205,
+      },
+    },
+  },
   // P2: height. Own linear fit; relation = LEB + LEOW.
-  { key: 'height', label: 'H Kammer', form: 'linear', cvError: 28.6, confidence: 'Moderate',
+  {
+    key: 'height',
+    label: 'H Kammer',
+    form: 'linear',
+    cvError: 28.6,
+    confidence: 'Moderate',
     coeffs: { a: -2655.561158, b: 3.469850592, c: 500.9913764, d: -178.9974433 },
-    relation: { kind: 'combination', defaultOn: true, label: '= LEB + LEOW',
+    relation: {
+      kind: 'combination',
+      defaultOn: true,
+      label: '= LEB + LEOW',
       description: 'H Kammer = LEB + LEOW (middle+first plus last cylinder height).',
-      terms: [{ key: 'hMiddlePlusFirst', coeff: 1 }, { key: 'hLast', coeff: 1 }] } },
+      terms: [
+        { key: 'hMiddlePlusFirst', coeff: 1 },
+        { key: 'hLast', coeff: 1 },
+      ],
+    },
+  },
   // P3: distFromSideChamfer1. Refines from a measured B Kammer (P1).
-  { key: 'distFromSideChamfer1', label: 'B1', form: 'linear', cvError: 32.0, confidence: 'Low',
+  {
+    key: 'distFromSideChamfer1',
+    label: 'B1',
+    form: 'linear',
+    cvError: 32.0,
+    confidence: 'Low',
     coeffs: { a: 1913.645229, b: -0.1144287145, c: -38.895132, d: 115.1237973 },
-    relation: { kind: 'refine', defaultOn: true, partner: 'width',
-      label: 'refine from B Kammer', description: 'Sharpen B1 from a measured B Kammer (its Exact); R² 0.09 → 0.62.',
-      refineCoeffs: { a: -417.365864, b: -0.2106437417, c: 14.17960421, d: -32.6306581, p: 0.7098088714 } } },
+    relation: {
+      kind: 'refine',
+      defaultOn: true,
+      partner: 'width',
+      label: 'refine from B Kammer',
+      description: 'Sharpen B1 from a measured B Kammer (its Exact); R² 0.09 → 0.62.',
+      refineCoeffs: {
+        a: -417.365864,
+        b: -0.2106437417,
+        c: 14.17960421,
+        d: -32.6306581,
+        p: 0.7098088714,
+      },
+    },
+  },
   // P4: chamferLength1. No relation.
-  { key: 'chamferLength1', label: 'LF1', form: 'linear', cvError: 20.6, confidence: 'Moderate',
-    coeffs: { a: -2.009758353, b: 0.9116908157, c: 16.38088606, d: -19.61930855 } },
-  // P5: chamferWidth1. relation = LF1.
-  { key: 'chamferWidth1', label: 'BF1', form: 'linear', cvError: 20.6, confidence: 'Moderate',
+  {
+    key: 'chamferLength1',
+    label: 'LF1',
+    form: 'linear',
+    cvError: 20.6,
+    confidence: 'Moderate',
     coeffs: { a: -2.009758353, b: 0.9116908157, c: 16.38088606, d: -19.61930855 },
-    relation: { kind: 'combination', defaultOn: true, label: '= LF1',
+  },
+  // P5: chamferWidth1. relation = LF1.
+  {
+    key: 'chamferWidth1',
+    label: 'BF1',
+    form: 'linear',
+    cvError: 20.6,
+    confidence: 'Moderate',
+    coeffs: { a: -2.009758353, b: 0.9116908157, c: 16.38088606, d: -19.61930855 },
+    relation: {
+      kind: 'combination',
+      defaultOn: true,
+      label: '= LF1',
       description: 'BF1 = LF1 (chamfer 1 width equals its length).',
-      terms: [{ key: 'chamferLength1', coeff: 1 }] } },
+      terms: [{ key: 'chamferLength1', coeff: 1 }],
+    },
+  },
   // P6: chamferLength2. relation = LF1 (both chamfers equal).
-  { key: 'chamferLength2', label: 'LF2', form: 'linear', cvError: 18.6, confidence: 'Moderate',
+  {
+    key: 'chamferLength2',
+    label: 'LF2',
+    form: 'linear',
+    cvError: 18.6,
+    confidence: 'Moderate',
     coeffs: { a: 810.7255952, b: 0.1366396239, c: -70.24908474, d: 55.86948952 },
-    relation: { kind: 'combination', defaultOn: true, label: '= LF1',
+    relation: {
+      kind: 'combination',
+      defaultOn: true,
+      label: '= LF1',
       description: 'LF2 = LF1 (both chamfers equal).',
-      terms: [{ key: 'chamferLength1', coeff: 1 }] } },
+      terms: [{ key: 'chamferLength1', coeff: 1 }],
+    },
+  },
   // P7: chamferWidth2. relation = LF2.
-  { key: 'chamferWidth2', label: 'BF2', form: 'linear', cvError: 22.0, confidence: 'Moderate',
+  {
+    key: 'chamferWidth2',
+    label: 'BF2',
+    form: 'linear',
+    cvError: 22.0,
+    confidence: 'Moderate',
     coeffs: { a: 1207.055875, b: -0.137521288, c: -128.8078895, d: 79.76891504 },
-    relation: { kind: 'combination', defaultOn: true, label: '= LF2',
+    relation: {
+      kind: 'combination',
+      defaultOn: true,
+      label: '= LF2',
       description: 'BF2 = LF2 (chamfer 2 width equals its length).',
-      terms: [{ key: 'chamferLength2', coeff: 1 }] } },
+      terms: [{ key: 'chamferLength2', coeff: 1 }],
+    },
+  },
   // P8: distFromEnd. relation = LF1 + LF2 (chamfered part).
-  { key: 'distFromEnd', label: 'LT', form: 'linear', cvError: 27.2, confidence: 'Moderate',
+  {
+    key: 'distFromEnd',
+    label: 'LT',
+    form: 'linear',
+    cvError: 27.2,
+    confidence: 'Moderate',
     coeffs: { a: -359.9271681, b: 2.188772589, c: 48.83409566, d: -45.9108988 },
-    relation: { kind: 'combination', defaultOn: true, label: '= LF1 + LF2',
+    relation: {
+      kind: 'combination',
+      defaultOn: true,
+      label: '= LF1 + LF2',
       description: 'LT = LF1 + LF2 (the chamfered part).',
-      terms: [{ key: 'chamferLength1', coeff: 1 }, { key: 'chamferLength2', coeff: 1 }] } },
+      terms: [
+        { key: 'chamferLength1', coeff: 1 },
+        { key: 'chamferLength2', coeff: 1 },
+      ],
+    },
+  },
   // P9: dLast. relation = 255.16 + 3.4954 × HLE.
-  { key: 'dLast', label: 'LE (Durchmesser)', form: 'linear', cvError: 8.1, confidence: 'Good',
+  {
+    key: 'dLast',
+    label: 'LE (Durchmesser)',
+    form: 'linear',
+    cvError: 8.1,
+    confidence: 'Good',
     coeffs: { a: 221.4522145, b: 1.498949106, c: -9.02505593, d: 14.40321366 },
-    relation: { kind: 'combination', defaultOn: true, label: '= f(HLE)',
+    relation: {
+      kind: 'combination',
+      defaultOn: true,
+      label: '= f(HLE)',
       description: 'LE = 255.16 + 3.4954 × HLE.',
-      constant: 255.16, terms: [{ key: 'hMiddle', coeff: 3.4954 }], empirical: true } },
+      constant: 255.16,
+      terms: [{ key: 'hMiddle', coeff: 3.4954 }],
+      empirical: true,
+    },
+  },
   // P10: hMiddle. No relation.
-  { key: 'hMiddle', label: 'HLE', form: 'linear', cvError: 5.8, confidence: 'High',
-    coeffs: { a: 17.17464869, b: 0.435873881, c: -6.126007422, d: 2.320487817 } },
+  {
+    key: 'hMiddle',
+    label: 'HLE',
+    form: 'linear',
+    cvError: 5.8,
+    confidence: 'High',
+    coeffs: { a: 17.17464869, b: 0.435873881, c: -6.126007422, d: 2.320487817 },
+  },
   // P11: hMiddlePlusFirst. Own power fit; relation = 2 × HLE.
-  { key: 'hMiddlePlusFirst', label: 'LEB', form: 'power', cvError: 24.9, confidence: 'Moderate',
+  {
+    key: 'hMiddlePlusFirst',
+    label: 'LEB',
+    form: 'power',
+    cvError: 24.9,
+    confidence: 'Moderate',
     coeffs: { k: 0.0000000238913334, e1: 3.631996617, e2: 0.647878341, e3: -1.281050007 },
-    relation: { kind: 'combination', defaultOn: true, label: '= 2 × HLE',
+    relation: {
+      kind: 'combination',
+      defaultOn: true,
+      label: '= 2 × HLE',
       description: 'LEB = 2 × HLE (middle+first height is twice the middle height).',
-      terms: [{ key: 'hMiddle', coeff: 2 }] } },
+      terms: [{ key: 'hMiddle', coeff: 2 }],
+    },
+  },
   // P12: hLast. No relation.
-  { key: 'hLast', label: 'LEOW', form: 'linear', cvError: 38.9, confidence: 'Low',
-    coeffs: { a: 506.0051287, b: -0.4315856534, c: 312.7206124, d: 47.41062013 } },
+  {
+    key: 'hLast',
+    label: 'LEOW',
+    form: 'linear',
+    cvError: 38.9,
+    confidence: 'Low',
+    coeffs: { a: 506.0051287, b: -0.4315856534, c: 312.7206124, d: 47.41062013 },
+  },
 ];
 
 /** UI descriptor for one toggleable relation (derived from the specs). */
@@ -3015,8 +3389,7 @@ export function computeChamberGeneratorDims(input: {
   const { x1, x3 } = input;
   const x4Auto = 0.9 * 9.81 * input.x2 * input.x3;
   const x4Used = input.x4 ?? x4Auto;
-  const frame =
-    x4Used > 1560 ? 115 : x4Used <= 175 ? (x1 <= 940 ? 26 : 46) : x1 <= 683 ? 48 : 62;
+  const frame = x4Used > 1560 ? 115 : x4Used <= 175 ? (x1 <= 940 ? 26 : 46) : x1 <= 683 ? 48 : 62;
   // Round to the catalog step of 5 FIRST, then clamp to the catalog span.
   const lengthCode = Math.max(
     30,
@@ -3428,7 +3801,9 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
   // They can chain (LEB = 2·HLE, then H Kammer = LEB + LEOW), so resolve to a
   // fixpoint: emit any whose terms are all resolved until none remain. Reading each
   // term's FINAL means an override on a partner (or a chained relation) propagates.
-  const combos = CHAMBER_OUTPUT_SPECS.filter((s) => relationOn(s) && s.relation!.kind === 'combination');
+  const combos = CHAMBER_OUTPUT_SPECS.filter(
+    (s) => relationOn(s) && s.relation!.kind === 'combination',
+  );
   let progressed = true;
   while (progressed) {
     progressed = false;
@@ -3437,7 +3812,8 @@ export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
       const rel = spec.relation!;
       if (!rel.terms!.every((t) => byKey.has(t.key))) continue;
       const model =
-        (rel.constant ?? 0) + rel.terms!.reduce((sum, t) => sum + t.coeff * byKey.get(t.key)!.final, 0);
+        (rel.constant ?? 0) +
+        rel.terms!.reduce((sum, t) => sum + t.coeff * byKey.get(t.key)!.final, 0);
       // A true identity over a user-driven partner keeps that value verbatim;
       // a fitted formula (rel.empirical, e.g. LE = f(HLE)) always re-snaps.
       const inherits = !rel.empirical && rel.terms!.some((t) => byKey.get(t.key)!.userDriven);
@@ -3795,16 +4171,28 @@ export function chamberSpiralVelocityRefusal(
   outputs: ChamberOutput[],
 ): string | null {
   const c = chamberSpiralVelocityOf(input, outputs);
-  if (Number.isFinite(c) && c >= CHAMBER_SPIRAL_FLOW_RANGE.min && c <= CHAMBER_SPIRAL_FLOW_RANGE.max) {
+  if (
+    Number.isFinite(c) &&
+    c >= CHAMBER_SPIRAL_FLOW_RANGE.min &&
+    c <= CHAMBER_SPIRAL_FLOW_RANGE.max
+  ) {
     return null;
   }
   const final = (k: ChamberOutputKey) => outputs.find((o) => o.key === k)!.final;
   const h = final('height') / 1000;
   const dLe = chamberSpiralDLeM(input, outputs);
   const widthMm = Math.round(final('width'));
-  const lo = Math.ceil((chamberSpiralWidthFor(input.x3, h, dLe, CHAMBER_SPIRAL_FLOW_RANGE.max) * 1000) / 50) * 50;
-  const hi = Math.floor((chamberSpiralWidthFor(input.x3, h, dLe, CHAMBER_SPIRAL_FLOW_RANGE.min) * 1000) / 50) * 50;
-  const got = Number.isFinite(c) ? `gives a casing flow velocity of ${c} m/s` : 'is too narrow for the casing';
+  const lo =
+    Math.ceil(
+      (chamberSpiralWidthFor(input.x3, h, dLe, CHAMBER_SPIRAL_FLOW_RANGE.max) * 1000) / 50,
+    ) * 50;
+  const hi =
+    Math.floor(
+      (chamberSpiralWidthFor(input.x3, h, dLe, CHAMBER_SPIRAL_FLOW_RANGE.min) * 1000) / 50,
+    ) * 50;
+  const got = Number.isFinite(c)
+    ? `gives a casing flow velocity of ${c} m/s`
+    : 'is too narrow for the casing';
   return (
     `B Kammer (${widthMm} mm) ${got}; it must stay between ${CHAMBER_SPIRAL_FLOW_RANGE.min} and ` +
     `${CHAMBER_SPIRAL_FLOW_RANGE.max} m/s. Set B Kammer between ${lo} and ${hi} mm.`
@@ -3873,7 +4261,6 @@ export function applyChamberSpiralToOutputs(
       : o,
   );
 }
-
 
 /**
  * Machine-readable error codes the API may emit in its `{ error: { code } }`
@@ -3944,7 +4331,14 @@ export type ServerErrorCode = (typeof SERVER_ERROR_CODES)[number];
 // ---------------------------------------------------------------------------
 
 /** Study lifecycle: draft → running → (pausing → paused → running …) → completed | failed. */
-export const STUDY_STATUSES = ['draft', 'running', 'pausing', 'paused', 'completed', 'failed'] as const;
+export const STUDY_STATUSES = [
+  'draft',
+  'running',
+  'pausing',
+  'paused',
+  'completed',
+  'failed',
+] as const;
 export type StudyStatus = (typeof STUDY_STATUSES)[number];
 
 /** Stages of one evaluation, persisted in `Evaluation.status` before each starts. */
@@ -4040,10 +4434,9 @@ export interface ParamSpaceResult {
   errors: string[];
 }
 
-/** Is the relation of `spec` on for this input? Permanent ones always are. */
+/** Is the relation of `spec` on for this input? */
 function studyRelationOn(input: ChamberInput, spec: ChamberOutputSpec): boolean {
   if (!spec.relation) return false;
-  if (spec.relation.permanent) return true;
   return (
     input.relationsMaster !== false && (input.relations?.[spec.key] ?? spec.relation.defaultOn)
   );
@@ -4054,15 +4447,24 @@ function chamberOutputLabel(key: ChamberOutputKey): string {
   return CHAMBER_OUTPUT_SPECS.find((s) => s.key === key)?.label ?? key;
 }
 
+/** Corner chamfer widths that copy their chamfer length while their relation is on. */
+const STUDY_BF_KEYS: readonly ChamberOutputKey[] = ['chamferWidth1', 'chamferWidth2'];
+
+/** Is the BF = LF relation of `key` active in this design (on by default)? */
+function bfRelationOn(base: ChamberInput, key: ChamberOutputKey): boolean {
+  const spec = CHAMBER_OUTPUT_SPECS.find((o) => o.key === key);
+  return spec ? studyRelationOn(base, spec) : false;
+}
+
 /**
- * The outputs a study may optimise for this base design: every output except the
- * permanent identities (BF1 = LF1, BF2 = LF2) and, with the semi-spiral on, the
- * rows the spiral derives.
+ * The outputs a study may optimise for this base design: every output except
+ * BF1 / BF2 while their BF = LF relation is on (they follow LF1 / LF2) and, with
+ * the semi-spiral on, the rows the spiral derives.
  */
 export function studyPickableKeys(base: ChamberInput): ChamberOutputKey[] {
   return CHAMBER_OUTPUT_KEYS.filter(
     (k) =>
-      !CHAMBER_PERMANENT_RELATION_KEYS.includes(k) &&
+      !(STUDY_BF_KEYS.includes(k) && bfRelationOn(base, k)) &&
       !(base.semiSpiral === true && CHAMBER_SPIRAL_DERIVED_KEYS.includes(k)),
   );
 }
@@ -4090,9 +4492,9 @@ export function computeParamSpace(
     const label = chamberOutputLabel(key);
     if (!pickable.includes(key)) {
       errors.push(
-        CHAMBER_PERMANENT_RELATION_KEYS.includes(key)
-          ? `${label} always equals its chamfer length (45° corner) and cannot be optimised.`
-          : `${label} comes from the semi-spiral casing and cannot be optimised.`,
+        base.semiSpiral === true && CHAMBER_SPIRAL_DERIVED_KEYS.includes(key)
+          ? `${label} comes from the semi-spiral casing and cannot be optimised.`
+          : `${label} follows its chamfer length through its relation. Turn that relation off in the base design to optimise it.`,
       );
       continue;
     }
@@ -4162,7 +4564,7 @@ export function studyRelationWarnings(
   const warnings: string[] = [];
   for (const spec of CHAMBER_OUTPUT_SPECS) {
     const rel = spec.relation;
-    if (!rel || rel.kind !== 'combination' || rel.permanent) continue;
+    if (!rel || rel.kind !== 'combination') continue;
     if (!keys.includes(spec.key) || !studyRelationOn(base, spec)) continue;
     const partners = (rel.terms ?? []).map((t) => t.key).filter((k) => keys.includes(k));
     if (partners.length === 0) continue;

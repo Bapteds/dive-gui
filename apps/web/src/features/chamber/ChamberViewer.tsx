@@ -128,7 +128,9 @@ function CanvasArea({
   if (!webglAvailable) {
     return (
       <StageMessage
-        icon={<MonitorX className="size-6 text-text-secondary" strokeWidth={1.5} aria-hidden="true" />}
+        icon={
+          <MonitorX className="size-6 text-text-secondary" strokeWidth={1.5} aria-hidden="true" />
+        }
         title="3D rendering isn't available"
         body="Your browser doesn't support WebGL, so the chamber can't be shown here."
       />
@@ -137,7 +139,13 @@ function CanvasArea({
   if (manifestPending) {
     return (
       <StageMessage
-        icon={<Loader2 className="size-6 animate-spin text-primary" strokeWidth={1.75} aria-hidden="true" />}
+        icon={
+          <Loader2
+            className="size-6 animate-spin text-primary"
+            strokeWidth={1.75}
+            aria-hidden="true"
+          />
+        }
         title="Loading preview"
         body="Fetching the built chamber."
       />
@@ -163,7 +171,13 @@ function CanvasArea({
   if (geometry.isPending || edges.isPending) {
     return (
       <StageMessage
-        icon={<Loader2 className="size-6 animate-spin text-primary" strokeWidth={1.75} aria-hidden="true" />}
+        icon={
+          <Loader2
+            className="size-6 animate-spin text-primary"
+            strokeWidth={1.75}
+            aria-hidden="true"
+          />
+        }
         title="Loading geometry"
         body="Preparing the 3D surfaces."
       />
@@ -191,7 +205,15 @@ function CanvasArea({
   );
 }
 
-function StageMessage({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) {
+function StageMessage({
+  icon,
+  title,
+  body,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  body: string;
+}) {
   return (
     <div
       className="flex size-full flex-col items-center justify-center gap-3 px-6 py-12 text-center"
@@ -218,7 +240,9 @@ function StageError({ message, detail }: { message: string; detail: string | nul
         <p className="text-base font-semibold text-text">{message}</p>
         {detail && (
           <details className="w-full text-left">
-            <summary className="cursor-pointer text-sm text-text-secondary">Technical details</summary>
+            <summary className="cursor-pointer text-sm text-text-secondary">
+              Technical details
+            </summary>
             <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-sm bg-surface p-3 text-xs text-text-secondary">
               {detail}
             </pre>

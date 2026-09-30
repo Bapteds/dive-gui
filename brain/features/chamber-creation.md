@@ -59,9 +59,9 @@ Single source: `CHAMBER_OUTPUT_SPECS` in `packages/shared/src/index.ts` (full-pr
 | `height` | H Kammer | `= LEB + LEOW` | combination (identity) |
 | `distFromSideChamfer1` | B1 | refine from the Exact of `width` | refine |
 | `chamferLength1` | LF1 | none | |
-| `chamferWidth1` | BF1 | `= LF1` (**permanent**, not toggleable) | identity |
+| `chamferWidth1` | BF1 | `= LF1` | identity |
 | `chamferLength2` | LF2 | `= LF1` | identity |
-| `chamferWidth2` | BF2 | `= LF2` (**permanent**, not toggleable) | identity |
+| `chamferWidth2` | BF2 | `= LF2` | identity |
 | `distFromEnd` | LT | `= LF1 + LF2` | identity |
 | `dLast` | LE (Durchmesser) | `= f(HLE)` = 255.16 + 3.4954 × HLE | **empirical** combination (`empirical: true`) |
 | `hMiddle` | HLE | none | |
@@ -69,7 +69,7 @@ Single source: `CHAMBER_OUTPUT_SPECS` in `packages/shared/src/index.ts` (full-pr
 | `hLast` | LEOW | none | |
 
 **Computation chain** (`computeChamberOutputs`):
-1. Master switch `relationsMaster` (default true): `false` turns off all toggleable relations (hard override). Otherwise each relation follows `relations[key] ?? defaultOn`. **Corner chamfers always at 45°** (since 2026-09-30, spec `2026-09-29-corner-chamfer-45-design.md`): BF1 = LF1 and BF2 = LF2 are `permanent: true` relations, always on whatever `relationsMaster` / `relations` say, and any Min / Max / Exact on BF1 / BF2 is ignored (Final copied from LF, `userDriven` inherited). They are listed in `CHAMBER_PERMANENT_RELATION_KEYS` and left out of `CHAMBER_RELATIONS`, so the relations menu has 7 entries ("Configure relations (n/7 on)"). LF2 = LF1 stays toggleable. With Semi-spiral casing the four chamfer rows still come from the spiral (`from spiral`, not 45°).
+1. Master switch `relationsMaster` (default true): `false` turns off all toggleable relations (hard override). Otherwise each relation follows `relations[key] ?? defaultOn`. **BF1 = LF1 and BF2 = LF2 are normal relations again** (user decision 2026-09-30, reverses the "corner chamfers always at 45°" lock of the same morning): on by default, in the relations menu (9 entries, "Configure relations (n/9 on)"), switched off by the master or individually; with the relation off, BF takes its own fit and its own Min / Max / Exact, and the chamfer is no longer 45°. With Semi-spiral casing the four chamfer rows still come from the spiral (`from spiral`, not 45°).
 2. **Pass 1**: outputs without a relation, with the relation off, or with a `refine` relation (which reads the partner's **entered Exact** in `constraints`, not its Final; without a partner Exact, falls back to the base fit, `refined: false`).
 3. **Pass 2**: active `combination` relations, resolved to a fixed point (LEB before H Kammer); they read the partners' **Final**, so an override propagates.
 4. Each value goes through the 50 mm rounding (§3.4) then through Min / Max / Exact (§3.3).
@@ -80,7 +80,7 @@ The geometric options (§3.7) **never** influence the 12 outputs. A chamber too 
 ### 3.3 Min / Max / Exact constraints and statuses
 - `ChamberConstraint { min?, max?, exact? }` per output; each value must be `> 0` and `≤ CHAMBER_DIMENSION_MAX_MM` (100,000 mm). In the table, `NumCell` only accepts `0 < v ≤ 100,000`; any other entry clears the constraint.
 - Precedence: **Exact** wins (`set exact`); otherwise Min > Max gives `! min>max` and keeps the model value; otherwise clipping (`capped at max`, `raised to min`); otherwise `within range` (fit) or `from relation` (with `relationLabel`).
-- **BF1 / BF2 take no constraint** (since 2026-09-30): their table rows are read-only (Min / Max / Exact show "-", screen-reader text "BF1 exact: read-only, always equals LF1"), status "= LF1" / "= LF2"; the model ignores BF constraints sent by the API or kept in old saves, and loading a save drops them (`chamberInputToConstraints`) along with the BF relation toggles (`chamberInputToFormValues`). Old saves with a BF Exact or a disabled BF relation now build at 45° (new key, intended).
+- **BF1 / BF2 take Min / Max / Exact again** (2026-09-30, reverses the read-only rows of the 45° lock): the constraint applies like on any row (with the BF relation on, a relation conflict follows the §3.2 rules); saves load their BF constraints and BF relation toggles as saved; the BF rows show their confidence pill again.
 - `! min>max` **refuses** the build: on the web before any call (red panel + toast), on the API as 422 `VALIDATION_ERROR` ("Cannot build the chamber. The Min is larger than the Max for B Kammer: Min 5000 > Max 4000. Swap or clear…").
 
 ### 3.4 50 mm rounding (manufacturing grid)
@@ -137,7 +137,7 @@ All of them enter the build hash (unless stated) and never affect the 12 outputs
 | Key | UI label | Form default | API default | Range | Effect |
 |---|---|---|---|---|---|
 | `variant` | Design: "Closed generator" (`stepped`) / "With cone" (`hollow`) | `stepped` | `stepped` | enum | Stepped: three stacked solid cylinders, last cylinder pinned **through** the ceiling at any scale. Hollow: solid runner case + middle cylinder, last cylinder as a **cone** (open cup, wall and bottom of thickness `wallThickness`), central **generator** + semi-ellipsoidal dome. |
-| `relationsMaster` / `relations` | Structural relations + "Configure relations (n/7 on)" (BF1 = LF1 and BF2 = LF2 are permanent, not in the menu) | true / all on | true / defaults | bool | §3.2 (these two fields enter the hash only through the Finals). |
+| `relationsMaster` / `relations` | Structural relations + "Configure relations (n/9 on)" (BF1 = LF1 and BF2 = LF2 toggleable again since 2026-09-30) | true / all on | true / defaults | bool | §3.2 (these two fields enter the hash only through the Finals). |
 | `guideVanes` | Guide vanes | **true** | **false** | bool | Replaces the middle cylinder with a distributor of 8 to 32 guide vanes (`vaneCount`, both designs). Caution: a direct API call without this field builds **without** vanes. |
 | `vaneAngleDeg` | Vane angle (°) | 50 | 50 | 45 to 55 | Absolute opening angle; each vane pivots by `vaneAngleDeg − 50` around its axis. Only useful with vanes. |
 | `vaneCount` | Guide vane count (integer number field, 8 to 32, step 1, hint "Guide-vane builds only", just before Vane angle, always visible) | 16 | 16 | whole number 8..32 | Number of guide vanes. With n vanes each blade is scaled uniformly in XY by **min(1, 16/n)** about its own pivot (same pivot radius, airfoil kept similar), ring step 360°/n (spec 2026-09-29-guide-vane-count-any, amended 2026-09-30; 16 or 18 only before). Above 16 the chord shrinks × 16/n (same solidity `n·c/(2π·R_pivot)`; 18 unchanged); below 16 the blade keeps its 16-vane size (lower solidity, wider throat). Smallest blade gap: ≈ 1.18 to 1.24 chord at 8 vanes, 0.52 to 0.58 at 16, 0.54 to 0.61 at 32 (45..55°). Every count 8..32 builds on the test machines; the passage refusal (§3.8) is only a safety net. Only useful with vanes. Enters the hash **only** for a build with vanes and a count other than 16 (16 and vane-less builds omit it: no re-key; 18 keys exactly as before). |

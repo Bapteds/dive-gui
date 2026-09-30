@@ -191,7 +191,7 @@ Extends `tsconfig.base.json`; `module`/`moduleResolution` `NodeNext` (hence impo
 | `hLast` | LEOW | linear | 38.9 | Low | none |
 
 - `ChamberRelationInfo`, `CHAMBER_RELATIONS`. Derived from the specs that have a **toggleable** relation (list of UI toggles, 7 entries since 2026-09-30).
-- `CHAMBER_PERMANENT_RELATION_KEYS` (`['chamferWidth1', 'chamferWidth2']`). Outputs whose relation has `permanent: true` (`ChamberRelation.permanent`, spec 2026-09-29-corner-chamfer-45): BF1 = LF1 and BF2 = LF2 always, never toggled, never constrained (corner chamfers at 45°).
+- (Removed 2026-09-30: `CHAMBER_PERMANENT_RELATION_KEYS` and `ChamberRelation.permanent`; BF1 = LF1 / BF2 = LF2 are normal toggleable relations again, 9 in `CHAMBER_RELATIONS`.) `studyPickableKeys(base)` excludes BF1 / BF2 only while their BF = LF relation is on in the base design (`bfRelationOn`, via `studyRelationOn`).
 - `CHAMBER_GRID_MM = 50`; `snapToChamberGrid(valueMm: number): number` (rounds to the nearest multiple of 50).
 - `CHAMBER_DIMENSION_MAX_MM = 100_000`. Upper bound for any entered dimension (API, web form).
 - `ChamberConstraint` (`min?`, `max?`, `exact?`).

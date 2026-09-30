@@ -76,8 +76,8 @@ function SpiralNote({ summary }: { summary: ChamberSpiralSummary | null }) {
       {summary.widthBinding ? ', limited by B Kammer' : ''}
       {summary.lengthBinding ? ', limited by the Length Max' : ''}
       {extension > 0 ? `, inlet channel extended by ${Math.round(extension)} mm` : ''}; worst
-      cross-section error {summary.worstAreaErrorM2.toFixed(2)} m² at{' '}
-      {Math.round(summary.atPhiDeg)}°.
+      cross-section error {summary.worstAreaErrorM2.toFixed(2)} m² at {Math.round(summary.atPhiDeg)}
+      °.
     </p>
   );
 }

@@ -167,7 +167,7 @@ describe('Studies: creation and search space', () => {
     });
   });
 
-  it('refuses an empty range, no parameter, zero weights, a bad session or a permanent row (422)', async () => {
+  it('refuses an empty range, no parameter, zero weights, a bad session or BF1 while its relation is on (422)', async () => {
     const f = await makeStudyProject({
       input: { ...BASE_INPUT, constraints: { width: { min: 4460, max: 4480 } } },
     });
