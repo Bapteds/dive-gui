@@ -375,24 +375,18 @@ export function ChamberOutputsTable({
                         </span>
                       )}
                     </TableCell>
-                    <TableCell className={locked ? 'text-text-secondary' : undefined}>
-                      {/* BF1 / BF2 copy LF1 / LF2: their own fit's confidence would
-                        not describe the value shown, so no claim (like spiral rows). */}
-                      {locked ? (
-                        '-'
-                      ) : (
-                        /* The CV error is shown, not hidden in a tooltip — title
-                        attributes never reach keyboard/touch/screen-reader users. */
-                        <span
-                          title={`Leave-one-out cross-validation error: ${o.cvError}%`}
-                          className={cn(
-                            'inline-block whitespace-nowrap rounded-sm px-2 py-0.5 text-xs font-medium',
-                            CONF_STYLES[o.confidence],
-                          )}
-                        >
-                          {o.confidence} · {o.cvError}%
-                        </span>
-                      )}
+                    <TableCell>
+                      {/* The CV error is shown, not hidden in a tooltip — title
+                        attributes never reach keyboard/touch/screen-reader users. */}
+                      <span
+                        title={`Leave-one-out cross-validation error: ${o.cvError}%`}
+                        className={cn(
+                          'inline-block whitespace-nowrap rounded-sm px-2 py-0.5 text-xs font-medium',
+                          CONF_STYLES[o.confidence],
+                        )}
+                      >
+                        {o.confidence} · {o.cvError}%
+                      </span>
                     </TableCell>
                   </TableRow>
                   {lengthRow}
