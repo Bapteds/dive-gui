@@ -2,6 +2,8 @@
 
 > When to use: shipping a new version of `main` to the Debian 12 server (app in `/home/app`, service `dive-api`, nginx), or rolling one back · Related: `brain/operations/installation.md` (first install, sections 3 to 7), `brain/architecture/overview.md` §7, `brain/architecture/configuration.md`, `brain/known-issues.md` · Updated: 2026-09-28
 
+> **The live server departs from this recipe (checked 2026-10-01)**: there is no `dive-api` systemd unit; the app runs by hand with `npm run dev` from a miniforge-activated shell. Read `brain/STATUS.md` §3 (Production server row) before following the `systemctl` steps below.
+
 ## Before you start
 - Deploying is an action on shared infrastructure: only on explicit request from the user, who runs the commands (as root) or confirms each one.
 - Paths below follow the installation guide: code `/home/app`, DB `DATABASE_URL=file:/var/lib/dive/prod.db`, storage `STORAGE_DIR=/var/lib/dive/storage`, OpenFOAM `/usr/lib/openfoam/openfoam2406`, mesh venv `/opt/dive-venv`. Check the real values in `/home/app/apps/api/.env` first.
