@@ -1,6 +1,6 @@
 # Index of every repository file
 
-> One line per file (657 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
+> One line per file (658 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
 
 Detail of a code file: open the sheet shown and search for the `## path/to/file` section. Documents: the description is their title and introduction line.
 
@@ -18,7 +18,6 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `eslint.config.js` : ESLint 9 "flat" configuration of the monorepo via `tseslint.config`. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package-lock.json` : npm lockfile for the whole monorepo (workspaces), used by `npm ci` in CI and in production. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package.json` : root of the `dive-turbinen` workspace (private, ESM, `engines.node >=20`). · [root-shared-mcp](codemap/root-shared-mcp.md)
-- `tools.tar` : **(undocumented: add a section in brain/codemap)**
 - `tsconfig.base.json` : Common TypeScript base: `target ES2022`, `strict`, `esModuleInterop`, `skipLibCheck`, `forceConsistentCasingInFileNames`, `resolveJsonModule`, `noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch`. · [root-shared-mcp](codemap/root-shared-mcp.md)
 
 ## `.claude`
@@ -739,12 +738,17 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 
 - `brain/assets/chamber-parameter-map.html` : standalone interactive mind map of the Chamber Creation parameters and their relations (deliverable of 2026-08-04, v2 model: without Gen Dim v3 or the recent geometric options). · [root-shared-mcp](codemap/root-shared-mcp.md)
 
+## `brain/briefs`
+
+- `brain/briefs/2026-09-30-chamber-spiral-and-optimisation-fixes.md` : Agent brief: semi-spiral, Length and optimisation fixes : Date: 2026-09-30 · Requested by: the user (DIVE Turbinen), from a review session of the brain.
+
 ## `brain/changelog`
 
 - `brain/changelog/2026-06.md` : Changelog : juin 2026
 - `brain/changelog/2026-07.md` : Changelog : juillet 2026 : Correctifs des bugs relevés dans `BUG_AUDIT.md`, branche `fix/bugs-v1.0.1` (partie de `main`/v1.0.0).
 - `brain/changelog/2026-08.md` : Changelog : août 2026
 - `brain/changelog/2026-09.md` : Changelog : septembre 2026
+- `brain/changelog/2026-10.md` : Changelog: October 2026
 - `brain/changelog/README.md` : Changelog: rules : Log of EVERY change to the repository (code, scripts, config, structural docs).
 
 ## `brain/codemap`

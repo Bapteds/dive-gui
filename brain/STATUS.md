@@ -2,7 +2,7 @@
 
 > Snapshot to read at the start of a session. **Rewrite it** (do not stack) as soon as the state changes: branch, work in progress, verification, open threads.
 > Detailed history: `brain/changelog/`. Bugs and debt: `brain/known-issues.md`.
-> Last updated: 2026-09-30.
+> Last updated: 2026-10-01.
 
 ## 1. Where we are
 
@@ -10,7 +10,7 @@
   - **Done (on `main`)** (each with its approved spec in `brain/specs/2026-09-29-*`, tests and brain update):
     - WS-A guide-vane pocket vs Runner case Ø (5 mm snap with warning, junction labels) + WS-A v2: Runner case Ø below LE Ø builds a 20 mm ledge under the shroud brim, refused only below Runner Ø + 20 mm;
     - WS-B Guide vane count, now any whole number 8 to 32 (branch `feat/guide-vane-count-any`, not merged); chord min(1, 16/n) since 2026-09-30 (below 16 the 16-vane blade: every count builds, vaned STEP at 8 / 13 in about 30 s; worktree branch `worktree-agent-abda8d52e36f8b19d`, not merged);
-    - Corner chamfers always at 45° (BF1 = LF1, BF2 = LF2 permanent, BF rows read-only, relations menu 7 entries; 2026-09-30, worktree branch `worktree-agent-abda8d52e36f8b19d`, not merged);
+    - Corner chamfers: the "always at 45°" lock (BF1 = LF1, BF2 = LF2 permanent) was **reverted on 2026-09-30** (`fix/bf-relations-toggleable`, merged). BF1 = LF1 and BF2 = LF2 are normal relations again: on by default, can be turned off, "Configure relations (n/9 on)"; the BF rows take Min / Max / Exact and show their confidence; saves load their BF values and toggles as saved. Spec `2026-09-29-corner-chamfer-45-design.md` is superseded;
     - WS-C v2 Cone chamfer: 45° foot chamfer on the LE part in both designs, part widened by the chamfer size above it (the first top-rim version was removed at the user's request);
     - WS-E Semi-spiral casing (cached `designSemiSpiral.py` step, nose + plank = new `tongue` patch, Feet off; unticking it restores Chamfer);
     - WS-F Meshing session → project (`POST /projects/:id/mesh/from-meshing`, "Send to project" dialog, chamber patch types forced).
@@ -26,7 +26,7 @@
 
 Hub knee ellipse (branch `fix/chamber-hub-knee-ellipse`, 2026-09-30, `C:/cqv`): geometry suite 140/140 with CadQuery 2.8.0 (`C:/cqv`, 20 min 34 s; every GOLDEN within `VOL_RTOL`, none updated); `_test_hub_shroud_math.py` ALL PASS; API chamber + chamberModel 136/136, web chamber 135/135, typecheck clean. Browser not checked.
 
-Chord cap min(1, 16/n) + corner chamfers at 45° (worktree branch `worktree-agent-abda8d52e36f8b19d`, 2026-09-30): geometry 123/123 with CadQuery 2.8.0 (`C:/cqv`, 97 builder + 26 spiral-module, 18 min 26 s; every GOLDEN unchanged), API chamber suites 136/136, web chamber 127/127, typecheck clean, lint 0 errors; vaned STEP 28 s at 8 vanes, 36 s at 13.
+Chord cap min(1, 16/n) + corner chamfers at 45°, the latter since reverted (worktree branch `worktree-agent-abda8d52e36f8b19d`, 2026-09-30): geometry 123/123 with CadQuery 2.8.0 (`C:/cqv`, 97 builder + 26 spiral-module, 18 min 26 s; every GOLDEN unchanged), API chamber suites 136/136, web chamber 127/127, typecheck clean, lint 0 errors; vaned STEP 28 s at 8 vanes, 36 s at 13.
 
 Free guide vane count (branch `worktree-agent-a841f1e42daa5f408`, 2026-09-29, same workstation): geometry 118/118 (GOLDEN unchanged), API chamber suites 129/129, web chamber 123/123, typecheck clean, lint 0 errors; vaned STEP falls back at 8 vanes and is very slow at 13 (`known-issues.md` §6).
 
