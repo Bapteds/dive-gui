@@ -15,8 +15,15 @@ import {
   chamberSpiralVelocityOf,
   chamberSpiralVelocityRefusal,
   computeChamberGeneratorDims,
+  normaliseChamberLength,
 } from '@dive/shared';
-import type { ChamberConstraint, ChamberInput, ChamberOutput, ChamberVariant } from '@dive/shared';
+import type {
+  ChamberConstraint,
+  ChamberInput,
+  ChamberOutput,
+  ChamberOutputKey,
+  ChamberVariant,
+} from '@dive/shared';
 import { ApiError } from '@/lib/api/client';
 
 /**
@@ -26,7 +33,7 @@ import { ApiError } from '@/lib/api/client';
 
 const r = CHAMBER_INPUT_RANGES;
 
-/** The chamber form fields. Lengths are in mm; lengthOverride blank => 2 x width. */
+/** The chamber form fields. Lengths are in mm (the box Length is a Parameters-table row). */
 export interface ChamberFormValues {
   x1: number;
   x2: number;
@@ -52,8 +59,6 @@ export interface ChamberFormValues {
   vaneCount: number;
   /** Outlet inner/outer diameter ratio (0.35..0.50, default 0.45). Guide-vane builds only. */
   outletRatio: number;
-  /** Box length along Y (mm); blank => auto 2 x width. */
-  lengthOverride?: number;
   /** Hollow last-cylinder height (mm); required when variant === 'hollow'. */
   hollowLength?: number;
   /** Hollow wall thickness (mm); defaults to CHAMBER_WALL_THICKNESS_MM. */
@@ -130,7 +135,6 @@ export const chamberFormSchema = z
       .number({ invalid_type_error: 'Enter a number' })
       .min(0.35, 'Min 0.35')
       .max(0.5, 'Max 0.50'),
-    lengthOverride: optionalPositive,
     hollowLength: optionalPositive,
     wallThickness: optionalPositive,
     coneChamferEnabled: z.boolean(),
@@ -204,7 +208,6 @@ export const CHAMBER_FORM_DEFAULTS: ChamberFormValues = {
   vaneAngleDeg: 50,
   vaneCount: CHAMBER_VANE_COUNT_DEFAULT,
   outletRatio: 0.45,
-  lengthOverride: undefined,
   hollowLength: 200,
   wallThickness: CHAMBER_WALL_THICKNESS_MM,
   coneChamferEnabled: false,
@@ -269,7 +272,6 @@ export function chamberInputToFormValues(input: ChamberInput): ChamberFormValues
     // Saves made before the vane count existed load as the asset's 16 vanes.
     vaneCount: input.vaneCount ?? CHAMBER_FORM_DEFAULTS.vaneCount,
     outletRatio: input.outletRatio ?? CHAMBER_FORM_DEFAULTS.outletRatio,
-    lengthOverride: input.lengthOverride,
     hollowLength: input.hollowLength,
     wallThickness: input.wallThickness,
     // Saves made before the cone chamfer existed load with it off, at 50 mm.
@@ -288,22 +290,15 @@ export function chamberInputToFormValues(input: ChamberInput): ChamberFormValues
 }
 
 /**
- * The semi-spiral Length Min / Max / Exact of a saved build snapshot (spec
- * 2026-09-30-spiral-length); empty for saves made before it existed.
+ * The Parameters-table constraints of a saved build snapshot or a hand-off, with
+ * an old save's Length folded in (spec 2026-10-01-chamber-length-row §5): a
+ * plain-box `lengthOverride` becomes a Length Exact, a spiral `spiralLength`
+ * the Length Min / Max / Exact.
  */
-export function chamberInputToSpiralLength(input: ChamberInput): ChamberConstraint {
-  return { ...(input.spiralLength ?? {}) };
-}
-
-/**
- * The `spiralLength` field of a build body: sent only with the spiral on and a
- * value typed, so every other body (and its comparison key) is unchanged.
- */
-export function chamberSpiralLengthBody(
-  semiSpiral: boolean,
-  spiralLength: ChamberConstraint,
-): ChamberConstraint | undefined {
-  return semiSpiral && Object.keys(spiralLength).length > 0 ? { ...spiralLength } : undefined;
+export function chamberInputToConstraints(
+  input: ChamberInput,
+): Partial<Record<ChamberOutputKey, ChamberConstraint>> {
+  return { ...(normaliseChamberLength(input).constraints ?? {}) };
 }
 
 /** The auto (empirical) values shown as placeholders on the blank override fields. */

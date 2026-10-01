@@ -61,7 +61,6 @@ function Harness({
           setValue('chamferEnabled', false);
         }
       }}
-      autoLengthMm={8889}
       casingVelocity={casingVelocity}
       autoDims={AUTO_DIMS}
       relationsMaster={relationsMaster}
@@ -90,7 +89,6 @@ describe('ChamberInputsForm', () => {
     render(<Harness onValid={() => {}} />);
     expect(screen.getByText('Blank = auto ≈ 2778 mm')).toBeInTheDocument();
     expect(screen.getByText(/Blank = auto ≈ 1937 mm/)).toBeInTheDocument();
-    expect(screen.getByText('Blank = 2 × width ≈ 8889 mm')).toBeInTheDocument();
   });
 
   it('submits the defaults with every blank override as undefined (auto)', async () => {
@@ -101,7 +99,7 @@ describe('ChamberInputsForm', () => {
     const values = onValid.mock.calls[0][0] as ChamberFormValues;
     expect(values.x1).toBe(1450);
     expect(values.variant).toBe('stepped');
-    expect(values.lengthOverride).toBeUndefined();
+    expect(values).not.toHaveProperty('lengthOverride');
     expect(values.dFirst).toBeUndefined();
     expect(values.dMiddle).toBeUndefined();
   });
@@ -336,9 +334,10 @@ describe('ChamberInputsForm', () => {
       expect(screen.getByLabelText(/Semi-spiral casing/)).toBeInTheDocument();
     });
 
-    it('unchecks and disables Feet and Chamfer, hides Length and shows the casing flow velocity', async () => {
+    it('unchecks and disables Feet and Chamfer and shows the casing flow velocity', async () => {
       render(<Harness onValid={() => {}} />);
-      expect(screen.getByLabelText('Length (mm)')).toBeInTheDocument();
+      // Length is a Parameters-table row since 2026-10-01: no form field in either mode.
+      expect(screen.queryByLabelText('Length (mm)')).not.toBeInTheDocument();
       expect(screen.queryByLabelText('Casing flow velocity (m/s)')).not.toBeInTheDocument();
       fireEvent.click(screen.getByLabelText(/Semi-spiral casing/));
       await waitFor(() =>

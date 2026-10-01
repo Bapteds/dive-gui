@@ -7,8 +7,7 @@ import {
   chamberBuildErrorMessage,
   chamberFormSchema,
   chamberInputToFormValues,
-  chamberInputToSpiralLength,
-  chamberSpiralLengthBody,
+  chamberInputToConstraints,
   computeChamberAutoDims,
   semiSpiralToggle,
   type ChamberFormValues,
@@ -90,7 +89,7 @@ describe('chamberFormSchema', () => {
   });
 
   it('ships defaults that leave every override on auto (undefined)', () => {
-    expect(CHAMBER_FORM_DEFAULTS.lengthOverride).toBeUndefined();
+    expect(CHAMBER_FORM_DEFAULTS).not.toHaveProperty('lengthOverride');
     expect(CHAMBER_FORM_DEFAULTS.dFirst).toBeUndefined();
     expect(CHAMBER_FORM_DEFAULTS.dMiddle).toBeUndefined();
     expect(CHAMBER_FORM_DEFAULTS.centralDiameter).toBeUndefined();
@@ -110,7 +109,6 @@ describe('chamberInputToFormValues', () => {
       vaneCount: 18,
       outletRatio: 0.4,
       relations: { ...CHAMBER_FORM_DEFAULTS.relations, height: false },
-      lengthOverride: 4200,
       hollowLength: 250,
       dMiddle: 1900,
     };
@@ -457,28 +455,40 @@ describe('old saves: BF relations and constraints load as saved (2026-09-30)', (
   });
 
   it('restores the semi-spiral Length Min / Max / Exact (empty for old saves)', () => {
-    expect(chamberInputToSpiralLength({ ...base, spiralLength: { min: 5000, max: 6000 } })).toEqual(
-      {
-        min: 5000,
-        max: 6000,
-      },
-    );
-    expect(chamberInputToSpiralLength(base)).toEqual({});
+    expect(
+      chamberInputToConstraints({
+        ...base,
+        semiSpiral: true,
+        spiralLength: { min: 5000, max: 6000 },
+      }),
+    ).toEqual({ length: { min: 5000, max: 6000 } });
+    expect(chamberInputToConstraints(base)).toEqual({});
   });
 });
 
-describe('chamberSpiralLengthBody (spec 2026-09-30-spiral-length)', () => {
-  it('sends the Length constraint only with the spiral on and a value typed', () => {
-    expect(chamberSpiralLengthBody(true, { min: 5000 })).toEqual({ min: 5000 });
-    expect(chamberSpiralLengthBody(true, {})).toBeUndefined();
-    expect(chamberSpiralLengthBody(false, { max: 6000 })).toBeUndefined();
+describe('chamberInputToConstraints (spec 2026-10-01-chamber-length-row)', () => {
+  const base: ChamberInput = { x1: 1450, x2: 7.85, x3: 8 };
+
+  it('loads an old plain-box lengthOverride as a Length Exact, next to the saved constraints', () => {
+    expect(
+      chamberInputToConstraints({
+        ...base,
+        lengthOverride: 9000,
+        constraints: { width: { max: 4000 } },
+      }),
+    ).toEqual({ width: { max: 4000 }, length: { exact: 9000 } });
   });
 
-  it('keeps an old body and one with an empty Length on the same comparison key', () => {
-    const body = { x1: 1450, x2: 7.85, x3: 8, semiSpiral: true };
-    expect(chamberBodyKey({ ...body, spiralLength: chamberSpiralLengthBody(true, {}) })).toBe(
-      chamberBodyKey(body),
-    );
+  it('keeps a saved constraints.length as it is', () => {
+    expect(chamberInputToConstraints({ ...base, constraints: { length: { min: 8000 } } })).toEqual({
+      length: { min: 8000 },
+    });
+  });
+
+  it('never puts the legacy fields in the form values', () => {
+    const loaded = chamberInputToFormValues({ ...base, lengthOverride: 9000 });
+    expect(loaded).not.toHaveProperty('lengthOverride');
+    expect(loaded).not.toHaveProperty('spiralLength');
   });
 });
 

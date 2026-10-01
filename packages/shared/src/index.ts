@@ -2926,11 +2926,13 @@ export const CHAMBER_INPUT_RANGES = {
 } as const;
 
 /**
- * The twelve output parameter keys, in display order. Each key is also the JSON
- * key the buildChamber.py builder reads (plus `length`, a direct input).
+ * The output parameter keys, in display order. Each key is also the JSON key
+ * the buildChamber.py builder reads. `length` (the box Length) has no fit: it is
+ * the always-on identity 2 × B Kammer (spec 2026-10-01-chamber-length-row).
  */
 export const CHAMBER_OUTPUT_KEYS = [
   'width',
+  'length',
   'height',
   'distFromSideChamfer1',
   'chamferLength1',
@@ -2949,7 +2951,7 @@ export type ChamberOutputKey = (typeof CHAMBER_OUTPUT_KEYS)[number];
 export type ChamberConfidence = 'Good' | 'High' | 'Moderate' | 'Low';
 
 /** The functional form of a parameter's own X1–X3 fit. */
-export type ChamberForm = 'linear' | 'power';
+export type ChamberForm = 'linear' | 'power' | 'identity';
 
 /** A structural relation's kind: refine a fit from a measured partner, or a
  * linear combination of other outputs' FINAL values. */
@@ -2983,6 +2985,12 @@ export interface ChamberRelation {
   /** 'combination': additive constant (default 0). */
   constant?: number;
   /**
+   * Always on and not toggleable (left out of CHAMBER_RELATIONS, ignores
+   * `relations` and `relationsMaster`): the output has no fit of its own
+   * (form 'identity'). Only Length = 2 × B Kammer.
+   */
+  fixed?: boolean;
+  /**
    * 'combination' only: the relation is a fitted formula, not a true identity
    * (e.g. LE = 255.16 + 3.4954 × HLE) — its result stays an empirical estimate,
    * so it is snapped to the CHAMBER_GRID_MM grid and never inherits a partner's
@@ -3004,10 +3012,11 @@ export interface ChamberOutputSpec {
   key: ChamberOutputKey;
   label: string;
   form: ChamberForm;
-  cvError: number;
-  confidence: ChamberConfidence;
-  /** Base X1–X3 fit coefficients (every output has one). */
-  coeffs:
+  /** null for an 'identity' output (no fit, no confidence claim). */
+  cvError: number | null;
+  confidence: ChamberConfidence | null;
+  /** Base X1–X3 fit coefficients (every fitted output has one; none for 'identity'). */
+  coeffs?:
     | { a: number; b: number; c: number; d: number }
     | { k: number; e1: number; e2: number; e3: number };
   relation?: ChamberRelation;
@@ -3040,6 +3049,24 @@ export const CHAMBER_OUTPUT_SPECS: readonly ChamberOutputSpec[] = [
         d: 78.2136825,
         p: 0.976665205,
       },
+    },
+  },
+  // Length: no fit. The always-on identity 2 × B Kammer (the plain box's
+  // default since the first builder), with Min / Max / Exact like any row
+  // (spec 2026-10-01-chamber-length-row).
+  {
+    key: 'length',
+    label: 'Length',
+    form: 'identity',
+    cvError: null,
+    confidence: null,
+    relation: {
+      kind: 'combination',
+      defaultOn: true,
+      fixed: true,
+      label: '= 2 × B Kammer',
+      description: 'Length = 2 × B Kammer (always on).',
+      terms: [{ key: 'width', coeff: 2 }],
     },
   },
   // P2: height. Own linear fit; relation = LEB + LEOW.
@@ -3230,7 +3257,7 @@ export interface ChamberRelationInfo {
 
 /** The toggleable relations, in output order — the per-relation dropdown iterates this. */
 export const CHAMBER_RELATIONS: readonly ChamberRelationInfo[] = CHAMBER_OUTPUT_SPECS.filter(
-  (s) => s.relation,
+  (s) => s.relation && !s.relation.fixed,
 ).map((s) => ({
   key: s.key,
   label: s.label,
@@ -3514,7 +3541,11 @@ export interface ChamberInput {
    * empirical model). Default 1.
    */
   partScale?: number;
-  /** Box length along Y (mm). Omitted => 2 x the (final) width. */
+  /**
+   * @deprecated since 2026-10-01: the Length is the `length` output (Min / Max /
+   * Exact in `constraints.length`). Still accepted from old saves and clients:
+   * `normaliseChamberLength` folds it into a Length Exact (plain box only).
+   */
   lengthOverride?: number;
   /** Height (mm) of the hollow last cylinder. Required for the 'hollow' variant. */
   hollowLength?: number;
@@ -3586,8 +3617,8 @@ export interface ChamberInput {
    * the nose tip tangent to the generator / cone circle; nose + plank form the
    * `tongue` patch. B Kammer becomes the spiral's width LIMIT; Length, B1, LT and
    * the four chamfer values are derived from the spiral (status 'from spiral';
-   * Length takes Min / Max / Exact through `spiralLength`), lengthOverride and
-   * chamferEnabled are ignored, and Feet must be off.
+   * Length takes Min / Max / Exact through `constraints.length`), chamferEnabled
+   * is ignored, and Feet must be off.
    * Geometry-only. Default false.
    */
   semiSpiral?: boolean;
@@ -3598,13 +3629,11 @@ export interface ChamberInput {
    */
   spiralFlowVelocity?: number;
   /**
-   * Semi-spiral casing only (ignored otherwise): Min / Max / Exact on the
-   * spiral's Length (mm; V2.y - V0.y, the Length row of the Parameters table).
-   * Max is a hard limit for the spiral designer (`max_length`); Min extends the
-   * straight inlet channel (V0 and V9 move out) when the spiral is shorter;
-   * Exact = both. Length is not a ChamberOutputKey, so it lives here and not in
-   * `constraints`; `lengthOverride` stays the plain box's Length. Spec
-   * brain/specs/2026-09-30-spiral-length-design.md. Absent: no change at all.
+   * @deprecated since 2026-10-01: Min / Max / Exact on the semi-spiral Length now
+   * live in `constraints.length`. Still accepted from old saves and clients:
+   * `normaliseChamberLength` moves it there (spiral on only). Semantics
+   * unchanged (spec 2026-09-30-spiral-length): Max = the designer's
+   * `max_length`, Min extends the inlet channel, Exact = both.
    */
   spiralLength?: ChamberConstraint;
 }
@@ -3660,8 +3689,9 @@ export interface ChamberOutput {
   status: ChamberStatus;
   /** Present when status is 'from relation': the relation label, e.g. '= LEB + LEOW'. */
   relationLabel?: string;
-  cvError: number;
-  confidence: ChamberConfidence;
+  /** null for Length (an identity, no fit): no confidence claim. */
+  cvError: number | null;
+  confidence: ChamberConfidence | null;
   /**
    * True when the model value came from an active 'refine' relation (this output's
    * partner had a measured Exact value and the relation was on).
@@ -3700,6 +3730,8 @@ export function evalChamberSpec(
     const r = spec.relation.refineCoeffs;
     return r.a + r.b * x1 + r.c * x2 + r.d * x3 + r.p * partnerKnown;
   }
+  // An identity has no fit: it is always resolved through its fixed relation.
+  if (spec.form === 'identity' || !spec.coeffs) return Number.NaN;
   if (spec.form === 'power') {
     const c = spec.coeffs as { k: number; e1: number; e2: number; e3: number };
     return c.k * Math.pow(x1, c.e1) * Math.pow(x2, c.e2) * Math.pow(x3, c.e3);
@@ -3737,12 +3769,16 @@ function resolveChamberFinal(
  * values and does no model math.
  */
 export function computeChamberOutputs(input: ChamberInput): ChamberOutput[] {
+  // Old saves and clients may still carry lengthOverride / spiralLength.
+  input = normaliseChamberLength(input);
   const { x1, x2, x3, constraints } = input;
   // Hard master override: when false, EVERY relation is off. Otherwise each
   // relation follows its per-key toggle, defaulting to its own defaultOn.
   const masterOn = input.relationsMaster !== false;
   const relationOn = (spec: ChamberOutputSpec): boolean =>
-    masterOn && !!spec.relation && (input.relations?.[spec.key] ?? spec.relation.defaultOn);
+    !!spec.relation &&
+    (spec.relation.fixed === true ||
+      (masterOn && (input.relations?.[spec.key] ?? spec.relation.defaultOn)));
 
   const byKey = new Map<ChamberOutputKey, ChamberOutput>();
   const setOutput = (
@@ -4063,11 +4099,34 @@ export interface ChamberSpiralLengthLimits {
 }
 
 /**
- * The Length Min / Max of a semi-spiral chamber: `spiralLength`, read only with
- * the spiral on. Exact wins over Min / Max and sets both (as on every other row).
+ * Fold the legacy Length fields of an old save or client into `constraints.length`
+ * (spec 2026-10-01-chamber-length-row §5) and drop them: a saved
+ * `constraints.length` wins; else, spiral on, `spiralLength` as it is; else,
+ * spiral off, `lengthOverride` as a Length Exact. Each legacy field was ignored
+ * in the other mode, so it is dropped there. Returns the same object when there
+ * is nothing to fold.
+ */
+export function normaliseChamberLength<T extends ChamberInput>(input: T): T {
+  if (input.lengthOverride === undefined && input.spiralLength === undefined) return input;
+  const { lengthOverride, spiralLength, ...rest } = input;
+  const legacy: ChamberConstraint | undefined =
+    input.semiSpiral === true
+      ? spiralLength
+      : lengthOverride != null
+        ? { exact: lengthOverride }
+        : undefined;
+  if (input.constraints?.length || !legacy || Object.keys(legacy).length === 0) return rest as T;
+  return { ...rest, constraints: { ...(input.constraints ?? {}), length: { ...legacy } } } as T;
+}
+
+/**
+ * The Length Min / Max of a semi-spiral chamber: `constraints.length` (or a
+ * legacy `spiralLength`), read only with the spiral on. Exact wins over Min /
+ * Max and sets both (as on every other row).
  */
 export function chamberSpiralLengthLimits(input: ChamberInput): ChamberSpiralLengthLimits {
-  const con = input.semiSpiral === true ? input.spiralLength : undefined;
+  const con =
+    input.semiSpiral === true ? normaliseChamberLength(input).constraints?.length : undefined;
   if (!con) return { minMm: null, maxMm: null, inverted: false };
   if (con.exact != null) return { minMm: con.exact, maxMm: con.exact, inverted: false };
   const minMm = con.min ?? null;
@@ -4248,9 +4307,29 @@ export function chamberSpiralModelInput<T extends ChamberInput>(input: T): T {
 export function applyChamberSpiralToOutputs(
   outputs: ChamberOutput[],
   boxMm: ChamberSpiralBoxDims | null,
+  summary: Pick<ChamberSpiralSummary, 'lengthBinding' | 'inletExtensionMm'> | null = null,
 ): ChamberOutput[] {
-  return outputs.map((o) =>
-    CHAMBER_SPIRAL_DERIVED_KEYS.includes(o.key)
+  return outputs.map((o) => {
+    if (o.key === 'length') {
+      // The spiral sets the Length; the typed Exact / inverted range still show,
+      // then what the build did with the Min / Max (spec 2026-09-30-spiral-length §8).
+      const status: ChamberStatus =
+        o.status === 'set exact' || o.status === '! min>max'
+          ? o.status
+          : summary?.lengthBinding
+            ? 'capped at max'
+            : (summary?.inletExtensionMm ?? 0) > 0
+              ? 'raised to min'
+              : 'from spiral';
+      return {
+        ...o,
+        final: boxMm ? boxMm.length : Number.NaN,
+        status,
+        relationLabel: undefined,
+        userDriven: true,
+      };
+    }
+    return CHAMBER_SPIRAL_DERIVED_KEYS.includes(o.key)
       ? {
           ...o,
           final: boxMm ? boxMm[o.key as keyof ChamberSpiralBoxDims] : Number.NaN,
@@ -4258,8 +4337,8 @@ export function applyChamberSpiralToOutputs(
           relationLabel: undefined,
           userDriven: true,
         }
-      : o,
-  );
+      : o;
+  });
 }
 
 /**
@@ -4437,6 +4516,7 @@ export interface ParamSpaceResult {
 /** Is the relation of `spec` on for this input? */
 function studyRelationOn(input: ChamberInput, spec: ChamberOutputSpec): boolean {
   if (!spec.relation) return false;
+  if (spec.relation.fixed) return true;
   return (
     input.relationsMaster !== false && (input.relations?.[spec.key] ?? spec.relation.defaultOn)
   );
@@ -4465,8 +4545,17 @@ export function studyPickableKeys(base: ChamberInput): ChamberOutputKey[] {
   return CHAMBER_OUTPUT_KEYS.filter(
     (k) =>
       !(STUDY_BF_KEYS.includes(k) && bfRelationOn(base, k)) &&
-      !(base.semiSpiral === true && CHAMBER_SPIRAL_DERIVED_KEYS.includes(k)),
+      !(base.semiSpiral === true && chamberSpiralSetsKey(k)),
   );
+}
+
+/**
+ * With the spiral on, the spiral sets these rows: the derived ones, and the
+ * Length (its default is the spiral's own length until the spiral is designed
+ * inside the Length; spec 2026-10-01-chamber-length-row §3.1).
+ */
+function chamberSpiralSetsKey(key: ChamberOutputKey): boolean {
+  return key === 'length' || CHAMBER_SPIRAL_DERIVED_KEYS.includes(key);
 }
 
 /**
@@ -4482,6 +4571,7 @@ export function computeParamSpace(
   bandPct: number,
   overrides: Partial<Record<ChamberOutputKey, number>> = {},
 ): ParamSpaceResult {
+  base = normaliseChamberLength(base);
   const outputs = computeChamberOutputs(chamberSpiralModelInput(base));
   const pickable = studyPickableKeys(base);
   const wanted = CHAMBER_OUTPUT_KEYS.filter((k) => keys.includes(k));
@@ -4492,7 +4582,7 @@ export function computeParamSpace(
     const label = chamberOutputLabel(key);
     if (!pickable.includes(key)) {
       errors.push(
-        base.semiSpiral === true && CHAMBER_SPIRAL_DERIVED_KEYS.includes(key)
+        base.semiSpiral === true && chamberSpiralSetsKey(key)
           ? `${label} comes from the semi-spiral casing and cannot be optimised.`
           : `${label} follows its chamfer length through its relation. Turn that relation off in the base design to optimise it.`,
       );
@@ -4543,6 +4633,7 @@ export function chamberInputWithExact(
   base: ChamberInput,
   params: Partial<Record<ChamberOutputKey, number>>,
 ): ChamberInput {
+  base = normaliseChamberLength(base);
   const constraints: Partial<Record<ChamberOutputKey, ChamberConstraint>> = {
     ...(base.constraints ?? {}),
   };

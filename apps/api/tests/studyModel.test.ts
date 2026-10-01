@@ -123,3 +123,34 @@ describe('objectives', () => {
     expect(front).toEqual([0, 1, 2]);
   });
 });
+
+describe('Length in studies (spec 2026-10-01-chamber-length-row)', () => {
+  it('is pickable without the semi-spiral, not with it', () => {
+    expect(studyPickableKeys(BASE)).toContain('length');
+    expect(studyPickableKeys({ ...BASE, semiSpiral: true })).not.toContain('length');
+    const { errors } = computeParamSpace({ ...BASE, semiSpiral: true }, ['length'], 10);
+    expect(errors[0]).toMatch(/^Length comes from the semi-spiral casing/);
+  });
+
+  it('bands around 2 × B Kammer, or around an old lengthOverride', () => {
+    const auto = final(BASE, 'length');
+    expect(auto).toBe(2 * final(BASE, 'width'));
+    const [r] = computeParamSpace(BASE, ['length'], 10).ranges;
+    expect(r).toMatchObject({ key: 'length', label: 'Length', base: auto });
+    const [old] = computeParamSpace({ ...BASE, lengthOverride: 9000 }, ['length'], 10).ranges;
+    expect(old).toMatchObject({ base: 9000, min: 8100, max: 9900 });
+  });
+
+  it('pins a picked Length as Exact, over an old lengthOverride', () => {
+    const out = chamberInputWithExact({ ...BASE, lengthOverride: 9000 }, { length: 9500 });
+    expect(final(out, 'length')).toBe(9500);
+  });
+
+  it('warns when Length and B Kammer are both picked, even with the master off', () => {
+    const [w] = studyRelationWarnings(BASE, ['width', 'length']);
+    expect(w).toMatch(/Length = 2 × B Kammer/);
+    expect(
+      studyRelationWarnings({ ...BASE, relationsMaster: false }, ['width', 'length']),
+    ).toHaveLength(1);
+  });
+});

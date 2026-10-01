@@ -1,5 +1,5 @@
 // Unit tests for the chamber empirical model (the single source of truth in
-// @dive/shared). Verifies a few of the twelve fitted formulas (incl. the power
+// @dive/shared). Verifies a few of the fitted formulas (incl. the power
 // form) at a known input, that P4/P5 share one formula, and that the Min / Max /
 // Exact clamp + Status behave like the calculator.
 import { describe, expect, it } from 'vitest';
@@ -19,6 +19,8 @@ import {
   chamberSpiralModelInput,
   chamberSpiralLengthLimits,
   chamberSpiralExtendInlet,
+  normaliseChamberLength,
+  CHAMBER_OUTPUT_KEYS,
   CHAMBER_GRID_MM,
   computeChamberGeneratorDims,
   blankGeneratorHeightRefusal,
@@ -36,9 +38,9 @@ function byKey(outputs: ChamberOutput[]) {
 }
 
 describe('computeChamberOutputs', () => {
-  it('evaluates the twelve base X1–X3 fits when the master switch is off', () => {
+  it('evaluates the base X1–X3 fits when the master switch is off', () => {
     const outputs = computeChamberOutputs({ ...BASE, relationsMaster: false });
-    expect(outputs).toHaveLength(12);
+    expect(outputs).toHaveLength(13);
     const m = byKey(outputs);
 
     // Linear: width = 3501.480486 - 0.01990289598*X1 - 104.4968392*X2 + 224.0149301*X3.
@@ -54,7 +56,8 @@ describe('computeChamberOutputs', () => {
     for (const o of outputs) {
       expect(o.final).toBe(snapToChamberGrid(o.model));
       expect(o.final % CHAMBER_GRID_MM).toBe(0);
-      expect(o.status).toBe('within range');
+      // Length is an always-on identity (= 2 × B Kammer), not a fit.
+      expect(o.status).toBe(o.key === 'length' ? 'from relation' : 'within range');
       expect(o.userDriven).toBe(false);
     }
   });
@@ -714,7 +717,7 @@ describe('corner chamfer relations (BF = LF) toggleable', () => {
   });
 });
 
-describe('semi-spiral Length Min / Max / Exact (spec 2026-09-30-spiral-length)', () => {
+describe('semi-spiral Length Min / Max / Exact (spec 2026-09-30-spiral-length; constraints.length since 2026-10-01)', () => {
   const SPIRAL_BASE = { ...BASE, semiSpiral: true };
   // The stepped-spiral fixture (metres): length = 2.2 - (-2.13664) = 4.33664 m.
   const VERTICES = [
@@ -733,13 +736,18 @@ describe('semi-spiral Length Min / Max / Exact (spec 2026-09-30-spiral-length)',
   it('reads the limits only with the spiral on; Exact sets both; flags an inverted range', () => {
     const none = { minMm: null, maxMm: null, inverted: false };
     expect(chamberSpiralLengthLimits(SPIRAL_BASE)).toEqual(none);
-    expect(chamberSpiralLengthLimits({ ...BASE, spiralLength: { min: 5000, max: 6000 } })).toEqual(
-      none,
-    );
     expect(
-      chamberSpiralLengthLimits({ ...SPIRAL_BASE, spiralLength: { min: 5000, max: 6000 } }),
+      chamberSpiralLengthLimits({ ...BASE, constraints: { length: { min: 5000, max: 6000 } } }),
+    ).toEqual(none);
+    expect(
+      chamberSpiralLengthLimits({
+        ...SPIRAL_BASE,
+        constraints: { length: { min: 5000, max: 6000 } },
+      }),
     ).toEqual({ minMm: 5000, maxMm: 6000, inverted: false });
-    expect(chamberSpiralLengthLimits({ ...SPIRAL_BASE, spiralLength: { max: 6000 } })).toEqual({
+    expect(
+      chamberSpiralLengthLimits({ ...SPIRAL_BASE, constraints: { length: { max: 6000 } } }),
+    ).toEqual({
       minMm: null,
       maxMm: 6000,
       inverted: false,
@@ -748,11 +756,14 @@ describe('semi-spiral Length Min / Max / Exact (spec 2026-09-30-spiral-length)',
     expect(
       chamberSpiralLengthLimits({
         ...SPIRAL_BASE,
-        spiralLength: { min: 9000, max: 1000, exact: 5500 },
+        constraints: { length: { min: 9000, max: 1000, exact: 5500 } },
       }),
     ).toEqual({ minMm: 5500, maxMm: 5500, inverted: false });
     expect(
-      chamberSpiralLengthLimits({ ...SPIRAL_BASE, spiralLength: { min: 7000, max: 6000 } }),
+      chamberSpiralLengthLimits({
+        ...SPIRAL_BASE,
+        constraints: { length: { min: 7000, max: 6000 } },
+      }),
     ).toEqual({ minMm: 7000, maxMm: 6000, inverted: true });
   });
 
@@ -760,13 +771,15 @@ describe('semi-spiral Length Min / Max / Exact (spec 2026-09-30-spiral-length)',
     const outputs = computeChamberOutputs(SPIRAL_BASE);
     expect(chamberSpiralInputs(SPIRAL_BASE, outputs)).not.toHaveProperty('max_length');
     expect(
-      chamberSpiralInputs({ ...SPIRAL_BASE, spiralLength: { min: 5000 } }, outputs),
+      chamberSpiralInputs({ ...SPIRAL_BASE, constraints: { length: { min: 5000 } } }, outputs),
     ).not.toHaveProperty('max_length');
     expect(
-      chamberSpiralInputs({ ...SPIRAL_BASE, spiralLength: { max: 6000 } }, outputs).max_length,
+      chamberSpiralInputs({ ...SPIRAL_BASE, constraints: { length: { max: 6000 } } }, outputs)
+        .max_length,
     ).toBe(6);
     expect(
-      chamberSpiralInputs({ ...SPIRAL_BASE, spiralLength: { exact: 5500 } }, outputs).max_length,
+      chamberSpiralInputs({ ...SPIRAL_BASE, constraints: { length: { exact: 5500 } } }, outputs)
+        .max_length,
     ).toBe(5.5);
   });
 
@@ -781,5 +794,140 @@ describe('semi-spiral Length Min / Max / Exact (spec 2026-09-30-spiral-length)',
     // Already long enough (or no Min): the same vertices.
     expect(chamberSpiralExtendInlet(VERTICES, 4000)).toBe(VERTICES);
     expect(chamberSpiralExtendInlet(VERTICES, null)).toBe(VERTICES);
+  });
+});
+
+describe('Length row in both modes (spec 2026-10-01-chamber-length-row)', () => {
+  const m = (input: Parameters<typeof computeChamberOutputs>[0]) =>
+    byKey(computeChamberOutputs(input));
+  const BOX = {
+    width: 4400,
+    length: 4336.64,
+    distFromSideChamfer1: 2700,
+    chamferLength1: 1450,
+    chamferWidth1: 1400,
+    chamferLength2: 1200,
+    chamferWidth2: 1150,
+    distFromEnd: 2200,
+  };
+
+  it('is a model row right after B Kammer', () => {
+    expect(CHAMBER_OUTPUT_KEYS.indexOf('length')).toBe(CHAMBER_OUTPUT_KEYS.indexOf('width') + 1);
+    expect(computeChamberOutputs(BASE)).toHaveLength(13);
+  });
+
+  it('defaults to 2 × B Kammer, an identity that keeps the grid', () => {
+    const o = m(BASE);
+    const length = o.get('length')!;
+    expect(length.label).toBe('Length');
+    expect(length.final).toBe(2 * o.get('width')!.final);
+    expect(length.final % CHAMBER_GRID_MM).toBe(0);
+    expect(length.status).toBe('from relation');
+    expect(length.relationLabel).toBe('= 2 × B Kammer');
+    expect(length.userDriven).toBe(false);
+    // No empirical fit: no confidence claim.
+    expect(length.confidence).toBeNull();
+    expect(length.cvError).toBeNull();
+  });
+
+  it('propagates a user-driven B Kammer verbatim', () => {
+    const length = m({ ...BASE, constraints: { width: { exact: 4475.5 } } }).get('length')!;
+    expect(length.final).toBe(8951);
+    expect(length.userDriven).toBe(true);
+  });
+
+  it('takes Min / Max / Exact like every other row', () => {
+    const auto = m(BASE).get('length')!.final;
+    expect(m({ ...BASE, constraints: { length: { exact: 9123 } } }).get('length')).toMatchObject({
+      final: 9123,
+      status: 'set exact',
+    });
+    expect(
+      m({ ...BASE, constraints: { length: { max: auto - 500 } } }).get('length'),
+    ).toMatchObject({ final: auto - 500, status: 'capped at max' });
+    expect(
+      m({ ...BASE, constraints: { length: { min: auto + 500 } } }).get('length'),
+    ).toMatchObject({ final: auto + 500, status: 'raised to min' });
+    expect(
+      m({ ...BASE, constraints: { length: { min: 9000, max: 8000 } } }).get('length')!.status,
+    ).toBe('! min>max');
+  });
+
+  it('cannot be turned off: not in the relations list, ignores the master switch', () => {
+    expect(CHAMBER_RELATIONS.map((r) => r.key)).not.toContain('length');
+    expect(CHAMBER_RELATIONS).toHaveLength(9);
+    const off = m({ ...BASE, relationsMaster: false, relations: { length: false } });
+    expect(off.get('length')!.final).toBe(2 * off.get('width')!.final);
+  });
+
+  it('shows the spiral length with the spiral on, with its own statuses', () => {
+    const outputs = computeChamberOutputs({ ...BASE, semiSpiral: true });
+    expect(byKey(applyChamberSpiralToOutputs(outputs, BOX)).get('length')).toMatchObject({
+      final: 4336.64,
+      status: 'from spiral',
+    });
+    expect(
+      byKey(applyChamberSpiralToOutputs(outputs, BOX, { lengthBinding: true })).get('length')!
+        .status,
+    ).toBe('capped at max');
+    expect(
+      byKey(applyChamberSpiralToOutputs(outputs, BOX, { inletExtensionMm: 120 })).get('length')!
+        .status,
+    ).toBe('raised to min');
+    const exact = computeChamberOutputs({
+      ...BASE,
+      semiSpiral: true,
+      constraints: { length: { exact: 5000 } },
+    });
+    expect(byKey(applyChamberSpiralToOutputs(exact, BOX)).get('length')!.status).toBe('set exact');
+    expect(byKey(applyChamberSpiralToOutputs(outputs, null)).get('length')!.final).toBeNaN();
+  });
+});
+
+describe('normaliseChamberLength (old saves, spec 2026-10-01-chamber-length-row §5)', () => {
+  it('turns a plain-box lengthOverride into a Length Exact', () => {
+    const out = normaliseChamberLength({ ...BASE, lengthOverride: 9000 });
+    expect(out.constraints?.length).toEqual({ exact: 9000 });
+    expect(out).not.toHaveProperty('lengthOverride');
+  });
+
+  it('keeps a spiral spiralLength as it is', () => {
+    const out = normaliseChamberLength({
+      ...BASE,
+      semiSpiral: true,
+      spiralLength: { min: 5000, max: 6000 },
+    });
+    expect(out.constraints?.length).toEqual({ min: 5000, max: 6000 });
+    expect(out).not.toHaveProperty('spiralLength');
+  });
+
+  it('drops the field each mode ignored', () => {
+    expect(
+      normaliseChamberLength({ ...BASE, semiSpiral: true, lengthOverride: 9000 }).constraints
+        ?.length,
+    ).toBeUndefined();
+    expect(
+      normaliseChamberLength({ ...BASE, spiralLength: { exact: 5000 } }).constraints?.length,
+    ).toBeUndefined();
+  });
+
+  it('lets constraints.length win over the legacy fields', () => {
+    const out = normaliseChamberLength({
+      ...BASE,
+      lengthOverride: 9000,
+      constraints: { length: { max: 8000 } },
+    });
+    expect(out.constraints?.length).toEqual({ max: 8000 });
+  });
+
+  it('returns the same object when there is nothing to fold', () => {
+    const input = { ...BASE, constraints: { width: { exact: 4000 } } };
+    expect(normaliseChamberLength(input)).toBe(input);
+  });
+
+  it('feeds the spiral limits from a legacy spiralLength too', () => {
+    expect(
+      chamberSpiralLengthLimits({ ...BASE, semiSpiral: true, spiralLength: { max: 6000 } }),
+    ).toEqual({ minMm: null, maxMm: 6000, inverted: false });
   });
 });

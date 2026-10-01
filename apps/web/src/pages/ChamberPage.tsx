@@ -24,8 +24,7 @@ import {
   chamberBodyKey,
   chamberBuildErrorMessage,
   chamberFormSchema,
-  chamberInputToSpiralLength,
-  chamberSpiralLengthBody,
+  chamberInputToConstraints,
   chamberInputToFormValues,
   computeChamberAutoDims,
   casingVelocity,
@@ -70,9 +69,6 @@ export function ChamberPage() {
   const [constraints, setConstraints] = useState<
     Partial<Record<ChamberOutputKey, ChamberConstraint>>
   >({});
-  // Semi-spiral Length Min / Max / Exact (spec 2026-09-30-spiral-length): not an
-  // output key, so kept apart from `constraints`; sent only with the spiral on.
-  const [spiralLength, setSpiralLength] = useState<ChamberConstraint>({});
   const [hash, setHash] = useState<string | null>(null);
   // Whether the LAST build gets the STEP menu with "Change rotational
   // direction" (kept in step with `hash`): a guide-vane build whose STEP is
@@ -105,22 +101,18 @@ export function ChamberPage() {
     const handed = (location.state as { chamberInput?: ChamberInput } | null)?.chamberInput;
     if (!handed) return;
     reset(chamberInputToFormValues(handed));
-    setConstraints(handed.constraints ?? {});
-    setSpiralLength(chamberInputToSpiralLength(handed));
+    setConstraints(chamberInputToConstraints(handed));
     navigate(location.pathname, { replace: true, state: null });
     // Only when a new hand-off arrives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);
 
   const values = watch();
-  // The build body's Length field: undefined unless the spiral is on and a value is typed.
-  const spiralLengthBody = chamberSpiralLengthBody(values.semiSpiral, spiralLength);
   // The last build's spiral only describes the CURRENT inputs while nothing
   // drifted since Generate; otherwise its derived values would be stale.
   const lastBuildMatches =
     lastBuildInput !== null &&
-    chamberBodyKey({ ...values, constraints, spiralLength: spiralLengthBody }) ===
-      chamberBodyKey(lastBuildInput);
+    chamberBodyKey({ ...values, constraints }) === chamberBodyKey(lastBuildInput);
   const spiralSummary = values.semiSpiral && lastBuildMatches ? lastSpiral : null;
   const relationsKey = JSON.stringify(values.relations);
   const outputs = useMemo<ChamberOutput[] | null>(() => {
@@ -133,7 +125,9 @@ export function ChamberPage() {
     const model = computeChamberOutputs(
       chamberSpiralModelInput({ x1, x2, x3, constraints, relationsMaster, relations, semiSpiral }),
     );
-    return semiSpiral ? applyChamberSpiralToOutputs(model, spiralSummary?.boxMm ?? null) : model;
+    return semiSpiral
+      ? applyChamberSpiralToOutputs(model, spiralSummary?.boxMm ?? null, spiralSummary)
+      : model;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     values.x1,
@@ -146,9 +140,6 @@ export function ChamberPage() {
     spiralSummary,
   ]);
 
-  // Auto length shown on the (blank) length field = 2 x the final width (mm).
-  const widthFinal = outputs?.find((o) => o.key === 'width')?.final ?? null;
-  const autoLengthMm = widthFinal != null ? 2 * widthFinal : null;
   // Semi-spiral casing: the Casing flow velocity follows B Kammer live (user
   // rule 2026-09-30), from the same shared helper the API builds with.
   const casing = useMemo(
@@ -200,16 +191,7 @@ export function ChamberPage() {
 
   // The current form as a build body for the saved-builds Save button (null
   // while the form is invalid, which disables saving an unbuildable state).
-  const saveSnapshot = isValid ? { ...values, constraints, spiralLength: spiralLengthBody } : null;
-
-  const onSpiralLengthChange = (field: keyof ChamberConstraint, value: number | undefined) => {
-    setSpiralLength((prev) => {
-      const next = { ...prev };
-      if (value === undefined) delete next[field];
-      else next[field] = value;
-      return next;
-    });
-  };
+  const saveSnapshot = isValid ? { ...values, constraints } : null;
 
   // Field labels for the invalid-submit summary, mirroring the Inputs form.
   const FIELD_LABELS: Partial<Record<keyof ChamberFormValues, string>> = {
@@ -217,7 +199,6 @@ export function ChamberPage() {
     x2: 'Head (m)',
     x3: 'Q_max (m³/s)',
     x4: 'Power (kW)',
-    lengthOverride: 'Length',
     footAngleDeg: 'Foot angle',
     partScale: 'Part scale',
     vaneAngleDeg: 'Vane angle',
@@ -239,29 +220,17 @@ export function ChamberPage() {
       // An inverted Min>Max is a contradiction the server refuses anyway —
       // surface it here without a round trip (the table cell shows which row).
       const inverted = (outputs ?? []).filter((o) => o.status === '! min>max');
-      const lengthBody = chamberSpiralLengthBody(v.semiSpiral, spiralLength);
-      const lengthInverted =
-        lengthBody !== undefined &&
-        lengthBody.exact == null &&
-        lengthBody.min != null &&
-        lengthBody.max != null &&
-        lengthBody.min > lengthBody.max;
-      if (inverted.length || lengthInverted) {
+      if (inverted.length) {
         const messages = inverted.map((o) => {
           const con = constraints[o.key];
           return `${o.label}: Min ${con?.min ?? '?'} > Max ${con?.max ?? '?'} — fix or clear those values.`;
         });
-        if (lengthInverted) {
-          messages.push(
-            `Length: Min ${lengthBody.min} > Max ${lengthBody.max}. Fix or clear those values.`,
-          );
-        }
         setBuildWarnings([]);
         setBuildErrors(messages);
         toast.error('Inverted Min/Max range — see the notes below the preview.');
         return;
       }
-      const body = { ...v, constraints, spiralLength: lengthBody };
+      const body = { ...v, constraints };
       build.mutate(body, {
         onSuccess: (res) => {
           setHash(res.hash);
@@ -340,8 +309,7 @@ export function ChamberPage() {
             snapshot={saveSnapshot}
             onLoad={(save) => {
               reset(chamberInputToFormValues(save.snapshot));
-              setConstraints(save.snapshot.constraints ?? {});
-              setSpiralLength(chamberInputToSpiralLength(save.snapshot));
+              setConstraints(chamberInputToConstraints(save.snapshot));
               // The loaded save is a DIFFERENT configuration: everything tied
               // to the previous build (viewer, exports, notices) is stale now.
               setHash(null);
@@ -381,7 +349,6 @@ export function ChamberPage() {
                 setValue('chamferEnabled', next.set.chamferEnabled, { shouldDirty: true });
               }
             }}
-            autoLengthMm={autoLengthMm}
             casingVelocity={casing}
             autoDims={autoDims}
             relationsMaster={values.relationsMaster}
@@ -452,12 +419,7 @@ export function ChamberPage() {
         outputs={outputs}
         constraints={constraints}
         onConstraintChange={onConstraintChange}
-        spiral={{
-          on: values.semiSpiral,
-          summary: spiralSummary,
-          length: spiralLength,
-          onLengthChange: onSpiralLengthChange,
-        }}
+        spiral={{ on: values.semiSpiral, summary: spiralSummary }}
       />
     </div>
   );

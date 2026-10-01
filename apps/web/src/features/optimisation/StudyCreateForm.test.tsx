@@ -80,6 +80,26 @@ describe('StudyCreateForm', () => {
     expect(screen.getByTestId('range-width')).toHaveTextContent('3600 to 5300 mm');
   });
 
+  it('offers Length (= 2 × B Kammer) without the spiral, from an old lengthOverride too', async () => {
+    const user = userEvent.setup();
+    renderForm();
+    await user.click(screen.getByRole('checkbox', { name: 'Length' }));
+    expect(screen.getByTestId('base-length')).toHaveTextContent('8900');
+    expect(screen.getByTestId('range-length')).toHaveTextContent('8050 to 9750 mm');
+  });
+
+  it('reads an old lengthOverride as the Length base value', async () => {
+    const user = userEvent.setup();
+    renderForm([save({ snapshot: { x1: 1450, x2: 7.85, x3: 8, lengthOverride: 9000 } })]);
+    await user.click(screen.getByRole('checkbox', { name: 'Length' }));
+    expect(screen.getByTestId('range-length')).toHaveTextContent('8100 to 9900 mm');
+  });
+
+  it('does not offer Length on a semi-spiral base design', () => {
+    renderForm([save({ snapshot: { x1: 1450, x2: 7.85, x3: 8, semiSpiral: true } })]);
+    expect(screen.queryByRole('checkbox', { name: 'Length' })).toBeNull();
+  });
+
   it('shows a tighter table Max as the range limit', async () => {
     const user = userEvent.setup();
     renderForm([

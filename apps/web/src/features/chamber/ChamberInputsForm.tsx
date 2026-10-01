@@ -55,7 +55,6 @@ export function ChamberInputsForm({
   coneChamferEnabled,
   semiSpiral = false,
   onSemiSpiralChange,
-  autoLengthMm,
   casingVelocity,
   autoDims,
   relationsMaster,
@@ -72,13 +71,12 @@ export function ChamberInputsForm({
   /** Current Cone chamfer state (shows the Cone chamfer size field when on). */
   coneChamferEnabled: boolean;
   /**
-   * Current Semi-spiral casing state: shows the Casing flow velocity, hides
-   * Length and disables Feet and Chamfer (spec 2026-09-29-semi-spiral-casing).
+   * Current Semi-spiral casing state: shows the Casing flow velocity
+   * and disables Feet and Chamfer (spec 2026-09-29-semi-spiral-casing).
    */
   semiSpiral?: boolean;
   /** Called when the Semi-spiral casing box is toggled (the parent unticks Feet / Chamfer). */
   onSemiSpiralChange?: (on: boolean) => void;
-  autoLengthMm: number | null;
   /** Casing flow velocity derived live from B Kammer (read-only; semi-spiral casing). */
   casingVelocity: CasingVelocity;
   /** Auto (empirical) placeholders for the five manual dimension overrides. */
@@ -129,7 +127,7 @@ export function ChamberInputsForm({
       <div>
         <h2 className="text-lg font-semibold text-text">Inputs</h2>
         <p className="mt-1 text-sm text-text-secondary">
-          Three empirical inputs drive the twelve geometry parameters. Lengths are in millimetres.
+          Three empirical inputs drive the geometry parameters. Lengths are in millimetres.
         </p>
       </div>
 
@@ -315,24 +313,7 @@ export function ChamberInputsForm({
               value={casingVelocity.value != null ? casingVelocity.value.toFixed(3) : ''}
             />
           </Field>
-        ) : (
-          <Field
-            label="Length (mm)"
-            error={errors.lengthOverride?.message}
-            helperText={
-              autoLengthMm != null
-                ? `Blank = 2 × width ≈ ${Math.round(autoLengthMm)} mm`
-                : 'Blank = 2 × width'
-            }
-          >
-            <Input
-              type="number"
-              step="any"
-              placeholder="auto"
-              {...register('lengthOverride', { setValueAs: numOrUndef })}
-            />
-          </Field>
-        )}
+        ) : null}
         <Field
           label="Foot angle (°)"
           error={errors.footAngleDeg?.message}

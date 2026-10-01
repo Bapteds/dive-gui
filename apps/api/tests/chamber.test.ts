@@ -19,6 +19,11 @@ const BUILD = { x1: 1450, x2: 7.85, x3: 8 };
 // WS-B code (16 or 18 only): the free vane count must not move them.
 const VANE_HASH_16 = 'fed61c76dc7ce595';
 const VANE_HASH_18 = '06b19c34f39b6070';
+// Build keys frozen before the Length row (spec 2026-10-01-chamber-length-row):
+// BUILD, BUILD + lengthOverride 12000, and the semi-spiral BUILD (fixture spiral).
+const LENGTH_HASH_PLAIN = '97ccaaee672f8851';
+const LENGTH_HASH_OVERRIDE = 'a2fe3df7d2b5dcb9';
+const LENGTH_HASH_SPIRAL = '22df8fb40911cd93';
 
 const MANIFEST = [
   { name: 'inlet', type: 'patch', nFaces: 1, edgeOffset: 0, edgeCount: 0 },
@@ -172,7 +177,7 @@ describe('Chamber Creation', () => {
     await request(app).post('/api/v1/chamber/build').send(BUILD).expect(401);
   });
 
-  it('builds a chamber and returns the hash + twelve outputs', async () => {
+  it('builds a chamber and returns the hash + thirteen outputs', async () => {
     setCommandRunner(successRunner);
     const auth = authHeader(await createTestUser());
 
@@ -184,7 +189,7 @@ describe('Chamber Creation', () => {
 
     const { hash, outputs } = built.body as { hash: string; outputs: { key: string; final: number }[] };
     expect(hash).toBeTruthy();
-    expect(outputs).toHaveLength(12);
+    expect(outputs).toHaveLength(13);
     expect(outputs[0].key).toBe('width');
     expect(outputs.every((o) => Number.isFinite(o.final))).toBe(true);
 
@@ -717,7 +722,7 @@ describe('Chamber Creation', () => {
 
     // Guide vanes change the geometry => a different cache key, same 12 outputs.
     expect(on.body.hash).not.toBe(off.body.hash);
-    expect(on.body.outputs).toHaveLength(12);
+    expect(on.body.outputs).toHaveLength(13);
   });
 
   it('keys the build on the chamfer-enabled flag, defaulting to on', async () => {
@@ -806,7 +811,7 @@ describe('Chamber Creation', () => {
     expect(n16.body.hash).toBe(plain.body.hash);
     expect(n18.body.hash).not.toBe(plain.body.hash);
     expect(n18.body.outputs).toEqual(plain.body.outputs);
-    expect(n18.body.outputs).toHaveLength(12);
+    expect(n18.body.outputs).toHaveLength(13);
     // Only the 18-vane build reached the builder (16 was a cache hit) and it carries the count.
     expect(seen).toHaveLength(2);
     expect(seen[0]).not.toHaveProperty('vaneCount');
@@ -1040,7 +1045,7 @@ describe('Chamber Creation', () => {
       const on50 = await build({ ...base, coneChamferEnabled: true, coneChamferSize: 50 });
       expect(on50.body.hash).not.toBe(plain.body.hash);
       expect(on50.body.outputs).toEqual(plain.body.outputs);
-      expect(on50.body.outputs).toHaveLength(12);
+      expect(on50.body.outputs).toHaveLength(13);
       // Only plain and on50 reached the builder; the off request was a cache hit.
       expect(seen).toHaveLength(2);
       expect(seen[0]).not.toHaveProperty('coneChamferEnabled');
@@ -1156,7 +1161,7 @@ describe('Chamber Creation', () => {
       .send({ ...BUILD, variant: 'hollow', hollowLength: 2000 })
       .expect(200);
     expect(res.body.hash).toBeTruthy();
-    expect(res.body.outputs).toHaveLength(12);
+    expect(res.body.outputs).toHaveLength(13);
   });
 
   it('rejects the hollow variant without a hollow length', async () => {
@@ -1587,5 +1592,76 @@ describe('Chamber Creation', () => {
       expect(a.body.hash).not.toBe(b.body.hash);
       expect(spiralRuns).toHaveLength(1);
     });
+  });
+});
+
+describe('Length row in both modes (spec 2026-10-01-chamber-length-row)', () => {
+  const post = (auth: string, body: object) =>
+    request(app).post('/api/v1/chamber/build').set('Authorization', auth).send(body);
+
+  it('keeps the build keys of today: no Length, an old lengthOverride, a spiral', async () => {
+    const params: Record<string, unknown>[] = [];
+    setCommandRunner(withSpiralRunner(recordingBuilder(params), []));
+    const auth = authHeader(await createTestUser());
+    const plain = await post(auth, BUILD).expect(200);
+    expect(plain.body.hash).toBe(LENGTH_HASH_PLAIN);
+    const width = plain.body.outputs.find((o: { key: string }) => o.key === 'width').final;
+    expect(params[0].length).toBeCloseTo((2 * width) / 1000, 12);
+    const old = await post(auth, { ...BUILD, lengthOverride: 12000 }).expect(200);
+    expect(old.body.hash).toBe(LENGTH_HASH_OVERRIDE);
+    // The same Length as an Exact is the same build.
+    const exact = await post(auth, { ...BUILD, constraints: { length: { exact: 12000 } } }).expect(200);
+    expect(exact.body.hash).toBe(LENGTH_HASH_OVERRIDE);
+    const spiral = await post(auth, SPIRAL).expect(200);
+    expect(spiral.body.hash).toBe(LENGTH_HASH_SPIRAL);
+  });
+
+  it('answers a Length row: 2 × B Kammer by default, the spiral length with the spiral', async () => {
+    setCommandRunner(withSpiralRunner(successRunner, []));
+    const auth = authHeader(await createTestUser());
+    const plain = await post(auth, BUILD).expect(200);
+    const row = (body: { outputs: { key: string; final: number; status: string }[] }) =>
+      body.outputs.find((o) => o.key === 'length')!;
+    const width = plain.body.outputs.find((o: { key: string }) => o.key === 'width').final;
+    expect(row(plain.body)).toMatchObject({ final: 2 * width, status: 'from relation' });
+    const spiral = await post(auth, SPIRAL).expect(200);
+    expect(row(spiral.body).final).toBeCloseTo(spiral.body.spiral.boxMm.length, 6);
+    expect(row(spiral.body).status).toBe('from spiral');
+  });
+
+  it('caps the plain box at a Length Max', async () => {
+    const params: Record<string, unknown>[] = [];
+    setCommandRunner(recordingBuilder(params));
+    const auth = authHeader(await createTestUser());
+    const res = await post(auth, { ...BUILD, constraints: { length: { max: 6000 } } }).expect(200);
+    expect(params[0].length).toBeCloseTo(6, 12);
+    expect(res.body.outputs.find((o: { key: string }) => o.key === 'length')).toMatchObject({
+      final: 6000,
+      status: 'capped at max',
+    });
+  });
+
+  it('refuses an inverted Length range in both modes', async () => {
+    setCommandRunner(withSpiralRunner(successRunner, []));
+    const auth = authHeader(await createTestUser());
+    for (const body of [BUILD, SPIRAL]) {
+      const res = await post(auth, { ...body, constraints: { length: { min: 9000, max: 8000 } } }).expect(
+        422,
+      );
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+      expect(res.body.error.message).toContain('Length: Min 9000 > Max 8000');
+    }
+  });
+
+  it('sends a spiral Length Max from constraints.length to the designer', async () => {
+    const spiralRuns: Record<string, unknown>[] = [];
+    setCommandRunner(withSpiralRunner(successRunner, spiralRuns));
+    const auth = authHeader(await createTestUser());
+    const viaRow = await post(auth, { ...SPIRAL, constraints: { length: { max: 4400 } } }).expect(200);
+    expect(spiralRuns[0]).toMatchObject({ max_length: 4.4 });
+    // An old save with spiralLength builds the same chamber.
+    const legacy = await post(auth, { ...SPIRAL, spiralLength: { max: 4400 } }).expect(200);
+    expect(legacy.body.hash).toBe(viaRow.body.hash);
+    expect(spiralRuns).toHaveLength(1);
   });
 });

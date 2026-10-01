@@ -8,7 +8,7 @@ import {
 import { ChamberOutputsTable } from './ChamberOutputsTable';
 
 /**
- * ChamberOutputsTable tests: the twelve computed parameters render with their
+ * ChamberOutputsTable tests: the computed parameters render with their
  * FINAL and status, an empty (null) outputs state prompts for inputs, and
  * editing a Min / Max / Exact cell reports the change up (the parent owns the
  * constraints + live recompute).
@@ -149,6 +149,22 @@ describe('ChamberOutputsTable', () => {
     expect(onChange).toHaveBeenCalledWith('width', 'min', undefined);
   });
 
+  describe('Length row without the spiral (spec 2026-10-01-chamber-length-row)', () => {
+    it('is an editable row = 2 × B Kammer with no confidence claim', () => {
+      const onChange = vi.fn();
+      render(
+        <ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={onChange} />,
+      );
+      const row = screen.getByText('Length').closest('tr')!;
+      const width = OUTPUTS.find((o) => o.key === 'width')!.final;
+      expect(row).toHaveTextContent((2 * width).toLocaleString());
+      expect(within(row).getByText('= 2 × B Kammer')).toBeInTheDocument();
+      expect(within(row).queryByText(/Good|High|Moderate|Low/)).toBeNull();
+      fireEvent.change(screen.getByLabelText('Length maximum'), { target: { value: '6000' } });
+      expect(onChange).toHaveBeenCalledWith('length', 'max', 6000);
+    });
+  });
+
   describe('semi-spiral casing', () => {
     const SUMMARY: ChamberSpiralSummary = {
       widthMm: 4400,
@@ -202,25 +218,35 @@ describe('ChamberOutputsTable', () => {
       expect(screen.getByText(/0\.43 m² at 219°/)).toBeInTheDocument();
     });
 
-    describe('Length Min / Max / Exact (spec 2026-09-30-spiral-length)', () => {
+    describe('Length Min / Max / Exact (spec 2026-09-30-spiral-length, a model row since 2026-10-01)', () => {
       const lengthRow = () => screen.getByText('Length').closest('tr')!;
+      const spiralOutputs = (
+        constraints: Parameters<typeof computeChamberOutputs>[0]['constraints'],
+        box: ChamberSpiralSummary['boxMm'] | null,
+        summary: ChamberSpiralSummary | null = null,
+      ) =>
+        applyChamberSpiralToOutputs(
+          computeChamberOutputs({ x1: 1450, x2: 7.85, x3: 8, semiSpiral: true, constraints }),
+          box,
+          summary,
+        );
 
       it('makes the Length row editable while the other derived rows stay read-only', () => {
-        const onLengthChange = vi.fn();
+        const onChange = vi.fn();
         render(
           <ChamberOutputsTable
-            outputs={applyChamberSpiralToOutputs(OUTPUTS, null)}
+            outputs={spiralOutputs({}, null)}
             constraints={{}}
-            onConstraintChange={() => {}}
-            spiral={{ on: true, summary: null, length: {}, onLengthChange }}
+            onConstraintChange={onChange}
+            spiral={{ on: true, summary: null }}
           />,
         );
         fireEvent.change(screen.getByLabelText('Length minimum'), { target: { value: '5000' } });
-        expect(onLengthChange).toHaveBeenCalledWith('min', 5000);
+        expect(onChange).toHaveBeenCalledWith('length', 'min', 5000);
         fireEvent.change(screen.getByLabelText('Length maximum'), { target: { value: '6000' } });
-        expect(onLengthChange).toHaveBeenCalledWith('max', 6000);
+        expect(onChange).toHaveBeenCalledWith('length', 'max', 6000);
         fireEvent.change(screen.getByLabelText('Length exact'), { target: { value: '5500' } });
-        expect(onLengthChange).toHaveBeenCalledWith('exact', 5500);
+        expect(onChange).toHaveBeenCalledWith('length', 'exact', 5500);
         for (const label of ['B1', 'LT', 'LF1', 'BF1', 'LF2', 'BF2']) {
           expect(screen.queryByLabelText(`${label} minimum`)).toBeNull();
           expect(screen.queryByLabelText(`${label} maximum`)).toBeNull();
@@ -230,17 +256,13 @@ describe('ChamberOutputsTable', () => {
       });
 
       it('shows the typed values and flags an inverted Length range', () => {
+        const constraints = { length: { min: 7000, max: 6000 } };
         render(
           <ChamberOutputsTable
-            outputs={applyChamberSpiralToOutputs(OUTPUTS, null)}
-            constraints={{}}
+            outputs={spiralOutputs(constraints, null)}
+            constraints={constraints}
             onConstraintChange={() => {}}
-            spiral={{
-              on: true,
-              summary: null,
-              length: { min: 7000, max: 6000 },
-              onLengthChange: () => {},
-            }}
+            spiral={{ on: true, summary: null }}
           />,
         );
         expect(screen.getByLabelText('Length minimum')).toHaveValue(7000);
@@ -258,15 +280,10 @@ describe('ChamberOutputsTable', () => {
         };
         const { unmount } = render(
           <ChamberOutputsTable
-            outputs={applyChamberSpiralToOutputs(OUTPUTS, extended.boxMm)}
-            constraints={{}}
+            outputs={spiralOutputs({ length: { min: 5000 } }, extended.boxMm, extended)}
+            constraints={{ length: { min: 5000 } }}
             onConstraintChange={() => {}}
-            spiral={{
-              on: true,
-              summary: extended,
-              length: { min: 5000 },
-              onLengthChange: () => {},
-            }}
+            spiral={{ on: true, summary: extended }}
           />,
         );
         expect(lengthRow()).toHaveTextContent('5,000');
@@ -277,10 +294,10 @@ describe('ChamberOutputsTable', () => {
         const bound = { ...SUMMARY, lengthMm: 4300, lengthBinding: true, inletExtensionMm: 0 };
         render(
           <ChamberOutputsTable
-            outputs={applyChamberSpiralToOutputs(OUTPUTS, SUMMARY.boxMm)}
-            constraints={{}}
+            outputs={spiralOutputs({ length: { max: 4300 } }, SUMMARY.boxMm, bound)}
+            constraints={{ length: { max: 4300 } }}
             onConstraintChange={() => {}}
-            spiral={{ on: true, summary: bound, length: { max: 4300 }, onLengthChange: () => {} }}
+            spiral={{ on: true, summary: bound }}
           />,
         );
         expect(within(lengthRow()).getByText('capped at max')).toBeInTheDocument();
@@ -290,27 +307,21 @@ describe('ChamberOutputsTable', () => {
       it('reads "set exact" with a Length Exact', () => {
         render(
           <ChamberOutputsTable
-            outputs={applyChamberSpiralToOutputs(OUTPUTS, SUMMARY.boxMm)}
-            constraints={{}}
+            outputs={spiralOutputs({ length: { exact: 4400 } }, SUMMARY.boxMm, SUMMARY)}
+            constraints={{ length: { exact: 4400 } }}
             onConstraintChange={() => {}}
-            spiral={{
-              on: true,
-              summary: SUMMARY,
-              length: { exact: 4400 },
-              onLengthChange: () => {},
-            }}
+            spiral={{ on: true, summary: SUMMARY }}
           />,
         );
         expect(within(lengthRow()).getByText('set exact')).toBeInTheDocument();
       });
     });
 
-    it('has no Length row and no spiral note while the spiral is off', () => {
+    it('has no spiral note while the spiral is off', () => {
       render(
         <ChamberOutputsTable outputs={OUTPUTS} constraints={{}} onConstraintChange={() => {}} />,
       );
       expect(screen.queryByText('from spiral')).toBeNull();
-      expect(screen.queryByText('Length')).toBeNull();
     });
   });
 });

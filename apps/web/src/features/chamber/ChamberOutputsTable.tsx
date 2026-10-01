@@ -20,7 +20,7 @@ import type {
 } from '@/lib/api/types';
 
 /**
- * ChamberOutputsTable - the twelve computed parameters (mm), with the calculator's
+ * ChamberOutputsTable - the computed parameters (mm), with the calculator's
  * per-output Min / Max / Exact overrides editable inline. Model is the raw
  * regression value; FINAL applies the clamp; Status explains what happened. The
  * confidence pill carries the leave-one-out CV error. Values are recomputed live
@@ -80,21 +80,6 @@ function SpiralNote({ summary }: { summary: ChamberSpiralSummary | null }) {
       °.
     </p>
   );
-}
-
-/**
- * Status of the semi-spiral Length row (spec 2026-09-30-spiral-length): the
- * typed range first, then what the last build did with it.
- */
-function spiralLengthStatus(
-  con: ChamberConstraint,
-  summary: ChamberSpiralSummary | null,
-): ChamberStatus {
-  if (con.exact != null) return 'set exact';
-  if (con.min != null && con.max != null && con.min > con.max) return '! min>max';
-  if (summary?.lengthBinding) return 'capped at max';
-  if ((summary?.inletExtensionMm ?? 0) > 0) return 'raised to min';
-  return 'from spiral';
 }
 
 /** Format a millimetre value for display (1 decimal, tabular). */
@@ -159,17 +144,15 @@ export function ChamberOutputsTable({
     value: number | undefined,
   ) => void;
   /**
-   * Semi-spiral casing state: `on` adds the Length row and the spiral note;
-   * `summary` is the current build's spiral (null before Generate). The derived
-   * rows themselves arrive with status 'from spiral' in `outputs`. `length` /
-   * `onLengthChange` carry the Length Min / Max / Exact (spec
-   * 2026-09-30-spiral-length); without a handler the Length row is read-only.
+   * Semi-spiral casing state: `on` adds the spiral note; `summary` is the
+   * current build's spiral (null before Generate). The derived rows arrive with
+   * status 'from spiral' in `outputs`; the Length row stays editable (its Min /
+   * Max / Exact drive the spiral, spec 2026-09-30-spiral-length) and shows the
+   * spiral's length.
    */
   spiral?: {
     on: boolean;
     summary: ChamberSpiralSummary | null;
-    length?: ChamberConstraint;
-    onLengthChange?: (field: ConstraintField, value: number | undefined) => void;
   };
 }) {
   const [legendOpen, setLegendOpen] = useState(false);
@@ -208,44 +191,10 @@ export function ChamberOutputsTable({
           <TableBody>
             {outputs.map((o) => {
               const con = constraints[o.key] ?? {};
-              const derived = o.status === 'from spiral';
-              // Semi-spiral Length: derived by the spiral, but Min / Max / Exact
-              // apply (Max limits the spiral, Min extends the inlet channel).
-              const lengthCon = spiral?.length ?? {};
-              const lengthStatus = spiralLengthStatus(lengthCon, spiral?.summary ?? null);
-              const onLength = spiral?.onLengthChange;
-              const lengthRow =
-                o.key === 'width' && spiral?.on ? (
-                  <TableRow key="spiral-length">
-                    <TableCell className="font-medium text-text">Length</TableCell>
-                    <TableCell className="text-right text-text-secondary">-</TableCell>
-                    {(['min', 'max', 'exact'] as const).map((field) => {
-                      const name = { min: 'minimum', max: 'maximum', exact: 'exact' }[field];
-                      return (
-                        <TableCell key={field}>
-                          {onLength ? (
-                            <NumCell
-                              value={lengthCon[field]}
-                              ariaLabel={`Length ${name}`}
-                              onChange={(v) => onLength(field, v)}
-                            />
-                          ) : (
-                            <ReadOnlyCell label={`Length ${name}: read-only, from the spiral`} />
-                          )}
-                        </TableCell>
-                      );
-                    })}
-                    <TableCell className="text-right font-semibold text-text">
-                      {spiral.summary ? mm(spiral.summary.boxMm.length) : '-'}
-                    </TableCell>
-                    <TableCell>
-                      <span className={cn('text-xs', STATUS_STYLES[lengthStatus])}>
-                        {lengthStatus}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-text-secondary">-</TableCell>
-                  </TableRow>
-                ) : null;
+              // Length keeps its Min / Max / Exact with the spiral on (they drive it).
+              const derived = o.status === 'from spiral' && o.key !== 'length';
+              // With the spiral on, Length is the spiral's: no model value to show.
+              const spiralLength = o.key === 'length' && spiral?.on === true;
               // Relation-driven outputs (e.g. Height = LEB + LEOW) default to their
               // derived value but can be overridden with Min/Max/Exact like any other.
               if (derived) {
@@ -308,7 +257,9 @@ export function ChamberOutputsTable({
                         )}
                       </span>
                     </TableCell>
-                    <TableCell className="text-right text-text-secondary">{mm(o.model)}</TableCell>
+                    <TableCell className="text-right text-text-secondary">
+                      {spiralLength || !Number.isFinite(o.model) ? '-' : mm(o.model)}
+                    </TableCell>
                     <TableCell>
                       <NumCell
                         value={con.min}
@@ -336,7 +287,7 @@ export function ChamberOutputsTable({
                         o.final <= 0 && !o.noEffect ? 'text-danger' : 'text-text',
                       )}
                     >
-                      {mm(o.final)}
+                      {Number.isFinite(o.final) ? mm(o.final) : '-'}
                     </TableCell>
                     <TableCell>
                       {o.final <= 0 && !o.noEffect ? (
@@ -351,19 +302,26 @@ export function ChamberOutputsTable({
                     </TableCell>
                     <TableCell>
                       {/* The CV error is shown, not hidden in a tooltip — title
-                        attributes never reach keyboard/touch/screen-reader users. */}
-                      <span
-                        title={`Leave-one-out cross-validation error: ${o.cvError}%`}
-                        className={cn(
-                          'inline-block whitespace-nowrap rounded-sm px-2 py-0.5 text-xs font-medium',
-                          CONF_STYLES[o.confidence],
-                        )}
-                      >
-                        {o.confidence} · {o.cvError}%
-                      </span>
+                        attributes never reach keyboard/touch/screen-reader users.
+                        Length is an identity (no fit): no confidence claim. */}
+                      {o.confidence == null ? (
+                        <span className="text-text-secondary">
+                          <span aria-hidden="true">-</span>
+                          <span className="sr-only">No fit: set by a relation</span>
+                        </span>
+                      ) : (
+                        <span
+                          title={`Leave-one-out cross-validation error: ${o.cvError}%`}
+                          className={cn(
+                            'inline-block whitespace-nowrap rounded-sm px-2 py-0.5 text-xs font-medium',
+                            CONF_STYLES[o.confidence],
+                          )}
+                        >
+                          {o.confidence} · {o.cvError}%
+                        </span>
+                      )}
                     </TableCell>
                   </TableRow>
-                  {lengthRow}
                 </Fragment>
               );
             })}

@@ -25,6 +25,7 @@ import {
   chamberSpiralExtendInlet,
   chamberSpiralInputs,
   chamberSpiralLengthLimits,
+  normaliseChamberLength,
   chamberSpiralVelocityRefusal,
   chamberSpiralModelInput,
   runnerCaseClearanceRefusal,
@@ -381,20 +382,15 @@ function outputFinal(outputs: ChamberOutput[], key: string): number {
 }
 
 /**
- * The metres geometry params buildChamber.py consumes: the twelve FINAL outputs
- * (mm -> m) keyed by their param name, plus the resolved LENGTH (mm -> m) and,
- * for the 'hollow' variant, the derived hollow/central/dome dimensions.
+ * The metres geometry params buildChamber.py consumes: the FINAL outputs (mm -> m)
+ * keyed by their param name (Length included, spiral off) and, for the 'hollow'
+ * variant, the derived hollow/central/dome dimensions.
  */
 function resolveGeometryParams(
   input: ChamberInput,
   outputs: ChamberOutput[],
   spiral: DesignedSpiral | null = null,
 ): ChamberParams {
-  const widthMm = outputFinal(outputs, 'width');
-  // Default: length = 2 x width — a true identity, so it inherits width's grid
-  // snap (an empirical width is already on the 50 mm grid) or propagates a
-  // user-driven width verbatim. A lengthOverride is the user's number as-is.
-  const lengthMm = input.lengthOverride ?? 2 * widthMm;
   const variant = input.variant ?? 'stepped';
 
   const params: ChamberParams = { variant };
@@ -410,8 +406,6 @@ function resolveGeometryParams(
       vertices: spiral.vertices,
       quality: spiral.quality,
     };
-  } else {
-    params.length = lengthMm * MM_TO_M;
   }
   // Torque-foot orientation is an angle (degrees), not a length — passed as-is.
   // Default 40° (an intermediate angle where the triangular gusset can form).
@@ -451,8 +445,12 @@ function resolveGeometryParams(
   // Both variants. Part of the cache key, so a new value => a new build.
   if (input.dFirst != null) params.dFirst = input.dFirst * MM_TO_M;
   if (input.dMiddle != null) params.dMiddle = input.dMiddle * MM_TO_M;
+  // Length is the `length` output (2 × B Kammer by default, Min / Max / Exact;
+  // spec 2026-10-01-chamber-length-row): the same number the old
+  // `lengthOverride ?? 2 * width` gave, so existing keys hold. With the spiral
+  // on, the spiral derives it like the other derived rows.
   for (const key of CHAMBER_OUTPUT_KEYS) {
-    if (spiral && CHAMBER_SPIRAL_DERIVED_KEYS.includes(key)) continue;
+    if (spiral && (key === 'length' || CHAMBER_SPIRAL_DERIVED_KEYS.includes(key))) continue;
     params[key] = outputFinal(outputs, key) * MM_TO_M;
   }
   // Closed generator: a typed generator height closes the last cylinder under
@@ -512,7 +510,10 @@ function resolveGeometryParams(
  * @throws 422 CHAMBER_REFUSED when the builder or the spiral designer refuses (KO: line).
  * @throws 502 CHAMBER_BUILD_FAILED if the run errors otherwise or produces no GLB.
  */
-export async function buildChamber(input: ChamberInput): Promise<ChamberBuildResult> {
+export async function buildChamber(rawInput: ChamberInput): Promise<ChamberBuildResult> {
+  // Old saves and clients may send lengthOverride / spiralLength: fold them into
+  // constraints.length first, so outputs, refusals, hash and input.json agree.
+  const input = normaliseChamberLength(rawInput);
   // Semi-spiral casing: the rows the spiral derives read 'from spiral' (no
   // value until it is designed), so they are exempt from the refusals below.
   const spiralOn = input.semiSpiral === true;
@@ -543,19 +544,15 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
 
   // An inverted range is a contradiction, not an input: building on the
   // silently-ignored model value hid the mistake (and it survived into saves).
-  // The semi-spiral Length is not an output but takes Min / Max too (spec
-  // 2026-09-30-spiral-length): its inverted range is refused the same way.
+  // Length is an output too (both modes), so the same path refuses it.
   const inverted = outputs.filter((o) => o.status === '! min>max');
   const lengthLimits = chamberSpiralLengthLimits(input);
-  if (inverted.length || lengthLimits.inverted) {
+  if (inverted.length) {
     const list = inverted
       .map((o) => {
         const con = input.constraints?.[o.key];
         return `${o.label}: Min ${con?.min ?? '?'} > Max ${con?.max ?? '?'}`;
       })
-      .concat(
-        lengthLimits.inverted ? [`Length: Min ${lengthLimits.minMm} > Max ${lengthLimits.maxMm}`] : [],
-      )
       .join(', ');
     throw new AppError(
       422,
@@ -588,7 +585,7 @@ export async function buildChamber(input: ChamberInput): Promise<ChamberBuildRes
     ? extendSpiralInlet(await designSpiral(chamberSpiralInputs(input, outputs)), lengthLimits.minMm)
     : null;
   const responseOutputs = spiral
-    ? applyChamberSpiralToOutputs(modelOutputs, spiral.summary.boxMm)
+    ? applyChamberSpiralToOutputs(modelOutputs, spiral.summary.boxMm, spiral.summary)
     : outputs;
   const params = resolveGeometryParams(input, outputs, spiral);
   const hash = chamberHash(params);

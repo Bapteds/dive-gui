@@ -98,9 +98,10 @@ export const chamberBuildSchema = z
     // chamberSpiralFlowVelocity, range checked in the service). Still accepted,
     // unbounded, so old saves carrying any value keep validating.
     spiralFlowVelocity: z.number().finite().optional(),
+    // Legacy Length fields (old saves and clients), folded into
+    // constraints.length by normaliseChamberLength (spec 2026-10-01-chamber-length-row):
+    // lengthOverride = a plain-box Length Exact, spiralLength = the spiral Length.
     lengthOverride: dimensionMm.optional(),
-    // Semi-spiral casing only: Min / Max / Exact on the spiral's Length (mm;
-    // spec 2026-09-30-spiral-length). Ignored while the spiral is off.
     spiralLength: constraintSchema.optional(),
     hollowLength: dimensionMm.optional(),
     wallThickness: dimensionMm.optional(),
