@@ -1,6 +1,6 @@
 # Index of every repository file
 
-> One line per file (658 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
+> One line per file (664 files): one-sentence role and detailed codemap sheet. **Generated**, do not edit by hand: `python brain/codemap/build-index.py` (`--check` lists undocumented files). Search it; do not read it end to end.
 
 Detail of a code file: open the sheet shown and search for the `## path/to/file` section. Documents: the description is their title and introduction line.
 
@@ -15,9 +15,11 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `AGENTS.md` : instructions common to every AI agent (project, session protocol, golden rules, commands, brain map, design in brief). · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `CLAUDE.md` : Claude Code entry point: imports `AGENTS.md` (`@AGENTS.md`) and adds the Claude-specific parts (memory, changelog hook, UI skills, index, Windows shells). · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `README.md` : technical reference for humans (architecture, prerequisites, dev, configuration, Debian deployment, CFD tools per feature, commands, auth, REST API, links to the brain). · [root-shared-mcp](codemap/root-shared-mcp.md)
+- `brain.zip` : **(undocumented: add a section in brain/codemap)**
 - `eslint.config.js` : ESLint 9 "flat" configuration of the monorepo via `tseslint.config`. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package-lock.json` : npm lockfile for the whole monorepo (workspaces), used by `npm ci` in CI and in production. · [root-shared-mcp](codemap/root-shared-mcp.md)
 - `package.json` : root of the `dive-turbinen` workspace (private, ESM, `engines.node >=20`). · [root-shared-mcp](codemap/root-shared-mcp.md)
+- `tools.tar` : **(undocumented: add a section in brain/codemap)**
 - `tsconfig.base.json` : Common TypeScript base: `target ES2022`, `strict`, `esModuleInterop`, `skipLibCheck`, `forceConsistentCasingInFileNames`, `resolveJsonModule`, `noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch`. · [root-shared-mcp](codemap/root-shared-mcp.md)
 
 ## `.claude`
@@ -333,7 +335,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/api/tests/cfMeshDicts.test.ts` : `resolveMaxCellSize` (configured size, otherwise bounds diagonal/40, `null` without size or bounds for an FMS input) and `renderMeshDict` from `src/lib/cfMeshDicts`: `surfaceFile` and `maxCellSize`, optional entries omit … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/cfdCriteria.test.ts` : pure `lib/cfdCriteria`: the three convergence files render byte-identical to `documents/Tools/ConvergenceFunctions/*` at the tool defaults, and with custom inputs differ only on the USER INPUTS lines (plus `rhoInf` / the … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/chamber.test.ts` : Chamber Creation, `POST /api/v1/chamber/build` and the hash-based reads (`/chamber/:hash/manifest|geometry|edges|export/:kind`). · [api-tests](codemap/api-tests.md)
-- `apps/api/tests/chamberModel.test.ts` : `computeChamberOutputs` (12 X1 to X3 fits with relations off, `linear`/`power` shapes, snap to the 50 mm `CHAMBER_GRID_MM` grid, default structural relations `height = LEB + LEOW`, `LEB = 2 × HLE`, chamfer chain … · [api-tests](codemap/api-tests.md)
+- `apps/api/tests/chamberModel.test.ts` : `computeChamberOutputs` (the base X1 to X3 fits with relations off, `linear`/`power` shapes, snap to the 50 mm `CHAMBER_GRID_MM` grid, default structural relations `height = LEB + LEOW`, `LEB = 2 × HLE`, chamfer chain … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/chamberPatchTypes.test.ts` : contract parity: `CHAMBER_PATCH_TYPES` (`@dive/shared`) equals the `PATCH_TYPES` dict of `apps/api/scripts/buildChamber.py`. · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/chamberSaves.test.ts` : `/api/v1/chamber/saves` (named, shared snapshots of the build body): 401 on read and create, creation with trimmed name and `owner { id, fullName }`, snapshot normalized by the schema (defaults `variant: 'stepped'` … · [api-tests](codemap/api-tests.md)
 - `apps/api/tests/conversion.test.ts` : CGNS upload (`POST/GET/DELETE /projects/:id/cgns`, 400 `INVALID_CGNS` for non-`.cgns`, 404 for an invisible project or a missing file) and the `POST /projects/:id/cgns/convert` pipeline: steps `cgnsToVtk` → `vtkToFoam` → … · [api-tests](codemap/api-tests.md)
@@ -522,10 +524,10 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `apps/web/src/features/chamber/ChamberBuildWarnings.tsx` : notices panel between the preview and the parameter table. · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
 - `apps/web/src/features/chamber/ChamberExportButtons.test.tsx` : the three exports disabled without a hash then enabled; download via object URL (`getChamberExport(HASH, 'step')`, `revokeObjectURL('blob:mock')`); recovery after failure; `onDownloaded` called only on success; plain STE … · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
 - `apps/web/src/features/chamber/ChamberExportButtons.tsx` : downloads of the current build as STL, STEP or OpenFOAM triSurface zip. · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
-- `apps/web/src/features/chamber/ChamberInputsForm.test.tsx` : "hollow" fields visible only for `variant: 'hollow'`; rounded hints (`Blank = auto ≈ 2778 mm`, `Blank = 2 × width ≈ 8889 mm`); submission of the defaults with `undefined` overrides; typed override → number, cleared → … · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
+- `apps/web/src/features/chamber/ChamberInputsForm.test.tsx` : "hollow" fields visible only for `variant: 'hollow'`; rounded hints (`Blank = auto ≈ 2778 mm`); submission of the defaults with `undefined` overrides; typed override → number, cleared → `undefined`; hollow blocked withou … · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
 - `apps/web/src/features/chamber/ChamberInputsForm.tsx` : presentational form for the chamber inputs. · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
 - `apps/web/src/features/chamber/ChamberOutputsTable.test.tsx` : prompt when `outputs === null`; collapsed "Dimension reference" legend (`aria-expanded`, image shown/hidden); one row per output with status and relation labels (`= LEB + LEOW`, `= LF1 + LF2`); Min edit → … · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
-- `apps/web/src/features/chamber/ChamberOutputsTable.tsx` : table of the twelve computed parameters (mm) with Min / Max / Exact constraints editable inline. · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
+- `apps/web/src/features/chamber/ChamberOutputsTable.tsx` : table of the thirteen computed parameters (mm; Length included since 2026-10-01) with Min / Max / Exact constraints editable inline. · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
 - `apps/web/src/features/chamber/ChamberSavesMenu.test.tsx` : dropdown disabled without saves; loading → `onLoad(save)`; creation; overwrite when keeping the name of the loaded save (`updateChamberSave('save-mine', { snapshot })`); inline refusal to overwrite a colleague's name ("b … · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
 - `apps/web/src/features/chamber/ChamberSavesMenu.tsx` : saved-build controls in the Chamber page header: load, Save (create or overwrite by name), Rename / Duplicate / Delete menu. · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
 - `apps/web/src/features/chamber/ChamberViewer.tsx` : 3D preview of a build (colored per OpenFOAM patch), reusing `MeshScene` and `PatchTable` from Visualize. · [web-features-assemble-chamber](codemap/web-features-assemble-chamber.md)
@@ -580,7 +582,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 
 - `apps/web/src/features/optimisation/OptimisationTab.tsx` : the project's Optimisation tab (WS-H): studies list (status badge, counted / max), the shown study (`StudyPanel`, running one first) or the inline `StudyCreateForm` (create / edit draft); skeleton, `ErrorState`, empty st … · [web-features-projects](codemap/web-features-projects.md)
 - `apps/web/src/features/optimisation/StudyCharts.tsx` : hand-made SVG `ObjectiveChart` (objective per evaluation, best-so-far step line, diamond for the best) and `ParetoChart` (head loss against the picked vortex metric, front joined), each with a "Show … values" table. · [web-features-projects](codemap/web-features-projects.md)
-- `apps/web/src/features/optimisation/StudyCreateForm.test.tsx` : band preview on the grid, table limit, zero weights refused, Pareto hides the weights, create body. · [web-features-projects](codemap/web-features-projects.md)
+- `apps/web/src/features/optimisation/StudyCreateForm.test.tsx` : band preview on the grid, table limit, zero weights refused, Pareto hides the weights, create body; Length (spec 2026-10-01-chamber-length-row): offered (= 2 × B Kammer) for a non-spiral base, an old `lengthOverride` rea … · [web-features-projects](codemap/web-features-projects.md)
 - `apps/web/src/features/optimisation/StudyCreateForm.tsx` : inline create / edit form: study name, base design (chamber save or chamber of this mesh), parameters table with live range preview (`computeParamSpace`, per-key band, table limit note, relation warnings), objective (wei … · [web-features-projects](codemap/web-features-projects.md)
 - `apps/web/src/features/optimisation/StudyPanel.test.tsx` : stepper of the running evaluation + Pause, owner Start and read-only member, evaluations table (infeasible reason, budget flag, best), chart table alternatives. · [web-features-projects](codemap/web-features-projects.md)
 - `apps/web/src/features/optimisation/StudyPanel.tsx` : one study: status badge (`StudyStatusBadge`, exported), owner-only controls (Start / Resume orange, Pause, Edit, Delete with confirmation), Export CSV, running evaluation stepper (Build, Mesh, Transfer, Configure, Solve) … · [web-features-projects](codemap/web-features-projects.md)
@@ -695,7 +697,7 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 
 - `apps/web/src/pages/AccountPage.tsx` : settings of the current account (route `/account`). · [web-core](codemap/web-core.md)
 - `apps/web/src/pages/AdminPage.tsx` : account back office (`/admin`, `SUPER_ADMIN`). · [web-core](codemap/web-core.md)
-- `apps/web/src/pages/ChamberPage.tsx` : Chamber Creation tool (`/chamber`): input form, live computation of the 12 outputs, CadQuery generation, 3D preview, exports, send to Meshing, saves. · [web-core](codemap/web-core.md)
+- `apps/web/src/pages/ChamberPage.tsx` : Chamber Creation tool (`/chamber`): input form, live computation of the 13 outputs, CadQuery generation, 3D preview, exports, send to Meshing, saves. · [web-core](codemap/web-core.md)
 - `apps/web/src/pages/HomePage.test.tsx` : rendering with data (greeting "Welcome back, Ada", CPU 42, solver `simpleFoam`, recent project, donut `role="img"` "4 total runs") and empty states ("no solver running", "no projects yet"). · [web-core](codemap/web-core.md)
 - `apps/web/src/pages/HomePage.tsx` : `/` dashboard pinned to the viewport from `lg` up: KPI strip (CPU, memory, active solvers, total runs), panel of running solvers (can be stopped), outcomes donut, grid of recent projects. · [web-core](codemap/web-core.md)
 - `apps/web/src/pages/LoginPage.tsx` : `/login` sign-in screen: `bg-blueprint` background, `rounded-lg shadow-md` `max-w-[400px]` card, `BrandLockup`, email and password fields, full-width CTA. · [web-core](codemap/web-core.md)
@@ -877,6 +879,13 @@ Detail of a code file: open the sheet shown and search for the `## path/to/file`
 - `brain/specs/2026-09-30-hub-shoulder-knee-ellipse-design.md` : Guide-vane hub shoulder — knee P2 from the P1–P3 quarter ellipse — design
 - `brain/specs/2026-09-30-solver-convergence-vorticity-design.md` : Solver convergence criteria + vortex metrics (WS-G) — design
 - `brain/specs/2026-09-30-spiral-length-design.md` : Semi-spiral casing: editable Length (Min / Max / Exact)
+- `brain/specs/2026-10-01-chamber-length-row-design.md` : Chamber Length: one Parameters-table row with Min / Max / Exact in both modes
+
+## `brain/stepbystep`
+
+- `brain/stepbystep/2026-10-01-spiral-fixes-00-status-bf-relations.md` : Step 0: STATUS no longer says the corner chamfers are locked at 45° : The project snapshot `brain/STATUS.md` was corrected: the BF1 = LF1 / BF2 = LF2 relations are normal, switchable relations again, not a permanent lock …
+- `brain/stepbystep/2026-10-01-spiral-fixes-01-length-row.md` : Item 2: Length is one row of the Parameters table, with Min / Max / Exact, with or without the spiral : The chamber Length moved from a form field into the Parameters table, where it defaults to 2 × B Kammer and accepts …
+- `brain/stepbystep/README.md` : Step by step : Plain-language log of gated, one-item-at-a-time work sessions: one file per item, written when the item is done.
 
 ## `documents`
 

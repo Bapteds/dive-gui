@@ -284,10 +284,12 @@ Hook for the BC overlay. `ApplyBoundaryInput` = `{ request: ApplyBoundaryConditi
 ## `apps/web/src/features/optimisation/StudyCreateForm.tsx`
 **Role**: inline create / edit form: study name, base design (chamber save or chamber of this mesh), parameters table with live range preview (`computeParamSpace`, per-key band, table limit note, relation warnings), objective (weighted / Pareto, weights, vortex metric), reference session, cores, budgets, Advanced (sampler, seed, keep best / last). Client validation mirrors the API; first invalid control focused. One orange CTA ("Create study" / "Save changes").
 
+**Length (2026-10-01)**: no code change; the parameters table now lists Length for a non-spiral base design (from `studyPickableKeys`, spec `2026-10-01-chamber-length-row-design.md`).
+
 **Fieldsets (2026-09-30)**: `min-w-0` on every fieldset (default `min-inline-size: min-content` let the 560 px parameters table overflow the card); the form is shown full width by `OptimisationTab` (list hidden while it is open).
 
 ## `apps/web/src/features/optimisation/StudyCreateForm.test.tsx`
-**Covers**: band preview on the grid, table limit, zero weights refused, Pareto hides the weights, create body.
+**Covers**: band preview on the grid, table limit, zero weights refused, Pareto hides the weights, create body; Length (spec 2026-10-01-chamber-length-row): offered (= 2 × B Kammer) for a non-spiral base, an old `lengthOverride` read as its base value, not offered on a semi-spiral base.
 
 ## `apps/web/src/features/optimisation/StudyPanel.tsx`
 **Role**: one study: status badge (`StudyStatusBadge`, exported), owner-only controls (Start / Resume orange, Pause, Edit, Delete with confirmation), Export CSV, running evaluation stepper (Build, Mesh, Transfer, Configure, Solve) with session link and Solver tab button, search space, best design with "Open in Chamber" (router state `chamberInput`), evaluations table, charts.

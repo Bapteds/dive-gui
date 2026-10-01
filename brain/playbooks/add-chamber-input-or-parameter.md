@@ -18,7 +18,7 @@
 1. **Shared model** (`packages/shared/src/index.ts`):
    - add the field to `ChamberInput` with a JSDoc stating unit, default, design and "geometry-only" or not (model: `simplifyGenerator`, `x4`);
    - bounds as exported constants next to `CHAMBER_INPUT_RANGES` / `CHAMBER_X4_MAX` / `CHAMBER_DIMENSION_MAX_MM` so API and web share them;
-   - new derived output: key in `CHAMBER_OUTPUT_KEYS`, spec in `CHAMBER_OUTPUT_SPECS` (fit `linear` or `power`, optional `relation` `refine` / `combination`, `defaultOn`); `computeChamberOutputs` then produces it, the table shows it, and `resolveGeometryParams` sends it to the builder under the same key. A relation also appears in `CHAMBER_RELATIONS`;
+   - new derived output: key in `CHAMBER_OUTPUT_KEYS`, spec in `CHAMBER_OUTPUT_SPECS` (fit `linear` or `power`, optional `relation` `refine` / `combination`, `defaultOn`); `computeChamberOutputs` then produces it, the table shows it, and `resolveGeometryParams` sends it to the builder under the same key. A relation also appears in `CHAMBER_RELATIONS` (unless `fixed: true`, the always-on kind with form `identity` and no fit, like Length = 2 × B Kammer since 2026-10-01);
    - Gen Dim v3: edit `computeChamberGeneratorDims` only in line with the workbook.
    - `npm run build:shared`.
 2. **API schema** `chamberBuildSchema` (`apps/api/src/modules/chamber/chamber.schemas.ts`):
@@ -45,7 +45,7 @@
 7. **Page** (`apps/web/src/pages/ChamberPage.tsx`): add the key to `FIELD_LABELS` (used by the "Build errors" list on invalid submit). The stale-build note (`chamberBodyKey`) and the Save snapshot (`{ ...values, constraints }`) pick the field up without code.
 
 ## Tests
-- `apps/api/tests/chamber.test.ts` (fake builder, no Python): the value re-keys the build and leaves the 12 outputs unchanged (copy `keys the build on the feet-enabled flag, defaulting to on`); explicit default == omitted gives the same hash; no effect in the other design gives the same hash (copy `keys the hollow build on x4 (a new frame) but ignores x4 on stepped`); out-of-range 422 (copy `rejects an outlet ratio outside 0.35-0.50`).
+- `apps/api/tests/chamber.test.ts` (fake builder, no Python): the value re-keys the build and leaves the 13 outputs unchanged (copy `keys the build on the feet-enabled flag, defaulting to on`); explicit default == omitted gives the same hash; no effect in the other design gives the same hash (copy `keys the hollow build on x4 (a new frame) but ignores x4 on stepped`); out-of-range 422 (copy `rejects an outlet ratio outside 0.35-0.50`).
 - `apps/api/tests/chamberModel.test.ts`: any model, output, relation or Gen Dim change (parity reference X1 = 1450, X2 = 7, X3 = 10); `chamberSaves.test.ts` if the snapshot normalisation matters.
 - `apps/web/src/features/chamber/chamberForm.test.ts`: schema bounds, shipped defaults, round trip, and "defaults on old saves" (copy `round-trips through a saved snapshot and defaults to false on old saves`), hints via `computeChamberAutoDims`.
 - `apps/web/src/features/chamber/ChamberInputsForm.test.tsx`: the local `Harness` (`useForm` + `zodResolver`), field visible per design, submitted value; mount fresh to test other defaults.

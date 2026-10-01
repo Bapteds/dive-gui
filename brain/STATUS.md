@@ -6,6 +6,8 @@
 
 ## 1. Where we are
 
+- **In progress (2026-10-01): brief `brain/briefs/2026-09-30-chamber-spiral-and-optimisation-fixes.md`, one item at a time, each gated by the user** (order: step 0, items 2, 1, 3, 6, 5, 7, 8; item 4 = no change). Plain-language notes per item in `brain/stepbystep/`. Branches are chained and **not merged** (the user reviews each PR; no GitHub CLI on the workstation, PRs are opened from the push link):
+  - step 0 `docs/status-bf-relations` (STATUS snapshot fix) → `docs/server-runtime` (live-server notes) → item 2 `feat/chamber-length-row`: Length is a Parameters-table model row (`= 2 × B Kammer`, Min / Max / Exact in both modes, pickable in studies without the spiral; spec `2026-10-01-chamber-length-row-design.md`; no cache change). Waiting for the user's "next" before item 1.
 - **Chamber Creation v2 + CFD loop merged into `main`** (2026-09-29, merge `9e92400` of `feat/chamber-v2-cfd-loop`, at the user's request). Work order WS-A to WS-I:
   - **Done (on `main`)** (each with its approved spec in `brain/specs/2026-09-29-*`, tests and brain update):
     - WS-A guide-vane pocket vs Runner case Ø (5 mm snap with warning, junction labels) + WS-A v2: Runner case Ø below LE Ø builds a 20 mm ledge under the shroud brim, refused only below Runner Ø + 20 mm;
@@ -23,6 +25,8 @@
 - **Brain**: reorganized on 2026-09-28 (`brain/`, English, generated `INDEX.md`, playbooks, zone rules, `Stop` hook).
 
 ## 2. Last known verification
+
+Length row (branch `feat/chamber-length-row`, 2026-10-01, Baptiste's Windows workstation): API chamber + studies suites 201/201, full API 784/786 (2 known Windows-flaky meshing tests), web 331/331, typecheck clean, eslint clean on the touched areas; build hashes frozen and unchanged. Browser not checked.
 
 Hub knee ellipse (branch `fix/chamber-hub-knee-ellipse`, 2026-09-30, `C:/cqv`): geometry suite 140/140 with CadQuery 2.8.0 (`C:/cqv`, 20 min 34 s; every GOLDEN within `VOL_RTOL`, none updated); `_test_hub_shroud_math.py` ALL PASS; API chamber + chamberModel 136/136, web chamber 135/135, typecheck clean. Browser not checked.
 
