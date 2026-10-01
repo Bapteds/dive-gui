@@ -32,6 +32,7 @@
 | `decisions.md` | Register of structural decisions (what, when, why) | Before challenging a technical or product choice |
 | `specs/` | Approved design specs (`YYYY-MM-DD-<topic>-design.md`) | Context of a feature, before writing a new one |
 | `plans/` | Detailed implementation plans of the big topics | Resume or audit an implementation |
+| `stepbystep/` | Plain-language note per item of a gated, item-by-item session (one sentence, details, one example) | Explain to the user what an item changed |
 | `assets/chamber-parameter-map.html` | Interactive mind map of the chamber parameters (2026-08-04, model v2) | Explore parameter relations |
 
 Only `README.md` (technical reference for humans, GitHub convention), `AGENTS.md` and `CLAUDE.md` stay at the repository root. Domain reference material: `documents/` (Gen Dim v3 workbook, semi-spiral spec, BC profiles, turbulence notes), cited by the code.

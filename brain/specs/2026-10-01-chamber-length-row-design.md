@@ -1,6 +1,6 @@
 # Chamber Length: one Parameters-table row with Min / Max / Exact in both modes
 
-> **Status**: draft, awaiting user approval · **Date**: 2026-10-01 · **Feature**: `brain/features/chamber-creation.md` · **Brief**: `brain/briefs/2026-09-30-chamber-spiral-and-optimisation-fixes.md` item 2 · **Builds on**: `2026-09-30-spiral-length-design.md` · **Branch**: `feat/chamber-length-row`
+> **Status**: approved (user, 2026-10-01) · **Date**: 2026-10-01 · **Feature**: `brain/features/chamber-creation.md` · **Brief**: `brain/briefs/2026-09-30-chamber-spiral-and-optimisation-fixes.md` item 2 · **Builds on**: `2026-09-30-spiral-length-design.md` · **Branch**: `feat/chamber-length-row`
 
 ## 1. Goal
 
