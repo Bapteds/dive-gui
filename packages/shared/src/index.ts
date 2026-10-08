@@ -3477,10 +3477,10 @@ export interface ChamberInput {
    */
   feetEnabled?: boolean;
   /**
-   * Absolute guide-vane open angle in degrees. The asset is baked at 50°; the
-   * builder swings each blade about its OWN vertical spindle (pivot) axis at
-   * pivotRadius by (vaneAngleDeg − 50) to reach this angle. Range 45..55 (±5° about
-   * the 50° base). Only affects guide-vane builds (ignored when guideVanes is
+   * Absolute guide-vane open angle in degrees, smaller = more open. The asset is
+   * baked at 50°; the builder turns each blade counter-clockwise about its OWN
+   * vertical spindle (on the pivot circle, at the blade's mid-thickness) by
+   * (50 − vaneAngleDeg) to reach this angle. Range 45..55 (±5° about the 50° base). Only affects guide-vane builds (ignored when guideVanes is
    * false). Geometry-only (not part of the empirical model). Default 50.
    */
   vaneAngleDeg?: number;

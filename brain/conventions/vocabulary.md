@@ -39,7 +39,7 @@
 |---|---|
 | **Gen Dim v3** | Empirical model of the generator dimensions (Ø, height, dome) from X1..X4; source of truth: `documents/Gen Dim v3 Only Calculator (standalone).xlsx`, implemented by `computeChamberGeneratorDims` in `packages/shared`. |
 | **Simplify Generator** | Option (hollow variant only): generator as a strict cylinder going through the top of the chamber, without a dome. |
-| **Guide vanes** | Ring of guide vanes replacing the middle cylinder; stagger angle `vaneAngleDeg` (default 50°, range 45 to 55). Checked by default. |
+| **Guide vanes** | Ring of guide vanes replacing the middle cylinder; stagger angle `vaneAngleDeg` (default 50°, range 45 to 55; **smaller = more open**). Each vane turns about its **spindle**: the point on the pivot circle (`pivotRadius`) at the blade's mid-thickness. Checked by default. |
 | **Hub / shroud** | Inner and outer surfaces of the guide vane channel; separate OpenFOAM patches `hub` and `shroud`. |
 | **Torque feet** | Torque feet (leg + gusset plank), can be disabled. |
 | **Chamfer** | Chamfer of the chamber, can be disabled without touching the rest of the geometry. |

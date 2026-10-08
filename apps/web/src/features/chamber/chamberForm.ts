@@ -46,7 +46,7 @@ export interface ChamberFormValues {
   chamferEnabled: boolean;
   /** Cut the four torque-foot voids (legs + planks). Geometry-only. */
   feetEnabled: boolean;
-  /** Absolute guide-vane open angle (deg, 45..55; asset baked at 50°); each blade swings about its spindle. Guide-vane builds only. */
+  /** Absolute guide-vane open angle (deg, 45..55, smaller = more open; asset baked at 50°); each blade turns about its spindle. Guide-vane builds only. */
   vaneAngleDeg: number;
   /** Number of guide vanes (whole number 8..32, default 16; chord x min(1, 16/n)). Guide-vane builds only. */
   vaneCount: number;

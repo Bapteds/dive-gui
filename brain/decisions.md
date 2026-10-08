@@ -50,6 +50,7 @@
 
 | Date | Decision | Reason |
 |---|---|---|
+| 2026-10-08 | **Vane angle: smaller = more open**; each blade turns counter-clockwise by `50 − vaneAngleDeg` about its **spindle**, the point of the pivot circle (`pivotRadius` 0.86732 m, the CAD value, unchanged) at the blade's **mid-thickness** (mid-point of the arc where that circle crosses the blade's mid-height section). Range 45..55 unchanged, no migration of saves (a saved 45° now builds more open) | User, 2026-10-08: "33 degrees should mean more open, not more closed" and "it was supposed to be this 0.86732 point from the axis origin". The old pitch had the opposite sign and took the spindle azimuth from the mean mesh vertex, 15 mm outside the blade. On that circle the blade only spans 45 to 56 % of the chord, so mid-thickness is the only free choice; a CAD spindle position, if supplied later, replaces it. Spec `2026-10-08-guide-vane-pitch-spindle-design.md`. |
 | 2026-07-30 | Empirical model **only in `@dive/shared`**; the Python builder receives the FINAL values | Zero drift between the coefficients. |
 | 2026-07-30 | Build cache **keyed by parameter hash** | No staleness management. Consequence: manual purge after a code change (see 2026-08-05). |
 | 2026-07-31 | `P2 = P11 + P12` as a hard identity | New Excel workbook. |

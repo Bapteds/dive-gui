@@ -106,8 +106,9 @@ FOOT_ANGLE_DEG = 40.0        # default leg orientation; the gusset needs an inte
                              # (0/180 = tangential and 90 = radial both degenerate the gusset)
 FOOT_ANGLES_DEG = (0, 90, 180, 270)     # azimuth positions (aligned with the inlet axes)
 VANE_BASE_ANGLE_DEG = 50.0   # the guide-vane open angle baked into the asset. The
-                             # vaneAngleDeg param is this ABSOLUTE angle; the pitch
-                             # actually applied is (vaneAngleDeg - VANE_BASE_ANGLE_DEG).
+                             # vaneAngleDeg param is this ABSOLUTE angle, smaller = more
+                             # open; the pitch actually applied (counter-clockwise, about
+                             # each blade's spindle) is (VANE_BASE_ANGLE_DEG - vaneAngleDeg).
 VANE_COUNT_MIN = 8           # guide vane counts accepted (vaneCount param): any whole
 VANE_COUNT_MAX = 32          # number in [8, 32]. 16 is the asset; with n vanes each
                              # blade is scaled in XY by min(1, bladeCount / n) about
@@ -120,8 +121,9 @@ VANE_MIN_GAP = 2e-3          # smallest gap (m) allowed between two neighbouring
                              # outlines (2 x VANE_SKIN_TOL: below it the skin mask
                              # cannot tell the blades apart and a mesher cannot fill
                              # the slot). Never reached with the asset over 45..55 deg
-                             # at any count (smallest gap ~0.52 chord at 16, ~0.54
-                             # at 32, ~1.2 at 8 where the 16-vane blade is kept).
+                             # at any count (smallest gap ~0.51 chord at 16, ~0.52
+                             # at 32, ~1.18 at 8 where the 16-vane blade is kept;
+                             # all at 55 deg, the most closed, re-measured 2026-10-08).
 VANE_OUTLET_SAFE_MARGIN = 0.97   # outlet outer radius clamp: stay this fraction inside
                                  # the vane's own inner working radius (R_anchor in
                                  # make_vane_patches) so the blade always has shroud/hub
@@ -713,6 +715,39 @@ def _revolve_open(np, trimesh, profile_rz, cx, cy, sections=128):
     return trimesh.Trimesh(vertices=verts, faces=np.array(faces, dtype=np.int64), process=False)
 
 
+def _vane_pitch_deg(vane_angle_deg):
+    """Pitch (deg, counter-clockwise about +z) that turns the asset blade, baked at
+    VANE_BASE_ANGLE_DEG, to the absolute open angle `vane_angle_deg`. A SMALLER angle
+    is MORE open (user convention, spec 2026-10-08): the blade turns counter-clockwise,
+    its chord gets more radial and the throat between blades widens."""
+    return VANE_BASE_ANGLE_DEG - vane_angle_deg
+
+
+def _vane_spindle_xy(np, loop, radius):
+    """The spindle of a blade section: on the pivot circle (`radius` about the origin),
+    half-way along the arc where that circle crosses the closed outline `loop` (N, 2),
+    i.e. at the blade's mid-thickness (spec 2026-10-08). Raises ValueError unless the
+    circle crosses the outline exactly twice."""
+    p = np.asarray(loop, dtype=float)[:, :2]
+    d = np.roll(p, -1, axis=0) - p
+    qa = (d ** 2).sum(axis=1)
+    qb = 2.0 * (p * d).sum(axis=1)
+    qc = (p ** 2).sum(axis=1) - radius ** 2
+    disc = qb ** 2 - 4.0 * qa * qc
+    hits = []
+    for i in np.where((disc >= 0.0) & (qa > 0.0))[0]:
+        sq = float(np.sqrt(disc[i]))
+        for t in ((-qb[i] - sq) / (2.0 * qa[i]), (-qb[i] + sq) / (2.0 * qa[i])):
+            if 0.0 <= t < 1.0:                      # [0, 1): a vertex counts once
+                hits.append(p[i] + t * d[i])
+    if len(hits) != 2:
+        raise ValueError("guide-vane asset: the pivot circle (r = %.5f) crosses the blade "
+                         "section %d times, expected 2" % (radius, len(hits)))
+    u = hits[0] / np.linalg.norm(hits[0]) + hits[1] / np.linalg.norm(hits[1])
+    th = float(np.arctan2(u[1], u[0]))             # bisector = mid-arc azimuth
+    return float(radius * np.cos(th)), float(radius * np.sin(th))
+
+
 def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_angle_deg=0.0,
                        outlet_outer_d=None, outlet_ratio=None, d_ring=None,
                        casing_overshoot=FLOOR_OVERCUT, vane_count=16):
@@ -791,10 +826,16 @@ def make_vane_patches(trimesh, np, cx, cy, z_mid_base, z_mid_top, d_last, vane_a
     # work: R_anchor (the vane's own inner working radius, below) is measured from
     # it, and pitch/placement only move the blade radially — the shroud-floor DRAPE
     # applied later only moves Z, so measuring here (pre-drape) is exact.
-    bc = np.asarray(blade.vertices, dtype=float).mean(axis=0)
-    theta0 = np.arctan2(bc[1], bc[0])               # reference blade angular position
-    piv_x = meta["pivotRadius"] * s * np.cos(theta0) + cx
-    piv_y = meta["pivotRadius"] * s * np.sin(theta0) + cy
+    # Spindle of the reference blade (spec 2026-10-08): on the pivot circle at the
+    # blade's mid-thickness, read on the asset blade's mid-height section, then placed
+    # with the ring (x s). Until 2026-10-08 its azimuth was that of the mean vertex,
+    # which the dense leading-edge tessellation dragged 3.6 deg off: the point sat
+    # 15 mm outside the blade, so a pitched blade slid instead of turning in place.
+    _sec = blade.section(plane_origin=[0.0, 0.0, 0.5 * (blade_z0 + meta["height"])],
+                         plane_normal=[0.0, 0.0, 1.0])
+    sp_x, sp_y = _vane_spindle_xy(np, max(_sec.discrete, key=len)[:, :2], meta["pivotRadius"])
+    piv_x = sp_x * s + cx
+    piv_y = sp_y * s + cy
     pang = np.radians(vane_angle_deg)
     Rp = np.array([[np.cos(pang), -np.sin(pang), 0, 0],
                    [np.sin(pang), np.cos(pang), 0, 0],
@@ -1728,11 +1769,12 @@ def main():
                 "Generator height must be greater than 0 mm. Leave it blank to "
                 "run the generator up through the chamber top.")
         # Absolute guide-vane open angle (deg). The asset is baked at
-        # VANE_BASE_ANGLE_DEG (50); each blade swings about its own spindle by
-        # (vane_angle - VANE_BASE_ANGLE_DEG) to reach the requested angle. Range is
-        # +-5 deg about the base (45..55). Only used by guide-vane builds.
+        # VANE_BASE_ANGLE_DEG (50); each blade turns counter-clockwise about its own
+        # spindle by (VANE_BASE_ANGLE_DEG - vane_angle): a smaller angle is more open
+        # (_vane_pitch_deg, spec 2026-10-08). Range is +-5 deg about the base
+        # (45..55). Only used by guide-vane builds.
         vane_angle = float(P.get("vaneAngleDeg", VANE_BASE_ANGLE_DEG))
-        vane_pitch = vane_angle - VANE_BASE_ANGLE_DEG   # signed offset actually applied
+        vane_pitch = _vane_pitch_deg(vane_angle)        # signed CCW pitch actually applied
         # Guide vane count (any whole number 8..32; 16 = the asset). Old params.json
         # files and every 16-vane build omit the key. Only used by guide-vane builds.
         vane_count = P.get("vaneCount", 16)
@@ -2478,7 +2520,7 @@ def main():
                                                     z_mid_top + 2.0 * FLOOR_OVERCUT)
             # Neighbouring blades must not touch (spec 2026-09-29-guide-vane-count,
             # R2), checked on the real outlines before the expensive union. It cannot
-            # fire with the asset over 45..55 deg (smallest gap ~0.53 chord); it
+            # fire with the asset over 45..55 deg (smallest gap ~0.51 chord); it
             # guards a future angle range or asset.
             if len(_blade_outlines) != vane_count:
                 raise RuntimeError("expected %d blade sections, found %d"

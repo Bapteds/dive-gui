@@ -2,10 +2,11 @@
 
 > Snapshot to read at the start of a session. **Rewrite it** (do not stack) as soon as the state changes: branch, work in progress, verification, open threads.
 > Detailed history: `brain/changelog/`. Bugs and debt: `brain/known-issues.md`.
-> Last updated: 2026-09-30.
+> Last updated: 2026-10-08.
 
 ## 1. Where we are
 
+- **In progress (2026-10-08, branch `fix/vane-pitch-spindle`, not committed)**: guide-vane pitch fix (spec `2026-10-08-guide-vane-pitch-spindle-design.md`): smaller `vaneAngleDeg` = more open (the old sign closed the ring at 45°), and each blade turns about a spindle at mid-thickness on the pivot circle (the old one sat 15 mm outside the blade). Builds at 50° with up to 16 vanes unchanged; other angles and counts above 16 change on purpose. Local chamber cache purged; **on deploy purge `<STORAGE_DIR>/chamber/*`**. The true CAD spindle position is still unknown (`known-issues.md` §6).
 - **Chamber Creation v2 + CFD loop merged into `main`** (2026-09-29, merge `9e92400` of `feat/chamber-v2-cfd-loop`, at the user's request). Work order WS-A to WS-I:
   - **Done (on `main`)** (each with its approved spec in `brain/specs/2026-09-29-*`, tests and brain update):
     - WS-A guide-vane pocket vs Runner case Ø (5 mm snap with warning, junction labels) + WS-A v2: Runner case Ø below LE Ø builds a 20 mm ledge under the shroud brim, refused only below Runner Ø + 20 mm;
@@ -23,6 +24,8 @@
 - **Brain**: reorganized on 2026-09-28 (`brain/`, English, generated `INDEX.md`, playbooks, zone rules, `Stop` hook).
 
 ## 2. Last known verification
+
+Guide-vane pitch fix (branch `fix/vane-pitch-spindle`, 2026-10-08, Hristo's WSL venv, scipy 1.18.0): geometry suite 137 passed, 1 skipped, 2 failed; the vane-skin failure on `stepped-vanes-18` (sub-µm slivers read through 1 µm ASCII rounding) fixed in the test and its 4 cases rerun green; the semi-spiral golden case A also fails on untouched `main` here (`known-issues.md` §8). New unit tests 5/5, `VANE_GAP_RATIO` re-measured on real builds, a real build of the user's machine at 45° checked against the standalone vane script (0.001 mm). Web typecheck clean; API typecheck blocked by the stale local Prisma client (studies only). API / web vitest not run (comment-only TS changes). Browser not checked.
 
 Hub knee ellipse (branch `fix/chamber-hub-knee-ellipse`, 2026-09-30, `C:/cqv`): geometry suite 140/140 with CadQuery 2.8.0 (`C:/cqv`, 20 min 34 s; every GOLDEN within `VOL_RTOL`, none updated); `_test_hub_shroud_math.py` ALL PASS; API chamber + chamberModel 136/136, web chamber 135/135, typecheck clean. Browser not checked.
 
@@ -42,7 +45,7 @@ Branch `feat/chamber-v2-cfd-loop`, 2026-09-29, Baptiste's Windows workstation (C
 | Workstation | Specifics |
 |---|---|
 | Baptiste's Windows workstation (this checkout: `C:\Users\Baptiste.Erades\Desktop\dive-gui`) | `node` v24 and `npm` **native on Windows** (available in Git Bash); Windows Python 3.13 **without CadQuery**; `node_modules` **not installed** as of 2026-09-28 (run `npm install` before any test or typecheck); `apps/mcp/.env` missing, so the `dive` MCP server does not start. |
-| Co-developer's workstation (Hristo, WSL) | `node`/`npm` only inside WSL; CadQuery in the venv `/home/hristo/cadquery-env` (`CHAMBER_PYTHON_BIN`); mesh viewer via `/home/hristo/mesh-viz-env` (`MESH_PYTHON_BIN`); calls `wsl bash -lc "cd /mnt/c/... && ..."` (the "Failed to translate 'H:\bin'" lines are harmless). |
+| Co-developer's workstation (Hristo, WSL; checkout `C:/Users/Hristo.Dimitrov/Desktop/dive-gui`) | `node`/`npm` only inside WSL (node 20); as of 2026-10-08 the generated Prisma client predates the `optimisation_studies` migration (API typecheck fails in `src/modules/studies/*` until `npx prisma generate` in `apps/api`), and the working tree carries uncommitted dependency bumps in `apps/api/package.json`, `apps/web/package.json`, `package-lock.json` that belong to no branch; CadQuery in the venv `/home/hristo/cadquery-env` (`CHAMBER_PYTHON_BIN`); mesh viewer via `/home/hristo/mesh-viz-env` (`MESH_PYTHON_BIN`); calls `wsl bash -lc "cd /mnt/c/... && ..."` (the "Failed to translate 'H:\bin'" lines are harmless). |
 | Production server (`192.168.5.51`, checked 2026-09-29) | **Ubuntu 24.04** on a Proxmox VM (not Debian 12 as older docs say), 24 cores, 107 GB RAM. ESI OpenFOAM **v2406 and v2606** in `/usr/lib/openfoam/` (the API uses v2406 via `OPENFOAM_BASHRC`); both have `gcc`/`g++`/`wmake` (so `coded` function objects compile), cfMesh (`cartesianMesh`, `improveMeshQuality`), `topoSet`, `postProcess`, field/utility function-object libraries. Mesh venv `MESH_PYTHON_BIN=/home/dive-venv/bin/python` (numpy 2.5, pyvista 0.48). CadQuery 2.8.0 lives in the miniforge `base` env (`~/miniforge`); `CHAMBER_PYTHON_BIN` is **not set** in `.env`, so the API calls plain `python3`: whether the service sees CadQuery is to confirm. `STORAGE_DIR="./storage"` (relative, not `/var/lib/dive/storage`). App in `/home/app` as root, systemd service `dive-api`, nginx. See `brain/operations/installation.md` (target procedure; the live server departs from it) and `brain/playbooks/deploy-and-update.md`. |
 
 On a workstation without OpenFOAM, ParaView or CadQuery, CFD actions answer "not found" step by step (by design). The real geometry suite only runs with CadQuery (GitHub CI is the authority).

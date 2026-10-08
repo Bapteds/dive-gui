@@ -58,9 +58,10 @@ export const chamberBuildSchema = z
     // Cut the four torque-foot voids (geometry-only; footAngleDeg keeps being
     // validated regardless). A different flag => a different cached build.
     feetEnabled: z.boolean().default(true),
-    // Absolute guide-vane open angle (deg); the asset is baked at 50° and each blade
-    // swings about its own spindle by (vaneAngleDeg - 50). Range 45..55. Guide-vane
-    // builds only. A different angle => a different cached build.
+    // Absolute guide-vane open angle (deg), smaller = more open; the asset is baked
+    // at 50° and each blade turns counter-clockwise about its own spindle by
+    // (50 - vaneAngleDeg). Range 45..55. Guide-vane builds only. A different angle
+    // => a different cached build.
     vaneAngleDeg: z.number().finite().min(45).max(55).default(50),
     // Number of guide vanes: any whole number 8..32, 16 being the asset (each chord
     // scaled by min(1, 16/n) about its pivot). Guide-vane builds only. Any

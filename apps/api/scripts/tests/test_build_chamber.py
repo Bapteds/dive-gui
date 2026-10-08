@@ -714,12 +714,24 @@ def test_vane_skin_stays_on_the_guide_vanes_patch(build, name):
         r = np.maximum(np.hypot(dx, dy), 1e-9)
         return np.abs((n[:, 0] * -dy + n[:, 1] * dx) / r)
 
+    def has_a_normal(mesh):
+        """Faces thick enough for the exported file to carry their normal. The
+        ASCII triSurface keeps 7 significant digits (~1 um at chamber coordinates)
+        and the boolean leaves sub-um slivers along each airfoil hole rim, whose
+        normal recomputed from the rounded vertices is noise (2026-10-08:
+        stepped-vanes-18, four 0.25-1 um high shroud-floor slivers whose builder
+        normals are |nz| ~0.97 read as 'blade-like'). 10 um = 10x that precision."""
+        tri = mesh.triangles
+        longest = np.linalg.norm(tri - np.roll(tri, -1, axis=1), axis=2).max(axis=1)
+        return 2.0 * mesh.area_faces / np.maximum(longest, 1e-12) > 1e-5
+
     # Hub and shroud are surfaces of revolution: every face normal is
     # meridional up to facet noise. The blade skin is the only strongly
     # azimuthal surface in the band; none of it may land on hub/shroud.
     for pname in ("hub", "shroud"):
-        nth = azimuthal(patch(pname))
-        leaked = int((nth > 0.35).sum())
+        mesh = patch(pname)
+        nth = azimuthal(mesh)
+        leaked = int(((nth > 0.35) & has_a_normal(mesh)).sum())
         assert leaked == 0, f"{name}: {leaked} blade-like faces classified as {pname}"
 
     # Reverse direction: the blades are strict VERTICAL prisms, so the vane
@@ -919,8 +931,10 @@ def test_low_vane_counts_keep_the_16_vane_blade(build, name, count):
 
 # Smallest blade gap / chord measured on the rounded asset outline. Above 16 the
 # ring curvature grows with the chord ratio, so it drifts from the 16-vane
-# ~0.52-0.58; at 8 the 16-vane blade sits on twice the pitch (wide throat).
-VANE_GAP_RATIO = {(8, 45): 1.184, (8, 55): 1.245, (32, 45): 0.541, (32, 55): 0.611}
+# ~0.51-0.58; at 8 the 16-vane blade sits on twice the pitch (wide throat).
+# Re-measured 2026-10-08 (spec 2026-10-08-guide-vane-pitch-spindle): smaller angle
+# = more open, blades turned about their mid-thickness spindle.
+VANE_GAP_RATIO = {(8, 45): 1.253, (8, 55): 1.176, (32, 45): 0.602, (32, 55): 0.524}
 
 
 def _mid_loop(np, blade):
@@ -970,6 +984,94 @@ def test_free_vane_count_step_keeps_the_vanes(build, count):
     assert os.path.getsize(result.export_path("chamber.step")) > 0
     assert result.build_meta == {"stepHasVanes": True}
     assert "falls back to the vane-less solid" not in result.stderr
+
+
+# --- guide-vane pitch: direction and spindle (spec 2026-10-08) -----------------
+# A SMALLER vane angle is MORE open (user convention): each blade turns
+# counter-clockwise by (50 - angle) about its spindle. The spindle is on the pivot
+# circle at the blade's mid-thickness; until 2026-10-08 the angle came from the
+# mean of the mesh vertices and the point sat 15 mm OUTSIDE the blade.
+
+
+def test_gap_table_opens_the_ring_at_smaller_angles():
+    for count in (8, 32):
+        assert VANE_GAP_RATIO[(count, 45)] > VANE_GAP_RATIO[(count, 55)]
+
+
+def test_vane_pitch_turns_counter_clockwise_for_smaller_angles():
+    bc = _builder_module()
+    assert bc._vane_pitch_deg(45.0) == pytest.approx(5.0)
+    assert bc._vane_pitch_deg(50.0) == 0.0
+    assert bc._vane_pitch_deg(55.0) == pytest.approx(-5.0)
+
+
+def test_vane_spindle_is_the_mid_point_of_the_pivot_arc_inside_the_outline():
+    """The unit circle enters the rectangle through its bottom edge and leaves
+    through its top edge; the spindle is the circle point half-way between them."""
+    import numpy as np
+
+    bc = _builder_module()
+    rect = np.array([[0.9, -0.05], [1.1, -0.05], [1.1, 0.15], [0.9, 0.15]])
+    a = np.arctan2(-0.05, np.sqrt(1.0 - 0.05 ** 2))
+    b = np.arctan2(0.15, np.sqrt(1.0 - 0.15 ** 2))
+    mid = 0.5 * (a + b)
+    assert bc._vane_spindle_xy(np, rect, 1.0) == pytest.approx((np.cos(mid), np.sin(mid)), abs=1e-12)
+    # Scaled radius and reversed winding give the same rule.
+    assert (bc._vane_spindle_xy(np, 2.0 * rect[::-1], 2.0)
+            == pytest.approx((2.0 * np.cos(mid), 2.0 * np.sin(mid)), abs=1e-12))
+    with pytest.raises(ValueError, match="pivot circle"):
+        bc._vane_spindle_xy(np, rect + np.array([2.0, 0.0]), 1.0)
+
+
+def _asset_vane_ring(bc, np, trimesh, pitch_deg):
+    """make_vane_patches at scale 1 on the asset frame (ring = pivot circle, band =
+    asset channel, axis at the origin): (pivot, list of blade meshes)."""
+    meta = bc._load_vane_meta()
+    out = bc.make_vane_patches(trimesh, np, 0.0, 0.0, meta["bladeBottomZ"], meta["height"],
+                               2.2, vane_angle_deg=pitch_deg, d_ring=2.0 * meta["pivotRadius"])
+    return out["pivot"], out["guide_vanes"].split(only_watertight=False)
+
+
+def test_each_blade_turns_about_a_spindle_inside_it():
+    import numpy as np
+    import trimesh
+    from shapely.geometry import Point, Polygon
+
+    bc = _builder_module()
+    meta = bc._load_vane_meta()
+    piv, blades0 = _asset_vane_ring(bc, np, trimesh, 0.0)
+    piv5, blades5 = _asset_vane_ring(bc, np, trimesh, 5.0)
+    assert piv5 == pytest.approx(piv)
+    assert float(np.hypot(*piv)) == pytest.approx(meta["pivotRadius"], abs=1e-9)
+
+    # The spindle is well inside the blade it turns (mid-thickness, ~28 mm of material).
+    ref0 = min(blades0, key=lambda m: float(np.linalg.norm(m.vertices.mean(axis=0)[:2] - piv)))
+    outline = Polygon(_mid_loop(np, ref0))
+    assert outline.contains(Point(piv))
+    assert outline.exterior.distance(Point(piv)) > 0.02
+
+    # The 5 deg pitch is a pure rotation about that spindle (above the shroud drape).
+    ref5 = min(blades5, key=lambda m: float(np.linalg.norm(m.vertices.mean(axis=0)[:2] - piv)))
+    band = meta["height"] - meta["bladeBottomZ"]
+    keep = ref0.vertices[:, 2] > meta["bladeBottomZ"] + 0.15 * band + 1e-3
+    P = np.asarray(ref0.vertices[keep, :2], dtype=float)
+    Q = np.asarray(ref5.vertices[keep, :2], dtype=float)
+    a = np.radians(5.0)
+    R = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
+    c = np.asarray(piv)
+    assert np.abs((P - c) @ R.T + c - Q).max() < 1e-9
+
+
+def test_smaller_vane_angle_opens_the_ring():
+    import numpy as np
+    import trimesh
+
+    bc = _builder_module()
+    gap = {}
+    for angle in (45.0, 50.0, 55.0):
+        _piv, blades = _asset_vane_ring(bc, np, trimesh, bc._vane_pitch_deg(angle))
+        gap[angle] = bc._min_blade_gap([_mid_loop(np, b) for b in blades])
+    assert gap[45.0] > gap[50.0] > gap[55.0]
 
 
 # --- cone chamfer: 45 deg foot on the LE part (both designs) --------------------
